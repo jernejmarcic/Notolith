@@ -643,6 +643,10 @@ static QList<Settings::Feature> &mutableFeatures()
          QT_TRANSLATE_NOOP("Settings", "Render an embedded .tex file: maths through MicroTeX, a whole document "
                                        "compiled by the TeX installed, in a sandbox."),
          false},
+        {"csv-embeds", QT_TRANSLATE_NOOP("Settings", "CSV embeds"),
+         QT_TRANSLATE_NOOP("Settings", "Show an embedded .csv or .tsv file as a table, read and parsed "
+                                       "off the editing thread. Off, it is a plain listing of the file."),
+         false},
         {"epub-reader", QT_TRANSLATE_NOOP("Settings", "EPUB reader"),
          QT_TRANSLATE_NOOP("Settings", "Open .epub books in a tab, with highlights and notes kept in a note "
                                        "beside the book."),

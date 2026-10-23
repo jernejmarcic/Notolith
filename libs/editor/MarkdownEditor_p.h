@@ -21,9 +21,11 @@
 #include <QPair>
 #include <QPixmap>
 #include <QPointer>
+#include <QSet>
 #include <QSizeF>
 #include <QTextLayout>
 #include <QTimer>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <span>
@@ -46,6 +48,15 @@
 #include "TexCompiler.h"
 
 namespace noteAppC {
+
+/// While it lives, an edit is the reader's own (a key, a pick, a drop): it keeps
+/// the value it found, so one inside another does not end the outer one's.
+struct TypingScope {
+    bool &flag;
+    bool was;
+    explicit TypingScope(bool &f) : flag(f), was(f) { flag = true; }
+    ~TypingScope() { flag = was; }
+};
 
 /// A format property: the colour of a strikethrough line that is not the
 /// text's. Qt draws a strikeout in the text's own colour, so such a line is
@@ -422,6 +433,10 @@ struct MarkdownEditor::BlockView {
         QString path;
     };
     std::vector<BaseRow> baseRows;
+    /// The file a CSV/TSV embed shows (CSVembed.cpp), empty for any other
+    /// block: what deliverCSV matches a block back on. Such a block is also
+    /// isBase, which only means "painted as a data table".
+    QString CSVpath;
 
     /// Set when this block is a raw HTML block (top-level `<div>`,
     /// `<table>`, `<details>`... - not inline HTML inside a paragraph)
@@ -701,6 +716,23 @@ struct MarkdownEditor::BaseCacheEntry {
     quint64 generation = 0;
 };
 
+/// A CSV/TSV file as the last read left it - one per path, replaced when the
+/// file's mtime or size changes (CSVembed.cpp). `table` holds at most the
+/// header and kCSVmaxRows rows.
+struct MarkdownEditor::CSVcacheEntry {
+    qint64 mtime = 0;
+    qint64 size = 0;
+    bool pending = true;
+    quint64 generation = 0;
+    BaseTableData table; ///< `error` set when the file could not be read
+    qsizetype hiddenRows = 0; ///< records past the cap, counted but not kept
+    int hiddenColumns = 0;    ///< cells of the widest record past the column cap
+    /// The newest generation started for this path, readable from a worker:
+    /// one that finds itself superseded stops before reading the file.
+    std::shared_ptr<std::atomic<quint64>> latest;
+    bool partial = false;     ///< the file was larger than was read
+};
+
 /// The recognised, paired inline tags in `view`'s block, in source
 /// order: what layoutInlineHtml hides, and what revealedSyntax shows
 /// while the caret touches the element.
@@ -777,6 +809,7 @@ struct MarkdownEditor::ParseJob {
     QList<Heading> headings;
     int words = 0;
     quint64 version = 0;
+    qint64 nanoseconds = 0; ///< how long the parse itself took
 };
 
 struct MarkdownEditor::Private {
@@ -869,6 +902,13 @@ struct MarkdownEditor::Private {
     Features m_features;
     /// A .base file's text, read again only when its mtime moves.
     QHash<QString, QPair<qint64, QString>> m_baseFiles;
+    QHash<QString, CSVcacheEntry> m_CSVcache; ///< path -> its last read
+    quint64 m_CSVgeneration = 0;
+    QFileSystemWatcher *m_CSVwatcher = nullptr; ///< made with the first CSV embed
+    QTimer *m_CSVrefresh = nullptr;
+    QElapsedTimer m_CSVpendingSince; ///< the first unanswered change event, for the debounce's longest wait
+    QSet<QString> m_CSVgone; ///< cached files that were deleted: refreshCSVfiles looks for them coming back
+    QString m_CSVdelivering; ///< the path whose read has just landed: its failure is shown, not retried, by the relayout
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()
@@ -1062,6 +1102,9 @@ struct MarkdownEditor::Private {
     quint64 m_textVersion = 0;
     quint64 m_parsedVersion = 0;
     bool m_parsePending = false; ///< a pool parse is out and not yet adopted
+    qint64 m_lastParseNs = 0;    ///< the last parse's cost: whether a newline may be parsed on the spot
+    int m_parses = 0;
+    bool m_typing = false;       ///< inside a key, an input-method event, a pick or a drop: the edit is the reader's own
     bool m_cursorOn = true;
     QTimer m_blink;
 };

@@ -226,6 +226,19 @@ TEST(ListEnter, AFenceTypedWithinTheParseDelayIsSeen)
     EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- a\n```\n- b\n- "));
 }
 
+// The same, with the parse landing between the lines: a fence nothing closes yet
+// runs to the end of the note, and what is typed in it is still code.
+TEST(ListEnter, AnUnclosedFenceTheParseSawHoldsWhatIsTypedAfterIt)
+{
+    auto editor = editorWith(QString());
+    QTest::keyClicks(editor.get(), QStringLiteral("```"));
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    QTest::qWait(100); // the parse has seen the fence and nothing in it
+    QTest::keyClicks(editor.get(), QStringLiteral("- a"));
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- a\n")) << "inside the fence: a newline, not a bullet";
+}
+
 TEST(ListEnter, AFenceTheParseAlreadySawStillCounts)
 {
     const QString note = QStringLiteral("```\n- x\n```\n\n- b");

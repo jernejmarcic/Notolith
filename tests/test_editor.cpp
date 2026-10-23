@@ -17,6 +17,8 @@
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QImage>
+#include <QAbstractItemView>
+#include <QCompleter>
 #include <QMimeData>
 #include <QRandomGenerator>
 #include <QLineEdit>
@@ -813,6 +815,34 @@ TEST(MarkdownEditorTest, KeystrokeStaysInsideTheBudget)
     EXPECT_LT(perKeystroke, 8.0);
 }
 
+// Enter is parsed at once (a newline changes what the blocks are) while parses are
+// cheap, so it is the one key that can pay for a parse: it must stay inside the
+// 10 ms a key may cost on a note the parse is cheap for and on one it is not.
+TEST(MarkdownEditorTest, EnterStaysInsideTheBudgetWhateverTheNoteSize)
+{
+    for (const int kilobytes : {20, 120}) {
+    SCOPED_TRACE(kilobytes);
+    QString note = generateNote(kilobytes);
+    auto editor = parsedEditorWith(note);
+    ASSERT_TRUE(editor) << "the parse never came back";
+    editor->setCursorOffset(note.size() / 2);
+    editor->enterBlockAt(note.size() / 2);
+
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    constexpr int kEnters = 10;
+    const double perEnter = perf::bestOf([&] {
+        QElapsedTimer clock;
+        clock.start();
+        for (int i = 0; i < kEnters; ++i)
+            QTest::keyClick(editor.get(), Qt::Key_Return);
+        return double(clock.nsecsElapsed()) / kEnters / 1e6;
+    }, 3, 10.0);
+
+    std::printf("[ PERF     ] %.2f kB note, %.2f ms per Enter\n", note.size() / 1024.0, perEnter);
+    EXPECT_LT(perEnter, 10.0);
+    }
+}
+
 TEST(MarkdownEditorTest, OpeningALargeNoteIsFast)
 {
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
@@ -949,6 +979,526 @@ TEST(SoftBreakTest, StrictLineBreaksJoinTheLinesOfAParagraph)
         return editor->caretRectNow().y();
     };
     EXPECT_LT(threeAt(true), threeAt(false)) << "strict: the two lines above are one, so the next paragraph sits higher";
+}
+
+// Pressing Enter must not make the text jump. What is on screen straight after
+// the key is the edit, and nothing the parse, the timers or the scroll do later
+// may move a line of it: a line that sits at a different y a frame later,
+// though the note did not change, is the jitter.
+namespace {
+
+/// The top y of every band of ink in the viewport - one per drawn line of text.
+/// The caret's own column is blanked, so only text is compared.
+QList<int> inkBands(MarkdownEditor &editor)
+{
+    QImage frame = editor.viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    const QRgb background = frame.pixel(frame.width() - 4, 4);
+    const QRectF caret = editor.caretRectNow();
+    QList<int> bands;
+    bool inBand = false;
+    for (int y = 0; y < frame.height(); ++y) {
+        bool ink = false;
+        for (int x = 0; x < frame.width() - 4 && !ink; ++x) {
+            if (x >= caret.left() - 2 && x <= caret.right() + 2)
+                continue;
+            ink = frame.pixel(x, y) != background;
+        }
+        if (ink && !inBand)
+            bands.append(y);
+        inBand = ink;
+    }
+    return bands;
+}
+
+/// The viewport as drawn, with the caret's own box blanked: it blinks.
+QImage withoutCaret(MarkdownEditor &editor)
+{
+    QImage frame = editor.viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    QPainter painter(&frame);
+    painter.fillRect(editor.caretRectNow().adjusted(-3, -2, 3, 2), Qt::black);
+    return frame;
+}
+
+/// Which rows differ between two frames, "" when they are the same picture.
+QString diffRows(const QImage &now, const QImage &before)
+{
+    if (now.size() != before.size())
+        return QStringLiteral("size");
+    QStringList rows;
+    int first = -1;
+    for (int y = 0; y <= now.height(); ++y) {
+        const bool differs = y < now.height() && std::memcmp(now.constScanLine(y), before.constScanLine(y), size_t(now.bytesPerLine())) != 0;
+        if (differs && first < 0)
+            first = y;
+        if (!differs && first >= 0) {
+            rows << QStringLiteral("%1-%2").arg(first).arg(y - 1);
+            first = -1;
+        }
+    }
+    return rows.join(QLatin1Char(' '));
+}
+
+QString bandsText(const QList<int> &bands)
+{
+    QStringList parts;
+    for (int y : bands)
+        parts << QString::number(y);
+    return parts.join(QLatin1Char(' '));
+}
+
+} // namespace
+
+TEST(EnterJitterTest, NoLineOfTextMovesAfterEnterOnceTheEditIsDrawn)
+{
+    struct Case {
+        const char *name;
+        QString text;
+        QString endOf; // the caret goes to the end of the line holding this; "" is the end of the note
+        int back = 0;  // ... and this many characters back from there
+        int lift = 0;  // the view is scrolled up this far, the caret mid-screen
+        bool slow = false; // the last parse was a slow one: the newline waits for the debounce
+        bool plain = false; // no letter typed first (it would end a setext underline)
+    };
+    QString long60;
+    for (int i = 0; i < 60; ++i)
+        long60 += QStringLiteral("paragraph number %1\n\n").arg(i);
+    QList<Case> cases = {
+        {"paragraph", QStringLiteral("first paragraph\n\nsecond paragraph here\n\nthird paragraph\n\nfourth\n"),
+         QStringLiteral("second paragraph here")},
+        {"insideParagraph", QStringLiteral("aa\nbb\ncc\n\ndd\n\nee\n"), QStringLiteral("bb")},
+        {"listItem", QStringLiteral("intro\n\n- one\n- two\n- three\n\nafter\n\nmore\n"), QStringLiteral("- two")},
+        {"lastListItem", QStringLiteral("intro\n\n- one\n- two\n\nafter\n\nmore\n"), QStringLiteral("- two")},
+        {"orderedItem", QStringLiteral("intro\n\n1. one\n2. two\n3. three\n\nafter\n"), QStringLiteral("2. two")},
+        {"heading", QStringLiteral("# Title\n\npara\n\nanother\n\nlast\n"), QStringLiteral("# Title")},
+        {"subheading", QStringLiteral("intro\n\n## Sub heading\nbody under it\n\nlast\n"), QStringLiteral("## Sub heading")},
+        {"blockquote", QStringLiteral("intro\n\n> quote line\n\nafter\n\nmore\n"), QStringLiteral("> quote line")},
+        {"endOfNote", QStringLiteral("alpha\n\nbeta\n\ngamma"), QString()},
+        {"endOfNoteNewline", QStringLiteral("alpha\n\nbeta\n\ngamma\n"), QString()},
+        {"endOfLongNote", long60, QString()},
+        {"middleOfLongNote", long60, QStringLiteral("paragraph number 30")},
+        {"midScreenOfLongNote", long60, QStringLiteral("paragraph number 40"), 0, 300},
+        {"midScreenListOfLongNote", long60 + QStringLiteral("- a\n- b\n- c\n\n") + long60, QStringLiteral("- b"), 0, 300},
+        {"midHeading", QStringLiteral("# Title here\n\npara\n\nanother\n\nlast\n"), QStringLiteral("# Title here"), 5},
+        {"midListItem", QStringLiteral("intro\n\n- one\n- two words\n- three\n\nafter\n\nmore\n"),
+         QStringLiteral("- two words"), 5},
+        {"midBlockquote", QStringLiteral("intro\n\n> quote line here\n\nafter\n\nmore\n"),
+         QStringLiteral("> quote line here"), 5},
+        {"headingEndOfNote", QStringLiteral("para\n\n## Last heading"), QString()},
+        {"setext", QStringLiteral("intro\n\nTitle\n=====\n\nafter\n\nmore\n"), QStringLiteral("====="), 0, 0, false, true},
+        {"slowHeading", QStringLiteral("# Title\n\npara\n\nanother\n\nlast\n"), QStringLiteral("# Title"), 0, 0, true},
+        {"slowSetext", QStringLiteral("intro\n\nTitle\n=====\n\nafter\n\nmore\n"), QStringLiteral("====="), 0, 0, true, true},
+        {"slowSetextMid", QStringLiteral("intro\n\nTitle words\n=====\n\nafter\n\nmore\n"), QStringLiteral("Title words"), 5, 0, true, true},
+    };
+    // Past the size a newline is parsed on the spot at, the stale blocks are drawn
+    // until the pool parse lands, and a heading must look like what it becomes.
+    const QString filler = generateNote(40);
+    for (const char *name : {"paragraph", "heading", "subheading", "midHeading"}) {
+        const Case &small = *std::find_if(cases.cbegin(), cases.cend(),
+                                          [name](const Case &c) { return std::strcmp(c.name, name) == 0; });
+        cases.append({"bigNote", small.text + QStringLiteral("\n") + filler, small.endOf, small.back, small.lift, true});
+    }
+
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.name);
+        auto editor = editorWith(c.text);
+        editor->show();
+        qsizetype at = c.text.size();
+        if (!c.endOf.isEmpty()) {
+            const qsizetype hit = c.text.indexOf(c.endOf);
+            ASSERT_GE(hit, 0);
+            at = hit + c.endOf.size() - c.back;
+        }
+        editor->setCursorOffset(at);
+        QTest::qWait(300); // the open settles: parse, scroll to the caret
+        if (!c.plain)
+            QTest::keyClicks(editor.get(), QStringLiteral("x")); // the caret's block is raw, as in a real session
+        QTest::qWait(300);
+        editor->setCursorOffset(c.plain ? at : at + 1);
+        QTest::qWait(100);
+
+        if (c.lift > 0) {
+            editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->value() - c.lift);
+            QTest::qWait(100);
+        }
+        const QImage beforeEnter = withoutCaret(*editor);
+        const qreal caretBefore = editor->caretRectNow().y();
+        if (c.slow)
+            editor->setLastParseTimeForTest(50'000'000);
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        struct Frame {
+            const char *when;
+            QList<int> bands;
+            int scroll;
+            qreal caretY;
+            QImage image;
+            qreal caretH;
+        };
+        QList<Frame> frames;
+        const auto snap = [&](const char *when) {
+            frames.append({when, inkBands(*editor), editor->verticalScrollBar()->value(),
+                           editor->caretRectNow().y(), withoutCaret(*editor), editor->caretRectNow().height()});
+        };
+        snap("immediately");
+        QCoreApplication::processEvents();
+        snap("afterEvents");
+        QTest::qWait(10);
+        snap("10ms");
+        QTest::qWait(30);
+        snap("40ms(parseLanded)");
+        QTest::qWait(100);
+        snap("140ms");
+        QTest::qWait(500);
+        snap("640ms");
+
+        // The edit itself: the caret is on screen, and when the view stayed put
+        // what sat above the caret's line is the same picture as before.
+        EXPECT_GE(frames.last().caretY, 0) << "the caret left the view";
+        EXPECT_LT(frames.last().caretY, editor->viewport()->height()) << "the caret left the view";
+        if (frames[0].caretY > caretBefore + 1) { // the view stayed put: what is above is what was
+            const int rows = qMax(0, int(caretBefore) - 48);
+            EXPECT_EQ(diffRows(frames.last().image.copy(0, 0, beforeEnter.width(), rows),
+                               beforeEnter.copy(0, 0, beforeEnter.width(), rows))
+                          .toStdString(),
+                      "")
+                << "text above the caret moved";
+        }
+        for (qsizetype i = 1; i < frames.size(); ++i) {
+            EXPECT_EQ(frames[i].scroll, frames[0].scroll) << frames[i].when << " scrolled";
+            EXPECT_NEAR(frames[i].caretY, frames[0].caretY, 0.5) << frames[i].when << " caret moved";
+            EXPECT_EQ(frames[i].caretH, frames[0].caretH) << frames[i].when << " caret changed size";
+            EXPECT_EQ(bandsText(frames[i].bands).toStdString(), bandsText(frames[0].bands).toStdString())
+                << frames[i].when << " moved text that had already been drawn";
+            EXPECT_EQ(diffRows(frames[i].image, frames[0].image).toStdString(), "")
+                << frames[i].when << " drew something other than the edit's own frame";
+        }
+    }
+}
+
+// The note's own last line: a note ends in a newline, and the empty line after it
+// belongs to no block, so there was nowhere to draw the caret. Enter at the end
+// left it on the line above (or on the top of the last block), and the next
+// character then dropped a line.
+TEST(EnterJitterTest, EnterAtTheEndOfTheNoteMovesTheCaretToTheNewLineAtOnce)
+{
+    struct Case {
+        const char *name;
+        QString text;
+        bool press; // Enter pressed at the end; else the note already ends in a newline
+        bool list = false;
+    };
+    QString long60;
+    for (int i = 0; i < 60; ++i)
+        long60 += QStringLiteral("paragraph number %1\n\n").arg(i);
+    const QList<Case> cases = {
+        {"paragraph", QStringLiteral("alpha\n\nbeta\n\ngamma"), true},
+        {"multiLineParagraph", QStringLiteral("intro\n\none\ntwo\nthree"), true},
+        {"newlineEnded", QStringLiteral("alpha\n\nbeta\n\ngamma\n"), false},
+        {"heading", QStringLiteral("para\n\n# Title"), true},
+        {"subheading", QStringLiteral("para\n\n## Sub heading"), true},
+        {"listItem", QStringLiteral("para\n\n- item"), true, true},
+        {"quote", QStringLiteral("para\n\n> quoted"), true},
+        {"longNote", long60 + QStringLiteral("last words"), true},
+        {"longNoteNewlineEnded", long60 + QStringLiteral("last words\n"), false},
+    };
+
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.name);
+        auto editor = editorWith(c.text);
+        editor->show();
+        const auto docY = [&] { return editor->caretRectNow().y(); };
+        const qsizetype end = c.text.size();
+        // The line the text ends on: the end of its last character.
+        editor->setCursorOffset(c.press ? end : end - 1);
+        QTest::qWait(300);
+        const qreal lastLine = docY();
+        editor->setCursorOffset(end);
+        if (c.press)
+            QTest::keyClick(editor.get(), Qt::Key_Return);
+
+        const QRectF afterEnter = editor->caretRectNow();
+        const qreal moved = docY() - lastLine;
+        // Near the bottom of the view it scrolls to follow the caret, and the
+        // distance in the view says nothing.
+        if (lastLine < editor->viewport()->height() - 60) {
+            EXPECT_GT(moved, 15) << "the caret is not on a line of its own below the text";
+            EXPECT_LT(moved, 45) << "the caret is more than a line below the text";
+        }
+        EXPECT_GE(afterEnter.y(), 0) << "the caret left the view";
+        EXPECT_LT(afterEnter.y() + afterEnter.height(), editor->viewport()->height() + 1) << "the caret left the view";
+        if (!c.list)
+            EXPECT_NEAR(afterEnter.x(), editor->textColumn() - 1, 1.5) << "not at the start of the line";
+
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        const QRectF afterX = editor->caretRectNow();
+        EXPECT_NEAR(afterX.y(), afterEnter.y(), 0.5) << "the next character landed on another line";
+        EXPECT_GT(afterX.x(), afterEnter.x()) << "the character is not where the caret was";
+        QTest::qWait(300); // the parse lands
+        const QRectF parsed = editor->caretRectNow();
+        EXPECT_NEAR(parsed.y(), afterX.y(), 0.5);
+        EXPECT_NEAR(parsed.x(), afterX.x(), 0.5);
+    }
+}
+
+// What a newline costs: it is parsed on the spot only for the reader's own key,
+// only while parses are cheap, and never twice.
+TEST(EnterJitterTest, ANewlineIsParsedOnTheSpotOnlyForTheReadersOwnKeyWhileParsesAreCheap)
+{
+    const QString note = QStringLiteral("# Title\n\nparagraph one\n\n- a\n- b\n\nparagraph two\n");
+    const qsizetype at = note.indexOf(QStringLiteral("paragraph one")) + 5;
+
+    // The reader's own Enter: one parse, at once.
+    {
+        auto editor = editorWith(note);
+        editor->setCursorOffset(at);
+        const int before = editor->parseCountForTest();
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        EXPECT_EQ(editor->parseCountForTest(), before + 1);
+        QTest::qWait(100);
+        EXPECT_EQ(editor->parseCountForTest(), before + 1) << "parsed again by the debounce";
+    }
+    // The same note open in a second pane: the mirrored edit is not parsed on
+    // the spot, the debounce does it once.
+    {
+        auto first = editorWith(note);
+        auto second = editorWith(note);
+        QObject::connect(first.get(), &MarkdownEditor::edited, second.get(), &MarkdownEditor::applyExternalEdit);
+        first->setCursorOffset(at);
+        const int firstBefore = first->parseCountForTest();
+        const int secondBefore = second->parseCountForTest();
+        QTest::keyClick(first.get(), Qt::Key_Return);
+        EXPECT_EQ(first->parseCountForTest(), firstBefore + 1);
+        EXPECT_EQ(second->parseCountForTest(), secondBefore) << "the other pane parsed inside the key";
+        QTest::qWait(100);
+        EXPECT_EQ(second->parseCountForTest(), secondBefore + 1);
+        EXPECT_EQ(second->noteText(), first->noteText());
+    }
+    // A burst from elsewhere (a peer catching up): 50 edits with a newline each,
+    // one parse once it is over.
+    {
+        auto editor = editorWith(note);
+        const int before = editor->parseCountForTest();
+        for (int i = 0; i < 50; ++i)
+            editor->applyExternalEdit(note.size() / 2, 0, QStringLiteral("edit %1\n").arg(i));
+        EXPECT_EQ(editor->parseCountForTest(), before) << "parsed inside the burst";
+        QTest::qWait(100);
+        EXPECT_EQ(editor->parseCountForTest(), before + 1);
+    }
+    // A slow parse makes the next newline wait for the debounce, on any machine.
+    {
+        auto editor = editorWith(note);
+        editor->setCursorOffset(at);
+        editor->setLastParseTimeForTest(50'000'000);
+        const int before = editor->parseCountForTest();
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        EXPECT_EQ(editor->parseCountForTest(), before) << "a slow parse ran inside the key";
+        QTest::qWait(150);
+        EXPECT_EQ(editor->parseCountForTest(), before + 1);
+        // ... and a fast one measured since lets the next one be immediate again.
+        const int measured = editor->parseCountForTest();
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        EXPECT_EQ(editor->parseCountForTest(), measured + 1);
+    }
+    // A programmatic edit is not the reader's key.
+    {
+        auto editor = editorWith(note);
+        const int before = editor->parseCountForTest();
+        editor->insertAtCaret(QStringLiteral("\n"));
+        EXPECT_EQ(editor->parseCountForTest(), before);
+    }
+}
+
+// The view stays put when the parse lands, in a note long enough that blocks
+// above the view are estimates: the parse re-estimates them, and without the
+// anchor everything on screen moves by the difference.
+TEST(EnterJitterTest, ALetterInALongNoteDoesNotMoveTheViewWhenTheParseLands)
+{
+    QString long60;
+    for (int i = 0; i < 60; ++i)
+        long60 += QStringLiteral("paragraph number %1\n\n").arg(i);
+    struct Case {
+        const char *name;
+        QString text;
+        QString at;
+        int lift;
+    };
+    const QList<Case> cases = {
+        {"end", long60, QStringLiteral("paragraph number 59"), 0},
+        {"midScreen", long60, QStringLiteral("paragraph number 40"), 300},
+        {"bigEnd", generateNote(40), QStringLiteral("another one"), 0},
+        {"bigMidScreen", generateNote(40), QStringLiteral("Section 30"), 300},
+    };
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.name);
+        auto editor = editorWith(c.text);
+        editor->show();
+        const qsizetype at = c.text.lastIndexOf(c.at) + c.at.size();
+        editor->setCursorOffset(at);
+        QTest::qWait(300);
+        if (c.lift > 0) {
+            editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->value() - c.lift);
+            QTest::qWait(100);
+        }
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        const QImage typed = withoutCaret(*editor);
+        const qreal caret = editor->caretRectNow().y();
+        QTest::qWait(300); // the parse lands
+        EXPECT_NEAR(editor->caretRectNow().y(), caret, 0.5) << "the caret moved when the parse landed";
+        EXPECT_EQ(diffRows(withoutCaret(*editor), typed).toStdString(), "") << "the text moved when the parse landed";
+    }
+}
+
+// The adaptive budget times the parse and nothing else, on both paths: a
+// synchronous Enter once also timed the layout after it, so the next Enter in a
+// note of 20-30 kB was debounced, and the one after parsed again at once.
+TEST(EnterJitterTest, EveryEnterInANoteOfMiddlingSizeIsParsedOnTheSpot)
+{
+    for (int kilobytes : {20, 24}) { // ponytail: 28 kB parses in 4.2 ms on this loaded box, over the budget on purpose
+        SCOPED_TRACE(kilobytes);
+        const QString note = generateNote(kilobytes);
+        auto editor = editorWith(note);
+        editor->show();
+        QTest::qWait(300);
+        editor->setCursorOffset(note.indexOf(QStringLiteral("Section 20")) + 5);
+        for (int i = 0; i < 10; ++i) {
+            const int before = editor->parseCountForTest();
+            QTest::keyClick(editor.get(), Qt::Key_Return);
+            EXPECT_EQ(editor->parseCountForTest(), before + 1) << "Enter number " << i << " waited for the debounce";
+        }
+    }
+}
+
+// The empty line after the note's final newline is a line like any other: it can
+// be reached from the line above, by a click, by End and Ctrl+End, and a
+// selection to the end takes it.
+TEST(EnterJitterTest, TheLineAfterTheFinalNewlineCanBeReached)
+{
+    const QString note = QStringLiteral("alpha\n\nbeta\n\ngamma\n");
+    auto editor = editorWith(note);
+    editor->show();
+    QTest::qWait(300);
+    const qsizetype end = note.size();
+    const qsizetype inGamma = note.indexOf(QStringLiteral("gamma")) + 2;
+
+    editor->setCursorOffset(inGamma);
+    QTest::keyClick(editor.get(), Qt::Key_Down);
+    EXPECT_EQ(editor->cursorOffset(), end) << "Down from the last line";
+    const QRectF tail = editor->caretRectNow();
+    QTest::keyClick(editor.get(), Qt::Key_Down);
+    EXPECT_EQ(editor->cursorOffset(), end) << "Down on the last line stays";
+    QTest::keyClick(editor.get(), Qt::Key_Up);
+    EXPECT_GE(editor->cursorOffset(), note.indexOf(QStringLiteral("gamma"))) << "Up from the tail";
+    EXPECT_LT(editor->cursorOffset(), end);
+
+    editor->setCursorOffset(0);
+    const QPoint onTail(editor->textColumn() + 40, int(tail.center().y()));
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, onTail);
+    EXPECT_EQ(editor->cursorOffset(), end) << "a click on the tail line";
+    editor->setCursorOffset(0);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, onTail + QPoint(0, 40));
+    EXPECT_EQ(editor->cursorOffset(), end) << "a click under it";
+    editor->setCursorOffset(0);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(editor->textColumn() + 10, int(tail.y()) - 20));
+    EXPECT_LT(editor->cursorOffset(), end) << "a click on the last text line is still on it";
+
+    editor->setCursorOffset(0);
+    QTest::keyClick(editor.get(), Qt::Key_End, Qt::ControlModifier);
+    EXPECT_EQ(editor->cursorOffset(), end) << "Ctrl+End";
+    EXPECT_NEAR(editor->caretRectNow().y(), tail.y(), 0.5);
+    QTest::keyClick(editor.get(), Qt::Key_End);
+    EXPECT_EQ(editor->cursorOffset(), end) << "End on the tail line stays on it";
+
+    editor->setCursorOffset(inGamma);
+    QTest::keyClick(editor.get(), Qt::Key_Down, Qt::ShiftModifier);
+    EXPECT_EQ(editor->cursorOffset(), end) << "Shift+Down";
+    EXPECT_EQ(editor->selectedText(), note.mid(inGamma));
+    editor->setCursorOffset(0);
+    QTest::keyClick(editor.get(), Qt::Key_End, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(editor->selectedText(), note) << "Ctrl+Shift+End takes the whole note";
+
+    // Down in a last paragraph of several lines goes line by line first.
+    const QString several = QStringLiteral("intro\n\none\ntwo\nthree\n");
+    auto other = editorWith(several);
+    other->show();
+    QTest::qWait(300);
+    other->setCursorOffset(several.indexOf(QStringLiteral("one")) + 1);
+    QTest::keyClick(other.get(), Qt::Key_Down);
+    EXPECT_EQ(other->cursorOffset(), several.indexOf(QStringLiteral("two")) + 1);
+    QTest::keyClick(other.get(), Qt::Key_Down);
+    EXPECT_EQ(other->cursorOffset(), several.indexOf(QStringLiteral("three")) + 1);
+    QTest::keyClick(other.get(), Qt::Key_Down);
+    EXPECT_EQ(other->cursorOffset(), several.size());
+}
+
+// A table or a callout last in the note: the first letter on the empty line
+// after it is drawn where it will be once the parse has landed.
+TEST(EnterJitterTest, TheFirstLetterAfterATrailingTableOrCalloutIsDrawnWhereItStays)
+{
+    const QList<std::pair<const char *, QString>> notes = {
+        {"table", QStringLiteral("para\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")},
+        {"callout", QStringLiteral("para\n\n> [!note] Title\n> body\n")},
+    };
+    for (const auto &[name, note] : notes) {
+        SCOPED_TRACE(name);
+        auto editor = editorWith(note);
+        editor->show();
+        editor->setCursorOffset(note.size());
+        QTest::qWait(300);
+        const int parsesBefore = editor->parseCountForTest();
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        EXPECT_EQ(editor->parseCountForTest(), parsesBefore + 1) << "the letter was drawn from the stale blocks";
+        const QImage typed = withoutCaret(*editor);
+        const qreal caret = editor->caretRectNow().y();
+        QTest::qWait(300);
+        EXPECT_NEAR(editor->caretRectNow().y(), caret, 0.5) << "the caret moved when the parse landed";
+        EXPECT_EQ(diffRows(withoutCaret(*editor), typed).toStdString(), "") << "the text moved when the parse landed";
+    }
+}
+
+// An insert that is the reader's own action in the focused editor - a slash
+// command picked with the mouse, a drop - is parsed on the spot like a key.
+TEST(EnterJitterTest, ASlashCommandAndADropAreTheReadersOwnEdit)
+{
+    const QString note = QStringLiteral("# Title\n\nparagraph one\n\n- a\n- b\n\nparagraph two\n");
+    {
+        const QString slashNote = QStringLiteral("# Title\n\nparagraph one\n\nsee \n\n- a\n- b\n\nparagraph two\n");
+        auto editor = editorWith(slashNote);
+        editor->show();
+        MarkdownEditor *raw = editor.get();
+        raw->setSlashCommands([] { return testSlashCommands(); },
+                              [raw](const QString &) { raw->insertAtCaret(QStringLiteral("one\n\n- two\n")); });
+        raw->setCursorOffset(slashNote.indexOf(QStringLiteral("see ")) + 4);
+        QTest::keyClicks(raw, QStringLiteral("/bol"));
+        ASSERT_TRUE(raw->slashPopupVisible());
+        QCompleter *slash = nullptr;
+        for (QCompleter *completer : raw->findChildren<QCompleter *>()) {
+            if (completer->popup()->objectName() == QLatin1String("slashCommandPopup"))
+                slash = completer;
+        }
+        ASSERT_NE(slash, nullptr);
+        const int before = raw->parseCountForTest();
+        emit slash->activated(raw->slashSuggestions().constFirst());
+        EXPECT_GT(raw->noteText().indexOf(QStringLiteral("- two")), 0);
+        EXPECT_EQ(raw->parseCountForTest(), before + 1) << "a picked slash command waited for the debounce";
+    }
+    {
+        auto editor = editorWith(note);
+        editor->show();
+        QTest::qWait(300);
+        QMimeData mime;
+        mime.setText(QStringLiteral("dropped\n\n- item\n"));
+        const qsizetype at = note.indexOf(QStringLiteral("paragraph two"));
+        editor->setCursorOffset(at);
+        const QPoint point(300, 100);
+        const int before = editor->parseCountForTest();
+        QDragEnterEvent enter(point, Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor->viewport(), &enter);
+        ASSERT_TRUE(enter.isAccepted());
+        QDropEvent drop(QPointF(point), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor->viewport(), &drop);
+        ASSERT_TRUE(drop.isAccepted());
+        EXPECT_EQ(editor->parseCountForTest(), before + 1) << "a drop waited for the debounce";
+    }
 }
 
 TEST(CodeHighlighterTest, KnowsKateDefinitionsAndObsidianAliases)
@@ -3735,6 +4285,11 @@ struct PdfZoomFixture {
     {
         const QString pdf = makeTestPdf(dir.path(), pages);
         editor = editorWith(note);
+        // Shown, so the viewport is the 900x600 asked for: hidden, it keeps the
+        // 640x480 default, which a note this tall only just fits - a scrollbar
+        // appearing (the empty line after the final newline counts) changes the
+        // column width under a raster that was drawn for the other one.
+        editor->show();
         editor->setLinkResolver([pdf](const QString &) { return pdf; });
         editor->setPdfNavClock([] { return qint64(100000); });
         offset = note.indexOf(QLatin1String("![["));
@@ -7943,6 +8498,460 @@ TEST(BaseBlockTest, FencedBlockAsksForNoParticularView)
     EXPECT_TRUE(fake.calls.first().viewName.isEmpty());
 }
 
+// --- CSV / TSV embeds ---------------------------------------------------------------
+
+namespace {
+
+QString writeTextFile(const QTemporaryDir &dir, const QString &name, const QByteArray &bytes)
+{
+    const QString path = dir.filePath(name);
+    QFile file(path);
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(bytes);
+    return path;
+}
+
+/// An editor showing `![[name]]`, resolved to `path`, and waited until the
+/// table the off-thread read and parse produces has landed.
+std::unique_ptr<MarkdownEditor> CSVeditorWith(const QString &path, bool waitForTable = true)
+{
+    auto editor = editorWith(QStringLiteral("![[%1]]\n").arg(QFileInfo(path).fileName()));
+    editor->setLinkResolver([path](const QString &) { return path; });
+    if (waitForTable)
+        EXPECT_TRUE(QTest::qWaitFor([&] { return !editor->tableCellTextsAt(0).isEmpty(); }, 5000));
+    return editor;
+}
+
+QList<QStringList> grid(std::initializer_list<std::initializer_list<const char *>> rows)
+{
+    QList<QStringList> out;
+    for (const auto &row : rows) {
+        QStringList cells;
+        for (const char *cell : row)
+            cells << QString::fromUtf8(cell);
+        out << cells;
+    }
+    return out;
+}
+
+} // namespace
+
+TEST(CSVembedTest, LaysOutAsATableWithItsHeaderAndCellTexts)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("data.csv"),
+                                       "name,qty\nApple,3\n\"Smith, J\",\"say \"\"hi\"\"\"\n");
+    auto editor = CSVeditorWith(path, false);
+    EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty()) << "nothing is read on the layout path: loading first";
+    EXPECT_NE(editor->panelTextAt(0).indexOf(QStringLiteral("Loading")), -1);
+
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->tableCellTextsAt(0).isEmpty(); }, 5000));
+    EXPECT_EQ(editor->tableCellTextsAt(0),
+              grid({{"name", "qty"}, {"Apple", "3"}, {"Smith, J", "say \"hi\""}}));
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("data.csv")));
+    EXPECT_GT(editor->documentHeight(), 3 * QFontMetricsF(editor->font()).height());
+}
+
+TEST(CSVembedTest, ATableCellKeepsALineBreakAsALineSeparator)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("data.csv"), "a,b\r\n\"one\r\ntwo\",x\r\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_EQ(editor->tableCellTextsAt(0).size(), 2);
+    EXPECT_EQ(editor->tableCellTextsAt(0).at(1).at(0), QStringLiteral("one") + QChar(QChar::LineSeparator) + QStringLiteral("two"));
+}
+
+TEST(CSVembedTest, SemicolonCSVAndTSVAndBOM)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    {
+        auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("eu.csv"), "\xEF\xBB\xBFname;price\nTea;1,50\n"));
+        EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"name", "price"}, {"Tea", "1,50"}}));
+    }
+    {
+        // .tsv is always tab, even where commas would win the sniff
+        auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("t.tsv"), "a,b\tc\n1\t2,3\n"));
+        EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a,b", "c"}, {"1", "2,3"}}));
+    }
+}
+
+TEST(CSVembedTest, RaggedRowsArePaddedToTheWidestRow)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("r.csv"), "a,b,c\n1\n1,2,3,4\n"));
+    EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b", "c", ""}, {"1", "", "", ""}, {"1", "2", "3", "4"}}));
+}
+
+TEST(CSVembedTest, ALongFileShowsTheFirstRowsAndAFooter)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QByteArray bytes = "id,v\n";
+    for (int i = 1; i <= 700; ++i)
+        bytes += QByteArray::number(i) + ",x\n";
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("big.csv"), bytes));
+    const QList<QStringList> rows = editor->tableCellTextsAt(0);
+    ASSERT_EQ(rows.size(), 1 + 500 + 1) << "header, 500 rows, a footer";
+    EXPECT_EQ(rows.at(500).at(0), QStringLiteral("500"));
+    EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("200")), -1) << rows.last().at(0).toStdString();
+}
+
+TEST(CSVembedTest, AWideFileShowsFewerRowsSoLayoutStaysCheap)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QByteArray bytes;
+    for (int row = 0; row <= 600; ++row)
+        for (int column = 0; column < 40; ++column)
+            bytes += QByteArray::number(row) + (column < 39 ? "," : "\n");
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("wide.csv"), bytes));
+    const QList<QStringList> rows = editor->tableCellTextsAt(0);
+    ASSERT_EQ(rows.size(), 1 + 37 + 1) << "header, 1500 cells' worth of rows, a footer";
+    EXPECT_EQ(rows.at(37).at(0), QStringLiteral("37"));
+    EXPECT_EQ(rows.last().at(0), QStringLiteral("and 563 more rows"));
+}
+
+TEST(CSVembedTest, AHeaderOnlyFileIsATableOfOneRow)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("h.csv"), "a,b\n"));
+    EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}}));
+}
+
+TEST(CSVembedTest, AnEmptyFileSaysSo)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("e.csv"), ""), false);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("empty"), Qt::CaseInsensitive); }, 5000))
+        << editor->panelTextAt(0).toStdString();
+    EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty());
+}
+
+TEST(CSVembedTest, AMissingFileFallsBackToTheLinkLikeAnyOtherBrokenEmbed)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    auto editor = CSVeditorWith(dir.filePath(QStringLiteral("gone.csv")), false);
+    QTest::qWait(50);
+    EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty());
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("gone.csv")));
+}
+
+TEST(CSVembedTest, AnUnreadableFileShowsAnError)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("locked.csv"), "a,b\n1,2\n");
+    QFile::setPermissions(path, QFileDevice::Permissions());
+    if (QFile(path).open(QIODevice::ReadOnly))
+        GTEST_SKIP() << "this user can read a mode 000 file";
+    auto editor = CSVeditorWith(path, false);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked.csv")); }, 5000))
+        << editor->panelTextAt(0).toStdString();
+    EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty());
+    QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+}
+
+TEST(CSVembedTest, AChangedFileIsReadAgain)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("live.csv"), "a,b\n1,2\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}, {"1", "2"}}));
+
+    writeTextFile(dir, QStringLiteral("live.csv"), "a,b\n1,2\n3,4\n");
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(file.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
+    file.close();
+
+    // the same note again, so every block is laid out afresh against the file as it is now
+    editor->setNoteText(QStringLiteral("![[live.csv]]\n\nafter\n"));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+    EXPECT_EQ(editor->tableCellTextsAt(0).at(2), (QStringList{QStringLiteral("3"), QStringLiteral("4")}));
+}
+
+TEST(CSVembedTest, ABaseRefreshDoesNotRelayOutACSVTable)
+{
+    // refreshBases() fires on every index change - every note save in the
+    // vault - and relays out each isBase block; a CSV table is not a base's.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("r.csv"), "a,b\n1,2\n"));
+    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+    const quint64 before = editor->layoutCount();
+    editor->refreshBases();
+    QTest::qWait(300); // past the 200 ms debounce
+    EXPECT_EQ(editor->layoutCount(), before);
+    editor->setBaseRunner([](const QString &, const QString &, const MarkdownEditor::BaseDeliver &) {});
+    EXPECT_EQ(editor->layoutCount(), before);
+    EXPECT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+}
+
+TEST(CSVembedTest, AFileRewrittenWhileTheNoteIsOpenIsReadAgainWithNothingElseHappening)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("live.csv"), "a,b\n1,2\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}, {"1", "2"}}));
+
+    // another program saves it: a new file renamed over the old, as most editors do
+    const QString replacement = writeTextFile(dir, QStringLiteral("live.csv.tmp"), "a,b\n1,2\n3,4\n");
+    QFile temporary(replacement);
+    ASSERT_TRUE(temporary.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(temporary.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
+    temporary.close();
+    ASSERT_TRUE(QFile::remove(path));
+    ASSERT_TRUE(QFile::rename(replacement, path));
+
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+    EXPECT_EQ(editor->tableCellTextsAt(0).at(2), (QStringList{QStringLiteral("3"), QStringLiteral("4")}));
+
+    // and a second time, in place: the watch survived the rename
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write("a,b\n1,2\n3,4\n5,6\n");
+    }
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 4; }, 5000));
+}
+
+TEST(CSVembedTest, TheOldTableStaysUpUntilTheNewOneLands)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("flicker.csv"), "a,b\n1,2\n");
+    const QString note = QStringLiteral("![[flicker.csv]]\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+
+    writeTextFile(dir, QStringLiteral("flicker.csv"), "a,b\n1,2\n3,4\n");
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(file.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
+    file.close();
+    editor->setNoteText(note + QStringLiteral("\nafter\n")); // a layout, with the read still to come
+    EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}, {"1", "2"}})) << "not \"Loading...\" meanwhile";
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+}
+
+TEST(CSVembedTest, ThousandsOfColumnsAreCutAndSaidSo)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QByteArray bytes(100000, ',');
+    bytes += "\n";
+    for (int i = 0; i < 500; ++i)
+        bytes += QByteArray::number(i) + ",x\n";
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("wide.csv"), bytes));
+    const QList<QStringList> rows = editor->tableCellTextsAt(0);
+    ASSERT_GE(rows.size(), 3);
+    EXPECT_EQ(rows.at(0).size(), 65) << "64 columns and a \"+N columns\" cell";
+    EXPECT_EQ(rows.at(0).last(), QStringLiteral("+%1 columns").arg(100001 - 64));
+    EXPECT_EQ(rows.at(1).size(), 65);
+    EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("more rows")), -1) << rows.last().at(0).toStdString();
+    EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("more columns")), -1);
+}
+
+TEST(CSVembedTest, AHugeCellIsCutAtAThousandCharacters)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QByteArray bytes = "h,i\n\"" + QByteArray(2 << 20, 'x') + "\",y\n";
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("cell.csv"), bytes));
+    const QList<QStringList> rows = editor->tableCellTextsAt(0);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(1).at(0).size(), 1001);
+    EXPECT_TRUE(rows.at(1).at(0).endsWith(QChar(0x2026)));
+    EXPECT_EQ(rows.at(1).at(1), QStringLiteral("y"));
+}
+
+TEST(CSVembedTest, AFileOverTheReadLimitSaysSoInsteadOfBeingEmpty)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // one 33 MB line: nothing to cut it at, so what was read is shown (cut) and the footer says why
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("long.csv"), QByteArray(33 << 20, 'x')));
+    const QList<QStringList> rows = editor->tableCellTextsAt(0);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("32 MB")), -1) << rows.last().at(0).toStdString();
+}
+
+TEST(CSVembedTest, OtherTextEncodingsAreReadAsText)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    {
+        auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("utf16.tsv"),
+                                                  QByteArray("\xFF\xFE" "a\0\t\0" "\x0D\x01\n\0", 10)));
+        EXPECT_EQ(editor->tableCellTextsAt(0).first(), (QStringList{QStringLiteral("a"), QString(QChar(0x010D))}));
+    }
+    {
+        // Excel's "CSV" on Windows: a code page, not UTF-8
+        auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("legacy.csv"), "name;city\nJo\xE9;Z\xFCrich\n"));
+        EXPECT_EQ(editor->tableCellTextsAt(0).at(1),
+                  (QStringList{QString::fromUtf8("Jo\xC3\xA9"), QString::fromUtf8("Z\xC3\xBC" "rich")}));
+    }
+}
+
+TEST(CSVembedTest, ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds)
+{
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // the cell budget is what bounds it, whatever the shape: a narrow file's 500 rows, a wide one's 64 columns
+    for (const int columns : {2, 8, 64, 200}) {
+        QByteArray bytes;
+        for (int row = 0; row <= 600; ++row)
+            for (int column = 0; column < columns; ++column)
+                bytes += "cell " + QByteArray::number(row * column) + (column + 1 < columns ? "," : "\n");
+        const QString name = QStringLiteral("budget%1.csv").arg(columns);
+        auto editor = CSVeditorWith(writeTextFile(dir, name, bytes));
+        ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+        const double best = perf::bestOf(
+            [&] {
+                QElapsedTimer timer;
+                timer.start();
+                editor->setNoteText(QStringLiteral("![[%1]]\n").arg(name)); // every block laid out afresh, the read cached
+                return timer.nsecsElapsed() / 1e6;
+            },
+            7, 10.0);
+        fprintf(stderr, "CSV relayout %d columns: %.2f ms\n", columns, best);
+        EXPECT_LT(best, 10.0) << columns << " columns";
+    }
+}
+
+TEST(CSVembedTest, ADeletedFileIsForgottenAndItsBlockLaidOutAgain)
+{
+    // the app's resolver answers {} for a file that is gone (so the block becomes the plain link,
+    // and a restored file is found again by Index::changed - see the window tests); what the
+    // watcher owes is dropping the read, which would otherwise count as "changed" at every event
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("gone.csv"), "a,b\n1,2\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_EQ(editor->CSVcacheSize(), 1);
+    ASSERT_TRUE(QFile::remove(path));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->CSVcacheSize() == 0; }, 5000));
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("gone.csv")));
+}
+
+TEST(CSVembedTest, AReadErrorIsRetriedWhenTheFileBecomesReadable)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("locked.csv"), "a,b\n1,2\n");
+    QFile::setPermissions(path, QFileDevice::Permissions());
+    if (QFile(path).open(QIODevice::ReadOnly))
+        GTEST_SKIP() << "this user can read a mode 000 file";
+    auto editor = CSVeditorWith(path, false);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked.csv")); }, 5000));
+
+    // a chmod changes neither mtime nor size, only ctime: the watcher's attribute event is all there is
+    const QDateTime mtime = QFileInfo(path).lastModified();
+    ASSERT_TRUE(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    ASSERT_EQ(QFileInfo(path).lastModified(), mtime);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+}
+
+TEST(CSVembedTest, AReadErrorIsRetriedAtTheNextLayout)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("locked2.csv"), "a,b\n1,2\n");
+    QFile::setPermissions(path, QFileDevice::Permissions());
+    if (QFile(path).open(QIODevice::ReadOnly))
+        GTEST_SKIP() << "this user can read a mode 000 file";
+    auto editor = CSVeditorWith(path, false);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked2.csv")); }, 5000));
+    QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    // the next layout of the block - here the note set again - asks again, whatever the watcher did
+    editor->setNoteText(QStringLiteral("![[locked2.csv]]\n\nafter\n"));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+}
+
+TEST(CSVembedTest, AFileAppendedToContinuouslyStillRefreshes)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("log.csv"), "t,v\n0,0\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_EQ(editor->tableCellTextsAt(0).size(), 2);
+
+    // a write every 100 ms, never a 200 ms pause: a plain debounce would wait for the end
+    bool refreshedWhileWriting = false;
+    for (int i = 1; i <= 30 && !refreshedWhileWriting; ++i) {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::Append));
+        file.write(QByteArray::number(i) + "," + QByteArray::number(i) + "\n");
+        file.close();
+        QTest::qWait(100);
+        refreshedWhileWriting = editor->tableCellTextsAt(0).size() > 2;
+    }
+    EXPECT_TRUE(refreshedWhileWriting) << "within 3 s of constant writing";
+}
+
+TEST(CSVembedTest, AWorkerThatThrowsLeavesANoticeNotLoadingForever)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("boom.csv"), "a,b\n1,2\n");
+    MarkdownEditor::setCSVreadHookForTests([](const QString &) { throw std::bad_alloc(); });
+    auto editor = CSVeditorWith(path, false);
+    const bool noticed = QTest::qWaitFor(
+        [&] { return editor->panelTextAt(0).contains(QStringLiteral("Could not read boom.csv")); }, 5000);
+    MarkdownEditor::setCSVreadHookForTests(nullptr);
+    EXPECT_TRUE(noticed) << editor->panelTextAt(0).toStdString();
+}
+
+TEST(CSVembedTest, TurningTheFeatureOffForgetsTheFiles)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("t.csv"), "a,b\n1,2\n"));
+    EXPECT_EQ(editor->CSVcacheSize(), 1);
+    MarkdownEditor::Features off;
+    off.CSVembeds = false;
+    editor->setFeatures(off);
+    EXPECT_EQ(editor->CSVcacheSize(), 0);
+}
+
+TEST(CSVembedTest, TwoEmbedsOfOneFileBothLand)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("twice.csv"), "a,b\n1,2\n");
+    const QString note = QStringLiteral("![[twice.csv]]\n\n![[twice.csv]]\n");
+    auto editor = editorWith(note);
+    editor->setLinkResolver([path](const QString &) { return path; });
+    const qsizetype second = note.lastIndexOf(QStringLiteral("!["));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->tableCellTextsAt(0).isEmpty() && !editor->tableCellTextsAt(second).isEmpty(); }, 5000));
+}
+
+TEST(FeaturesTest, CSVembedsToggle)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("t.csv"), "name,qty\nApple,3\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+
+    MarkdownEditor::Features off;
+    off.CSVembeds = false;
+    editor->setFeatures(off);
+    EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty()) << "off: no table";
+    EXPECT_TRUE(editor->panelTextAt(0).contains(QStringLiteral("name,qty")))
+        << "off: the file is a plain source listing again, as before CSV embeds existed";
+}
+
 // --- HTML blocks and inline HTML ----------------------------------------------------
 
 TEST(HtmlRendererTest, AvailableExactlyWhenLitehtmlWasFound)
@@ -8507,6 +9516,20 @@ TEST(TableCellTest, AClickEditsTheCellAndTheTableStaysATable)
     QTest::keyClicks(editor.get(), QStringLiteral("s|x"));
     EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| apples\\|x | 3 |")));
     EXPECT_TRUE(editor->tableRenderedAt(apple));
+}
+
+// Tab from the last cell adds a row, and the row is parsed once: the newline in
+// it is parsed on the spot and the command must not parse again.
+TEST(TableCellTest, ANewRowIsParsedOnce)
+{
+    auto editor = editorWith(kTableNote);
+    editor->show();
+    const qsizetype lastCell = kTableNote.indexOf(QStringLiteral("|  |\n\nbelow")) + 2;
+    editor->setCursorOffset(lastCell);
+    const int before = editor->parseCountForTest();
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| pear |  |\n|")));
+    EXPECT_EQ(editor->parseCountForTest(), before + 1);
 }
 
 TEST(TableCellTest, KeysMoveBetweenCellsAndNeverEatAPipe)
@@ -9916,6 +10939,31 @@ TEST(CodeScrollTest, HorizontalWheelAndTrackpadPixelsPanToo)
 
     sendWheel(*editor, at, QPoint(-50, 0), QPoint(), Qt::NoModifier);
     EXPECT_GT(editor->sideScrollAt(kFenceBody), wheel);
+}
+
+TEST(CSVembedTest, ASidewaysScrollSurvivesTheReparse)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QByteArray bytes;
+    for (int row = 0; row < 3; ++row)
+        for (int column = 0; column < 30; ++column)
+            bytes += "a fairly long cell " + QByteArray::number(row * column) + (column < 29 ? "," : "\n");
+    const QString path = writeTextFile(dir, QStringLiteral("wide.csv"), bytes);
+    const QString note = QStringLiteral("![[wide.csv]]\n\nend");
+    auto editor = editorWith(note);
+    editor->setLinkResolver([path](const QString &) { return path; });
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->tableCellTextsAt(0).isEmpty(); }, 5000));
+    editor->setCursorOffset(note.size());
+
+    sendWheel(*editor, centreOf(editor->blockPanelAt(0)), QPoint(), QPoint(0, -240), Qt::ShiftModifier);
+    const qreal scrolled = editor->sideScrollAt(0);
+    ASSERT_GT(scrolled, 0);
+
+    QTest::keyClicks(editor.get(), QStringLiteral("zz")); // a reparse rebuilds every block a moment later
+    QTest::qWait(400);
+    ASSERT_TRUE(editor->noteText().endsWith(QStringLiteral("endzz")));
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(0), scrolled);
 }
 
 TEST(CodeScrollTest, AShortListingIsNotScrollable)
