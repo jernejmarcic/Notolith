@@ -276,7 +276,7 @@ directory, or in `Config::storeDirectory` when a test gives one; a dead owner fr
 a process that cannot get it fails with "Sharing is already running in another Notolith
 window", shown in the status bar. The first process keeps its port, name and shares; the
 other opens no link, and can share once that window's vault is closed or its sharing is
-off and the vault is reopened. The stores are per vault, so nothing else is shared.
+off and this vault is reopened (the window does not retry by itself). The lock never goes stale by age, so the share directory (`~/.local/share/noteAppC/share`) must stay machine-local: never part of a synced tree. The stores are per vault, so nothing else is shared.
 
 Tests: `ctest -R '^share$'` - loopback only, mDNS off, port 0, an in-memory secret
 store, temporary store directories.

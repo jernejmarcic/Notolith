@@ -259,7 +259,7 @@ bool ShareEngine::start()
         lock->setStaleLockTime(0); // only a dead owner frees it: a window can run for months
         if (!lock->tryLock(0)) {
             m_error = tr("Sharing is already running in another Notolith window: this device's link can be "
-                         "online once. Close that window, or turn sharing off in it, to share from here.");
+                         "online once. Close that window, or turn sharing off in it, then reopen this vault to share from here.");
             return false;
         }
         m_linkLock = std::move(lock);

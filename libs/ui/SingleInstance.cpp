@@ -132,12 +132,13 @@ bool SingleInstance::moveTo(const QString &name, const QString &argument, const 
     case Outcome::Delivered:
         return false;
     case Outcome::Locked:
-        // Listening on the new name first, so there is no moment with neither.
+        // The new lock is held before the old name goes, so a launch for either finds an owner or
+        // waits for one; the old socket closes, then the new one listens.
         m_server.close();
         m_lock = std::move(lock);
         m_name = name;
         if (m_window)
-            m_server.listen(m_name);
+            listen();
         return true;
     case Outcome::Stuck:
         // Not ours to take: the old name goes, and the window carries on unserved.
@@ -175,7 +176,18 @@ void SingleInstance::serve(MainWindow *window)
     // We hold the lock, so a socket file here is a crash's leftover and
     // listen() replaces it.
     if (!m_name.isEmpty())
-        m_server.listen(m_name);
+        listen();
+}
+
+void SingleInstance::listen()
+{
+    if (m_server.listen(m_name))
+        return;
+    // Unserved but holding the lock, every later launch for this vault would wait two seconds and
+    // then start a second process on it: let the name go instead and say why.
+    qWarning("Notolith: cannot listen on %s: %s", qPrintable(m_name), qPrintable(m_server.errorString()));
+    m_lock.reset();
+    m_name.clear();
 }
 
 } // namespace noteAppC

@@ -97,6 +97,8 @@ public:
     QString name() const { return m_name; }
 
 private:
+    /// Listens on m_name; when that fails the lock and the name are given up (and the reason logged).
+    void listen();
     enum class Outcome { Delivered, Locked, Stuck };
     /// Delivers `argument` to `name` or takes `lock`, for up to `attempts` tries 50 ms apart.
     Outcome reach(const QString &name, QLockFile &lock, const QString &argument, const QByteArray &token, int attempts,

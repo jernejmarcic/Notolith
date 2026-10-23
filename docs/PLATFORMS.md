@@ -105,7 +105,7 @@ takes the no-vault name when it is free.
 
 A launch with no instance running pays one failed `connect()`, one lock file
 (`notolith-<id>.sock.lock`, taken before the window is built and held until
-exit) and, for a launch that names no vault, one read of the settings. The
+exit) and, for a launch that names no vault, one read of the settings (done twice before the window: the cheap pass and the full one, about 20 microseconds each). The
 lock is what makes two launches in the same moment - a multi-select "Open
 with" - one window: the second finds it held, and keeps retrying the connect
 for up to two seconds while the first builds its window. A crash leaves the
@@ -141,7 +141,7 @@ Per user, not per vault, and what was done about it:
 - `settings.ini` and `vaults.ini` (recent vaults and files, remembered note
   positions): each process holds what it loaded, so `Settings::save()` writes
   what the object changed since it loaded on top of what the files hold now,
-  under `~/.config/noteAppC/.save.lock`. Another window's change to another
+  under `~/.config/noteAppC/.save.lock` (200 ms wait at most). Another window's change to another
   setting, a vault it opened, a note it positioned survive; a reset or a forgotten
   position stays; a setting both changed takes the later save. A setting changed
   in one window shows in another only after that other loads or saves.
