@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVariant>
@@ -84,7 +85,7 @@ public:
     /// it loaded (or last saved) on top of what is on disk now: another window's
     /// changes to other settings survive, a vault one window opened joins the recent
     /// vaults another saved, and a note position forgotten stays forgotten. A setting both
-    /// changed takes the later save. The read and the write happen under a lock file.
+    /// changed takes the later save. The read and the write happen under a lock file (waited for 200 ms at most).
     /// What the file holds afterwards is what this object holds too.
     bool save(QString *error = nullptr);
 
@@ -173,6 +174,7 @@ private:
     QVariantMap m_index; ///< what the app remembers, written to vaults.ini
     QVariantMap m_baseUser;  ///< m_user as loaded or last saved: what save() tells "changed here" by
     QVariantMap m_baseIndex; ///< m_index likewise
+    QSet<QString> m_touched; ///< remembered lists noteOpened() acted on since the last save
     QVariantMap m_vault; ///< what the vault's Obsidian config says
     QString m_vaultRoot;
 };

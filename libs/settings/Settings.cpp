@@ -827,26 +827,35 @@ struct RememberedList {
 constexpr RememberedList kRemembered[] = {
     {"state.recentVaults", 10, false}, {"state.recentFiles", 10, false}, {"state.notePositions", 50, true}};
 
-/// `ours` - the window saving has just acted, so its entries lead - then what another window added
-/// to `theirs` since `base`. An entry of `ours` that is still as `base` had it and is gone from
-/// `theirs` was removed by another window, so it is not brought back. Up to the cap.
+/// The merged list, newest first: what this window added or moved to the front (`ours`, the
+/// window saving has just acted), then what another window added to `theirs` since `base`, then
+/// what both still have, in this window's order, up to the cap - the cap cuts the oldest, never
+/// a fresh entry. An entry of `ours` still as `base` had it and gone from `theirs` was removed
+/// by another window, so it is not brought back. `touched`: this window opened something, so
+/// its first entry leads even when it was first already.
 QStringList mergeRemembered(const QStringList &ours, const QStringList &base, const QStringList &theirs,
-                            const RememberedList &kind)
+                            const RememberedList &kind, bool touched)
 {
     const auto told = [&kind](const QString &entry) { return kind.byPath ? entry.section(kPositionField, 0, 0) : entry; };
     QStringList merged;
     QSet<QString> seen;
-    for (const QString &entry : ours) {
-        if (base.contains(entry) && !theirs.contains(entry))
-            continue;
-        merged.append(entry);
+    const auto add = [&](const QString &entry) {
+        if (seen.contains(told(entry)))
+            return;
         seen.insert(told(entry));
+        merged.append(entry);
+    };
+    for (qsizetype i = 0; i < ours.size(); ++i) {
+        if (!base.contains(ours.at(i)) || (touched && i == 0))
+            add(ours.at(i));
     }
     for (const QString &entry : theirs) {
-        if (base.contains(entry) || seen.contains(told(entry)))
-            continue;
-        seen.insert(told(entry));
-        merged.append(entry);
+        if (!base.contains(entry))
+            add(entry);
+    }
+    for (const QString &entry : ours) {
+        if (theirs.contains(entry))
+            add(entry);
     }
     while (merged.size() > kind.cap)
         merged.removeLast();
@@ -854,16 +863,17 @@ QStringList mergeRemembered(const QStringList &ours, const QStringList &base, co
 }
 
 /// What is on disk now, with this object's changes since `base` on top.
-QVariantMap overlay(QVariantMap disk, const QVariantMap &ours, const QVariantMap &base)
+QVariantMap overlay(QVariantMap disk, const QVariantMap &ours, const QVariantMap &base, const QSet<QString> &touched)
 {
     for (auto it = ours.constBegin(); it != ours.constEnd(); ++it) {
-        if (base.contains(it.key()) && base.value(it.key()) == it.value())
+        if (base.contains(it.key()) && base.value(it.key()) == it.value() && !touched.contains(it.key()))
             continue;
         const auto *kind = std::find_if(std::begin(kRemembered), std::end(kRemembered),
                                         [&it](const RememberedList &list) { return it.key() == QLatin1String(list.key); });
         if (kind != std::end(kRemembered))
             disk.insert(it.key(), mergeRemembered(it.value().toStringList(), base.value(it.key()).toStringList(),
-                                                  disk.value(it.key()).toStringList(), *kind));
+                                                  disk.value(it.key()).toStringList(), *kind,
+                                                  touched.contains(it.key())));
         else
             disk.insert(it.key(), it.value());
     }
@@ -943,11 +953,11 @@ bool Settings::save(QString *error)
     // what it merged from the same files: one at a time. Best effort - a lock that cannot be had
     // (a read-only directory fails below anyway) still gets the merge.
     QLockFile lock(QDir(configDirectory()).filePath(QStringLiteral(".save.lock")));
-    lock.setStaleLockTime(10000); // a save takes milliseconds
-    lock.tryLock(3000);
+    lock.setStaleLockTime(10000); // a save takes about 0.1 ms: 200 ms is long past a live owner
+    lock.tryLock(200);
 
-    const QVariantMap user = overlay(readKnown(configFile()), m_user, m_baseUser);
-    const QVariantMap indexMerged = overlay(readKnown(indexFile()), m_index, m_baseIndex);
+    const QVariantMap user = overlay(readKnown(configFile()), m_user, m_baseUser, {});
+    const QVariantMap indexMerged = overlay(readKnown(indexFile()), m_index, m_baseIndex, m_touched);
 
     // Only what differs from the compiled-in default, so the file stays short
     // enough to read and a later change of default still reaches people.
@@ -984,6 +994,7 @@ bool Settings::save(QString *error)
     // This object now holds what the files do.
     m_user = m_baseUser = user;
     m_index = m_baseIndex = indexMerged;
+    m_touched.clear();
     return true;
 }
 
@@ -1010,6 +1021,9 @@ void Settings::noteOpened(const QString &vaultRoot, const QString &filePath)
     };
     setValue(QStringLiteral("state.recentVaults"), push(recentVaults(), vaultRoot));
     setValue(QStringLiteral("state.recentFiles"), push(recentFiles(), filePath));
+    // Even when it changed nothing here, this vault is now the one last used: save() puts it first.
+    m_touched.insert(QStringLiteral("state.recentVaults"));
+    m_touched.insert(QStringLiteral("state.recentFiles"));
 }
 
 std::optional<Settings::NotePosition> Settings::notePosition(const QString &path) const

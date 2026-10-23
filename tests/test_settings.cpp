@@ -759,3 +759,55 @@ TEST(Settings, SavesFromTwoThreadsDoNotLoseEachOthersLastValue)
     EXPECT_EQ(now.integer(QStringLiteral("editor.tabWidth")), 159);
     EXPECT_EQ(now.integer(QStringLiteral("appearance.baseFontSize")), 259);
 }
+
+// The normal state after some use: the lists are full. The other window's newest entries must
+// not be the ones cut.
+TEST(Settings, AFullListKeepsTheOtherWindowsNewestEntries)
+{
+    SharedConfig config;
+    Settings seed = Settings::load();
+    for (int i = 0; i < 50; ++i)
+        seed.setNotePosition(QStringLiteral("/v/old%1.md").arg(i), i, i);
+    for (int i = 0; i < 10; ++i)
+        seed.noteOpened(QStringLiteral("/vaults/old%1").arg(i), QStringLiteral("/vaults/old%1/n.md").arg(i));
+    ASSERT_TRUE(seed.save());
+
+    Settings first = Settings::load();
+    Settings second = Settings::load();
+    first.setNotePosition(QStringLiteral("/v/fresh.md"), 7, 7);
+    first.noteOpened(QStringLiteral("/vaults/fresh"), QStringLiteral("/vaults/fresh/f.md"));
+    ASSERT_TRUE(first.save());
+    second.setNotePosition(QStringLiteral("/v/other.md"), 8, 8);
+    second.noteOpened(QStringLiteral("/vaults/other"), QStringLiteral("/vaults/other/o.md"));
+    ASSERT_TRUE(second.save());
+
+    const Settings now = Settings::load();
+    EXPECT_TRUE(now.notePosition(QStringLiteral("/v/fresh.md"))) << "the first window's newest position survives the second's save";
+    EXPECT_TRUE(now.notePosition(QStringLiteral("/v/other.md")));
+    EXPECT_EQ(now.rememberedNotes().size(), 50);
+    EXPECT_EQ(now.recentVaults().size(), 10);
+    EXPECT_EQ(now.recentVaults().value(0), QStringLiteral("/vaults/other"));
+    EXPECT_TRUE(now.recentVaults().contains(QStringLiteral("/vaults/fresh")));
+    EXPECT_EQ(now.recentFiles().size(), 10);
+    EXPECT_EQ(now.recentFiles().value(0), QStringLiteral("/vaults/other/o.md"));
+    EXPECT_TRUE(now.recentFiles().contains(QStringLiteral("/vaults/fresh/f.md")));
+    EXPECT_EQ(second.recentVaults(), now.recentVaults()) << "and the saving window agrees with the file";
+}
+
+// A window whose vault is already first in its own list still means "this vault, last": the
+// other window's vault must not stay first on disk.
+TEST(Settings, OpeningANoteInAnAlreadyFirstVaultMakesItTheLastUsedOne)
+{
+    SharedConfig config;
+    Settings first = Settings::load();
+    Settings second = Settings::load();
+    first.noteOpened(QStringLiteral("/vaults/one"), QString());
+    ASSERT_TRUE(first.save());
+    second.noteOpened(QStringLiteral("/vaults/two"), QString());
+    ASSERT_TRUE(second.save());
+    ASSERT_EQ(Settings::load().recentVaults().value(0), QStringLiteral("/vaults/two"));
+
+    first.noteOpened(QStringLiteral("/vaults/one"), QStringLiteral("/vaults/one/a.md")); // first in its own list already
+    ASSERT_TRUE(first.save());
+    EXPECT_EQ(Settings::load().recentVaults(), (QStringList{QStringLiteral("/vaults/one"), QStringLiteral("/vaults/two")}));
+}
