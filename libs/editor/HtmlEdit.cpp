@@ -1162,7 +1162,8 @@ bool MarkdownEditor::handleHTMLenter()
     split += QLatin1Char('\n') + indent + QStringLiteral("<%1>").arg(span->tag);
     d->m_lastEdit.invalidate(); // its own undo step
     insertText(split);
-    reparse(); // the new element is one before the next key needs it
+    if (d->m_parsedVersion != d->m_textVersion) // else its newline was parsed already
+        reparse(); // the new element is one before the next key needs it
     return true;
 }
 

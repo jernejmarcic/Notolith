@@ -813,15 +813,16 @@ TEST(MarkdownEditorTest, KeystrokeStaysInsideTheBudget)
     EXPECT_LT(perKeystroke, 8.0);
 }
 
-// Enter parses at once (a newline changes what the blocks are), so it is the one
-// key that pays for a parse: on the largest note that does it must stay inside
-// the 10 ms a key may cost.
-TEST(MarkdownEditorTest, EnterOnTheLargestSynchronousNoteStaysInsideTheBudget)
+// Enter is parsed at once (a newline changes what the blocks are) while parses are
+// cheap, so it is the one key that can pay for a parse: it must stay inside the
+// 10 ms a key may cost on a note the parse is cheap for and on one it is not.
+TEST(MarkdownEditorTest, EnterStaysInsideTheBudgetWhateverTheNoteSize)
 {
-    QString note = generateNote(31);
+    for (const int kilobytes : {20, 120}) {
+    SCOPED_TRACE(kilobytes);
+    QString note = generateNote(kilobytes);
     auto editor = parsedEditorWith(note);
     ASSERT_TRUE(editor) << "the parse never came back";
-    ASSERT_LE(note.size(), 32 * 1024) << "past the size it is parsed on the spot at";
     editor->setCursorOffset(note.size() / 2);
     editor->enterBlockAt(note.size() / 2);
 
@@ -837,6 +838,7 @@ TEST(MarkdownEditorTest, EnterOnTheLargestSynchronousNoteStaysInsideTheBudget)
 
     std::printf("[ PERF     ] %.2f kB note, %.2f ms per Enter\n", note.size() / 1024.0, perEnter);
     EXPECT_LT(perEnter, 10.0);
+    }
 }
 
 TEST(MarkdownEditorTest, OpeningALargeNoteIsFast)
@@ -1052,6 +1054,8 @@ TEST(EnterJitterTest, NoLineOfTextMovesAfterEnterOnceTheEditIsDrawn)
         QString endOf; // the caret goes to the end of the line holding this; "" is the end of the note
         int back = 0;  // ... and this many characters back from there
         int lift = 0;  // the view is scrolled up this far, the caret mid-screen
+        bool slow = false; // the last parse was a slow one: the newline waits for the debounce
+        bool plain = false; // no letter typed first (it would end a setext underline)
     };
     QString long60;
     for (int i = 0; i < 60; ++i)
@@ -1078,6 +1082,10 @@ TEST(EnterJitterTest, NoLineOfTextMovesAfterEnterOnceTheEditIsDrawn)
         {"midBlockquote", QStringLiteral("intro\n\n> quote line here\n\nafter\n\nmore\n"),
          QStringLiteral("> quote line here"), 5},
         {"headingEndOfNote", QStringLiteral("para\n\n## Last heading"), QString()},
+        {"setext", QStringLiteral("intro\n\nTitle\n=====\n\nafter\n\nmore\n"), QStringLiteral("====="), 0, 0, false, true},
+        {"slowHeading", QStringLiteral("# Title\n\npara\n\nanother\n\nlast\n"), QStringLiteral("# Title"), 0, 0, true},
+        {"slowSetext", QStringLiteral("intro\n\nTitle\n=====\n\nafter\n\nmore\n"), QStringLiteral("====="), 0, 0, true, true},
+        {"slowSetextMid", QStringLiteral("intro\n\nTitle words\n=====\n\nafter\n\nmore\n"), QStringLiteral("Title words"), 5, 0, true, true},
     };
     // Past the size a newline is parsed on the spot at, the stale blocks are drawn
     // until the pool parse lands, and a heading must look like what it becomes.
@@ -1085,7 +1093,7 @@ TEST(EnterJitterTest, NoLineOfTextMovesAfterEnterOnceTheEditIsDrawn)
     for (const char *name : {"paragraph", "heading", "subheading", "midHeading"}) {
         const Case &small = *std::find_if(cases.cbegin(), cases.cend(),
                                           [name](const Case &c) { return std::strcmp(c.name, name) == 0; });
-        cases.append({"bigNote", small.text + QStringLiteral("\n") + filler, small.endOf, small.back, small.lift});
+        cases.append({"bigNote", small.text + QStringLiteral("\n") + filler, small.endOf, small.back, small.lift, true});
     }
 
     for (const Case &c : cases) {
@@ -1100,9 +1108,10 @@ TEST(EnterJitterTest, NoLineOfTextMovesAfterEnterOnceTheEditIsDrawn)
         }
         editor->setCursorOffset(at);
         QTest::qWait(300); // the open settles: parse, scroll to the caret
-        QTest::keyClicks(editor.get(), QStringLiteral("x")); // the caret's block is raw, as in a real session
+        if (!c.plain)
+            QTest::keyClicks(editor.get(), QStringLiteral("x")); // the caret's block is raw, as in a real session
         QTest::qWait(300);
-        editor->setCursorOffset(at + 1);
+        editor->setCursorOffset(c.plain ? at : at + 1);
         QTest::qWait(100);
 
         if (c.lift > 0) {
@@ -1111,6 +1120,8 @@ TEST(EnterJitterTest, NoLineOfTextMovesAfterEnterOnceTheEditIsDrawn)
         }
         const QImage beforeEnter = withoutCaret(*editor);
         const qreal caretBefore = editor->caretRectNow().y();
+        if (c.slow)
+            editor->setLastParseTimeForTest(50'000'000);
         QTest::keyClick(editor.get(), Qt::Key_Return);
         struct Frame {
             const char *when;
@@ -1158,6 +1169,179 @@ TEST(EnterJitterTest, NoLineOfTextMovesAfterEnterOnceTheEditIsDrawn)
             EXPECT_EQ(diffRows(frames[i].image, frames[0].image).toStdString(), "")
                 << frames[i].when << " drew something other than the edit's own frame";
         }
+    }
+}
+
+// The note's own last line: a note ends in a newline, and the empty line after it
+// belongs to no block, so there was nowhere to draw the caret. Enter at the end
+// left it on the line above (or on the top of the last block), and the next
+// character then dropped a line.
+TEST(EnterJitterTest, EnterAtTheEndOfTheNoteMovesTheCaretToTheNewLineAtOnce)
+{
+    struct Case {
+        const char *name;
+        QString text;
+        bool press; // Enter pressed at the end; else the note already ends in a newline
+        bool list = false;
+    };
+    QString long60;
+    for (int i = 0; i < 60; ++i)
+        long60 += QStringLiteral("paragraph number %1\n\n").arg(i);
+    const QList<Case> cases = {
+        {"paragraph", QStringLiteral("alpha\n\nbeta\n\ngamma"), true},
+        {"multiLineParagraph", QStringLiteral("intro\n\none\ntwo\nthree"), true},
+        {"newlineEnded", QStringLiteral("alpha\n\nbeta\n\ngamma\n"), false},
+        {"heading", QStringLiteral("para\n\n# Title"), true},
+        {"subheading", QStringLiteral("para\n\n## Sub heading"), true},
+        {"listItem", QStringLiteral("para\n\n- item"), true, true},
+        {"quote", QStringLiteral("para\n\n> quoted"), true},
+        {"longNote", long60 + QStringLiteral("last words"), true},
+        {"longNoteNewlineEnded", long60 + QStringLiteral("last words\n"), false},
+    };
+
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.name);
+        auto editor = editorWith(c.text);
+        editor->show();
+        const auto docY = [&] { return editor->caretRectNow().y(); };
+        const qsizetype end = c.text.size();
+        // The line the text ends on: the end of its last character.
+        editor->setCursorOffset(c.press ? end : end - 1);
+        QTest::qWait(300);
+        const qreal lastLine = docY();
+        editor->setCursorOffset(end);
+        if (c.press)
+            QTest::keyClick(editor.get(), Qt::Key_Return);
+
+        const QRectF afterEnter = editor->caretRectNow();
+        const qreal moved = docY() - lastLine;
+        // Near the bottom of the view it scrolls to follow the caret, and the
+        // distance in the view says nothing.
+        if (lastLine < editor->viewport()->height() - 60) {
+            EXPECT_GT(moved, 15) << "the caret is not on a line of its own below the text";
+            EXPECT_LT(moved, 45) << "the caret is more than a line below the text";
+        }
+        EXPECT_GE(afterEnter.y(), 0) << "the caret left the view";
+        EXPECT_LT(afterEnter.y() + afterEnter.height(), editor->viewport()->height() + 1) << "the caret left the view";
+        if (!c.list)
+            EXPECT_NEAR(afterEnter.x(), editor->textColumn() - 1, 1.5) << "not at the start of the line";
+
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        const QRectF afterX = editor->caretRectNow();
+        EXPECT_NEAR(afterX.y(), afterEnter.y(), 0.5) << "the next character landed on another line";
+        EXPECT_GT(afterX.x(), afterEnter.x()) << "the character is not where the caret was";
+        QTest::qWait(300); // the parse lands
+        const QRectF parsed = editor->caretRectNow();
+        EXPECT_NEAR(parsed.y(), afterX.y(), 0.5);
+        EXPECT_NEAR(parsed.x(), afterX.x(), 0.5);
+    }
+}
+
+// What a newline costs: it is parsed on the spot only for the reader's own key,
+// only while parses are cheap, and never twice.
+TEST(EnterJitterTest, ANewlineIsParsedOnTheSpotOnlyForTheReadersOwnKeyWhileParsesAreCheap)
+{
+    const QString note = QStringLiteral("# Title\n\nparagraph one\n\n- a\n- b\n\nparagraph two\n");
+    const qsizetype at = note.indexOf(QStringLiteral("paragraph one")) + 5;
+
+    // The reader's own Enter: one parse, at once.
+    {
+        auto editor = editorWith(note);
+        editor->setCursorOffset(at);
+        const int before = editor->parseCountForTest();
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        EXPECT_EQ(editor->parseCountForTest(), before + 1);
+        QTest::qWait(100);
+        EXPECT_EQ(editor->parseCountForTest(), before + 1) << "parsed again by the debounce";
+    }
+    // The same note open in a second pane: the mirrored edit is not parsed on
+    // the spot, the debounce does it once.
+    {
+        auto first = editorWith(note);
+        auto second = editorWith(note);
+        QObject::connect(first.get(), &MarkdownEditor::edited, second.get(), &MarkdownEditor::applyExternalEdit);
+        first->setCursorOffset(at);
+        const int firstBefore = first->parseCountForTest();
+        const int secondBefore = second->parseCountForTest();
+        QTest::keyClick(first.get(), Qt::Key_Return);
+        EXPECT_EQ(first->parseCountForTest(), firstBefore + 1);
+        EXPECT_EQ(second->parseCountForTest(), secondBefore) << "the other pane parsed inside the key";
+        QTest::qWait(100);
+        EXPECT_EQ(second->parseCountForTest(), secondBefore + 1);
+        EXPECT_EQ(second->noteText(), first->noteText());
+    }
+    // A burst from elsewhere (a peer catching up): 50 edits with a newline each,
+    // one parse once it is over.
+    {
+        auto editor = editorWith(note);
+        const int before = editor->parseCountForTest();
+        for (int i = 0; i < 50; ++i)
+            editor->applyExternalEdit(note.size() / 2, 0, QStringLiteral("edit %1\n").arg(i));
+        EXPECT_EQ(editor->parseCountForTest(), before) << "parsed inside the burst";
+        QTest::qWait(100);
+        EXPECT_EQ(editor->parseCountForTest(), before + 1);
+    }
+    // A slow parse makes the next newline wait for the debounce, on any machine.
+    {
+        auto editor = editorWith(note);
+        editor->setCursorOffset(at);
+        editor->setLastParseTimeForTest(50'000'000);
+        const int before = editor->parseCountForTest();
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        EXPECT_EQ(editor->parseCountForTest(), before) << "a slow parse ran inside the key";
+        QTest::qWait(150);
+        EXPECT_EQ(editor->parseCountForTest(), before + 1);
+        // ... and a fast one measured since lets the next one be immediate again.
+        const int measured = editor->parseCountForTest();
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        EXPECT_EQ(editor->parseCountForTest(), measured + 1);
+    }
+    // A programmatic edit is not the reader's key.
+    {
+        auto editor = editorWith(note);
+        const int before = editor->parseCountForTest();
+        editor->insertAtCaret(QStringLiteral("\n"));
+        EXPECT_EQ(editor->parseCountForTest(), before);
+    }
+}
+
+// The view stays put when the parse lands, in a note long enough that blocks
+// above the view are estimates: the parse re-estimates them, and without the
+// anchor everything on screen moves by the difference.
+TEST(EnterJitterTest, ALetterInALongNoteDoesNotMoveTheViewWhenTheParseLands)
+{
+    QString long60;
+    for (int i = 0; i < 60; ++i)
+        long60 += QStringLiteral("paragraph number %1\n\n").arg(i);
+    struct Case {
+        const char *name;
+        QString text;
+        QString at;
+        int lift;
+    };
+    const QList<Case> cases = {
+        {"end", long60, QStringLiteral("paragraph number 59"), 0},
+        {"midScreen", long60, QStringLiteral("paragraph number 40"), 300},
+        {"bigEnd", generateNote(40), QStringLiteral("another one"), 0},
+        {"bigMidScreen", generateNote(40), QStringLiteral("Section 30"), 300},
+    };
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.name);
+        auto editor = editorWith(c.text);
+        editor->show();
+        const qsizetype at = c.text.lastIndexOf(c.at) + c.at.size();
+        editor->setCursorOffset(at);
+        QTest::qWait(300);
+        if (c.lift > 0) {
+            editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->value() - c.lift);
+            QTest::qWait(100);
+        }
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        const QImage typed = withoutCaret(*editor);
+        const qreal caret = editor->caretRectNow().y();
+        QTest::qWait(300); // the parse lands
+        EXPECT_NEAR(editor->caretRectNow().y(), caret, 0.5) << "the caret moved when the parse landed";
+        EXPECT_EQ(diffRows(withoutCaret(*editor), typed).toStdString(), "") << "the text moved when the parse landed";
     }
 }
 
@@ -3945,6 +4129,11 @@ struct PdfZoomFixture {
     {
         const QString pdf = makeTestPdf(dir.path(), pages);
         editor = editorWith(note);
+        // Shown, so the viewport is the 900x600 asked for: hidden, it keeps the
+        // 640x480 default, which a note this tall only just fits - a scrollbar
+        // appearing (the empty line after the final newline counts) changes the
+        // column width under a raster that was drawn for the other one.
+        editor->show();
         editor->setLinkResolver([pdf](const QString &) { return pdf; });
         editor->setPdfNavClock([] { return qint64(100000); });
         offset = note.indexOf(QLatin1String("![["));
@@ -8717,6 +8906,20 @@ TEST(TableCellTest, AClickEditsTheCellAndTheTableStaysATable)
     QTest::keyClicks(editor.get(), QStringLiteral("s|x"));
     EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| apples\\|x | 3 |")));
     EXPECT_TRUE(editor->tableRenderedAt(apple));
+}
+
+// Tab from the last cell adds a row, and the row is parsed once: the newline in
+// it is parsed on the spot and the command must not parse again.
+TEST(TableCellTest, ANewRowIsParsedOnce)
+{
+    auto editor = editorWith(kTableNote);
+    editor->show();
+    const qsizetype lastCell = kTableNote.indexOf(QStringLiteral("|  |\n\nbelow")) + 2;
+    editor->setCursorOffset(lastCell);
+    const int before = editor->parseCountForTest();
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| pear |  |\n|")));
+    EXPECT_EQ(editor->parseCountForTest(), before + 1);
 }
 
 TEST(TableCellTest, KeysMoveBetweenCellsAndNeverEatAPipe)

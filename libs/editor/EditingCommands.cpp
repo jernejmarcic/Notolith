@@ -447,6 +447,9 @@ bool MarkdownEditor::decoratedFenceAt(qsizetype offset) const
         if (it->block.end <= offset && it->depth == 0) {
             // A fence nothing closes runs to the end of the note, so what is
             // typed after the last line the parse saw is still inside it.
+            // ponytail: any fence-looking last line counts as the closing one
+            // (``` and ~~~ are not told apart, nor an info string), as in
+            // inCodeFenceAt above.
             const qsizetype lastLine = lineStartOf(d->m_text, qMax(it->block.start, it->block.end - 1));
             return lastLine == it->block.start
                    || !isFenceLine(QStringView(d->m_text).mid(lastLine, lineEndOf(d->m_text, lastLine) - lastLine));
@@ -566,7 +569,8 @@ void MarkdownEditor::insertTable()
     pushUndo();
     applyEdit(at, removed, text);
     d->m_lastEdit.invalidate();
-    reparse();
+    if (d->m_parsedVersion != d->m_textVersion) // else its newline was parsed already
+        reparse();
     moveCursor(tableStart + 2, false); // after the first "| "
 }
 

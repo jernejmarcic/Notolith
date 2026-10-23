@@ -843,6 +843,12 @@ public:
     qreal sideScrollAt(qsizetype offset) const;
     /// The caret's rectangle, viewport coordinates; empty when not drawn. For the tests.
     QRectF caretRectNow() const { return caretRect(); }
+    /// How many parses have run on this editor, on the calling thread or the
+    /// pool. For the tests.
+    int parseCountForTest() const;
+    /// Pretends the last parse took this long, which is what decides whether
+    /// the next newline is parsed on the spot (applyEdit). For the tests.
+    void setLastParseTimeForTest(qint64 nanoseconds);
 
     /// The other end of the selection; the caret's offset when nothing is selected.
     qsizetype anchorOffset() const;
@@ -1970,6 +1976,10 @@ private:
     /// Where `offset` is drawn, viewport coordinates, top of its line;
     /// `height`, when given, gets that line's own height (the caret's).
     QPointF pointFor(qsizetype offset, qreal *height = nullptr) const;
+    /// Whether `offset` is on the empty line a note ending in a newline has
+    /// under its last block, which belongs to no block: the caret there is
+    /// drawn under the last block, not on top of it.
+    bool belowLastBlock(qsizetype offset) const;
     /// The caret's rectangle in viewport coordinates, empty when not drawn.
     QRectF caretRect() const;
     void paintRemoteCarets(QPainter &painter) const;

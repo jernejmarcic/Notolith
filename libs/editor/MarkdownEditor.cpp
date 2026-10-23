@@ -179,11 +179,10 @@ constexpr qreal kListIndent = 26;
 /// plain-text state would be a flicker and nothing else. 200 kB parses in
 /// about 26 ms, 50 kB in 7 ms; this sits between them.
 constexpr qsizetype kAsyncParseThreshold = 128 * 1024;
-/// Up to this many characters a newline is parsed on the spot (see applyEdit):
-/// about 4 ms at the top, well inside what one key may cost. Between this
-/// and kAsyncParseThreshold the parse is quicker than a frame, but not quicker
-/// than a keystroke is allowed to be.
-constexpr qsizetype kEnterParseLimit = 32 * 1024;
+/// A newline the reader types is parsed on the spot (see applyEdit) while this
+/// document's last parse took less than this: well inside what one key may cost,
+/// whatever the machine. Past it the debounced pool parse does it.
+constexpr qint64 kSyncParseBudgetNs = 4'000'000;
 constexpr int kTypingBurstMs = 500;
 /// How many undo (and redo) steps an edit from elsewhere is carried over. Each
 /// one costs a scan of the whole note, so the oldest go rather than a remote
@@ -1320,6 +1319,15 @@ void sortDecorations(Decorations &decorations)
 void MarkdownEditor::reparse()
 {
     d->m_parseTimer.stop();
+    // A pool parse still out has the text as it was: let it end unadopted, so
+    // its older decorations are not laid over this text for a frame.
+    const bool dropped = d->m_parsePending;
+    if (d->m_parseWatcher.isRunning())
+        d->m_parseWatcher.waitForFinished();
+    d->m_parsePending = false;
+    ++d->m_parses;
+    QElapsedTimer clock;
+    clock.start();
     Parser::Result result = d->m_parser.parseAll(d->m_text, {}, d->m_parseOptions);
     if (d->m_features.HTMLblocks)
         expandEditableHTML(result.decorations, d->m_text);
@@ -1328,6 +1336,19 @@ void MarkdownEditor::reparse()
     setWordCount(result.metadata.wordCount);
     adoptDecorations(std::move(result.decorations), std::move(result.metadata.properties),
                      std::move(result.metadata.headings));
+    d->m_lastParseNs = clock.nsecsElapsed();
+    if (dropped && !d->m_pendingFolds.isEmpty()) // parked for the parse that was dropped
+        applyFoldState(std::exchange(d->m_pendingFolds, {}));
+}
+
+int MarkdownEditor::parseCountForTest() const
+{
+    return d->m_parses;
+}
+
+void MarkdownEditor::setLastParseTimeForTest(qint64 nanoseconds)
+{
+    d->m_lastParseNs = nanoseconds;
 }
 
 void MarkdownEditor::finishParse()
@@ -1344,7 +1365,9 @@ void MarkdownEditor::adoptParse()
     if (!d->m_parsePending || d->m_parseWatcher.future().resultCount() == 0)
         return;
     d->m_parsePending = false;
+    ++d->m_parses;
     ParseJob job = d->m_parseWatcher.result();
+    d->m_lastParseNs = job.nanoseconds;
     setWordCount(job.words);
     adoptDecorations(std::move(job.decorations), std::move(job.properties), std::move(job.headings));
     d->m_parsedVersion = job.version;
@@ -1366,6 +1389,8 @@ void MarkdownEditor::startParse()
     const bool HTML = d->m_features.HTMLblocks;
     const ParseOptions options = d->m_parseOptions;
     d->m_parseWatcher.setFuture(QtConcurrent::run([snapshot, version, HTML, options] {
+        QElapsedTimer clock;
+        clock.start();
         Parser::Result result = threadParser().parseAll(snapshot, {}, options);
         if (HTML)
             expandEditableHTML(result.decorations, snapshot);
@@ -1376,6 +1401,7 @@ void MarkdownEditor::startParse()
         job.words = result.metadata.wordCount;
         sortDecorations(job.decorations);
         job.version = version;
+        job.nanoseconds = clock.nsecsElapsed();
         return job;
     }));
 }
@@ -4177,18 +4203,43 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // its next line a few columns early. The same length, so offsets hold.
     if (view.span.kind == BlockSpan::Kind::Table)
         shown.replace(QLatin1Char(' '), QChar(QChar::Nbsp));
-    // An ATX heading is one line, so a newline inside its block is an Enter
-    // typed since the last parse: what follows it is the paragraph the parse is
-    // about to make of it. Drawn that way now - the layout's own font, and so an
-    // empty last line's height and the caret's, is the body's, and the heading
-    // font goes on its first line alone - the text below and the caret do not
-    // change by the difference between the two when the parse lands.
+    // A heading is one line, or two with a setext underline, so a newline past
+    // them inside its block is an Enter typed since the last parse: what follows
+    // is the paragraph the parse is about to make of it. Drawn that way now -
+    // the layout's own font, and so an empty last line's height and the caret's,
+    // is the body's, and the heading font goes on the heading's lines alone - the
+    // text below and the caret do not change by the difference between the two
+    // when the parse lands.
     qsizetype strayAt = -1;
-    if (view.span.kind == BlockSpan::Kind::Heading && !view.callout
-        && d->m_text.at(view.span.range.start) == QLatin1Char('#'))
-        strayAt = shown.indexOf(QChar::LineSeparator) + 1; // 0: none
-    if (strayAt == 0)
-        strayAt = -1;
+    if (view.span.kind == BlockSpan::Kind::Heading && !view.callout) {
+        const QStringView block = QStringView(d->m_text).mid(view.span.range.start, view.span.range.length());
+        const qsizetype firstEnd = block.indexOf(QLatin1Char('\n'));
+        int lines = block.trimmed().startsWith(QLatin1Char('#')) ? 1 : 0;
+        if (lines == 0 && firstEnd >= 0) {
+            const QStringView rest = block.mid(firstEnd + 1);
+            const QStringView underline = rest.left(rest.indexOf(QLatin1Char('\n')) < 0 ? rest.size()
+                                                                                       : rest.indexOf(QLatin1Char('\n'))).trimmed();
+            if (!underline.isEmpty() && (underline.front() == QLatin1Char('=') || underline.front() == QLatin1Char('-'))
+                && std::all_of(underline.cbegin(), underline.cend(), [&](QChar c) { return c == underline.front(); }))
+                lines = 2;
+        }
+        // Where the text after those lines starts, in the source and then as
+        // drawn (a setext underline is not drawn, so the lines cannot be counted
+        // in what is shown).
+        qsizetype after = -1;
+        int newlines = 0;
+        for (qsizetype i = 0; i < block.size() && lines > 0; ++i) {
+            if (block.at(i) == QLatin1Char('\n') && ++newlines == lines) {
+                after = view.span.range.start + i + 1;
+                break;
+            }
+        }
+        if (after >= 0 && after < view.span.range.end) {
+            const qsizetype display = view.map.toDisplay(after);
+            if (display > 0 && display <= shown.size())
+                strayAt = display;
+        }
+    }
     view.layout = std::make_unique<QTextLayout>(shown);
     view.layout->setCacheEnabled(true);
     // A callout may name its own body font, size and effects; everything else
@@ -4213,6 +4264,15 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                                                    : QTextOption::WrapAtWordBoundaryOrAnywhere);
     view.layout->setTextOption(option);
     QList<QTextLayout::FormatRange> formats = formatsFor(view);
+    // A background on nothing but line breaks is a bar drawn at the end of a line:
+    // a stale span (a setext underline's "=====" read as a highlight) can land
+    // there once the hidden text around it has moved.
+    formats.removeIf([&](const QTextLayout::FormatRange &range) {
+        return range.format.background().style() != Qt::NoBrush && range.length > 0 && range.start >= 0
+               && range.start + range.length <= shown.size()
+               && std::all_of(shown.cbegin() + range.start, shown.cbegin() + range.start + range.length,
+                              [](QChar c) { return c == QChar::LineSeparator; });
+    });
     if (strayAt >= 0) {
         QTextCharFormat heading;
         heading.setFont(fontFor(view.span));
@@ -4396,6 +4456,10 @@ void MarkdownEditor::updateLayout()
     // One pass over the note, which is the only part of this proportional to
     // its length: settle what each block reveals, and place it.
     d->m_movedFrom = qInf();
+    // The empty line a note ending in a newline has under its last block.
+    const qreal tail = d->m_mode != Mode::Reading && d->m_text.endsWith(QLatin1Char('\n'))
+                           ? lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0})
+                           : 0;
     qreal y = d->m_topPadding;
     int foldLevel = 0; // the level of the folded heading whose section this is, 0 outside one
     const BlockView *above = nullptr; // the block before this one that takes room
@@ -4462,7 +4526,7 @@ void MarkdownEditor::updateLayout()
         if (headingFolds(view))
             foldLevel = view.span.level;
     }
-    d->m_totalHeight = y + d->m_topPadding;
+    d->m_totalHeight = y + d->m_topPadding + tail;
 
     // Lay out what is on screen, plus a screen either side so scrolling does
     // not stutter, plus the caret's block wherever it is. Blocks are placed in
@@ -4531,7 +4595,7 @@ void MarkdownEditor::updateLayout()
             }
             y += view.height + kBlockSpacing;
         }
-        d->m_totalHeight = y + d->m_topPadding;
+        d->m_totalHeight = y + d->m_topPadding + tail;
     }
     updateScrollRange();
     if (d->m_notebookInput.edit)
@@ -5026,8 +5090,22 @@ QRectF MarkdownEditor::caretRect() const
     return QRectF(point.x() - 1, point.y(), 2, height);
 }
 
+bool MarkdownEditor::belowLastBlock(qsizetype offset) const
+{
+    // The newline that ends a block is the block's own and is not drawn as a
+    // line, so the empty line after a note's last one has no block to be in.
+    return offset >= d->m_text.size() && d->m_text.endsWith(QLatin1Char('\n'))
+           && d->m_mode != Mode::Reading && !d->m_blocks.empty() && !d->m_blocks.back().foldHidden;
+}
+
 QPointF MarkdownEditor::pointFor(qsizetype offset, qreal *height) const
 {
+    if (belowLastBlock(offset)) {
+        const BlockView &last = d->m_blocks.back();
+        if (height)
+            *height = QFontMetricsF(fontFor({BlockSpan::Kind::Paragraph, {0, 0}, 0})).height();
+        return QPointF(contentLeft(), last.y + last.height - verticalScrollBar()->value());
+    }
     const qsizetype index = blockAt(offset);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
@@ -5185,6 +5263,14 @@ void MarkdownEditor::leaveEvent(QEvent *event)
 
 void MarkdownEditor::ensureCursorVisible()
 {
+    if (belowLastBlock(d->m_cursor)) {
+        const BlockView &last = d->m_blocks.back();
+        const qreal line = QFontMetricsF(fontFor({BlockSpan::Kind::Paragraph, {0, 0}, 0})).height();
+        QScrollBar *bar = verticalScrollBar();
+        if (last.y + last.height + line > bar->value() + viewport()->height())
+            bar->setValue(int(last.y + last.height + line - viewport()->height()));
+        return;
+    }
     const qsizetype index = blockAt(d->m_cursor);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
@@ -5374,8 +5460,16 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
             view.map.shift(delta);
         shift(view.span.range);
     }
+    // Text typed where a marker ends is after it, not in it: an empty list
+    // item's first letter would be hidden with the "- " until the parse.
+    const auto shiftMarker = [at, delta](Range &range) {
+        if (range.start >= at)
+            range.start += delta;
+        if (range.end > at || (range.end == at && delta < 0))
+            range.end += delta;
+    };
     for (Range &range : d->m_decorations.syntax)
-        shift(range);
+        shiftMarker(range);
     for (Range &range : d->m_decorations.metaNotes) // a jump or a delete in these 20 ms
         shift(range);
     for (Range &range : d->m_decorations.uncounted) // a selection count in these 20 ms
@@ -5388,12 +5482,12 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
         shift(property.range);
     for (ListItemSpan &item : d->m_decorations.listItems) {
         shift(item.range);
-        shift(item.marker);
-        shift(item.checkbox);
+        shiftMarker(item.marker);
+        shiftMarker(item.checkbox);
     }
     for (CalloutSpan &callout : d->m_decorations.callouts) {
         shift(callout.range);
-        shift(callout.marker);
+        shiftMarker(callout.marker);
         shift(callout.titleRange);
     }
     for (TableSpan &table : d->m_decorations.tables) {
@@ -5551,20 +5645,21 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     // A newline changes what the blocks around it are (a heading ends, a list
     // item begins), which no shifted offset can say: until the parse lands the
     // stale blocks are drawn a little differently, and the text visibly jumps
-    // when it does. So a note the parse is cheap enough for is parsed now,
-    // before anything is drawn.
-    // ponytail: a bigger note keeps the debounced pool parse and the jump -
+    // when it does. So the reader's own newline is parsed now, before anything
+    // is drawn - while parses are cheap: a key may cost a few milliseconds, and
+    // this document's last parse says what one costs on this machine. Edits
+    // from elsewhere (another pane, a peer, a command's loop) keep the
+    // debounce, so a burst of them is one parse; a parse already running is
+    // left to land.
+    // ponytail: past the budget the debounced pool parse and the jump stay -
     // softened for headings in layoutBlock; a parse of the edited block alone
     // would remove it.
-    const bool parsedNow = breaksLines && d->m_text.size() <= kEnterParseLimit;
-    if (parsedNow) {
-        if (d->m_parseWatcher.isRunning())
-            d->m_parseWatcher.waitForFinished(); // its text is gone; let it end unadopted
-        d->m_parsePending = false;
+    const bool parsedNow = breaksLines && d->m_typing && !d->m_applyingExternal && !d->m_formattingTables
+                           && !d->m_parsePending && d->m_lastParseNs < kSyncParseBudgetNs;
+    if (parsedNow)
         reparse();
-    } else {
+    else
         updateLayout();
-    }
     if (!d->m_applyingExternal) {
         ensureCursorVisible();
         emit edited(at, removed, inserted);
@@ -5875,6 +5970,8 @@ void MarkdownEditor::setKeyBindings(const QHash<QString, QList<QKeySequence>> &b
 
 void MarkdownEditor::keyPressEvent(QKeyEvent *event)
 {
+    d->m_typing = true; // applyEdit: this edit is the reader's own
+    const auto typed = qScopeGuard([this] { d->m_typing = false; });
     if (event->key() == Qt::Key_0 && event->modifiers() == Qt::ControlModifier && resetPdfZoom())
         return;
     // Ctrl pressed with the pointer already resting on a link previews it,
@@ -6494,6 +6591,8 @@ void MarkdownEditor::focusOutEvent(QFocusEvent *event)
 
 void MarkdownEditor::inputMethodEvent(QInputMethodEvent *event)
 {
+    d->m_typing = true;
+    const auto typed = qScopeGuard([this] { d->m_typing = false; });
     // Vim's normal and visual modes take keys as commands: composed text
     // would be typed into the note without an insert.
     if (d->m_vim.enabled && d->m_vim.mode != VimState::Mode::Insert) {

@@ -777,6 +777,7 @@ struct MarkdownEditor::ParseJob {
     QList<Heading> headings;
     int words = 0;
     quint64 version = 0;
+    qint64 nanoseconds = 0; ///< how long the parse itself took
 };
 
 struct MarkdownEditor::Private {
@@ -1062,6 +1063,9 @@ struct MarkdownEditor::Private {
     quint64 m_textVersion = 0;
     quint64 m_parsedVersion = 0;
     bool m_parsePending = false; ///< a pool parse is out and not yet adopted
+    qint64 m_lastParseNs = 0;    ///< the last parse's cost: whether a newline may be parsed on the spot
+    int m_parses = 0;
+    bool m_typing = false;       ///< inside a key or input-method event: the edit is the reader's own
     bool m_cursorOn = true;
     QTimer m_blink;
 };

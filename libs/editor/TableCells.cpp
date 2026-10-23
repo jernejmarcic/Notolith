@@ -223,8 +223,10 @@ void MarkdownEditor::insertTableRowAfter(const CellRef &cell, int column)
     pushUndo();
     applyEdit(lineEnd, 0, row);
     // The row has to be a row before the caret can go into it: parse now,
-    // not in 20 ms, or the caret lands in no cell and is snapped away.
-    reparse();
+    // not in 20 ms, or the caret lands in no cell and is snapped away. (The
+    // newline in the row may have been parsed by applyEdit already.)
+    if (d->m_parsedVersion != d->m_textVersion)
+        reparse();
     const qsizetype newLine = d->m_lines.lineAt(lineEnd + 1);
     const QList<Range> cells = tableRowCells(d->m_text, d->m_lines.lineStart(newLine), d->m_lines.lineEnd(newLine));
     moveCursor(cells.value(qBound(0, column, int(cells.size()) - 1)).start, false);
