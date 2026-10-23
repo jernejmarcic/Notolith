@@ -511,6 +511,36 @@ void applyCodeOption(CodeOptions &options, const QString &key, const QString &va
     }
 }
 
+/// One `<prefix>| key: value` line: `^[ \t]*prefix\|[ \t]*([\w-]+)[ \t]*:[ \t]*(.*)$` by hand,
+/// since compiling that expression per fenced block cost more than the parse of the block.
+bool splitCodeOption(QStringView line, const QString &prefix, QStringView &key, QStringView &value)
+{
+    const auto skipBlanks = [&line](qsizetype at) {
+        while (at < line.size() && (line.at(at) == QLatin1Char(' ') || line.at(at) == QLatin1Char('\t')))
+            ++at;
+        return at;
+    };
+    qsizetype at = skipBlanks(0);
+    if (!line.mid(at).startsWith(prefix))
+        return false;
+    at += prefix.size();
+    if (at >= line.size() || line.at(at) != QLatin1Char('|'))
+        return false;
+    at = skipBlanks(at + 1);
+    const qsizetype keyStart = at;
+    while (at < line.size() && (line.at(at).isLetterOrNumber() || line.at(at) == QLatin1Char('_')
+                                || line.at(at) == QLatin1Char('-')))
+        ++at;
+    if (at == keyStart)
+        return false;
+    key = line.mid(keyStart, at - keyStart);
+    at = skipBlanks(at);
+    if (at >= line.size() || line.at(at) != QLatin1Char(':'))
+        return false;
+    value = line.mid(skipBlanks(at + 1));
+    return true;
+}
+
 /// The `#|` lines at the head of a fenced block. `content` is the code between
 /// the fences, which is where md4qt puts a Code item's own range.
 CodeOptions parseCodeOptions(const QString &text, const Range &content, const QString &language)
@@ -519,20 +549,18 @@ CodeOptions parseCodeOptions(const QString &text, const Range &content, const QS
     options.block = content;
     QString rawHighlight;
 
-    const QRegularExpression option(
-        QStringLiteral("^[ \\t]*%1\\|[ \\t]*([\\w-]+)[ \\t]*:[ \\t]*(.*)$")
-            .arg(QRegularExpression::escape(commentPrefix(language))));
+    const QString prefix = commentPrefix(language);
 
     qsizetype cursor = content.start;
     while (cursor < content.end) {
         qsizetype lineEnd = text.indexOf(QLatin1Char('\n'), cursor);
         if (lineEnd < 0 || lineEnd > content.end)
             lineEnd = content.end;
-        const auto match = option.match(text.mid(cursor, lineEnd - cursor));
-        if (!match.hasMatch())
+        QStringView key;
+        QStringView value;
+        if (!splitCodeOption(QStringView(text).mid(cursor, lineEnd - cursor), prefix, key, value))
             break;
-        applyCodeOption(options, match.captured(1).toLower(), match.captured(2).trimmed(),
-                        rawHighlight);
+        applyCodeOption(options, key.toString().toLower(), value.trimmed().toString(), rawHighlight);
         cursor = qMin(content.end, lineEnd + 1);
         options.range = {content.start, cursor};
     }
