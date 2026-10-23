@@ -674,6 +674,10 @@ public:
         /// Which note's kernel: blocks that share it share variables.
         /// Left empty here; the window fills it from the note it is in.
         QString scope;
+        /// Which of the note's identical blocks this is: how many earlier ones
+        /// read the same (0 for the first). Part of the output cache's key
+        /// only - the code that runs is never changed by it.
+        int duplicateOrdinal = 0;
         /// Remove this block's kept output instead of reading or running it.
         bool clear = false;
         /// Set on a real run (never on a lookup): the runner may call it, from
@@ -1642,7 +1646,10 @@ private:
     /// fenced block's own `#| sandbox:` - see NotebookRunOptions.
     void appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
                               const QString &blockID, const QString &workingDir = QString(),
-                              const CodeOptions *options = nullptr);
+                              const CodeOptions *options = nullptr, int duplicateOrdinal = 0);
+    /// How many fences before `fence` read the same (same language, same code):
+    /// NotebookRunOptions::duplicateOrdinal. Counted over every fence of the note, in order.
+    int notebookDuplicateOrdinal(const CodeFenceSpan &fence) const;
     /// The options a run of what `view` last laid out is made with.
     NotebookRunOptions notebookOptionsOf(const BlockView &view) const;
     void deliverNotebookResult(const QString &key, quint64 generation, NotebookRunResult result);
@@ -1657,7 +1664,7 @@ private:
     /// prompt row while the block's code is waiting in input().
     void appendNotebookOutputRows(BlockView &view, const QString &language, const QString &source,
                                   const QString &blockID, const QString &workingDir,
-                                  const CodeOptions *options);
+                                  const CodeOptions *options, int duplicateOrdinal);
     /// The "Running...", or a kernel-level error, single-line message a
     /// block shows below its listing when there is nothing richer yet.
     void appendNotebookMessage(BlockView &view, const QString &text, const QString &colourToken);

@@ -37,6 +37,10 @@ struct NotebookOutput {
     bool isStderr = false; ///< Kind::Text only: the stream was stderr (or a warning), drawn as one
     QString alt;           ///< Kind::Html only: its text/plain twin, for a build without litehtml
     QString displayID;     ///< display_data's transient display_id; update_display_data replaces by it
+    /// The kernel said it as an `execute_result` (the value of the cell's last
+    /// expression), not as a stream or a `display_data`: kept so a notebook
+    /// written back says the same.
+    bool isResult = false;
 };
 
 struct NotebookRunResult {
@@ -61,10 +65,22 @@ struct NotebookRunResult {
 /// default for the handful of existing callers that ran before tiers were
 /// a per-block choice. The note's implicit code (`prelude`, `wrapper`) is part
 /// of what ran, so it is folded in too - but only when there is some: a block
-/// without it keeps the key it always had.
+/// without it keeps the key it always had. `ordinal` tells blocks that read
+/// the same apart (a notebook with two identical cells): how many blocks with
+/// that source come before this one in the note, 0 for the first, which leaves
+/// the key exactly as it was. It is part of the key only; the code that runs
+/// is never touched (duplicateOrdinal, below).
 QString notebookCacheKey(const QString &language, const QString &source,
                          SandboxTier tier = SandboxTier::Bubblewrap, const QString &prelude = {},
-                         const QString &wrapper = {});
+                         const QString &wrapper = {}, int ordinal = 0);
+
+/// How many blocks before `index` in `sourcesInOrder` (the code blocks of one
+/// note, in document order) have the very same source: the `ordinal` of
+/// notebookCacheKey. The one place the run, the lookup and a notebook's seed
+/// and write-back all count from.
+int duplicateOrdinal(const QStringList &sourcesInOrder, int index);
+/// duplicateOrdinal of every index, in one pass.
+QList<int> duplicateOrdinals(const QStringList &sourcesInOrder);
 
 /// Reads `key`'s cached result; `hasRun` is false and everything else
 /// default when there is nothing cached - never an error, since "never run"
@@ -75,6 +91,9 @@ NotebookRunResult readNotebookCache(const QString &key);
 /// forced true regardless of the caller's own value - only a result that
 /// actually ran is ever written.
 void writeNotebookCache(const QString &key, NotebookRunResult result);
+
+/// Whether `key` has a result, kept or waiting to be seeded; nothing is read or decoded.
+bool hasNotebookCache(const QString &key);
 
 /// Forgets `key`'s cached result ("Clear the output"). A key with none is fine.
 void removeNotebookCache(const QString &key);

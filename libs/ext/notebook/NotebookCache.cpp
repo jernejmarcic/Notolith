@@ -19,14 +19,34 @@ QString notebookCacheRoot()
 }
 
 QString notebookCacheKey(const QString &language, const QString &source, SandboxTier tier,
-                         const QString &prelude, const QString &wrapper)
+                         const QString &prelude, const QString &wrapper, int ordinal)
 {
     QCryptographicHash hash(QCryptographicHash::Sha256);
     hash.addData(language.trimmed().toLower().toUtf8() + '\x1f' + source.toUtf8() + '\x1f'
                 + QByteArray::number(int(tier)));
     if (!prelude.isEmpty() || !wrapper.isEmpty())
         hash.addData('\x1f' + prelude.toUtf8() + '\x1f' + wrapper.toUtf8());
+    if (ordinal > 0)
+        hash.addData('\x1e' + QByteArray::number(ordinal));
     return QString::fromLatin1(hash.result().toHex());
+}
+
+QList<int> duplicateOrdinals(const QStringList &sourcesInOrder)
+{
+    QList<int> ordinals;
+    ordinals.reserve(sourcesInOrder.size());
+    QHash<QString, int> seen;
+    for (const QString &source : sourcesInOrder)
+        ordinals.append(seen[source]++);
+    return ordinals;
+}
+
+int duplicateOrdinal(const QStringList &sourcesInOrder, int index)
+{
+    int count = 0;
+    for (int i = 0; i < index && i < sourcesInOrder.size(); ++i)
+        count += sourcesInOrder.at(i) == sourcesInOrder.value(index) ? 1 : 0;
+    return count;
 }
 
 namespace {
@@ -92,6 +112,16 @@ void seedNotebookCache(const QString &key, std::function<NotebookRunResult()> re
     pendingSeeds().insert(key, std::move(result));
 }
 
+bool hasNotebookCache(const QString &key)
+{
+    {
+        QMutexLocker lock(&seedMutex);
+        if (pendingSeeds().contains(key))
+            return true;
+    }
+    return QFile::exists(entryDir(key) + QStringLiteral("/outputs.json"));
+}
+
 NotebookRunResult readNotebookCache(const QString &key)
 {
     if (const auto seed = takeSeed(key))
@@ -118,6 +148,7 @@ NotebookRunResult readNotebookCache(const QString &key)
         output.ename = object.value(QStringLiteral("ename")).toString();
         output.evalue = object.value(QStringLiteral("evalue")).toString();
         output.isStderr = object.value(QStringLiteral("stderr")).toBool();
+        output.isResult = object.value(QStringLiteral("result")).toBool();
         output.alt = object.value(QStringLiteral("alt")).toString();
         for (const QJsonValue &line : object.value(QStringLiteral("traceback")).toArray())
             output.traceback << line.toString();
@@ -156,6 +187,8 @@ void writeNotebookCache(const QString &key, NotebookRunResult result)
             object.insert(QStringLiteral("evalue"), output.evalue);
         if (output.isStderr)
             object.insert(QStringLiteral("stderr"), true);
+        if (output.isResult)
+            object.insert(QStringLiteral("result"), true);
         if (!output.alt.isEmpty())
             object.insert(QStringLiteral("alt"), output.alt);
         if (!output.traceback.isEmpty())

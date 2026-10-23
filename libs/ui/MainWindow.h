@@ -613,8 +613,12 @@ private:
     /// Any note, read or written: an encrypted one is decrypted into `out`
     /// in memory only, asking for the password if the session is locked,
     /// and sealed again on write. Cancelling the password fails quietly.
-    bool readNote(const QString &path, Note &out, QString *error);
+    /// `seedOutputs`: a notebook's stored outputs go into the output cache (opening it); a mere look at the file
+    /// leaves the cache alone.
+    bool readNote(const QString &path, Note &out, QString *error, bool seedOutputs = false);
     bool writeNote(const QString &path, const Note &note, QString *error);
+    /// A cell of the notebook at `path` ran or was cleared: its tab is modified and the next save writes it.
+    void notebookOutputsChanged(const QString &path, const QString &cacheKey);
     /// The bytes of an encrypted note of this vault, preferring `path`: what
     /// a typed password is checked against. Empty when there is none yet.
     QByteArray encryptionSample(const QString &path = QString()) const;
@@ -955,6 +959,9 @@ QLabel *m_vimStatus = nullptr;
     /// Whether anything can run a code block's language, asked once each
     /// (MarkdownEditor::setNotebookRunnable).
     QHash<QString, bool> m_runnableLanguages;
+    /// The output-cache keys of the cells of each open .ipynb that ran, or were
+    /// cleared, since it was read or saved: what the next save writes back.
+    QHash<QString, QSet<QString>> m_notebookDirty;
     crypt::EncryptionSession *m_encryption = nullptr; ///< null in a build without encryption
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;

@@ -5466,6 +5466,168 @@ TEST_F(WindowTest, ANotebookFileOpensAsANoteAndSavesBackAsANotebook)
     }
 }
 
+namespace {
+
+QJsonArray notebookCells(const QByteArray &file)
+{
+    return QJsonDocument::fromJson(file).object().value(QStringLiteral("cells")).toArray();
+}
+
+/// A Jupyter python kernel and bubblewrap: what a notebook cell needs to run.
+bool notebookCellsCanRun()
+{
+    return !QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
+                                      QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
+           && !QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty();
+}
+
+/// Three code cells and a marker no earlier run of this test shares, so the output cache holds nothing of them.
+QByteArray threeCellNotebook(const QString &marker)
+{
+    const auto cell = [&marker](const QString &id, const QString &text) {
+        return QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("code")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("print('%1')  # %2").arg(text, marker)}},
+                           {QStringLiteral("execution_count"), QJsonValue()},
+                           {QStringLiteral("outputs"), QJsonArray()}};
+    };
+    return QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                     {QStringLiteral("nbformat_minor"), 5},
+                                     {QStringLiteral("metadata"),
+                                      QJsonObject{{QStringLiteral("kernelspec"),
+                                                   QJsonObject{{QStringLiteral("display_name"), QStringLiteral("Python 3")},
+                                                               {QStringLiteral("language"), QStringLiteral("python")},
+                                                               {QStringLiteral("name"), QStringLiteral("python3")}}}}},
+                                     {QStringLiteral("cells"),
+                                      QJsonArray{cell(QStringLiteral("a"), QStringLiteral("one")),
+                                                 cell(QStringLiteral("b"), QStringLiteral("two")),
+                                                 cell(QStringLiteral("c"), QStringLiteral("three"))}}})
+        .toJson();
+}
+
+} // namespace
+
+// "Clear outputs" in a notebook is a change to it: the tab is modified, and the
+// save writes `outputs: []` and a null count for the cells that had any. No
+// kernel is involved.
+TEST_F(WindowTest, ClearingANotebooksOutputsIsSavedIntoTheFile)
+{
+    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("Analysis.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+    WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+    EXPECT_FALSE(editor->isModified());
+
+    window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+    EXPECT_TRUE(editor->isModified());
+    WAIT_TRUE(!editor->notebookInfoAt(code).hasRun, 5000);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_FALSE(editor->isModified());
+
+    const QJsonArray before = notebookCells(original);
+    const QJsonArray after = notebookCells(readAll(path(QStringLiteral("Analysis.ipynb"))));
+    ASSERT_EQ(after.size(), before.size());
+    for (qsizetype i = 0; i < after.size(); ++i) {
+        const QJsonObject cell = after.at(i).toObject();
+        if (cell.value(QStringLiteral("cell_type")).toString() == QLatin1String("code")) {
+            EXPECT_TRUE(cell.value(QStringLiteral("outputs")).toArray().isEmpty()) << i;
+            EXPECT_TRUE(cell.value(QStringLiteral("execution_count")).isNull()) << i;
+        } else {
+            EXPECT_EQ(cell, before.at(i).toObject()) << "only code cells change: " << i;
+        }
+    }
+    // The cell that never ran is exactly the file's own object.
+    EXPECT_EQ(after.at(4).toObject().value(QStringLiteral("source")), before.at(4).toObject().value(QStringLiteral("source")));
+}
+
+// Running cell 2 of 3 makes the notebook modified, and the save puts that run's
+// output and count on that cell alone.
+TEST_F(WindowTest, ARunOfOneNotebookCellIsSavedOnThatCellAlone)
+{
+    if (!notebookCellsCanRun())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    const QByteArray original = threeCellNotebook(marker);
+    write(QStringLiteral("Run.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Run.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(200);
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("print('two')"));
+    ASSERT_TRUE(editor->notebookInfoAt(second).eligible);
+    ASSERT_FALSE(editor->isModified());
+
+    ASSERT_TRUE(editor->runNotebookBlockAt(second));
+    WAIT_TRUE(editor->notebookInfoAt(second).hasRun && !editor->notebookInfoAt(second).running, 30000);
+    EXPECT_TRUE(editor->isModified()) << "a finished run changes what the file would say";
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+
+    const QJsonArray before = notebookCells(original);
+    const QJsonArray after = notebookCells(readAll(path(QStringLiteral("Run.ipynb"))));
+    ASSERT_EQ(after.size(), 3);
+    EXPECT_EQ(after.at(0).toObject(), before.at(0).toObject());
+    EXPECT_EQ(after.at(2).toObject(), before.at(2).toObject());
+    const QJsonObject ran = after.at(1).toObject();
+    EXPECT_GE(ran.value(QStringLiteral("execution_count")).toInt(), 1);
+    const QJsonArray outputs = ran.value(QStringLiteral("outputs")).toArray();
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(QString::fromUtf8(QJsonDocument(outputs.at(0).toObject()).toJson()).contains(QStringLiteral("two")));
+    EXPECT_FALSE(editor->isModified());
+}
+
+// Two cells that read the same are two results: each block shows the output
+// its own cell had, not one that was cached under the shared text.
+TEST_F(WindowTest, IdenticalNotebookCellsShowTheirOwnOutputs)
+{
+    const auto cell = [](const QString &id, const QString &output, int count) {
+        return QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("code")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("print('same')")}},
+                           {QStringLiteral("execution_count"), count},
+                           {QStringLiteral("outputs"),
+                            QJsonArray{QJsonObject{{QStringLiteral("output_type"), QStringLiteral("stream")},
+                                                   {QStringLiteral("name"), QStringLiteral("stdout")},
+                                                   {QStringLiteral("text"), QJsonArray{output}}}}}};
+    };
+    write(QStringLiteral("Same.ipynb"),
+          QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                    {QStringLiteral("nbformat_minor"), 5},
+                                    {QStringLiteral("metadata"),
+                                     QJsonObject{{QStringLiteral("language_info"),
+                                                  QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                    {QStringLiteral("cells"),
+                                     QJsonArray{cell(QStringLiteral("a"), QStringLiteral("first-output"), 1),
+                                                cell(QStringLiteral("b"), QStringLiteral("second-output"), 2)}}})
+              .toJson());
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Same.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype first = editor->noteText().indexOf(QStringLiteral("print('same')"));
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("print('same')"), first + 1);
+    ASSERT_GT(second, first);
+    WAIT_TRUE(editor->notebookInfoAt(first).hasRun && editor->notebookInfoAt(second).hasRun, 5000);
+    ASSERT_EQ(editor->notebookOutputTextAt(first).size(), 1);
+    ASSERT_EQ(editor->notebookOutputTextAt(second).size(), 1);
+    EXPECT_EQ(editor->notebookOutputTextAt(first).constFirst().trimmed(), QStringLiteral("first-output"));
+    EXPECT_EQ(editor->notebookOutputTextAt(second).constFirst().trimmed(), QStringLiteral("second-output"));
+    EXPECT_EQ(editor->notebookInfoAt(first).executionCount, 1);
+    EXPECT_EQ(editor->notebookInfoAt(second).executionCount, 2);
+}
+
 TEST_F(WindowTest, ANotebookFileIsNotANoteWithTheNotebooksFeatureOff)
 {
     write(QStringLiteral("Analysis.ipynb"), readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb")));

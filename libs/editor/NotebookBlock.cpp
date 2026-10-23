@@ -260,20 +260,21 @@ MarkdownEditor::NotebookRunOptions MarkdownEditor::notebookOptionsOf(const Block
     options.kernel = view.notebookKernel;
     options.implicit = view.notebookImplicit;
     options.implicitMain = view.notebookImplicitMain;
+    options.duplicateOrdinal = view.notebookOrdinal;
     return options;
 }
 
 void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
                                           const QString &blockID, const QString &workingDir,
-                                          const CodeOptions *options)
+                                          const CodeOptions *options, int duplicateOrdinal)
 {
-    appendNotebookOutputRows(view, language, source, blockID, workingDir, options);
+    appendNotebookOutputRows(view, language, source, blockID, workingDir, options, duplicateOrdinal);
     appendNotebookInput(view);
 }
 
 void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &language, const QString &source,
                                               const QString &blockID, const QString &workingDir,
-                                              const CodeOptions *options)
+                                              const CodeOptions *options, int duplicateOrdinal)
 {
     const bool sandboxHost = options && options->sandboxHost;
     const bool sandboxWasm = options && options->sandboxWasm;
@@ -303,6 +304,10 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
     }
     if (!view.notebookImplicit.isEmpty() || !view.notebookImplicitMain.isEmpty())
         key += QLatin1Char('\x1f') + view.notebookImplicit + QLatin1Char('\x1f') + view.notebookImplicitMain;
+    // Two blocks that read the same are two results (a notebook's identical cells); the first keeps the key it had.
+    if (duplicateOrdinal > 0)
+        key += QLatin1Char('\x1e') + QString::number(duplicateOrdinal);
+    view.notebookOrdinal = duplicateOrdinal;
     view.notebookKey = key;
     view.notebookLanguage = language;
     view.notebookSource = source;
@@ -607,6 +612,30 @@ int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
         if (d->m_textVersion != version)
             break;
         count += runNotebookBlockAt(start) ? 1 : 0;
+    }
+    return count;
+}
+
+int MarkdownEditor::notebookDuplicateOrdinal(const CodeFenceSpan &fence) const
+{
+    // The code as the block runs it: the lines between the fences, minus the blank ones that open them and the
+    // newline that ends them. Compared in place, so a note of thousands of fences allocates nothing here.
+    const auto codeOf = [this](const CodeFenceSpan &of) {
+        QStringView code = of.content.isValid() ? QStringView(d->m_text).mid(of.content.start, of.content.length())
+                                                : QStringView();
+        while (code.startsWith(QLatin1Char('\n')))
+            code = code.mid(1);
+        if (code.endsWith(QLatin1Char('\n')))
+            code.chop(1);
+        return code;
+    };
+    const QStringView mine = codeOf(fence);
+    int count = 0;
+    for (const CodeFenceSpan &other : std::as_const(d->m_decorations.codeFences)) {
+        if (&other == &fence)
+            break;
+        if (other.language.trimmed().compare(fence.language.trimmed(), Qt::CaseInsensitive) == 0 && codeOf(other) == mine)
+            ++count;
     }
     return count;
 }

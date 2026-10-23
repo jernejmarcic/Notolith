@@ -1211,10 +1211,21 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         const notebook::SandboxTier tier = host                  ? notebook::SandboxTier::Host
                                            : options.sandboxWasm ? notebook::SandboxTier::Wasm
                                                                  : notebook::SandboxTier::Bubblewrap;
+        notebook::NotebookController::RunRequest request;
+        request.language = language;
+        request.source = source;
+        request.prelude = options.implicit;
+        request.wrapper = options.implicitMain;
+        request.duplicateOrdinal = options.duplicateOrdinal; // the key's only: the code is what was written
+        request.tier = tier;
+        const QString cacheKey = notebook::NotebookController::cacheKeyOf(request);
         // Forgetting a block's output: the sidecar entry goes, nothing runs.
         if (options.clear) {
-            notebook::removeNotebookCache(
-                notebook::notebookCacheKey(language, source, tier, options.implicit, options.implicitMain));
+            // A notebook file says so on its next save, if there was anything to forget.
+            const bool had = notebook::hasNotebookCache(cacheKey);
+            notebook::removeNotebookCache(cacheKey);
+            if (had)
+                notebookOutputsChanged(notePathOf(editor), cacheKey);
             deliver(MarkdownEditor::NotebookRunResult());
             return;
         }
@@ -1227,11 +1238,6 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             return;
         }
 #endif
-        notebook::NotebookController::RunRequest request;
-        request.language = language;
-        request.source = source;
-        request.prelude = options.implicit;
-        request.wrapper = options.implicitMain;
         // `#| sandbox: host` is the note asking, and a note can come from
         // anyone: it leaves the sandbox only when the person has allowed that
         // in settings. A runnable embed's own folder is bound read-only.
@@ -1242,7 +1248,6 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                                                  "Settings allows that"),
                                      6000);
         }
-        request.tier = tier;
         request.wasmModules = m_settings.text(QStringLiteral("notebooks.wasmModules"));
         if (!options.workingDir.isEmpty())
             request.extraReadOnlyBinds = {options.workingDir};
@@ -1257,7 +1262,13 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 handler(MarkdownEditor::NotebookInputPrompt{prompt.prompt, prompt.password}, reply);
             };
         }
-        m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {
+        m_notebook->run(request, forceRun, [this, deliver, forceRun, cacheKey, notePath = notePathOf(editor),
+                                            keep = request.cache](const notebook::NotebookRunResult &result) {
+            // A run of a notebook's cell changes what the file would say: the tab is modified, and the save
+            // writes that cell's outputs back (a lookup, or a run that never reached a kernel, changes nothing).
+            if (forceRun && keep && result.hasRun && result.kernelError.isEmpty()) {
+                QMetaObject::invokeMethod(this, [this, notePath, cacheKey] { notebookOutputsChanged(notePath, cacheKey); });
+            }
             MarkdownEditor::NotebookRunResult shown;
             shown.hasRun = result.hasRun;
             shown.ok = result.ok;
@@ -5655,7 +5666,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
 
     Note note;
     QString error;
-    if (!readNote(path, note, &error)) {
+    if (!readNote(path, note, &error, true)) {
         // Replaying history over a note that has since been deleted or
         // renamed is not an error, just a dead end to skip past; a password
         // prompt cancelled is not one either.
@@ -6965,6 +6976,24 @@ bool MainWindow::save()
 
 // --- encrypted notes (docs/ENCRYPTION.md) ------------------------------------
 
+void MainWindow::notebookOutputsChanged(const QString &path, const QString &cacheKey)
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (!isNotebookFile(path))
+        return; // only a .ipynb keeps its outputs in the file; any other note keeps them in the cache
+    m_notebookDirty[path].insert(cacheKey);
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && leaf->notePath == path)
+            leaf->editor->setModified(true);
+    }
+    if (m_settings.boolean(QStringLiteral("files.autosave")))
+        armAutosave();
+#else
+    Q_UNUSED(path)
+    Q_UNUSED(cacheKey)
+#endif
+}
+
 bool MainWindow::isNotebookFile(const QString &path) const
 {
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
@@ -6975,7 +7004,7 @@ bool MainWindow::isNotebookFile(const QString &path) const
 #endif
 }
 
-bool MainWindow::readNote(const QString &path, Note &out, QString *error)
+bool MainWindow::readNote(const QString &path, Note &out, QString *error, bool seedOutputs)
 {
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
     // A Jupyter notebook: its cells as text (docs/NOTEBOOKS.md), outputs seeded into the cache.
@@ -6987,7 +7016,16 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error)
             return false;
         }
         out = Note();
-        return notebook::readIpynb(file.readAll(), &out.text, error);
+        const QByteArray bytes = file.readAll();
+        if (seedOutputs)
+            return notebook::readIpynb(bytes, &out.text, error);
+        // A look at what is on disk (the change watcher, a save comparing): never seeded, or the outputs of a
+        // cell that ran since the file was read would give way to the ones the file still has.
+        notebook::IpynbDocument document;
+        if (!notebook::parseIpynb(bytes, &document, error))
+            return false;
+        out.text = notebook::ipynbMarkdown(document);
+        return true;
     }
 #endif
     if (!Vault::isEncryptedNote(path))
@@ -7028,9 +7066,12 @@ bool MainWindow::writeNote(const QString &path, const Note &note, QString *error
                 *error = file.errorString();
             return false;
         }
-        const QByteArray merged = notebook::mergeIpynb(file.readAll(), note.text, error);
+        const QByteArray merged = notebook::mergeIpynb(file.readAll(), note.text, m_notebookDirty.value(path), error);
         file.close();
-        return !merged.isEmpty() && Vault::writeBytes(path, merged, error);
+        if (merged.isEmpty() || !Vault::writeBytes(path, merged, error))
+            return false;
+        m_notebookDirty.remove(path); // the file says what those runs produced now
+        return true;
     }
 #endif
     if (!Vault::isEncryptedNote(path))
@@ -7756,7 +7797,7 @@ void MainWindow::reloadChangedNotes()
         // change (under 1 ms at 200 kB); compare size and mtime first if a
         // note ever gets big enough for that to show.
         Note disk;
-        if (!readNote(path, disk, nullptr))
+        if (!readNote(path, disk, nullptr, !m_notebookDirty.contains(path)))
             continue;
         const Note &known = (*first)->note;
         if (disk.text == known.text && disk.crlf == known.crlf && disk.bom == known.bom && disk.mixed == known.mixed)

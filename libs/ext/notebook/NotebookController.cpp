@@ -66,10 +66,15 @@ NotebookController::~NotebookController()
     shutdownAll();
 }
 
+QString NotebookController::cacheKeyOf(const RunRequest &request)
+{
+    return notebookCacheKey(request.language, request.source, request.tier, request.prelude, request.wrapper,
+                            request.duplicateOrdinal);
+}
+
 void NotebookController::run(const RunRequest &request, bool forceRun, const Deliver &deliver)
 {
-    const QString cacheKey =
-        notebookCacheKey(request.language, request.source, request.tier, request.prelude, request.wrapper);
+    const QString cacheKey = cacheKeyOf(request);
 
     if (!forceRun) {
         // Cache-only: never starts a kernel. Deferred one tick, like every
@@ -288,7 +293,8 @@ void NotebookController::wireKernel(KernelSession *session)
                const bool isStderr = name == QLatin1String("stderr");
                QList<NotebookOutput> &outputs = it->result.outputs;
                if (!outputs.isEmpty() && outputs.last().kind == NotebookOutput::Kind::Text
-                   && outputs.last().displayID.isEmpty() && outputs.last().isStderr == isStderr) {
+                   && outputs.last().displayID.isEmpty() && !outputs.last().isResult
+                   && outputs.last().isStderr == isStderr) {
                    outputs.last().text = resolveCarriageReturns(outputs.last().text + stripAnsi(text));
                    if (overCap(it->result)) {
                        it->truncated = true;
@@ -308,6 +314,7 @@ void NotebookController::wireKernel(KernelSession *session)
                if (it == session->inFlight.end())
                    return;
                NotebookOutput output = outputFromMimeBundle(data);
+               output.isResult = true;
                if (hasContent(output))
                    add(*it, output);
            });

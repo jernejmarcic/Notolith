@@ -50,6 +50,9 @@ public:
         /// once per kernel (and again after a restart), never with each block.
         QString prelude;
         QString wrapper;
+        /// Which of the note's identical blocks this is (duplicateOrdinal): part
+        /// of the output cache's key and nothing else - it never reaches the kernel.
+        int duplicateOrdinal = 0;
         SandboxTier tier = SandboxTier::Bubblewrap;
         /// Extra read-only binds for SandboxTier::Bubblewrap - a runnable
         /// `![[x.py]]` embed's own directory, so the file it names can
@@ -92,6 +95,8 @@ public:
     /// note reopening calls for every notebook block it lays out. `true`:
     /// runs for real, launching or reusing `request.language`'s kernel.
     void run(const RunRequest &request, bool forceRun, const Deliver &deliver);
+    /// The output cache's key a run of `request` is kept under.
+    static QString cacheKeyOf(const RunRequest &request);
 
     /// SIGINT (or, for a kernel that understands it, interrupt_request) to
     /// `language`'s kernel, if one is running, and stops a run that has no

@@ -4607,7 +4607,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             // fences (a block inserted above shifts it, which at worst shows
             // a neighbour's old output marked outdated).
             const QString blockID = QStringLiteral("f%1").arg(fence - d->m_decorations.codeFences.constData());
-            appendNotebookOutput(view, fence->language, source, blockID, QString(), view.options);
+            appendNotebookOutput(view, fence->language, source, blockID, QString(), view.options,
+                                 notebookDuplicateOrdinal(*fence));
         }
     }
     view.laidOut = true;

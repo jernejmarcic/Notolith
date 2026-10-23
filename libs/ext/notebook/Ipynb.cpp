@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QLocale>
 #include <QRegularExpression>
+#include <QSet>
 #include <QUuid>
 
 #include <algorithm>
@@ -220,7 +221,8 @@ NotebookRunResult resultOfCell(const QJsonObject &cell)
             const bool isStderr = stored.value(QStringLiteral("name")).toString() == QLatin1String("stderr");
             const QString text = stripAnsi(joined(stored.value(QStringLiteral("text"))));
             if (!result.outputs.isEmpty() && result.outputs.last().kind == NotebookOutput::Kind::Text
-                && result.outputs.last().isStderr == isStderr && result.outputs.last().displayID.isEmpty()) {
+                && result.outputs.last().isStderr == isStderr && result.outputs.last().displayID.isEmpty()
+                && !result.outputs.last().isResult) {
                 result.outputs.last().text = resolveCarriageReturns(result.outputs.last().text + text);
             } else {
                 NotebookOutput output;
@@ -240,11 +242,93 @@ NotebookRunResult resultOfCell(const QJsonObject &cell)
             result.outputs.append(output);
         } else if (type == QLatin1String("execute_result") || type == QLatin1String("display_data")) {
             NotebookOutput output = outputFromMimeBundle(flattened(stored.value(QStringLiteral("data")).toObject()));
+            output.isResult = type == QLatin1String("execute_result");
             if (hasContent(output))
                 result.outputs.append(output);
         }
     }
     return result;
+}
+
+
+/// The code a block is looked up by: the text between the fences, minus the blank lines that open it (the
+/// editor's own reading of it).
+QString keySourceOf(QString source)
+{
+    while (source.startsWith(QLatin1Char('\n')))
+        source.remove(0, 1);
+    return source;
+}
+
+/// A cell runs in tier 1 unless its own `#| sandbox:` line says another (Quarto's hash-pipe in any comment style:
+/// `#| sandbox: wasm`, `//| sandbox: host`). A host cell runs in tier 1 unless Settings allows the host, so
+/// it is looked up under either key; anything else the parser reads as tier 1.
+QList<SandboxTier> tiersOf(const QString &source)
+{
+    static const QRegularExpression sandboxLine(QStringLiteral("^\\s*\\S{1,2}\\|\\s*sandbox\\s*:\\s*[\"']?(\\w+)"),
+                                                QRegularExpression::MultilineOption);
+    const QString asked = sandboxLine.match(source).captured(1).toLower();
+    if (asked == QLatin1String("wasm"))
+        return {SandboxTier::Wasm};
+    if (asked == QLatin1String("host"))
+        return {SandboxTier::Bubblewrap, SandboxTier::Host};
+    return {SandboxTier::Bubblewrap};
+}
+
+// --- what the editor shows -> stored outputs ------------------------------------
+
+QJsonValue textValue(const QString &text)
+{
+    return linesOf(text);
+}
+
+QJsonObject bundleOf(const NotebookOutput &output)
+{
+    QJsonObject data;
+    switch (output.kind) {
+    case NotebookOutput::Kind::ImagePng:
+        data.insert(output.imageBytes.startsWith("\xff\xd8") ? QStringLiteral("image/jpeg") : QStringLiteral("image/png"),
+                    QString::fromLatin1(output.imageBytes.toBase64()));
+        break;
+    case NotebookOutput::Kind::ImageSvg: data.insert(QStringLiteral("image/svg+xml"), textValue(output.text)); break;
+    case NotebookOutput::Kind::Html:
+        data.insert(QStringLiteral("text/html"), textValue(output.text));
+        if (!output.alt.isEmpty())
+            data.insert(QStringLiteral("text/plain"), textValue(output.alt));
+        break;
+    case NotebookOutput::Kind::Markdown: data.insert(QStringLiteral("text/markdown"), textValue(output.text)); break;
+    default: data.insert(QStringLiteral("text/plain"), textValue(output.text)); break;
+    }
+    return data;
+}
+
+/// The inverse of resultOfCell's reading: the `outputs` nbformat stores for what a run produced.
+QJsonArray outputsOf(const NotebookRunResult &result)
+{
+    QJsonArray stored;
+    for (const NotebookOutput &output : result.outputs) {
+        QJsonObject object;
+        if (output.kind == NotebookOutput::Kind::Error) {
+            object.insert(QStringLiteral("output_type"), QStringLiteral("error"));
+            object.insert(QStringLiteral("ename"), output.ename);
+            object.insert(QStringLiteral("evalue"), output.evalue.isEmpty() ? output.text : output.evalue);
+            object.insert(QStringLiteral("traceback"), QJsonArray::fromStringList(output.traceback));
+        } else if (output.kind == NotebookOutput::Kind::Text && !output.isResult) {
+            object.insert(QStringLiteral("output_type"), QStringLiteral("stream"));
+            object.insert(QStringLiteral("name"), output.isStderr ? QStringLiteral("stderr") : QStringLiteral("stdout"));
+            object.insert(QStringLiteral("text"), textValue(output.text));
+        } else {
+            object.insert(QStringLiteral("output_type"),
+                          output.isResult ? QStringLiteral("execute_result") : QStringLiteral("display_data"));
+            object.insert(QStringLiteral("data"), bundleOf(output));
+            object.insert(QStringLiteral("metadata"), QJsonObject());
+            if (output.isResult)
+                object.insert(QStringLiteral("execution_count"),
+                              result.executionCount > 0 ? QJsonValue(result.executionCount) : QJsonValue());
+        }
+        stored.append(object);
+    }
+    return stored;
 }
 
 // --- JSON in nbformat's style ---------------------------------------------------
@@ -380,32 +464,30 @@ QString ipynbMarkdown(const IpynbDocument &document)
 // open for a notebook of 40 plots, on the GUI thread; now only the blocks laid out pay, when they look themselves up.
 void seedIpynbOutputs(const IpynbDocument &document)
 {
-    // Quarto's hash-pipe in any comment style: `#| sandbox: wasm`, `//| sandbox: host`.
-    static const QRegularExpression sandboxLine(QStringLiteral("^\\s*\\S{1,2}\\|\\s*sandbox\\s*:\\s*[\"']?(\\w+)"),
-                                                QRegularExpression::MultilineOption);
-    for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
+    // Identical cells are told apart by how many came before (duplicateOrdinal), counted over every code cell,
+    // the way the editor counts the fences it shows.
+    const QJsonArray cells = document.root.value(QStringLiteral("cells")).toArray();
+    QStringList sources;
+    for (const QJsonValue &value : cells) {
+        const QJsonObject cell = value.toObject();
+        if (cell.value(QStringLiteral("cell_type")).toString() == QLatin1String("code"))
+            sources << keySourceOf(joined(cell.value(QStringLiteral("source"))));
+    }
+    const QList<int> ordinals = duplicateOrdinals(sources);
+    int code = 0;
+    for (const QJsonValue &value : cells) {
         const QJsonObject cell = value.toObject();
         if (cell.value(QStringLiteral("cell_type")).toString() != QLatin1String("code"))
             continue;
+        const QString &source = sources.at(code);
+        const int ordinal = ordinals.at(code++);
         const bool ran = !cell.value(QStringLiteral("outputs")).toArray().isEmpty()
                          || !cell.value(QStringLiteral("execution_count")).isNull();
         if (!ran)
             continue; // never run: nothing the file can say about it
-        // The editor looks a block up by its text between the fences, minus the newline that ends it and any
-        // blank lines that open it.
-        QString source = joined(cell.value(QStringLiteral("source")));
-        while (source.startsWith(QLatin1Char('\n')))
-            source.remove(0, 1);
-        // A host cell runs in tier 1 unless Settings allows the host, so it is
-        // looked up under either key; anything else the parser reads as tier 1.
-        const QString asked = sandboxLine.match(source).captured(1).toLower();
-        QList<SandboxTier> tiers = {SandboxTier::Bubblewrap};
-        if (asked == QLatin1String("wasm"))
-            tiers = {SandboxTier::Wasm};
-        else if (asked == QLatin1String("host"))
-            tiers << SandboxTier::Host;
-        for (const SandboxTier tier : std::as_const(tiers))
-            seedNotebookCache(notebookCacheKey(document.language, source, tier), [cell] { return resultOfCell(cell); });
+        for (const SandboxTier tier : tiersOf(source))
+            seedNotebookCache(notebookCacheKey(document.language, source, tier, {}, {}, ordinal),
+                              [cell] { return resultOfCell(cell); });
     }
 }
 
@@ -421,10 +503,16 @@ bool readIpynb(const QByteArray &bytes, QString *markdown, QString *error)
 
 QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, QString *error)
 {
+    return mergeIpynb(fileBytes, markdown, {}, error);
+}
+
+QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, const QSet<QString> &dirtyKeys,
+                      QString *error)
+{
     IpynbDocument document;
     if (!parseIpynb(fileBytes, &document, error))
         return {};
-    if (markdown == ipynbMarkdown(document))
+    if (dirtyKeys.isEmpty() && markdown == ipynbMarkdown(document))
         return fileBytes; // not edited: the file's own bytes
 
     // The cells the file has, as objects, in the order and with the text this view shows them.
@@ -492,6 +580,41 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, QStr
         k = gapOld;
     }
     pairGap(i, n, k, m);
+
+    // The cells that ran (or were cleared) since the file was read take their outputs and count from the cache;
+    // every other cell stays the file's own object, since what the editor holds of an output is not all the file
+    // said (colour codes, alternative representations).
+    if (!dirtyKeys.isEmpty()) {
+        QStringList sources;
+        QList<qsizetype> at;
+        for (qsizetype c = 0; c < n; ++c) {
+            if (shown.at(c).type == Cell::Type::Code) {
+                sources << keySourceOf(shown.at(c).source);
+                at << c;
+            }
+        }
+        const QList<int> ordinals = duplicateOrdinals(sources);
+        for (qsizetype c = 0; c < at.size(); ++c) {
+            QString key;
+            for (const SandboxTier tier : tiersOf(sources.at(c))) {
+                const QString candidate = notebookCacheKey(document.language, sources.at(c), tier, {}, {}, ordinals.at(c));
+                if (dirtyKeys.contains(candidate)) {
+                    key = candidate;
+                    break;
+                }
+            }
+            if (key.isEmpty())
+                continue;
+            const NotebookRunResult result = readNotebookCache(key);
+            if (!result.kernelError.isEmpty())
+                continue; // it never reached a kernel: nothing ran, so nothing to say
+            QJsonObject cell = rebuilt.at(at.at(c)).toObject();
+            cell.insert(QStringLiteral("outputs"), result.hasRun ? outputsOf(result) : QJsonArray());
+            cell.insert(QStringLiteral("execution_count"),
+                        result.hasRun && result.executionCount > 0 ? QJsonValue(result.executionCount) : QJsonValue());
+            rebuilt.replace(at.at(c), cell);
+        }
+    }
 
     if (rebuilt == document.root.value(QStringLiteral("cells")).toArray())
         return fileBytes; // the text differs but its cells are the file's own

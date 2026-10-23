@@ -480,6 +480,7 @@ struct MarkdownEditor::BlockView {
     /// header (codeLabelOf, paintCodeChrome, handleBlockClick).
     bool notebookEligible = false;
     QString notebookKey; ///< "language|tier|source" - m_notebookCache's own key
+    int notebookOrdinal = 0; ///< NotebookRunOptions::duplicateOrdinal, part of that key
     /// What the run control's click re-runs - exactly the language,
     /// source, working directory and sandbox tier appendNotebookOutput
     /// was last called with, whether that came from a fenced block's own
