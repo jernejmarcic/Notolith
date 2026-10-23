@@ -893,6 +893,79 @@ void scanEntities(const QString &text, const QList<Range> &masked, Decorations &
     }
 }
 
+/// CommonMark's backslash escapes: a backslash before ASCII punctuation is
+/// not shown, only the punctuation is (`\(` is "(", `\\` is "\"). As
+/// substitutions, like entities, so the caret opens one by touching it. Not in
+/// `masked` (code, maths, HTML, links, the frontmatter): there a backslash is
+/// the author's own.
+void scanEscapes(const QString &text, QList<Range> masked, Decorations &decorations)
+{
+    qsizetype at = text.indexOf(QLatin1Char('\\'));
+    if (at < 0)
+        return;
+    std::sort(masked.begin(), masked.end(), [](const Range &l, const Range &r) { return l.start < r.start; });
+    qsizetype next = 0;
+    qsizetype maskedEnd = 0; // the furthest end among the ranges that start at or before `at`
+    while (at >= 0 && at + 1 < text.size()) {
+        while (next < masked.size() && masked.at(next).start <= at)
+            maskedEnd = qMax(maskedEnd, masked.at(next++).end);
+        if (at < maskedEnd) {
+            at = text.indexOf(QLatin1Char('\\'), maskedEnd);
+            continue;
+        }
+        const char16_t escaped = text.at(at + 1).unicode();
+        const bool punctuation = (escaped >= '!' && escaped <= '/') || (escaped >= ':' && escaped <= '@')
+                                 || (escaped >= '[' && escaped <= '`') || (escaped >= '{' && escaped <= '~');
+        if (punctuation)
+            decorations.substitutions.append({{at, at + 2}, QString(QChar(escaped))});
+        at = text.indexOf(QLatin1Char('\\'), at + (punctuation ? 2 : 1));
+    }
+}
+
+/// A paragraph that holds `$$ ... $$` on lines of its own - md4qt does not end
+/// a paragraph where a formula starts - is cut into the text before it, the
+/// formula, and the text after, so the formula is a block the editor can draw.
+/// A formula sharing its line with other text stays part of its paragraph.
+void splitParagraphsAtDisplayMath(const QString &text, Decorations &decorations)
+{
+    QList<Range> formulas;
+    for (const MathSpan &math : std::as_const(decorations.maths)) {
+        const bool ownsLines = math.display && math.range.isValid() && math.range.end <= text.size()
+                               && (math.range.start == 0 || text.at(math.range.start - 1) == QLatin1Char('\n'))
+                               && (math.range.end == text.size() || text.at(math.range.end) == QLatin1Char('\n'));
+        if (ownsLines)
+            formulas.append(math.range);
+    }
+    if (formulas.isEmpty())
+        return;
+    std::sort(formulas.begin(), formulas.end(), [](const Range &l, const Range &r) { return l.start < r.start; });
+
+    QList<BlockSpan> blocks;
+    blocks.reserve(decorations.blocks.size() + formulas.size());
+    for (const BlockSpan &block : std::as_const(decorations.blocks)) {
+        if (block.kind != BlockSpan::Kind::Paragraph) {
+            blocks.append(block);
+            continue;
+        }
+        qsizetype from = block.range.start;
+        bool split = false;
+        for (const Range &formula : std::as_const(formulas)) {
+            if (formula.start < from || formula.end > block.range.end)
+                continue;
+            if (formula.start > from)
+                blocks.append({BlockSpan::Kind::Paragraph, {from, formula.start}, 0});
+            blocks.append({BlockSpan::Kind::Paragraph, formula, 0});
+            from = formula.end < text.size() ? formula.end + 1 : formula.end; // the formula's own newline
+            split = true;
+        }
+        if (!split)
+            blocks.append(block);
+        else if (from < block.range.end && !QStringView(text).mid(from, block.range.end - from).trimmed().isEmpty())
+            blocks.append({BlockSpan::Kind::Paragraph, {from, block.range.end}, 0});
+    }
+    decorations.blocks = blocks;
+}
+
 const QRegularExpression &htmlHeadingRe()
 {
     static const QRegularExpression heading(
@@ -1949,7 +2022,12 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
         for (const Link &link : obsidian.links)
             notText.append(link.range);
         scanEntities(text, notText, walk.decorations);
+        notText += obsidian.comments;
+        if (frontmatter.isValid())
+            notText.append(frontmatter);
+        scanEscapes(text, notText, walk.decorations);
     }
+    splitParagraphsAtDisplayMath(text, walk.decorations);
     result.decorations = std::move(walk.decorations);
     if (frontmatter.isValid()) {
         result.decorations.blocks.prepend({BlockSpan::Kind::Frontmatter, frontmatter, 0});

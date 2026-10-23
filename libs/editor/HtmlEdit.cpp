@@ -1059,7 +1059,8 @@ bool MarkdownEditor::entityRevealed(const Substitution &substitution) const
     const bool vimStepping = d->m_vim.enabled && d->m_vim.mode != VimState::Mode::Insert;
     return d->m_mode == Mode::LivePreview && !vimStepping && d->m_anchor == d->m_cursor
            && substitution.range.start <= d->m_cursor
-           && d->m_cursor <= substitution.range.end && d->m_text.at(substitution.range.start) == QLatin1Char('&');
+           && d->m_cursor <= substitution.range.end
+           && (d->m_text.at(substitution.range.start) == QLatin1Char('&') || d->m_text.at(substitution.range.start) == QLatin1Char('\\'));
 }
 
 QList<Range> MarkdownEditor::revealedEntities() const
