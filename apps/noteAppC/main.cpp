@@ -108,6 +108,16 @@ bool answeredWithoutGUI(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
+#ifdef __GLIBC__
+    // glibc raises its mmap and trim thresholds by itself the first time a large buffer is freed, so whether a
+    // 4-8 MB buffer (a window's backing store, a page raster) is reused or mapped and faulted in again on every
+    // repaint hangs on what happened to be freed earlier in the process. Taking the sharing libraries out of the
+    // start moved it: +1100 page faults and +0.6 ms on every PDF view open. Pinned instead: buffers up to 16 MiB
+    // come from the heap, which gives memory back only when more than 16 MiB is free at its top (the 8 s trim
+    // below returns the rest). tools/bench/Bench.cpp sets the same two so its rows measure this process.
+    mallopt(M_MMAP_THRESHOLD, 16 << 20);
+    mallopt(M_TRIM_THRESHOLD, 16 << 20);
+#endif
     startLog("main");
     {
         // argc by value: QGuiApplication below strips the Qt options from

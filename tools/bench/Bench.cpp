@@ -2544,6 +2544,11 @@ void printJson(const QList<Timing> &timings, qint64 peakKB, const QString &memor
 
 int main(int argc, char *argv[])
 {
+#ifdef __GLIBC__
+    // The application's allocator setting, for the reason given in apps/noteAppC/main.cpp.
+    mallopt(M_MMAP_THRESHOLD, 16 << 20);
+    mallopt(M_TRIM_THRESHOLD, 16 << 20);
+#endif
     // --gpu needs a real GL context, which the offscreen platform cannot give,
     // so that run keeps whatever platform the session already has.
     const bool wantsGPU = [argc, argv] {
