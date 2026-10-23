@@ -8,11 +8,14 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
 #include <QImage>
 #include <QSaveFile>
 #include <QTemporaryDir>
+#include <QThread>
+#include <QTimer>
 
 #include <gtest/gtest.h>
 
@@ -108,6 +111,15 @@ TEST(PandocPrepare, NoteEmbedsAreInlined)
     EXPECT_EQ(prepared(QStringLiteral("![[Other#Missing]]"), context), QStringLiteral("[Other](<Other.md>)"));
 }
 
+TEST(PandocPrepare, ABlockEmbedTakesTheParsersBlockNotACodeLine)
+{
+    const QString other = QStringLiteral("/v/dir/Other.md");
+    const QHash<QString, QString> notes = {
+        {other, QStringLiteral("```\ncode line ^b9\n```\n\nfirst line\nsecond line ^b9\n")}};
+    auto context = contextFor({{QStringLiteral("Other"), other}}, notes);
+    EXPECT_EQ(prepared(QStringLiteral("![[Other#^b9]]"), context), QStringLiteral("first line\nsecond line"));
+}
+
 TEST(PandocPrepare, EmbedCyclesStop)
 {
     const QString a = QStringLiteral("/v/dir/A.md");
@@ -190,13 +202,13 @@ TEST(PandocArgs, Details)
     ExportRequest request;
     request.writer = QStringLiteral("docx");
     request.outputPath = QStringLiteral("/out/n.docx");
-    request.resourcePaths = {QStringLiteral("/v/dir"), QStringLiteral("/v")};
+    request.resourcePaths = {QStringLiteral("/v/di:r"), QStringLiteral("/v")}; // a ":" in a folder name stays whole
     request.referenceDoc = QStringLiteral("/ref.docx");
     request.title = QStringLiteral("My: note");
     request.extraArguments = {QStringLiteral("--toc")};
     EXPECT_EQ(exportArguments(request),
               (QStringList{QStringLiteral("-f"), QStringLiteral("commonmark_x-smart"), QStringLiteral("-t"), QStringLiteral("docx"),
-                           QStringLiteral("--resource-path=/v/dir:/v"), QStringLiteral("--reference-doc=/ref.docx"),
+                           QStringLiteral("--resource-path=/v/di:r"), QStringLiteral("--resource-path=/v"), QStringLiteral("--reference-doc=/ref.docx"),
                            QStringLiteral("--metadata=title=My: note"), QStringLiteral("--toc"), QStringLiteral("-o"),
                            QStringLiteral("/out/n.docx")}));
 
@@ -207,11 +219,18 @@ TEST(PandocArgs, Details)
     EXPECT_EQ(importArguments(in),
               (QStringList{QStringLiteral("-f"), QStringLiteral("docx"), QStringLiteral("-t"), QStringLiteral("gfm-tex_math_gfm+tex_math_dollars"),
                            QStringLiteral("--wrap=none"), QStringLiteral("--standalone"), QStringLiteral("--extract-media=."),
-                           QStringLiteral("-o"), QStringLiteral("out.md"), QStringLiteral("/in/a b.docx")}));
+                           QStringLiteral("--sandbox"), QStringLiteral("-o"), QStringLiteral("out.md"), QStringLiteral("/in/a b.docx")}));
+    in.extraArguments = {QStringLiteral("--toc")};
+    EXPECT_LT(importArguments(in).indexOf(QStringLiteral("--sandbox")), importArguments(in).indexOf(QStringLiteral("--toc")))
+        << "the person's own arguments come after, so they win";
 }
 
 TEST(PandocArgs, FormatNamesAndSuffixes)
 {
+    EXPECT_EQ(defaultExportName(QStringLiteral("Plan"), QStringLiteral("docx"), QStringLiteral("docx")), QStringLiteral("Plan.docx"));
+    EXPECT_EQ(defaultExportName(QStringLiteral("Plan"), QStringLiteral("gfm"), QStringLiteral("md")), QStringLiteral("Plan (gfm).md"));
+    EXPECT_EQ(defaultExportName(QStringLiteral("Plan"), QStringLiteral("markdown+smart-raw_html"), QStringLiteral("md")),
+              QStringLiteral("Plan (markdown).md")) << "never the note's own name";
     EXPECT_TRUE(validFormatName(QStringLiteral("rst")));
     EXPECT_TRUE(validFormatName(QStringLiteral("markdown+smart-raw_html")));
     EXPECT_FALSE(validFormatName(QStringLiteral("")));
@@ -236,6 +255,8 @@ TEST(PandocImport, RewritesWhatNotolithReads)
               QStringLiteral("![[rId9.png|cap]] ![[a b 1.png]] ![w](media/other.png)"));
     EXPECT_EQ(rewriteImported(QStringLiteral("<img src=\"./media/rId9.png\" style=\"width:2in;height:1in\" alt=\"x\" />"), names),
               QStringLiteral("![[rId9.png|192]]"));
+    EXPECT_EQ(rewriteImported(QStringLiteral("# <span id=\"anchor\"></span>Title and <span id=\"x\">kept</span>"), names),
+              QStringLiteral("# Title and <span id=\"x\">kept</span>"));
     EXPECT_EQ(rewriteImported(QStringLiteral("a <span class=\"mark\">hi *there*</span> b"), names),
               QStringLiteral("a ==hi *there*== b"));
     EXPECT_EQ(rewriteImported(QStringLiteral("- \\[ \\] a\n  - \\[x\\] b\n\\[ \\] not a list"), names),
@@ -247,7 +268,8 @@ TEST(PandocImport, MediaIsCopiedNeverOver)
     QTemporaryDir scratch;
     QTemporaryDir vault;
     ASSERT_TRUE(QDir(scratch.path()).mkpath(QStringLiteral("media/sub")));
-    for (const char *name : {"media/one.png", "media/sub/two.png"}) {
+    ASSERT_TRUE(QDir(scratch.path()).mkpath(QStringLiteral("Pictures")));
+    for (const char *name : {"media/one.png", "media/sub/two.png", "Pictures/0.png", "abc123.png", "out.md"}) {
         QFile file(scratch.filePath(QString::fromLatin1(name)));
         ASSERT_TRUE(file.open(QIODevice::WriteOnly));
         file.write("new");
@@ -260,9 +282,41 @@ TEST(PandocImport, MediaIsCopiedNeverOver)
     const QHash<QString, QString> names = moveMedia(scratch.path(), vault.path());
     EXPECT_EQ(names.value(QStringLiteral("media/one.png")), QStringLiteral("one 1.png"));
     EXPECT_EQ(names.value(QStringLiteral("media/sub/two.png")), QStringLiteral("two.png"));
+    EXPECT_EQ(names.value(QStringLiteral("Pictures/0.png")), QStringLiteral("0.png")) << "an ODT's folder";
+    EXPECT_EQ(names.value(QStringLiteral("abc123.png")), QStringLiteral("abc123.png")) << "an HTML file's hashed names";
+    EXPECT_FALSE(names.contains(QStringLiteral("out.md"))) << "the Markdown is not an attachment";
+    EXPECT_FALSE(QFileInfo::exists(vault.filePath(QStringLiteral("out.md"))));
     QFile kept(vault.filePath(QStringLiteral("one.png")));
     ASSERT_TRUE(kept.open(QIODevice::ReadOnly));
     EXPECT_EQ(kept.readAll(), QByteArray("keep"));
+}
+
+TEST(PandocImport, SiblingImagesAreOnlyPicturesBesideTheDocument)
+{
+    QTemporaryDir area;
+    const QString input = area.filePath(QStringLiteral("doc"));
+    ASSERT_TRUE(QDir().mkpath(input + QStringLiteral("/img")));
+    const auto write = [](const QString &path, const QByteArray &bytes) {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+    };
+    write(input + QStringLiteral("/pic one.png"), "p1");
+    write(input + QStringLiteral("/img/two.JPG"), "p2");
+    write(input + QStringLiteral("/notes.txt"), "not a picture");
+    write(area.filePath(QStringLiteral("outside.png")), "outside");
+    ASSERT_TRUE(QFile::link(area.filePath(QStringLiteral("outside.png")), input + QStringLiteral("/link.png")));
+    QTemporaryDir vault;
+
+    const QString markdown = QStringLiteral(
+        "![a](pic%20one.png) ![b](img/two.JPG) ![c](notes.txt) ![d](../outside.png) ![e](/etc/hostname) "
+        "![f](https://example.com/x.png) ![g](file:///etc/hostname) ![h](link.png) <img src=\"./img/two.JPG\" />");
+    const QHash<QString, QString> names = moveSiblingImages(markdown, input, vault.path());
+    EXPECT_EQ(names.value(QStringLiteral("pic one.png")), QStringLiteral("pic one.png"));
+    EXPECT_EQ(names.value(QStringLiteral("img/two.JPG")), QStringLiteral("two.JPG"));
+    EXPECT_EQ(names.size(), 2) << "no text file, no climbing out, no absolute path, no URL, no link out of the folder";
+    EXPECT_EQ(QDir(vault.path()).entryList(QDir::Files).size(), 2);
+    EXPECT_TRUE(rewriteImported(markdown, names).startsWith(QStringLiteral("![[pic one.png|a]] ![[two.JPG|b]] ![c](notes.txt)")));
 }
 
 // ---- the program itself -------------------------------------------------
@@ -322,6 +376,44 @@ TEST(PandocRunner, CancelAndTimeout)
         EXPECT_EQ(message.contains(QStringLiteral("Cancelled")), cancel) << qPrintable(message);
         EXPECT_EQ(message.contains(QStringLiteral("too long")), !cancel) << qPrintable(message);
     }
+}
+
+// Cancel stops what pandoc started too (pdflatex, a filter's shell), not only pandoc's own process.
+TEST(PandocRunner, CancelStopsTheChildrenToo)
+{
+    QTemporaryDir dir;
+    const QString pidFile = dir.filePath(QStringLiteral("child.pid"));
+    Runner runner;
+    QEventLoop loop;
+    QObject::connect(&runner, &Runner::finished, &loop, &QEventLoop::quit);
+    runner.start(QStringLiteral("/bin/sh"),
+                 {QStringLiteral("-c"), QStringLiteral("sleep 30 & echo $! > '%1'; wait").arg(pidFile)}, {}, dir.path());
+    // The shell has started its child once the file has its number.
+    QTimer poll;
+    QObject::connect(&poll, &QTimer::timeout, &runner, [&] {
+        QFile file(pidFile);
+        if (file.open(QIODevice::ReadOnly) && file.readAll().trimmed().toInt() > 0) {
+            poll.stop();
+            runner.cancel();
+        }
+    });
+    poll.start(10);
+    QTimer::singleShot(10000, &loop, &QEventLoop::quit);
+    loop.exec();
+    QFile file(pidFile);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    const int child = file.readAll().trimmed().toInt();
+    ASSERT_GT(child, 0);
+    // Gone (a zombie is not running either): no /proc entry, or one in state Z, soon after the cancel.
+    const auto alive = [child] {
+        QFile status(QStringLiteral("/proc/%1/status").arg(child));
+        return status.open(QIODevice::ReadOnly) && !status.readAll().contains("State:\tZ");
+    };
+    QElapsedTimer waited;
+    waited.start();
+    while (alive() && waited.elapsed() < 3000)
+        QThread::msleep(20);
+    EXPECT_FALSE(alive());
 }
 
 namespace {
@@ -399,6 +491,99 @@ TEST(PandocReal, NoteToDocxAndBackToMarkdown)
     EXPECT_TRUE(final.contains(QStringLiteral("| a")));
     EXPECT_FALSE(final.contains(QStringLiteral("hidden")));
     EXPECT_TRUE(QFileInfo::exists(vault.filePath(*names.cbegin())));
+}
+
+namespace {
+
+/// The window's steps on a file already exported or written by hand: pandoc under the import arguments,
+/// the media swept into `vault`, the Markdown rewritten. Starts with FAILED when pandoc wrote nothing.
+QString importedThrough(const QString &pandoc, const QString &file, const QString &vault)
+{
+    QTemporaryDir scratch;
+    ImportRequest in;
+    in.reader = readerForSuffix(QFileInfo(file).suffix());
+    in.inputPath = file;
+    in.outputName = QStringLiteral("out.md");
+    const QString failure = runAndWait(pandoc, importArguments(in), {}, scratch.path());
+    QFile result(scratch.filePath(QStringLiteral("out.md")));
+    if (!result.open(QIODevice::ReadOnly))
+        return QStringLiteral("FAILED: ") + failure;
+    const QString markdown = QString::fromUtf8(result.readAll());
+    QHash<QString, QString> names = moveMedia(scratch.path(), vault);
+    names.insert(moveSiblingImages(markdown, QFileInfo(file).absolutePath(), vault));
+    return rewriteImported(markdown, names);
+}
+
+} // namespace
+
+TEST(PandocReal, AnODTKeepsItsPictures)
+{
+    const QString pandoc = locate(QString());
+    if (pandoc.isEmpty())
+        GTEST_SKIP() << "pandoc is not installed";
+    QTemporaryDir dir;
+    QImage image(40, 20, QImage::Format_RGB32);
+    image.fill(Qt::blue);
+    ASSERT_TRUE(image.save(dir.filePath(QStringLiteral("pic.png"))));
+    ExportRequest request;
+    request.writer = QStringLiteral("odt");
+    request.outputPath = dir.filePath(QStringLiteral("in.odt"));
+    request.resourcePaths = {dir.path()};
+    ASSERT_EQ(runAndWait(pandoc, exportArguments(request), QByteArray("Text\n\n![a](<pic.png>)\n"), dir.path()), QString());
+
+    QTemporaryDir vault;
+    const QString final = importedThrough(pandoc, request.outputPath, vault.path());
+    EXPECT_TRUE(final.contains(QStringLiteral("![[")) && final.contains(QStringLiteral(".png"))) << qPrintable(final);
+    EXPECT_FALSE(final.contains(QStringLiteral("Pictures/"))) << qPrintable(final);
+    EXPECT_EQ(QDir(vault.path()).entryList({QStringLiteral("*.png")}).size(), 1);
+}
+
+TEST(PandocReal, AnHTMLFileKeepsItsSiblingPicturesAndNothingElse)
+{
+    const QString pandoc = locate(QString());
+    if (pandoc.isEmpty())
+        GTEST_SKIP() << "pandoc is not installed";
+    QTemporaryDir dir;
+    QImage image(40, 20, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    ASSERT_TRUE(image.save(dir.filePath(QStringLiteral("pic.png"))));
+    QFile secret(dir.filePath(QStringLiteral("key.txt")));
+    ASSERT_TRUE(secret.open(QIODevice::WriteOnly));
+    secret.write("TOPSECRET");
+    secret.close();
+    QFile page(dir.filePath(QStringLiteral("page.html")));
+    ASSERT_TRUE(page.open(QIODevice::WriteOnly));
+    page.write("<html><body><p>Hello</p><img src=\"pic.png\" alt=\"a\"><img src=\"file://" + dir.filePath(QStringLiteral("key.txt")).toUtf8() +
+               "\"><img src=\"http://127.0.0.1:9/x.png\"></body></html>");
+    page.close();
+
+    QTemporaryDir vault;
+    const QString final = importedThrough(pandoc, page.fileName(), vault.path());
+    EXPECT_TRUE(final.contains(QStringLiteral("![[pic.png|a]]"))) << qPrintable(final);
+    EXPECT_FALSE(final.contains(QStringLiteral("TOPSECRET")));
+    EXPECT_EQ(QDir(vault.path()).entryList(QDir::Files), QStringList{QStringLiteral("pic.png")})
+        << "the text file the page named is not copied";
+}
+
+TEST(PandocReal, ALaTeXInputOfAnotherFileIsNotInlined)
+{
+    const QString pandoc = locate(QString());
+    if (pandoc.isEmpty())
+        GTEST_SKIP() << "pandoc is not installed";
+    QTemporaryDir dir;
+    QFile secret(dir.filePath(QStringLiteral("secret.txt")));
+    ASSERT_TRUE(secret.open(QIODevice::WriteOnly));
+    secret.write("TOPSECRET\n");
+    secret.close();
+    QFile tex(dir.filePath(QStringLiteral("doc.tex")));
+    ASSERT_TRUE(tex.open(QIODevice::WriteOnly));
+    tex.write("\\documentclass{article}\\begin{document}Hi \\input{" + secret.fileName().toUtf8() + "} there\\end{document}\n");
+    tex.close();
+
+    QTemporaryDir vault;
+    const QString final = importedThrough(pandoc, tex.fileName(), vault.path());
+    EXPECT_TRUE(final.contains(QStringLiteral("Hi"))) << qPrintable(final);
+    EXPECT_FALSE(final.contains(QStringLiteral("TOPSECRET"))) << qPrintable(final);
 }
 
 TEST(PandocReal, AFailureShowsPandocsOwnWords)

@@ -68,8 +68,9 @@ QuickSwitcher::QuickSwitcher(QWidget *parent)
 }
 
 void QuickSwitcher::setCandidates(const QStringList &candidates, const QStringList &details,
-                                  const QList<QIcon> &icons)
+                                  const QList<QIcon> &icons, const QList<bool> &dimmed)
 {
+    m_dimmed = dimmed;
     m_candidates = candidates;
     m_details = details;
     m_icons = icons;
@@ -120,6 +121,8 @@ void QuickSwitcher::refill()
             item->setData(kDetailRole, m_details.at(i));
         if (i < m_icons.size())
             item->setIcon(m_icons.at(i));
+        if (i < m_dimmed.size() && m_dimmed.at(i))
+            item->setForeground(m_results->palette().color(QPalette::Disabled, QPalette::Text));
     }
     if (m_results->count() > 0)
         m_results->setCurrentRow(0);

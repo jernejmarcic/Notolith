@@ -40,6 +40,13 @@ bool validFormatName(const QString &name)
     return valid.match(name).hasMatch();
 }
 
+QString defaultExportName(const QString &noteBaseName, const QString &writer, const QString &extension)
+{
+    if (extension.compare(QLatin1String("md"), Qt::CaseInsensitive) != 0)
+        return noteBaseName + QLatin1Char('.') + extension;
+    return QStringLiteral("%1 (%2).md").arg(noteBaseName, writer.section(QRegularExpression(QStringLiteral("[+\\-]")), 0, 0));
+}
+
 QString extensionForWriter(const QString &writer)
 {
     static const QHash<QString, QString> known = {
@@ -83,8 +90,9 @@ QStringList exportArguments(const ExportRequest &request)
 {
     QStringList args = {QStringLiteral("-f"), inputFormat(), QStringLiteral("-t"), request.writer};
     args += request.formatArguments;
-    if (!request.resourcePaths.isEmpty())
-        args << QStringLiteral("--resource-path=") + request.resourcePaths.join(QDir::listSeparator());
+    // One flag per folder: a folder with a ':' (the list separator) in its name stays whole.
+    for (const QString &folder : request.resourcePaths)
+        args << QStringLiteral("--resource-path=") + folder;
     if (!request.referenceDoc.isEmpty())
         args << QStringLiteral("--reference-doc=") + request.referenceDoc;
     if (!request.title.isEmpty())
@@ -96,9 +104,12 @@ QStringList exportArguments(const ExportRequest &request)
 
 QStringList importArguments(const ImportRequest &request)
 {
+    // The sandbox, because the file may be from anyone: without it \input, `.. include::` and #+INCLUDE read any
+    // file the person can, and an <img> takes any URL. Not on export, where this pandoc cannot find its own
+    // docx template under it. Pictures a sandboxed reader leaves as links are copied by moveSiblingImages.
     QStringList args = {QStringLiteral("-f"), request.reader, QStringLiteral("-t"), importOutputFormat(),
                         QStringLiteral("--wrap=none"), QStringLiteral("--standalone"),
-                        QStringLiteral("--extract-media=.")};
+                        QStringLiteral("--extract-media=."), QStringLiteral("--sandbox")};
     args += request.extraArguments;
     args << QStringLiteral("-o") << request.outputName << request.inputPath;
     return args;
@@ -158,6 +169,25 @@ QString locate(const QString &setting)
 
 namespace {
 
+/// `![alt](media/x.png)`, as pandoc writes an image with no size.
+const QRegularExpression &imagePattern()
+{
+    static const QRegularExpression image(
+        QStringLiteral("!\\[([^\\]]*)\\]\\(<?([^)>\\s]+)>?(?:\\s+\"[^\"]*\")?\\)"));
+    return image;
+}
+/// `<img src="media/x.png" style="width:2in;height:1in" alt="x" />`, as it writes one with a size.
+const QRegularExpression &tagPattern()
+{
+    static const QRegularExpression tag(QStringLiteral("<img\\s+([^>]*?)\\s*/?>"));
+    return tag;
+}
+const QRegularExpression &srcPattern()
+{
+    static const QRegularExpression src(QStringLiteral("\\bsrc=\"([^\"]*)\""));
+    return src;
+}
+
 QString normalisedMediaPath(QString path)
 {
     path = QUrl::fromPercentEncoding(path.toUtf8());
@@ -182,6 +212,12 @@ int pixelsOf(const QString &number, const QString &unit)
     return int(pixels + 0.5);
 }
 
+/// What stands where a picture could not be copied: not a link to a file that is not there.
+QString lostPicture()
+{
+    return QStringLiteral("*(a picture could not be imported)*");
+}
+
 QString embedFor(const QString &name, int width, const QString &alt)
 {
     QString alias;
@@ -197,13 +233,8 @@ QString embedFor(const QString &name, int width, const QString &alt)
 QString rewriteImported(const QString &markdown, const QHash<QString, QString> &names)
 {
     QString out = markdown;
+    const QRegularExpression &image = imagePattern(), &tag = tagPattern(), &src = srcPattern();
 
-    // `![alt](media/x.png)`, as pandoc writes an image with no size.
-    static const QRegularExpression image(
-        QStringLiteral("!\\[([^\\]]*)\\]\\(<?([^)>\\s]+)>?(?:\\s+\"[^\"]*\")?\\)"));
-    // `<img src="media/x.png" style="width:2in;height:1in" alt="x" />`, as it writes one with a size.
-    static const QRegularExpression tag(QStringLiteral("<img\\s+([^>]*?)\\s*/?>"));
-    static const QRegularExpression src(QStringLiteral("\\bsrc=\"([^\"]*)\""));
     static const QRegularExpression alt(QStringLiteral("\\balt=\"([^\"]*)\""));
     static const QRegularExpression width(QStringLiteral("width:\\s*([0-9.]+)\\s*(in|px|cm|mm|pt)"));
     static const QRegularExpression mark(QStringLiteral("<span class=\"mark\">(.*?)</span>"),
@@ -227,9 +258,11 @@ QString rewriteImported(const QString &markdown, const QHash<QString, QString> &
 
     replaceAll(image, [&names](const QRegularExpressionMatch &match) {
         const auto name = names.constFind(normalisedMediaPath(match.captured(2)));
-        return name == names.constEnd() ? QString() : embedFor(*name, 0, match.captured(1));
+        if (name == names.constEnd())
+            return QString();
+        return name->isEmpty() ? lostPicture() : embedFor(*name, 0, match.captured(1));
     });
-    replaceAll(tag, [&names](const QRegularExpressionMatch &match) {
+    replaceAll(tag, [&names, &src](const QRegularExpressionMatch &match) {
         const QString attributes = match.captured(1);
         const auto source = src.match(attributes);
         if (!source.hasMatch())
@@ -237,6 +270,8 @@ QString rewriteImported(const QString &markdown, const QHash<QString, QString> &
         const auto name = names.constFind(normalisedMediaPath(source.captured(1)));
         if (name == names.constEnd())
             return QString();
+        if (name->isEmpty())
+            return lostPicture();
         const auto size = width.match(attributes);
         return embedFor(*name, size.hasMatch() ? pixelsOf(size.captured(1), size.captured(2)) : 0,
                         alt.match(attributes).captured(1));
@@ -244,6 +279,9 @@ QString rewriteImported(const QString &markdown, const QHash<QString, QString> &
     replaceAll(mark, [](const QRegularExpressionMatch &match) {
         return QStringLiteral("==") + match.captured(1) + QStringLiteral("==");
     });
+    // The empty anchors Word, ODT and EPUB headings come with (`# <span id="anchor"></span>Title`).
+    static const QRegularExpression anchor(QStringLiteral("<span id=\"[^\"]*\"></span>"));
+    out.remove(anchor);
     // A task list item pandoc read from Word as text, which its Markdown writer escapes.
     static const QRegularExpression task(QStringLiteral("^(\\s*(?:[-*+]|\\d+[.)])\\s+)\\\\\\[([ xX])\\\\\\]"),
                                          QRegularExpression::MultilineOption);
@@ -255,18 +293,62 @@ QHash<QString, QString> moveMedia(const QString &extractedRoot, const QString &f
 {
     QHash<QString, QString> names;
     const QDir root(extractedRoot);
-    if (!root.exists(QStringLiteral("media")))
-        return names;
-    QDir().mkpath(folder);
-    for (QDirIterator it(root.filePath(QStringLiteral("media")), QDir::Files, QDirIterator::Subdirectories); it.hasNext();) {
+    // Every file, not `media/` alone: ODT writes `Pictures/`, HTML puts them at the root under hashed names.
+    for (QDirIterator it(extractedRoot, QDir::Files, QDirIterator::Subdirectories); it.hasNext();) {
         const QString source = it.next();
+        const QString relative = root.relativeFilePath(source);
+        if (relative == QLatin1String("out.md"))
+            continue;
+        QDir().mkpath(folder);
         const QString target = Vault::uniqueAttachmentPath(folder, QFileInfo(source).fileName());
         if (!QFile::copy(source, target)) {
             if (error)
                 *error = QStringLiteral("could not copy %1 into %2").arg(QFileInfo(source).fileName(), folder);
+            names.insert(relative, QString()); // the picture is lost, and the note must not name it
             continue;
         }
-        names.insert(root.relativeFilePath(source), QFileInfo(target).fileName());
+        names.insert(relative, QFileInfo(target).fileName());
+    }
+    return names;
+}
+
+QHash<QString, QString> moveSiblingImages(const QString &markdown, const QString &inputFolder, const QString &folder,
+                                          QString *error)
+{
+    QHash<QString, QString> names;
+    const QString base = QDir(inputFolder).canonicalPath();
+    if (base.isEmpty())
+        return names;
+    static const QStringList pictures = {QStringLiteral("png"),  QStringLiteral("jpg"),  QStringLiteral("jpeg"),
+                                         QStringLiteral("gif"),  QStringLiteral("svg"),  QStringLiteral("webp"),
+                                         QStringLiteral("bmp"),  QStringLiteral("avif")};
+    QStringList written;
+    for (auto it = imagePattern().globalMatch(markdown); it.hasNext();)
+        written << it.next().captured(2);
+    for (auto it = tagPattern().globalMatch(markdown); it.hasNext();) {
+        const auto source = srcPattern().match(it.next().captured(1));
+        if (source.hasMatch())
+            written << source.captured(1);
+    }
+    for (const QString &raw : std::as_const(written)) {
+        const QString path = normalisedMediaPath(raw);
+        // Relative to the document and nothing else: no URL, no absolute path, nothing that climbs out.
+        static const QRegularExpression scheme(QStringLiteral("^[A-Za-z][A-Za-z0-9+.-]*:"));
+        if (path.isEmpty() || path.startsWith(QLatin1Char('/')) || scheme.match(path).hasMatch() || names.contains(path))
+            continue;
+        const QFileInfo file(QDir(base).filePath(path));
+        const QString real = file.canonicalFilePath();
+        if (real.isEmpty() || !real.startsWith(base + QLatin1Char('/')) || !pictures.contains(file.suffix().toLower()))
+            continue;
+        QDir().mkpath(folder);
+        const QString target = Vault::uniqueAttachmentPath(folder, file.fileName());
+        if (!QFile::copy(real, target)) {
+            if (error)
+                *error = QStringLiteral("could not copy %1 into %2").arg(file.fileName(), folder);
+            names.insert(path, QString());
+            continue;
+        }
+        names.insert(path, QFileInfo(target).fileName());
     }
     return names;
 }

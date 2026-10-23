@@ -680,6 +680,8 @@ private:
                    const QString &workingDirectory, const QString &title,
                    std::function<void()> done);
     pandoc::Runner *m_pandocRunner = nullptr;
+    /// Imports asked for while one runs (several files dropped at once): file and folder, taken in order as each finishes.
+    QList<QPair<QString, QString>> m_pandocQueue;
 #endif
     /// Puts a snapshot back as `notePath`'s content, keeping what it held as
     /// a snapshot of its own first.

@@ -29,6 +29,9 @@ bool validFormatName(const QString &name);
 /// The file extension for a pandoc output format named by hand ("Other..."):
 /// `rst` for rst, `adoc` for asciidoc, the name itself when none is known.
 QString extensionForWriter(const QString &writer);
+/// The save dialog's first suggestion: `Name.docx`; for a Markdown writer, whose file would be a note and
+/// could be this very one, `Name (gfm).md`.
+QString defaultExportName(const QString &noteBaseName, const QString &writer, const QString &extension);
 
 /// What the Markdown is read as: CommonMark with pandoc's extensions (divs,
 /// spans, footnotes, `$` maths, tables, tasks), not its own Markdown, whose
@@ -83,8 +86,16 @@ QString locate(const QString &setting);
 /// `<span class="mark">` (pandoc's highlight) becomes `==text==`, and an escaped `\[ \]` task box a task's.
 QString rewriteImported(const QString &markdown, const QHash<QString, QString> &names);
 
-/// Copies every file under `<extractedRoot>/media` into `folder`, never over
-/// one already there, and returns old relative path -> new file name.
+/// Copies every file pandoc extracted under `extractedRoot` (docx and epub `media/`, ODT `Pictures/`, HTML's
+/// hashed names at the root) except `out.md` into `folder`, never over one already there, and returns old
+/// relative path -> new file name. A failed copy sets `error` and maps to an empty name (rewriteImported
+/// then writes a note in the picture's place, not a link to the scratch file).
 QHash<QString, QString> moveMedia(const QString &extractedRoot, const QString &folder, QString *error = nullptr);
+
+/// Under --sandbox pandoc leaves an HTML or LaTeX file's own pictures as relative links. Copies those that
+/// are picture files inside `inputFolder` (after symlinks) into `folder` and returns link as written -> new
+/// file name (empty for a failed copy, as above), for rewriteImported. Absolute paths, URLs and anything climbing out of the folder are left.
+QHash<QString, QString> moveSiblingImages(const QString &markdown, const QString &inputFolder, const QString &folder,
+                                          QString *error = nullptr);
 
 } // namespace noteAppC::pandoc

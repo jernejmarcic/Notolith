@@ -22,7 +22,7 @@ file from a file manager onto the file explorer imports it into the folder it wa
 | `pandoc:import` | picks a file; the note is made in the new-note folder |
 
 With no pandoc the plugin is still listed, off and greyed, in Core plugins; the commands are still in the
-palette (marked "needs pandoc"); activating any of them - the switch, a menu entry, a command - opens a
+palette and the file explorer's menu (drawn in the disabled colour, with a tooltip, but still clickable); activating any of them - the switch, a menu entry, a command - opens a
 dialog saying it depends on pandoc, where it looked, how to install it, and a button to the path
 setting. Once pandoc is found the switch works again.
 
@@ -31,7 +31,7 @@ setting. Once pandoc is found the switch works again.
 | key | |
 |---|---|
 | `pandoc.path` | empty: `pandoc` on PATH (and `~/.local/bin`, `~/.cabal/bin`, `/usr/local/bin`); a name or a full path |
-| `pandoc.extraArguments` | added to every export and import after Notolith's own, split like a shell would (double quotes group), run by no shell |
+| `pandoc.extraArguments` | added to every export after Notolith's own (an import takes none: a `--toc` has no business in an imported note), split like a shell would (double quotes group), run by no shell |
 | `pandoc.referenceDoc` | a `.docx` whose styles an exported `.docx` takes (`--reference-doc`) |
 
 ## Export
@@ -62,7 +62,9 @@ works on the parser's own ranges, so a `[[x]]` in a code fence stays):
 
 Images are resolved the way the editor does (index, then beside the note, the vault root, the attachment
 folder) and passed as absolute paths, with the note's folder, the vault root and the attachment folder as
-`--resource-path` for the note's own `![](relative.png)`.
+`--resource-path` (one flag each, so a folder with a `:` in its name is safe) for the note's own
+`![](relative.png)`. A target that is a note of the vault, or the note itself, is refused, and a Markdown writer's
+suggested name is `Note (gfm).md`, never the note's own.
 
 Formats: `docx` (`--reference-doc` if set), `odt`, `epub3`, `html5 --standalone --embed-resources`
 (one file, images inside, maths as MathML), `latex --standalone`, `rtf --standalone`, `pptx`,
@@ -70,7 +72,7 @@ Formats: `docx` (`--reference-doc` if set), `odt`, `epub3`, `html5 --standalone 
 
 **Network.** Nothing in Notolith asks pandoc to fetch anything. But a note's own *remote* image
 (`![](https://...)`) is fetched by pandoc itself when the output has to contain it (docx, odt, epub,
-`--embed-resources` HTML), and an import of an HTML file with remote images fetches them for `--extract-media`.
+`--embed-resources` HTML). An import fetches nothing: it runs under `--sandbox` (below).
 
 **Lossy:** the callout type and folding; `%%` comments and block ids by design; a note embedded in the middle
 of a line becomes a link; links to other notes are relative file links (live in HTML, dead in Word);
@@ -80,14 +82,26 @@ and notebooks are links or listings.
 
 ## Import
 
-`pandoc -f <reader> -t gfm-tex_math_gfm+tex_math_dollars --wrap=none --standalone --extract-media=. in -o out.md`
+`pandoc -f <reader> -t gfm-tex_math_gfm+tex_math_dollars --wrap=none --standalone --extract-media=. --sandbox in -o out.md`
 run in a scratch folder. (Plain `gfm+tex_math_dollars` writes maths as GitHub's `` $`x`$ ``, which a note
 does not render; `-tex_math_gfm` turns that off.) Only when pandoc has succeeded is the note made, in the
 vault's own way: `createNote` numbers a taken name ("Name 1"), so nothing is ever overwritten. The media
 pandoc extracted are copied into the attachment folder of the vault settings (never over a file), and
 `![](media/x.png)` / `<img ... style="width:2in">` become `![[x.png|192]]`; pandoc's
-`<span class="mark">` becomes `==text==`. The file imported is never written to. The document's
+`<span class="mark">` becomes `==text==`. Everything pandoc extracted (docx and epub `media/`, ODT `Pictures/`, an HTML file's hashed names) is copied, not `media/` alone.
+The file imported is never written to. The document's
 title and author arrive as frontmatter.
+
+**The sandbox.** A document may come from anyone, and without `--sandbox` a `.tex` with `\input{/home/me/secret}`,
+an rst `.. include::` or an org `#+INCLUDE` would put that file's text into the note, and an HTML `<img>` could
+pull a file or a URL in. `--sandbox` stops all three. The trade-off is that pandoc then reads no picture beside an
+HTML or LaTeX file either; Notolith copies those itself, only picture files (png, jpg, gif, svg, webp, bmp, avif)
+named by a *relative* path that, after symlinks, is inside the document's own folder. Remote pictures stay links.
+An import never uses the extra-arguments setting. (The export cannot run sandboxed: this pandoc build then fails
+to find its own docx template.) A picture that cannot be copied is reported once, after the note is made, and the
+note says so where it would have been instead of linking a file that is not there.
+
+**Several files** dropped at once are imported one after another; cancelling one stops the rest.
 
 **Lossy:** comments, tracked changes, headers and footers, styles beyond headings, lists, tables,
 emphasis and code; tables that Markdown cannot express become HTML; an image's size is its width only.

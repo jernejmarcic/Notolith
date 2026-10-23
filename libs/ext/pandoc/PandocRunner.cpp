@@ -5,7 +5,27 @@
 
 #include <utility>
 
+#ifdef Q_OS_UNIX
+#include <csignal>
+#include <unistd.h>
+#endif
+
 namespace noteAppC::pandoc {
+
+namespace {
+
+/// Stops pandoc and what it started (pdflatex, a filter's shell): on Unix the process is its own group's leader
+/// and the whole group is killed.
+void killTree(QProcess *process)
+{
+#ifdef Q_OS_UNIX
+    if (const qint64 pid = process->processId(); pid > 0 && ::kill(-pid_t(pid), SIGKILL) == 0)
+        return;
+#endif
+    process->kill();
+}
+
+} // namespace
 
 Runner::Runner(QObject *parent)
     : QObject(parent)
@@ -16,8 +36,8 @@ Runner::~Runner()
 {
     if (m_process) {
         m_process->disconnect(this);
-        m_process->kill();
-        m_process->waitForFinished(1000);
+        killTree(m_process);
+        m_process->waitForFinished(250);
     }
 }
 
@@ -32,6 +52,9 @@ void Runner::start(const QString &program, const QStringList &arguments, const Q
     if (!workingDirectory.isEmpty())
         m_process->setWorkingDirectory(workingDirectory);
     m_process->setStandardOutputFile(QProcess::nullDevice()); // the result goes to a file, by -o
+#ifdef Q_OS_UNIX
+    m_process->setChildProcessModifier([] { ::setpgid(0, 0); }); // a group of its own, to kill as one
+#endif
     m_process->setProcessChannelMode(QProcess::SeparateChannels);
 
     connect(m_process, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
@@ -56,7 +79,7 @@ void Runner::start(const QString &program, const QStringList &arguments, const Q
     connect(m_timeout, &QTimer::timeout, this, [this] {
         m_timedOut = true;
         if (m_process)
-            m_process->kill();
+            killTree(m_process);
     });
     m_timeout->start(timeoutMilliseconds);
 
@@ -73,7 +96,7 @@ void Runner::cancel()
     if (!m_process)
         return;
     m_cancelled = true;
-    m_process->kill();
+    killTree(m_process);
 }
 
 void Runner::finish(bool ok, const QString &message)

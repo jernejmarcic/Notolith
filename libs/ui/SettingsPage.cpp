@@ -1023,7 +1023,7 @@ QWidget *SettingsPage::buildCorePluginsPage()
                    QStringLiteral("pandoc"));
     addLineEditRow(layout, QStringLiteral("pandoc.extraArguments"), tr("Pandoc: extra arguments"),
                    tr("Added to every export, after the ones Notolith passes, and split like a shell would split "
-                      "them (quotes group; nothing is expanded and no shell runs). For import too. Example: --toc"),
+                      "them (quotes group; nothing is expanded and no shell runs). Not used by import. Example: --toc"),
                    QString());
     addLineEditRow(layout, QStringLiteral("pandoc.referenceDoc"), tr("Pandoc: reference.docx"),
                    tr("A Word file whose styles an exported .docx takes (pandoc's --reference-doc). Optional."),
@@ -1426,7 +1426,10 @@ QLabel#settingsRowError { color: %9; font-size: 12px; }
 #ifdef NOTEAPPC_HAVE_PANDOC
 void SettingsPage::showPandocSettings()
 {
-    const int index = 3; // Core plugins, as ensurePage() lists them
+    const auto core = m_nav->findItems(tr("Core plugins"), Qt::MatchExactly);
+    if (core.isEmpty())
+        return;
+    const int index = m_nav->row(core.constFirst());
     if (m_needsRebuild)
         rebuild();
     ensurePage(index);

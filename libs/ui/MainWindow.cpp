@@ -74,6 +74,7 @@
 #include "MermaidBlock.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
+#include "DimMenu.h"
 #include "AudioRecorder.h"
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
 #include "DirectRunner.h"
@@ -3955,11 +3956,12 @@ void MainWindow::openCommandPalette()
         QString id;
         QString name;
         QList<QKeySequence> keys;
+        bool dimmed = false;
     };
     QList<Entry> entries;
     for (const QAction *action : std::as_const(m_commands)) {
         if (action->isEnabled() && action->objectName() != QLatin1String("command-palette:open"))
-            entries.append({action->objectName(), action->text(), action->shortcuts()});
+            entries.append({action->objectName(), action->text(), action->shortcuts(), action->property("dimmed").toBool()});
     }
     // Editing commands only while a note is open for editing, as in Obsidian.
     if (!m_active->notePath.isEmpty() && !m_active->view) {
@@ -3976,13 +3978,15 @@ void MainWindow::openCommandPalette()
 
     QStringList names;
     QStringList keys;
+    QList<bool> dimmed;
     m_paletteIDs.clear();
     for (const Entry &entry : std::as_const(entries)) {
         names << entry.name;
+        dimmed << entry.dimmed;
         keys << (entry.keys.isEmpty() ? QString() : entry.keys.constFirst().toString(QKeySequence::NativeText));
         m_paletteIDs.insert(entry.name, entry.id);
     }
-    m_palette->setCandidates(names, keys);
+    m_palette->setCandidates(names, keys, {}, dimmed);
     m_palette->popUp();
 }
 
@@ -8184,7 +8188,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         return;
 
     const QModelIndex index = m_tree->indexAt(pos);
-    QMenu menu(this);
+    DimMenu menu(this);
     QAction *newNoteAction = menu.addAction(tr("New note"));
     QAction *newFolderAction = menu.addAction(tr("New folder"));
     QAction *renameAction = nullptr;
@@ -8211,16 +8215,29 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
             openOutsideAction = menu.addAction(tr("Open in default app"));
 #ifdef NOTEAPPC_HAVE_PANDOC
         if (!m_files->isDir(index) && featureOn("pandoc")) {
-            // Looked for now, with the menu: the entries stay when it is missing, and say so.
-            const QString needs = pandoc::locate(m_settings.text(QStringLiteral("pandoc.path"))).isEmpty()
-                                      ? tr(" (needs pandoc)") : QString();
+            // Looked for now, with the menu: the entries stay when it is missing, drawn disabled, and say why.
+            const bool missing = pandoc::locate(m_settings.text(QStringLiteral("pandoc.path"))).isEmpty();
+            const auto dim = [missing](QAction *action) {
+                if (missing) {
+                    action->setProperty("dimmed", true);
+                    action->setToolTip(QObject::tr("pandoc was not found: click to see how to get it"));
+                }
+            };
             if (Vault::isNote(path)) {
-                QMenu *exportMenu = menu.addMenu(tr("Export with pandoc") + needs);
-                for (const pandoc::Format &format : pandoc::exportFormats())
-                    exportMenu->addAction(format.label)->setProperty("pandocFormat", format.id);
-                exportMenu->addAction(tr("Other format..."))->setProperty("pandocFormat", QStringLiteral("other"));
+                auto *exportMenu = new DimMenu(tr("Export with pandoc"), &menu);
+                menu.addMenu(exportMenu);
+                dim(exportMenu->menuAction());
+                for (const pandoc::Format &format : pandoc::exportFormats()) {
+                    QAction *entry = exportMenu->addAction(format.label);
+                    entry->setProperty("pandocFormat", format.id);
+                    dim(entry);
+                }
+                QAction *other = exportMenu->addAction(tr("Other format..."));
+                other->setProperty("pandocFormat", QStringLiteral("other"));
+                dim(other);
             } else if (!pandoc::readerForSuffix(QFileInfo(path).suffix()).isEmpty()) {
-                importAction = menu.addAction(tr("Import with pandoc") + needs);
+                importAction = menu.addAction(tr("Import with pandoc"));
+                dim(importAction);
             }
         }
 #endif

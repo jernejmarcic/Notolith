@@ -100,16 +100,17 @@ std::optional<QString> embeddedText(const QString &full, const QString &subpath)
     if (parts.isEmpty())
         return body.trimmed();
     if (parts.last().startsWith(QLatin1Char('^'))) {
-        const QRegularExpression marker(QStringLiteral("\\s\\^") + QRegularExpression::escape(parts.last().mid(1))
-                                        + QStringLiteral("[ \\t]*$"));
-        const QStringList lines = body.split(QLatin1Char('\n'));
-        for (qsizetype i = 0; i < lines.size(); ++i) {
-            if (!marker.match(lines.at(i)).hasMatch())
+        // The parser's block ids, so a `^id` inside a code fence is not taken for one.
+        const Parser::Result parsed = Parser().parseAll(body, QString());
+        for (const BlockId &id : parsed.metadata.blockIds) {
+            if (id.id != parts.last().mid(1))
                 continue;
-            qsizetype first = i;
+            const QStringList lines = body.split(QLatin1Char('\n'));
+            const qsizetype last = body.left(id.range.start).count(QLatin1Char('\n'));
+            qsizetype first = last;
             while (first > 0 && !lines.at(first - 1).trimmed().isEmpty())
                 --first;
-            return lines.mid(first, i - first + 1).join(QLatin1Char('\n'));
+            return lines.mid(first, last - first + 1).join(QLatin1Char('\n'));
         }
         return std::nullopt;
     }

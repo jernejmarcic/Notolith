@@ -124,6 +124,7 @@
 #endif
 #include "ToggleSwitch.h"
 #ifdef NOTEAPPC_HAVE_PANDOC
+#include "DimMenu.h"
 #include "Pandoc.h"
 #include "PandocRunner.h"
 #endif
@@ -1240,6 +1241,59 @@ void setPandocPath(MainWindow &window, const QString &path)
     QTest::keyClick(edit, Qt::Key_Return); // editingFinished: the page looks again
 }
 
+/// Writes a stand-in pandoc into `bin`: a shell script that runs `body` in the scratch folder, as pandoc would be
+/// run, with `$last` the input file. Returns its path.
+QString fakePandoc(const QTemporaryDir &bin, const QByteArray &body)
+{
+    QFile fake(bin.filePath(QStringLiteral("pandoc")));
+    EXPECT_TRUE(fake.open(QIODevice::WriteOnly));
+    fake.write("#!/bin/sh\nfor a; do last=\"$a\"; done\n" + body + "\n");
+    fake.close();
+    fake.setPermissions(fake.permissions() | QFileDevice::ExeOwner);
+    return fake.fileName();
+}
+
+/// The pandoc to use, written to the (isolated) settings before the window reads them.
+void usePandoc(const QString &program)
+{
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("pandoc.path"), program);
+    EXPECT_TRUE(settings.save());
+}
+
+/// What the tree's context menu on `file` shows of pandoc: the "dimmed" mark of its entries.
+struct PandocMenu {
+    bool exportListed = false, exportDimmed = false, exportEntriesDimmed = false, importListed = false, importDimmed = false;
+};
+
+PandocMenu pandocMenuOn(noteAppC::FileTree *tree, const QString &file)
+{
+    PandocMenu seen;
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    QTimer::singleShot(0, [&seen] {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (!menu)
+            return;
+        for (QAction *action : menu->actions()) {
+            if (action->text() == QLatin1String("Export with pandoc")) {
+                seen.exportListed = true;
+                seen.exportDimmed = action->property("dimmed").toBool();
+                seen.exportEntriesDimmed = !action->menu()->actions().isEmpty();
+                for (QAction *entry : action->menu()->actions())
+                    seen.exportEntriesDimmed = seen.exportEntriesDimmed && entry->property("dimmed").toBool() && entry->isEnabled();
+            } else if (action->text() == QLatin1String("Import with pandoc")) {
+                seen.importListed = true;
+                seen.importDimmed = action->property("dimmed").toBool() && action->isEnabled();
+            }
+        }
+        menu->close();
+    });
+    const QPoint at = tree->visualRect(model->index(file)).center();
+    QContextMenuEvent event(QContextMenuEvent::Mouse, at, tree->viewport()->mapToGlobal(at));
+    QCoreApplication::sendEvent(tree->viewport(), &event);
+    return seen;
+}
+
 } // namespace
 
 // No pandoc: the plugin stays listed but greyed, never written on; every way in says why, and gets to the path.
@@ -1290,6 +1344,224 @@ TEST_F(WindowTest, PandocMissingStaysListedAndExplains)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// The entries of a pandoc that is not there are drawn disabled, not renamed, and still do their work: the palette
+// row and the file explorer's menu entries are "dimmed" (a mark the menu and the palette read), yet clickable.
+TEST_F(WindowTest, MissingPandocDimsItsEntriesButTheyStillExplain)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    write(QStringLiteral("Report.docx"), "not really a document\n");
+    usePandoc(QStringLiteral("/nonexistent/dir/pandoc"));
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+
+        command(window, "command-palette:open")->trigger();
+        auto *palette = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("commandPalette"));
+        ASSERT_NE(palette, nullptr);
+        auto *list = palette->findChild<QListWidget *>(QStringLiteral("quickSwitcherResults"));
+        auto *query = palette->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+        ASSERT_TRUE(list && query);
+        QTest::keyClicks(query, QStringLiteral("Pandoc: Import"));
+        ASSERT_GT(list->count(), 0);
+        QListWidgetItem *row = list->item(0);
+        EXPECT_EQ(row->text(), QStringLiteral("Pandoc: Import a file as a note...")) << "the name is not changed";
+        EXPECT_EQ(row->foreground().color(), list->palette().color(QPalette::Disabled, QPalette::Text));
+        EXPECT_TRUE(command(window, "pandoc:import")->isEnabled());
+        EXPECT_FALSE(command(window, "pandoc:import")->toolTip().isEmpty());
+        QTest::keyClick(query, Qt::Key_Return); // chosen like any other row: it explains
+        auto *dialog = window.findChild<QMessageBox *>(QStringLiteral("pandocMissingDialog"));
+        ASSERT_NE(dialog, nullptr);
+        dialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        // An ordinary row is not dimmed.
+        command(window, "command-palette:open")->trigger();
+        QTest::keyClicks(query, QStringLiteral("settings"));
+        ASSERT_GT(list->count(), 0);
+        EXPECT_NE(list->item(0)->foreground().color(), list->palette().color(QPalette::Disabled, QPalette::Text));
+        palette->hide();
+
+        auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+        ASSERT_NE(tree, nullptr);
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        WAIT_TRUE(tree->rootIndex().isValid() && tree->visualRect(model->index(path(QStringLiteral("Report.docx")))).isValid()
+                      && tree->visualRect(model->index(path(QStringLiteral("Welcome.md")))).isValid(), 5000);
+        const PandocMenu onNote = pandocMenuOn(tree, path(QStringLiteral("Welcome.md")));
+        EXPECT_TRUE(onNote.exportListed);
+        EXPECT_TRUE(onNote.exportDimmed);
+        EXPECT_TRUE(onNote.exportEntriesDimmed);
+        const PandocMenu onDocument = pandocMenuOn(tree, path(QStringLiteral("Report.docx")));
+        EXPECT_TRUE(onDocument.importListed);
+        EXPECT_TRUE(onDocument.importDimmed);
+
+        // The menu draws a dimmed entry as disabled and an ordinary one as it is.
+        noteAppC::DimMenu menu;
+        QAction *plain = menu.addAction(QStringLiteral("plain"));
+        QAction *dimmed = menu.addAction(QStringLiteral("dimmed"));
+        dimmed->setProperty("dimmed", true);
+        EXPECT_TRUE(menu.optionFor(plain).state & QStyle::State_Enabled);
+        EXPECT_FALSE(menu.optionFor(dimmed).state & QStyle::State_Enabled);
+        EXPECT_TRUE(dimmed->isEnabled());
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// With pandoc there, nothing is dimmed.
+TEST_F(WindowTest, FoundPandocDimsNothing)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    write(QStringLiteral("Report.docx"), "x\n");
+    usePandoc(fakePandoc(bin, "exit 0"));
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+        command(window, "command-palette:open")->trigger();
+        EXPECT_FALSE(command(window, "pandoc:import")->property("dimmed").toBool());
+        auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        WAIT_TRUE(tree->rootIndex().isValid() && tree->visualRect(model->index(path(QStringLiteral("Report.docx")))).isValid(), 5000);
+        const PandocMenu onDocument = pandocMenuOn(tree, path(QStringLiteral("Report.docx")));
+        EXPECT_TRUE(onDocument.importListed);
+        EXPECT_FALSE(onDocument.importDimmed);
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// An export never overwrites a note: not the one it is made from, not another of the vault. The stand-in leaves a
+// mark when it runs, so "refused" is told from "ran and wrote nothing".
+TEST_F(WindowTest, PandocExportRefusesToOverwriteANote)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir out;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    const QString mark = out.filePath(QStringLiteral("ran"));
+    usePandoc(fakePandoc(bin, "cat > /dev/null; echo ran > '" + mark.toUtf8() + "'; echo x > \"$last\""));
+    write(QStringLiteral("Plan.md"), "# Plan\n\n[[Welcome]]\n");
+    write(QStringLiteral("Other.md"), "other\n");
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Plan.md"))));
+        const QByteArray before = readAll(path(QStringLiteral("Plan.md")));
+
+        for (const QString &target : {path(QStringLiteral("Plan.md")), path(QStringLiteral("Other.md")),
+                                      path(QStringLiteral("./Plan.md"))}) {
+            QMetaObject::invokeMethod(&window, "exportWithPandoc", Q_ARG(QString, path(QStringLiteral("Plan.md"))),
+                                      Q_ARG(QString, QStringLiteral("other:gfm")), Q_ARG(QString, target));
+            auto *refusal = window.findChild<QMessageBox *>(QStringLiteral("pandocRefusedDialog"));
+            ASSERT_NE(refusal, nullptr) << target.toStdString();
+            EXPECT_TRUE(refusal->text().contains(QStringLiteral("overwrite")));
+            refusal->close();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+        EXPECT_FALSE(QFileInfo::exists(mark)) << "pandoc was never started";
+        EXPECT_EQ(readAll(path(QStringLiteral("Plan.md"))), before);
+        EXPECT_EQ(readAll(path(QStringLiteral("Other.md"))), QByteArray("other\n"));
+
+        // A new file, even a Markdown one beside it, is fine.
+        const QString fresh = path(QStringLiteral("Plan (gfm).md"));
+        QMetaObject::invokeMethod(&window, "exportWithPandoc", Q_ARG(QString, path(QStringLiteral("Plan.md"))),
+                                  Q_ARG(QString, QStringLiteral("other:gfm")), Q_ARG(QString, fresh));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo::exists(mark) && QFileInfo::exists(fresh); }, 10000));
+        EXPECT_EQ(window.findChild<QMessageBox *>(QStringLiteral("pandocRefusedDialog")), nullptr);
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// Several documents dropped at once are all imported, one after the other, and a failure does not stop the rest.
+TEST_F(WindowTest, PandocImportsEveryDroppedFileInTurn)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    // Slow enough that the second file arrives while the first runs; fails for the one named broken.
+    usePandoc(fakePandoc(bin, "sleep 0.2\ncase \"$last\" in *broken.docx) echo boom >&2; exit 1;; esac\n"
+                              "printf 'imported %s\\n' \"$(basename \"$last\")\" > out.md"));
+    QStringList files;
+    for (const char *name : {"first.docx", "broken.docx", "third.docx"}) {
+        QFile file(inputs.filePath(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("x");
+        files << file.fileName();
+    }
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        // The failure's box is modal; close whichever is up.
+        QTimer closer;
+        QObject::connect(&closer, &QTimer::timeout, &window, [&window] {
+            for (auto *box : window.findChildren<QMessageBox *>()) {
+                if (box->isVisible())
+                    box->close();
+            }
+        });
+        closer.start(20);
+        for (const QString &file : files)
+            QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, file), Q_ARG(QString, QString()));
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return QFileInfo::exists(path(QStringLiteral("first.md"))) && QFileInfo::exists(path(QStringLiteral("third.md")));
+        }, 20000));
+        EXPECT_NE(readAll(path(QStringLiteral("first.md"))).indexOf("imported first.docx"), -1);
+        EXPECT_NE(readAll(path(QStringLiteral("third.md"))).indexOf("imported third.docx"), -1);
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("broken.md")))) << "a failed import leaves no note";
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// A picture that cannot be copied into the vault is reported, and the note does not link the file that is not there.
+TEST_F(WindowTest, PandocImportReportsAPictureItCouldNotCopy)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "mkdir media; echo png > media/x.png; printf 'text ![a](media/x.png)\\n' > out.md"));
+    QFile input(inputs.filePath(QStringLiteral("Doc.docx")));
+    ASSERT_TRUE(input.open(QIODevice::WriteOnly));
+    input.write("x");
+    input.close();
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    write(QStringLiteral(".obsidian/app.json"), R"({"attachmentFolderPath": "assets"})");
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("assets")));
+    const QFile::Permissions open = QFile::permissions(path(QStringLiteral("assets")));
+    ASSERT_TRUE(QFile::setPermissions(path(QStringLiteral("assets")), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    if (QFile(path(QStringLiteral("assets/probe"))).open(QIODevice::WriteOnly)) {
+        QFile::setPermissions(path(QStringLiteral("assets")), open);
+        GTEST_SKIP() << "this user can write into a read-only folder (root)";
+    }
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, input.fileName()), Q_ARG(QString, QString()));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo::exists(path(QStringLiteral("Doc.md"))); }, 20000));
+        const QString note = QString::fromUtf8(readAll(path(QStringLiteral("Doc.md"))));
+        EXPECT_FALSE(note.contains(QStringLiteral("media/x.png"))) << note.toStdString();
+        EXPECT_FALSE(note.contains(QStringLiteral("![["))) << note.toStdString();
+        EXPECT_TRUE(note.contains(QStringLiteral("could not be imported"))) << note.toStdString();
+        ASSERT_TRUE(QTest::qWaitFor([&] { return window.findChild<QMessageBox *>(QStringLiteral("pandocMediaDialog")) != nullptr; }, 5000));
+        EXPECT_TRUE(window.findChild<QMessageBox *>(QStringLiteral("pandocMediaDialog"))->text().contains(QStringLiteral("x.png")));
+    }
+    QFile::setPermissions(path(QStringLiteral("assets")), open);
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // Pandoc found (a stand-in executable): the switch is a switch again, and off takes the commands away.
 TEST_F(WindowTest, PandocFoundIsToggleable)
 {
@@ -1327,7 +1599,6 @@ TEST_F(WindowTest, PandocFoundIsToggleable)
     }
     qputenv("XDG_CONFIG_HOME", previous);
 }
-#endif
 
 // With pandoc installed (else skipped): a note out through the window as .docx and the .docx back in as a
 // new note, which does not touch the note that has its name.
@@ -1399,6 +1670,8 @@ TEST_F(WindowTest, TheTreeTakesAForeignDocumentForPandocAndNothingElse)
     }
     qputenv("XDG_CONFIG_HOME", previous);
 }
+
+#endif // NOTEAPPC_HAVE_PANDOC
 
 // --- detached sidebars and panes ---------------------------------------------
 

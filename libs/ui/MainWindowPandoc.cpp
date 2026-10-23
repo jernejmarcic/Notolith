@@ -25,6 +25,7 @@
 #include <QStatusBar>
 #include <QSvgRenderer>
 #include <QTemporaryDir>
+#include <QTimer>
 
 namespace noteAppC {
 
@@ -34,7 +35,6 @@ void MainWindow::buildPandocActions()
         auto *action = new QAction(name, this);
         action->setObjectName(id);
         action->setData(QString()); // no built-in keys; hotkeys.json can bind one
-        action->setProperty("pandocName", name);
         connect(action, &QAction::triggered, this, slot);
         addAction(action);
         m_commands << action;
@@ -63,8 +63,11 @@ void MainWindow::refreshPandocCommands()
         return; // off: nothing is looked up
     const bool found = !pandoc::locate(m_settings.text(QStringLiteral("pandoc.path"))).isEmpty();
     for (QAction *action : std::as_const(m_commands)) {
-        if (action->objectName().startsWith(QLatin1String("pandoc:")))
-            action->setText(action->property("pandocName").toString() + (found ? QString() : tr(" (needs pandoc)")));
+        if (!action->objectName().startsWith(QLatin1String("pandoc:")))
+            continue;
+        // Drawn disabled (the palette and menus read "dimmed") but enabled: using it explains and points to Settings.
+        action->setProperty("dimmed", !found);
+        action->setToolTip(found ? QString() : tr("pandoc was not found: click to see how to get it"));
     }
 }
 
@@ -125,19 +128,42 @@ void MainWindow::runPandoc(const QString &program, const QStringList &arguments,
         disconnect(*connection);
         progress->close();
         progress->deleteLater();
+        const bool cancelled = m_pandocRunner->wasCancelled();
         if (ok) {
             done();
-        } else if (!m_pandocRunner->wasCancelled()) {
+        } else if (!cancelled) {
             QMessageBox box(QMessageBox::Warning, title, tr("pandoc could not finish."), QMessageBox::Close, this);
             box.setDetailedText(message);
             box.setInformativeText(message.section(QLatin1Char('\n'), 0, 0));
             box.exec();
+        }
+        // The next file of a drop, failed or not; a cancel stops the rest as well.
+        if (cancelled)
+            m_pandocQueue.clear();
+        if (!m_pandocQueue.isEmpty()) {
+            QTimer::singleShot(0, this, [this] {
+                if (m_pandocQueue.isEmpty() || (m_pandocRunner && m_pandocRunner->running()))
+                    return;
+                const auto next = m_pandocQueue.takeFirst();
+                importWithPandoc(next.first, next.second);
+            });
         }
     });
     m_pandocRunner->start(program, arguments, input, workingDirectory);
 }
 
 namespace {
+
+/// A warning that does not hold the window: a test, or a person with something else to do, goes on.
+void showNotice(QWidget *parent, const QString &objectName, const QString &title, const QString &text)
+{
+    if (auto *old = parent->findChild<QMessageBox *>(objectName))
+        old->close();
+    auto *box = new QMessageBox(QMessageBox::Warning, title, text, QMessageBox::Close, parent);
+    box->setObjectName(objectName);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->open();
+}
 
 /// A diagram's cached SVG as a PNG in `folder`, wide enough to stay sharp on paper, on white.
 QString rasterised(const QByteArray &svg, const QString &folder)
@@ -210,10 +236,20 @@ void MainWindow::exportWithPandoc(const QString &notePath, const QString &format
     const QString target = !outputPath.isEmpty()
         ? outputPath
         : QFileDialog::getSaveFileName(
-              this, tr("Export with pandoc"), note.dir().filePath(note.completeBaseName() + QLatin1Char('.') + extension),
+              this, tr("Export with pandoc"),
+              note.dir().filePath(pandoc::defaultExportName(note.completeBaseName(), writer, extension)),
               QStringLiteral("%1 (*.%2);;%3").arg(label, extension, tr("All files (*)")));
     if (target.isEmpty())
         return;
+    // Never over a note: a Markdown writer's file is the note's own name's, and its wikilinks, embeds and
+    // comments would be gone from the note on disk while the editor still held them.
+    const QFileInfo targetInfo(target);
+    if (targetInfo.exists() && (targetInfo.canonicalFilePath() == note.canonicalFilePath()
+                                || (m_vault.isValid() && m_vault.contains(target) && Vault::isNote(target)))) {
+        showNotice(this, QStringLiteral("pandocRefusedDialog"), tr("Export with pandoc"),
+                   tr("%1 is a note, and exporting would overwrite it. Choose another name.").arg(targetInfo.fileName()));
+        return;
+    }
 
     // What is on screen if the note is open, else what is on disk.
     QString text;
@@ -343,7 +379,10 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
     if (program.isEmpty())
         return;
     if (m_pandocRunner && m_pandocRunner->running()) {
-        statusBar()->showMessage(tr("pandoc is already running"), 4000);
+        // Several files dropped at once: each is imported when the one before has finished.
+        m_pandocQueue.append({file, folderRelative});
+        statusBar()->showMessage(tr("%1 waits for pandoc (%n file(s) queued)", nullptr, int(m_pandocQueue.size()))
+                                     .arg(input.fileName()), 4000);
         return;
     }
     // Scratch space for the Markdown and the media pandoc takes out of the file; nothing reaches the vault
@@ -357,10 +396,9 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
     request.reader = reader;
     request.inputPath = input.absoluteFilePath();
     request.outputName = QStringLiteral("out.md");
-    request.extraArguments = pandoc::splitArguments(m_settings.text(QStringLiteral("pandoc.extraArguments")));
 
     runPandoc(program, pandoc::importArguments(request), {}, scratch->path(), tr("Import with pandoc"),
-              [this, scratch, input, folderRelative] {
+              [this, scratch, input, folderRelative, reader] {
                   QFile result(scratch->filePath(QStringLiteral("out.md")));
                   if (!result.open(QIODevice::ReadOnly)) {
                       QMessageBox::warning(this, tr("Import with pandoc"), tr("pandoc wrote no Markdown."));
@@ -374,25 +412,36 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
                       base.remove(0, 1);
                   if (base.isEmpty())
                       base = tr("Imported");
-                  QString error;
+                  // The attachment folder depends on the note's folder only, so the pictures can go first and the
+                  // note be made once, whole: a failure never leaves an empty note behind.
+                  const QString folderAbsolute = folderRelative.isEmpty() ? m_vault.root() : m_vault.absolute(folderRelative);
+                  const QString attachments = m_vault.attachmentFolderFor(
+                      m_settings.text(QStringLiteral("files.attachmentFolder")), QDir(folderAbsolute).filePath(base + QStringLiteral(".md")));
+                  QString mediaError;
+                  QHash<QString, QString> names = pandoc::moveMedia(scratch->path(), attachments, &mediaError);
+                  // Pictures the sandboxed reader left as links beside the document (HTML, LaTeX).
+                  // The readers that pull their pictures into the file's own package have extracted them already.
+                  if (!QStringList{QStringLiteral("docx"), QStringLiteral("odt"), QStringLiteral("epub"), QStringLiteral("rtf")}.contains(reader)) {
+                      QString siblingError;
+                      names.insert(pandoc::moveSiblingImages(text, input.absolutePath(), attachments, &siblingError));
+                      if (mediaError.isEmpty())
+                          mediaError = siblingError;
+                  }
                   // Never over a note that is there: the vault numbers a name taken ("Name 1").
-                  const QString path = m_vault.createNote(folderRelative, base, &error);
+                  QString error;
+                  const QString path = m_vault.createNote(folderRelative, base, &error, QStringLiteral(".md"),
+                                                          pandoc::rewriteImported(text, names));
                   if (path.isEmpty()) {
                       QMessageBox::warning(this, tr("Import with pandoc"), tr("Could not create the note: %1").arg(error));
-                      return;
-                  }
-                  const QString attachments = m_vault.attachmentFolderFor(
-                      m_settings.text(QStringLiteral("files.attachmentFolder")), path);
-                  const QHash<QString, QString> names = pandoc::moveMedia(scratch->path(), attachments, &error);
-                  Note note;
-                  note.text = pandoc::rewriteImported(text, names);
-                  if (!Vault::write(path, note, &error)) {
-                      QMessageBox::warning(this, tr("Import with pandoc"), tr("Could not write the note: %1").arg(error));
                       return;
                   }
                   m_indexer->reindex(path);
                   openNote(path);
                   statusBar()->showMessage(tr("Imported %1").arg(QFileInfo(path).fileName()), 5000);
+                  if (!mediaError.isEmpty()) {
+                      showNotice(this, QStringLiteral("pandocMediaDialog"), tr("Import with pandoc"),
+                                 tr("The note was made, but a picture could not be copied into the vault: %1").arg(mediaError));
+                  }
               });
 }
 

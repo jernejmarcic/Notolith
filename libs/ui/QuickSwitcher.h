@@ -21,9 +21,11 @@ public:
     /// `candidates` are ranked by Fuzzy::score as the query changes; with no
     /// query they keep the order given. `details`, when given, is one muted
     /// right-aligned text per candidate (the palette's hotkeys); `icons`, one
-    /// per candidate, drawn left of it (the icon picker).
+    /// per candidate, drawn left of it (the icon picker). `dimmed`, one per
+    /// candidate, draws a row in the disabled text colour: it is still
+    /// chosen the same way (a command that explains why it cannot run).
     void setCandidates(const QStringList &candidates, const QStringList &details = {},
-                       const QList<QIcon> &icons = {});
+                       const QList<QIcon> &icons = {}, const QList<bool> &dimmed = {});
     void setPlaceholder(const QString &text);
     /// Obsidian's "find or create": Enter with no match, or Shift+Enter with
     /// any, emits createRequested(typed text). Off by default - the command
@@ -50,6 +52,7 @@ private:
     QStringList m_candidates;
     QStringList m_details;
     QList<QIcon> m_icons;
+    QList<bool> m_dimmed;
     bool m_createAllowed = false;
 };
 
