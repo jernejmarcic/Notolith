@@ -934,6 +934,216 @@ TEST(MarkdownEditorTest, FinishParseAdoptsABigNotesParseWithoutRunningTheEventLo
     EXPECT_TRUE(counted.isEmpty());
 }
 
+// While a big note's parse is out its text is shown as chunks of 64 lines
+// lines, not a view per paragraph (1.8 kB each: 75 MB for a megabyte). These
+// pin that the chunks look and behave as the paragraphs did: the caret, a
+// click, a scroll position and a find land on the same lines, before the
+// parse lands and after it.
+namespace {
+
+/// Plain paragraphs of three lines, roughly 75 bytes each: 2 400 of them is
+/// 180 kB, over kAsyncParseThreshold, and nothing in it changes a line's height.
+QString plainBigNote(int paragraphs = 2400)
+{
+    QString text;
+    for (int i = 0; i < paragraphs; ++i) {
+        const QString n = QStringLiteral("%1").arg(i, 5, 10, QLatin1Char('0'));
+        text += QStringLiteral("Paragraph %1 first line\nParagraph %1 second line\nParagraph %1 third line\n\n").arg(n);
+    }
+    return text;
+}
+
+/// Where the caret is in the document, not the viewport: unchanged by scrolling.
+qreal caretDocumentY(const MarkdownEditor &editor)
+{
+    return editor.caretRectNow().y() + editor.verticalScrollBar()->value();
+}
+
+/// Waits for the parse a big note's setNoteText started to land.
+bool waitForParse(MarkdownEditor &editor)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (editor.wordCount() < 0 && clock.elapsed() < 10000)
+        QTest::qWait(10);
+    return editor.wordCount() >= 0;
+}
+
+std::unique_ptr<MarkdownEditor> placeholderEditorWith(const QString &text)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setNoteText(text);
+    return editor;
+}
+
+} // namespace
+
+TEST(PlaceholderTest, ABigNoteIsShownAsCoarseChunksUntilItsParseLands)
+{
+    const QString note = plainBigNote();
+    ASSERT_GT(note.size(), 128 * 1024);
+    auto editor = placeholderEditorWith(note);
+    ASSERT_LT(editor->wordCount(), 0) << "the parse landed before the placeholder could be inspected";
+    const quint64 lines = quint64(note.count(QLatin1Char('\n')));
+    // One view per 64 lines, give or take the last: 150 here. One per paragraph and
+    // blank line was 4 800.
+    EXPECT_GE(editor->rebuiltViewCount(), lines / 64);
+    EXPECT_LE(editor->rebuiltViewCount(), lines / 64 + 2);
+
+    const qreal placeholderHeight = editor->documentHeight();
+    ASSERT_TRUE(waitForParse(*editor));
+    std::printf("[ INFO     ] document height %.0f px as placeholder, %.0f px parsed\n", placeholderHeight,
+                editor->documentHeight());
+    EXPECT_GT(editor->rebuiltViewCount(), 2 * lines / 64) << "the parse's own blocks replace the chunks";
+    EXPECT_EQ(editor->noteText(), note);
+}
+
+TEST(PlaceholderTest, ACaretInsideAChunkIsPlacedLineByLineAndHitsWhereItIsClicked)
+{
+    const QString note = plainBigNote();
+    auto editor = placeholderEditorWith(note);
+    editor->show();
+    ASSERT_LT(editor->wordCount(), 0);
+    // Deep inside a chunk (line 4 800 of 9 600), on a word in the middle of its line.
+    const qsizetype at = note.indexOf(QStringLiteral("Paragraph 01200 second line")) + 14;
+    editor->setCursorOffset(at);
+    EXPECT_EQ(editor->cursorOffset(), at);
+    const QRectF caret = editor->caretRectNow();
+    ASSERT_FALSE(caret.isEmpty());
+    EXPECT_GE(caret.top(), 0);
+    EXPECT_LE(caret.bottom(), editor->viewport()->height()) << "the jump brings the caret on screen";
+    EXPECT_GT(editor->verticalScrollBar()->value(), 0);
+    EXPECT_GT(caret.x(), editor->textColumn()) << "past the start of its line";
+    // 4 800 lines above it: the document y is that many line heights down.
+    EXPECT_GT(caretDocumentY(*editor), 50000.0);
+
+    // The lines of a chunk keep one pitch, the one a paragraph's lines have once parsed:
+    // the line before, the line after and forty lines on.
+    const auto lineY = [&](qsizetype offset) {
+        editor->setCursorOffset(offset);
+        return caretDocumentY(*editor);
+    };
+    const qsizetype lineStart = note.lastIndexOf(QLatin1Char('\n'), at) + 1;
+    const qsizetype nextLine = note.indexOf(QLatin1Char('\n'), at) + 1;
+    const qreal pitch = lineY(nextLine) - lineY(lineStart);
+    ASSERT_GT(pitch, 0.0);
+    qsizetype forty = lineStart;
+    for (int i = 0; i < 40; ++i)
+        forty = note.indexOf(QLatin1Char('\n'), forty) + 1;
+    EXPECT_NEAR(lineY(forty) - lineY(lineStart), 40 * pitch, 0.5);
+
+    // A click at the caret lands on the caret.
+    editor->setCursorOffset(at);
+    const QRectF here = editor->caretRectNow();
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(int(here.x()) + 1, int(here.center().y())));
+    EXPECT_NEAR(double(editor->cursorOffset()), double(at), 1.0);
+    ASSERT_LT(editor->wordCount(), 0);
+
+    // The parsed note has the same pitch, and keeps the caret where the click put it.
+    const qsizetype clicked = editor->cursorOffset();
+    ASSERT_TRUE(waitForParse(*editor));
+    EXPECT_EQ(editor->cursorOffset(), clicked);
+    EXPECT_NEAR(lineY(nextLine) - lineY(lineStart), pitch, 0.5);
+}
+
+TEST(PlaceholderTest, TypingInsideAChunkEditsTheText)
+{
+    const QString note = plainBigNote();
+    auto editor = placeholderEditorWith(note);
+    editor->show();
+    ASSERT_LT(editor->wordCount(), 0);
+    const qsizetype at = note.indexOf(QStringLiteral("Paragraph 01500 third line")) + 10;
+    editor->setCursorOffset(at);
+    const qreal x = editor->caretRectNow().x();
+    const qreal y = caretDocumentY(*editor);
+    QTest::keyClicks(editor.get(), QStringLiteral("Q"));
+    EXPECT_EQ(editor->noteText().mid(at, 1), QStringLiteral("Q"));
+    EXPECT_EQ(editor->noteText().size(), note.size() + 1);
+    EXPECT_EQ(editor->cursorOffset(), at + 1);
+    EXPECT_GT(editor->caretRectNow().x(), x);
+    EXPECT_NEAR(caretDocumentY(*editor), y, 1.0);
+    // The parse that follows the edit leaves the edit and the caret where they were.
+    ASSERT_TRUE(waitForParse(*editor));
+    QTest::qWait(100);
+    EXPECT_EQ(editor->noteText().mid(at, 1), QStringLiteral("Q"));
+    EXPECT_EQ(editor->cursorOffset(), at + 1);
+}
+
+TEST(PlaceholderTest, AScrollPositionInsideAChunkShowsWholeLinesOfThePitch)
+{
+    const QString note = plainBigNote();
+    auto editor = placeholderEditorWith(note);
+    editor->show();
+    ASSERT_LT(editor->wordCount(), 0);
+    // A pixel position well inside one chunk; the lines under the top and the bottom of the
+    // viewport, found with clicks, are one viewport of the line pitch apart.
+    editor->verticalScrollBar()->setValue(60000);
+    const int x = editor->textColumn() + 4;
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, 3));
+    const qsizetype top = editor->cursorOffset();
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, editor->viewport()->height() - 3));
+    const qsizetype bottom = editor->cursorOffset();
+    ASSERT_GT(top, 0);
+    ASSERT_GT(bottom, top);
+    ASSERT_LT(editor->wordCount(), 0);
+    const int lines = int(note.mid(top, bottom - top).count(QLatin1Char('\n')));
+    // The pitch from two neighbouring lines, as above.
+    editor->setCursorOffset(top);
+    const qreal y0 = caretDocumentY(*editor);
+    editor->setCursorOffset(note.indexOf(QLatin1Char('\n'), top) + 1);
+    const qreal pitch = caretDocumentY(*editor) - y0;
+    ASSERT_GT(pitch, 0.0);
+    EXPECT_NEAR(double(lines), (editor->viewport()->height() - 6) / pitch, 1.5);
+}
+
+// The chunks are estimated at their true height, the parse's blocks at more, so the
+// same scroll pixel would show other text once the parse lands. The landing puts the
+// text that was at the top back at the top.
+TEST(PlaceholderTest, TheParseLandingKeepsTheTextAtTheTopOfTheViewport)
+{
+    const QString note = plainBigNote();
+    for (const int scroll : {60000, 140000, 200000}) {
+        SCOPED_TRACE(scroll);
+        auto editor = placeholderEditorWith(note);
+        editor->show();
+        ASSERT_LT(editor->wordCount(), 0);
+        editor->verticalScrollBar()->setValue(scroll);
+        const QPoint topLeft(editor->textColumn() + 4, 3);
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, topLeft);
+        const qsizetype before = editor->cursorOffset();
+        ASSERT_LT(editor->wordCount(), 0);
+        ASSERT_TRUE(waitForParse(*editor));
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, topLeft);
+        // Within a few lines of what was under the top (a source line is about 25 characters;
+        // without the anchor the text moved by thousands of them).
+        EXPECT_NEAR(double(editor->cursorOffset()), double(before), 150.0);
+    }
+}
+
+TEST(PlaceholderTest, FindInsideAChunkLandsOnTheMatchAndShowsIt)
+{
+    const QString note = plainBigNote();
+    auto editor = placeholderEditorWith(note);
+    editor->show();
+    ASSERT_LT(editor->wordCount(), 0);
+    editor->setFindQuery(QStringLiteral("Paragraph 01800 third"), true, false);
+    editor->findStep(1);
+    ASSERT_LT(editor->wordCount(), 0);
+    const qsizetype match = note.indexOf(QStringLiteral("Paragraph 01800 third"));
+    EXPECT_EQ(editor->findMatchCount(), 1);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("Paragraph 01800 third"));
+    EXPECT_EQ(qMin(editor->cursorOffset(), editor->anchorOffset()), match);
+    const QRectF caret = editor->caretRectNow();
+    ASSERT_FALSE(caret.isEmpty());
+    EXPECT_GE(caret.top(), 0);
+    EXPECT_LE(caret.bottom(), editor->viewport()->height()) << "the match is on screen";
+    ASSERT_TRUE(waitForParse(*editor));
+    EXPECT_EQ(editor->findMatchCount(), 1);
+    EXPECT_EQ(qMin(editor->cursorOffset(), editor->anchorOffset()), match);
+}
+
 TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)
 {
     // One paragraph across two source lines renders as one flowing line;

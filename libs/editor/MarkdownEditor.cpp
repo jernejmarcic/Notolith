@@ -197,6 +197,8 @@ constexpr qreal kListIndent = 26;
 /// plain-text state would be a flicker and nothing else. 200 kB parses in
 /// about 26 ms, 50 kB in 7 ms; this sits between them.
 constexpr qsizetype kAsyncParseThreshold = 128 * 1024;
+/// Lines to a stand-in block while a big note's parse is out (plainParagraphs).
+constexpr int kPlaceholderLines = 64;
 constexpr int kTypingBurstMs = 500;
 /// How many undo (and redo) steps an edit from elsewhere is carried over. Each
 /// one costs a scan of the whole note, so the oldest go rather than a remote
@@ -758,7 +760,8 @@ void MarkdownEditor::setNoteText(const QString &text)
     // and there is no reason to stare at nothing while it happens. A small
     // note parses faster than a frame, so it skips the intermediate state
     // rather than flickering through it.
-    if (text.size() > kAsyncParseThreshold) {
+    d->m_firstParseOfBigNote = text.size() > kAsyncParseThreshold;
+    if (d->m_firstParseOfBigNote) {
         setWordCount(-1); // not counted until the parse comes back
         adoptDecorations({}, {}, {});
         startParse();
@@ -1364,7 +1367,19 @@ void MarkdownEditor::adoptParse()
     d->m_parsePending = false;
     ParseJob job = d->m_parseWatcher.result();
     setWordCount(job.words);
+    // The placeholder's chunks are estimated at a line a line, the parse's
+    // blocks at a line more than they have each, so the pixel the reader
+    // scrolled to would show other text: the text stays instead.
+    QScrollBar *bar = verticalScrollBar();
+    const bool placeholder = std::exchange(d->m_firstParseOfBigNote, false);
+    const qsizetype keep = placeholder && bar->value() > 0 ? offsetAt(QPoint(contentLeft(), 0)) : -1;
+    const qreal keepY = keep >= 0 ? pointFor(keep).y() : 0;
     adoptDecorations(std::move(job.decorations), std::move(job.properties), std::move(job.headings));
+    if (keep >= 0) {
+        // The first move lays out what is around the block, the second puts its line where it was.
+        bar->setValue(int(d->m_blocks.at(size_t(blockAt(keep))).y));
+        bar->setValue(bar->value() + int(pointFor(keep).y() - keepY));
+    }
     d->m_parsedVersion = job.version;
     // The buffer moved on while we were parsing: go round again.
     if (d->m_parsedVersion != d->m_textVersion)
@@ -1517,11 +1532,27 @@ qreal MarkdownEditor::estimatedHeight(const BlockView &view) const
 /// Paragraph blocks split on blank lines, for a note whose parse has not come
 /// back yet. Without this an unparsed note is one block a megabyte long, and
 /// laying that out as a single QTextLayout costs more than the parse did.
+/// A note over kAsyncParseThreshold is cut into chunks of kPlaceholderLines
+/// lines instead: its 1 MB is 40 000 paragraphs and gaps, 1.8 kB of BlockView
+/// each, 75 MB for the half second until the parse lands. A chunk is laid out
+/// as one multi-line paragraph, the same lines at the same heights.
 QList<BlockSpan> MarkdownEditor::plainParagraphs() const
 {
     QList<BlockSpan> spans;
     qsizetype start = 0;
     const qsizetype size = d->m_text.size();
+    if (size > kAsyncParseThreshold) {
+        while (start < size) {
+            qsizetype end = start;
+            for (int line = 0; line < kPlaceholderLines && end < size; ++line) {
+                const qsizetype newline = d->m_text.indexOf(QLatin1Char('\n'), end);
+                end = newline < 0 ? size : newline + 1; // the chunk owns the newline that ends it
+            }
+            spans.append({BlockSpan::Kind::Paragraph, {start, end}, 0});
+            start = end;
+        }
+        return spans;
+    }
     for (qsizetype i = 0; i < size; ++i) {
         if (d->m_text.at(i) != QLatin1Char('\n'))
             continue;
