@@ -69,6 +69,9 @@ struct MarkmapTree {
 };
 
 /// The most nodes drawn; the rest of a bigger outline is left out and the map says so.
+/// (A map this big is about 17000 px tall and the editor rasterises at most 8192 px a
+/// side (MermaidBlock.cpp's kMaxPixels), so its text comes out soft, not unreadable-sharp:
+/// the ceiling that decides the cap, not the layout.)
 constexpr int kMarkmapMaxNodes = 1000;
 
 /// Headings nest by level, list items by indentation under the heading above
