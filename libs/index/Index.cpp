@@ -681,7 +681,8 @@ QStringList Index::Writer::allPaths()
 {
     QStringList paths;
     QSqlQuery query(d->db);
-    query.exec(QStringLiteral("SELECT path FROM files WHERE words >= 0 ORDER BY path"));
+    // Attachments too: one deleted from disk must stop resolving.
+    query.exec(QStringLiteral("SELECT path FROM files ORDER BY path"));
     while (query.next())
         paths << query.value(0).toString();
     return paths;

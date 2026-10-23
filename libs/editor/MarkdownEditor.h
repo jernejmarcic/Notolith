@@ -419,6 +419,10 @@ public:
     /// The index changed, so a link drawn as pointing nowhere may point
     /// somewhere now, or the reverse. Relays out only if one did.
     void refreshLinkStatus();
+    /// Files came or went in the vault without the index saying so (an image, a
+    /// PDF, a CSV, a whole folder): looks at the cached tables on disk again,
+    /// then at every link's status.
+    void refreshVaultFiles();
 
     // --- paste and drop --------------------------------------------------
     // The editor never links libs/vault, so saving an attachment or

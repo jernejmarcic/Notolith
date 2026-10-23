@@ -92,6 +92,8 @@ Indexer::Indexer(Index *index, QObject *parent)
     connect(&m_files, &DirWatcher::directoryChanged, this, &Indexer::onDirectoryChanged);
     connect(&m_files, &DirWatcher::fileChanged, this, &Indexer::onFileChanged);
     connect(&m_files, &DirWatcher::overflowed, this, &Indexer::rebuild); // events were lost: read it all
+    connect(&m_files, &DirWatcher::directoryChanged, this, &Indexer::vaultFilesChanged);
+    connect(&m_files, &DirWatcher::overflowed, this, &Indexer::vaultFilesChanged);
 }
 
 Indexer::~Indexer()

@@ -4989,6 +4989,56 @@ TEST_F(WindowTest, ADeletedCSVComesBackWhenItIsRestored)
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 10000));
 }
 
+// The folder goes with its file: its watches die with it (the CSV's own watcher
+// hears nothing more), and only the vault's watcher still has a word to say.
+TEST_F(WindowTest, ACSVInAFolderThatIsDeletedAndRestoredComesBack)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    write(QStringLiteral("Assets/data.csv"), "a,b\n1,2\n");
+    write(QStringLiteral("Table.md"), "![[Assets/data.csv]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Table.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+
+    settleIndexer(window);
+    ASSERT_TRUE(QDir(path(QStringLiteral("Assets"))).removeRecursively());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("data.csv")); }, 5000));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return window.index()->resolve(QStringLiteral("Assets/data.csv")).isEmpty(); }, 5000));
+    // From here the index says nothing: only the vault's file signal can bring the table back.
+    QObject::disconnect(window.index(), &Index::changed, &window, nullptr);
+    QTest::qWait(1500); // the trash, a minute later
+
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    write(QStringLiteral("Assets/data.csv"), "a,b\n1,2\n3,4\n"); // the folder with it
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 10000));
+}
+
+TEST_F(WindowTest, ADeletedImageGoesBackToItsLinkAndComesBackWithItsFile)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    QImage picture(32, 32, QImage::Format_RGB32);
+    picture.fill(Qt::red);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Assets/pic.png"))));
+    write(QStringLiteral("Pic.md"), "![[Assets/pic.png]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Pic.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->displayText().contains(QStringLiteral("pic.png")); }, 5000));
+
+    settleIndexer(window);
+    ASSERT_TRUE(QDir(path(QStringLiteral("Assets"))).removeRecursively());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("pic.png")); }, 10000));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return window.index()->resolve(QStringLiteral("Assets/pic.png")).isEmpty(); }, 5000));
+    QObject::disconnect(window.index(), &Index::changed, &window, nullptr); // only the vault's file signal is left
+
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Assets/pic.png"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->displayText().contains(QStringLiteral("pic.png")); }, 10000));
+}
+
 TEST_F(WindowTest, AMissingImageAppearsWhenItsFileDoes)
 {
     ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets"))); // a folder of its own: not the note's, so only the vault scan sees into it

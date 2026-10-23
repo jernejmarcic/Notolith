@@ -363,6 +363,14 @@ MainWindow::MainWindow(QWidget *parent)
     // shows: the file's own watch dies with the file.
     connect(m_noteWatcher, &QFileSystemWatcher::directoryChanged, this, [this] { m_noteChanges.start(); });
     connect(&m_noteChanges, &QTimer::timeout, this, &MainWindow::reloadChangedNotes);
+    // The vault's own watcher (the Indexer's, so no second set of inotify watches): a file that is no
+    // note appearing or going changes no index row, yet an open note's link to it must change look.
+    m_vaultFiles.setSingleShot(true);
+    m_vaultFiles.setInterval(300); // a sync or a trash emptying is a storm of events
+    connect(&m_vaultFiles, &QTimer::timeout, this, [this] {
+        for (const auto &leaf : m_leaves)
+            leaf->editor->refreshVaultFiles();
+    });
     m_lostRetry.setSingleShot(true);
     m_lostRetry.setInterval(1000);
     connect(&m_lostRetry, &QTimer::timeout, this, [this] { followLostNotes(true); });
@@ -549,6 +557,7 @@ MainWindow::MainWindow(QWidget *parent)
         // open() for a vault that was up to date and from the batch for one
         // that was not. Both ran it, 210 ms apiece on 20 000 notes.
     });
+    connect(m_indexer, &Indexer::vaultFilesChanged, &m_vaultFiles, qOverload<>(&QTimer::start));
     connect(m_indexer, &Indexer::watchesFailed, this, [this](int folders) {
         statusBar()->showMessage(tr("%n folder(s) cannot be watched (fs.inotify.max_user_watches?): changes made "
                                     "outside Notolith there are found every 30 seconds",

@@ -1016,6 +1016,7 @@ QLabel *m_vimStatus = nullptr;
     QFileSystemWatcher *m_noteWatcher = nullptr; ///< the open notes' files
     QSet<QString> m_changedNotes;                ///< what it reported, read when m_noteChanges fires
     QTimer m_noteChanges;
+    QTimer m_vaultFiles; ///< debounces Indexer::vaultFilesChanged
     QHash<QString, bool> m_lostNotes; ///< open notes whose file is gone -> reported
     QTimer m_lostRetry;               ///< one more look before reporting
 
