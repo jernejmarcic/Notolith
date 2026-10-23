@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <thread>
+
 #include <QDir>
 #include <QFile>
 #include <QStandardPaths>
@@ -627,4 +629,133 @@ TEST(SettingsModuleTest, StoredValuesOfKeysRegisteredAfterLoadAreAdopted)
     settings.adoptStored();
     EXPECT_TRUE(settings.boolean(QStringLiteral("late.greeting"))) << "an in-memory choice is not overwritten";
     QFile::remove(Settings::configFile());
+}
+
+namespace {
+
+/// A config directory of the test's own, the way a second Notolith process would share one.
+struct SharedConfig {
+    QTemporaryDir home;
+    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    SharedConfig()
+    {
+        QStandardPaths::setTestModeEnabled(false);
+        qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    }
+    ~SharedConfig() { qputenv("XDG_CONFIG_HOME", previous); }
+};
+
+} // namespace
+
+// Two windows (two processes, one per vault) each hold the settings they loaded: one saving
+// must not take away what the other saved in between.
+TEST(Settings, TwoWindowsSavingKeepBothChanges)
+{
+    SharedConfig config;
+    Settings first = Settings::load();
+    Settings second = Settings::load();
+    first.setValue(QStringLiteral("editor.tabWidth"), 2);
+    ASSERT_TRUE(first.save());
+    second.setValue(QStringLiteral("appearance.baseFontSize"), 20);
+    ASSERT_TRUE(second.save());
+
+    const Settings now = Settings::load();
+    EXPECT_EQ(now.integer(QStringLiteral("editor.tabWidth")), 2) << "the first window's change survives the second's save";
+    EXPECT_EQ(now.integer(QStringLiteral("appearance.baseFontSize")), 20);
+    EXPECT_EQ(second.integer(QStringLiteral("editor.tabWidth")), 2) << "and the saving window now knows it";
+}
+
+TEST(Settings, AResetInOneWindowIsNotUndoneByAnothersSave)
+{
+    SharedConfig config;
+    Settings first = Settings::load();
+    first.setValue(QStringLiteral("editor.tabWidth"), 2);
+    ASSERT_TRUE(first.save());
+    Settings second = Settings::load();
+    ASSERT_EQ(second.integer(QStringLiteral("editor.tabWidth")), 2);
+
+    first.reset(QStringLiteral("editor.tabWidth"));
+    ASSERT_TRUE(first.save());
+    second.setValue(QStringLiteral("appearance.baseFontSize"), 20);
+    ASSERT_TRUE(second.save());
+
+    const Settings now = Settings::load();
+    EXPECT_EQ(now.integer(QStringLiteral("editor.tabWidth")), 4) << "second never touched it, so the reset stands";
+    EXPECT_EQ(now.integer(QStringLiteral("appearance.baseFontSize")), 20);
+}
+
+TEST(Settings, ASettingChangedInTwoWindowsTakesTheLaterSave)
+{
+    SharedConfig config;
+    Settings first = Settings::load();
+    Settings second = Settings::load();
+    first.setValue(QStringLiteral("editor.tabWidth"), 2);
+    ASSERT_TRUE(first.save());
+    second.setValue(QStringLiteral("editor.tabWidth"), 8);
+    ASSERT_TRUE(second.save());
+    EXPECT_EQ(Settings::load().integer(QStringLiteral("editor.tabWidth")), 8);
+}
+
+// What the app remembers: the vaults two windows opened are both remembered, the later one first.
+TEST(Settings, RecentVaultsAndNotePositionsFromTwoWindowsAreMerged)
+{
+    SharedConfig config;
+    Settings first = Settings::load();
+    Settings second = Settings::load();
+    first.noteOpened(QStringLiteral("/vaults/one"), QStringLiteral("/vaults/one/a.md"));
+    first.setNotePosition(QStringLiteral("/vaults/one/a.md"), 11, 22);
+    ASSERT_TRUE(first.save());
+    second.noteOpened(QStringLiteral("/vaults/two"), QStringLiteral("/vaults/two/b.md"));
+    second.setNotePosition(QStringLiteral("/vaults/two/b.md"), 33, 44);
+    ASSERT_TRUE(second.save());
+
+    const Settings now = Settings::load();
+    EXPECT_EQ(now.recentVaults(), (QStringList{QStringLiteral("/vaults/two"), QStringLiteral("/vaults/one")}));
+    EXPECT_EQ(now.recentFiles(), (QStringList{QStringLiteral("/vaults/two/b.md"), QStringLiteral("/vaults/one/a.md")}));
+    ASSERT_TRUE(now.notePosition(QStringLiteral("/vaults/one/a.md")));
+    EXPECT_EQ(now.notePosition(QStringLiteral("/vaults/one/a.md"))->cursor, 11);
+    ASSERT_TRUE(now.notePosition(QStringLiteral("/vaults/two/b.md")));
+    EXPECT_EQ(now.notePosition(QStringLiteral("/vaults/two/b.md"))->cursor, 33);
+}
+
+TEST(Settings, AForgottenNotePositionStaysForgottenWhenAnotherWindowSaves)
+{
+    SharedConfig config;
+    Settings first = Settings::load();
+    first.setNotePosition(QStringLiteral("/v/a.md"), 1, 1);
+    first.setNotePosition(QStringLiteral("/v/b.md"), 2, 2);
+    ASSERT_TRUE(first.save());
+    Settings second = Settings::load();
+    Settings third = Settings::load();
+
+    second.forgetNotePosition(QStringLiteral("/v/a.md"));
+    ASSERT_TRUE(second.save());
+    third.setNotePosition(QStringLiteral("/v/c.md"), 3, 3);
+    ASSERT_TRUE(third.save());
+
+    const Settings now = Settings::load();
+    EXPECT_FALSE(now.notePosition(QStringLiteral("/v/a.md"))) << "third still held it, but never changed it";
+    EXPECT_TRUE(now.notePosition(QStringLiteral("/v/b.md")));
+    EXPECT_TRUE(now.notePosition(QStringLiteral("/v/c.md")));
+}
+
+// Two processes saving at once: each save reads the file and writes it back, so without a lock
+// they would trade stale copies of each other's key.
+TEST(Settings, SavesFromTwoThreadsDoNotLoseEachOthersLastValue)
+{
+    SharedConfig config;
+    const auto work = [](const char *key, int base) {
+        Settings settings = Settings::load();
+        for (int i = 0; i < 60; ++i) {
+            settings.setValue(QLatin1String(key), base + i);
+            EXPECT_TRUE(settings.save());
+        }
+    };
+    std::thread one(work, "editor.tabWidth", 100);
+    std::thread two(work, "appearance.baseFontSize", 200);
+    one.join();
+    two.join();
+    const Settings now = Settings::load();
+    EXPECT_EQ(now.integer(QStringLiteral("editor.tabWidth")), 159);
+    EXPECT_EQ(now.integer(QStringLiteral("appearance.baseFontSize")), 259);
 }
