@@ -1,9 +1,17 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
 #include <optional>
 #include <thread>
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <QClipboard>
+#include <QCoreApplication>
+#include <QDir>
 #include <QScroller>
 #include <QDropEvent>
 #include <QElapsedTimer>
@@ -18,6 +26,10 @@
 #include <QNativeGestureEvent>
 #include <QRegularExpression>
 #include <QSignalSpy>
+#include <QImageReader>
+#include <QPicture>
+#include <QScreen>
+#include <QWindow>
 #include <QScrollBar>
 #include <QScreen>
 #include <QTimer>
@@ -896,6 +908,47 @@ TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)
     EXPECT_EQ(editor->noteText(), QStringLiteral("one\ntwo\n\nthree\n"));
     // The buffer is untouched by the rendering decision, which is the point.
     EXPECT_EQ(editor->wordCount(), 3);
+}
+
+// Obsidian's "Strict line breaks" is off by default, and off means a newline in
+// a paragraph IS a line break (the setting follows CommonMark's joining only
+// when on, and only in reading view). The editor had it the other way round:
+// the debounced parse after typing marked the new line as the same paragraph
+// and drew the newline as a space, so what was typed after Enter ran on at the
+// end of the line above.
+TEST(SoftBreakTest, ATypedNewLineStaysOnItsOwnLineAfterTheReparse)
+{
+    for (const QString &start : {QStringLiteral("line one\n"), QStringLiteral("line one"),
+                                  QStringLiteral("# Title\n\npara\n")}) {
+        SCOPED_TRACE(start.toStdString());
+        auto editor = editorWith(start);
+        editor->show();
+        const qsizetype end = start.endsWith(QLatin1Char('\n')) ? start.size() - 1 : start.size();
+        editor->setCursorOffset(end);
+        const qreal firstLine = editor->caretRectNow().y();
+
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        QTest::qWait(300); // past the parse timer: the new line is in the paragraph now
+        QTest::keyClicks(editor.get(), QStringLiteral("abc"));
+        QTest::qWait(300);
+
+        EXPECT_EQ(editor->cursorOffset(), end + 4);
+        EXPECT_GT(editor->caretRectNow().y(), firstLine) << "typing ran on at the end of the line above";
+    }
+}
+
+TEST(SoftBreakTest, StrictLineBreaksJoinTheLinesOfAParagraph)
+{
+    const QString text = QStringLiteral("one\ntwo\n\nthree\n");
+    const auto threeAt = [&](bool strict) {
+        auto editor = editorWith(text);
+        editor->show();
+        editor->setStrictLineBreaks(strict);
+        editor->setCursorOffset(text.indexOf(QLatin1String("three")));
+        QTest::qWait(100);
+        return editor->caretRectNow().y();
+    };
+    EXPECT_LT(threeAt(true), threeAt(false)) << "strict: the two lines above are one, so the next paragraph sits higher";
 }
 
 TEST(CodeHighlighterTest, KnowsKateDefinitionsAndObsidianAliases)
@@ -4225,6 +4278,595 @@ TEST(MultiEmbedTest, ATallInlineEmbedGrowsItsLineAndTheTextAfterItFollowsOnIt)
     EXPECT_EQ(first.top(), second.top());
     EXPECT_GT(second.left(), first.right() + 10);
     EXPECT_GE(first.top(), 0);
+}
+
+// --- inline <img>: the Markdown image's own path, spelled in HTML ------------
+
+namespace {
+
+/// A 100x50 PNG in `dir`, and a resolver that finds it as "p.png" (anything
+/// else is unresolved, as a remote or unknown target is).
+struct HtmlImgFixture {
+    QTemporaryDir dir;
+    QString path;
+    HtmlImgFixture()
+    {
+        QImage image(100, 50, QImage::Format_RGB32);
+        image.fill(Qt::red);
+        path = dir.filePath(QStringLiteral("p.png"));
+        image.save(path);
+    }
+    std::function<QString(const QString &)> resolver()
+    {
+        return [this](const QString &target) {
+            return target == QLatin1String("p.png") ? path : QString();
+        };
+    }
+};
+
+const QString kImgTable = QStringLiteral("| a | b |\n|---|---|\n| x | %1 |\n");
+
+} // namespace
+
+TEST(HtmlImgTest, AnImgInATableCellBecomesAnImageOfTheRequestedWidth)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"40\">")));
+    editor->setLinkResolver(fixture.resolver());
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 1);
+    // 100x50 asked to be 40 wide: the height follows at 20.
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(40, 20));
+    EXPECT_TRUE(editor->embedCellLabelAt(0, 0).isEmpty());
+}
+
+TEST(HtmlImgTest, AnImgInATableWithAnEmptyHeaderStillRenders)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(QStringLiteral("| | |\n|---|---|\n"
+                                            "| Flashes red when hit | <img src=\"p.png\" width=\"40\"> |\n"
+                                            "| White sweep | <img src=\"p.png\" width=\"60\"> |\n"));
+    editor->setLinkResolver(fixture.resolver());
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 2);
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(40, 20));
+    EXPECT_EQ(editor->embedCellRectAt(0, 1).size(), QSizeF(60, 30));
+}
+
+TEST(HtmlImgTest, AMarkdownImageInATableCellRendersToo)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(kImgTable.arg(QStringLiteral("![40](p.png)")));
+    editor->setLinkResolver(fixture.resolver());
+
+    // The shared path: whatever draws the one draws the other.
+    ASSERT_EQ(editor->embedCellCountAt(0), 1);
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(40, 20));
+}
+
+TEST(HtmlImgTest, AnImgInsideRunningTextIsAnInlineImage)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(QStringLiteral("see <img src=\"p.png\" width=\"60\"> here\n"));
+    editor->setLinkResolver(fixture.resolver());
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 1);
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(60, 30));
+    EXPECT_GT(editor->embedCellRectAt(0, 0).left(), 10); // after "see ", not a row under it
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("see")));
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("here")));
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("src=")));
+}
+
+TEST(HtmlImgTest, AnImgInAListItemAndAQuoteIsDrawnToo)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(QStringLiteral("- item <img src=\"p.png\" width=\"20\">\n\n"
+                                            "> quoted <img src=\"p.png\" width=\"20\">\n"));
+    editor->setLinkResolver(fixture.resolver());
+
+    EXPECT_EQ(editor->embedCellCountAt(0), 1);
+    const qsizetype quote = editor->noteText().indexOf(QLatin1Char('>'));
+    EXPECT_EQ(editor->embedCellCountAt(quote), 1);
+}
+
+TEST(HtmlImgTest, OneAttributeKeepsTheAspectAndBothUseBoth)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto heightOnly = editorWith(QStringLiteral("a <img src=\"p.png\" height=\"25\"> b\n"));
+    heightOnly->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(heightOnly->embedCellCountAt(0), 1);
+    EXPECT_EQ(heightOnly->embedCellRectAt(0, 0).size(), QSizeF(50, 25));
+
+    auto both = editorWith(QStringLiteral("a <img src=\"p.png\" width=\"30px\" height=\"30\"> b\n"));
+    both->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(both->embedCellCountAt(0), 1);
+    EXPECT_EQ(both->embedCellRectAt(0, 0).size(), QSizeF(30, 30));
+
+    auto neither = editorWith(QStringLiteral("a <img src='p.png'> b\n"));
+    neither->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(neither->embedCellCountAt(0), 1);
+    EXPECT_EQ(neither->embedCellRectAt(0, 0).size(), QSizeF(100, 50));
+}
+
+TEST(HtmlImgTest, TheSourceShowsWhileTheCaretIsInsideIt)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto paragraph = editorWith(QStringLiteral("see <img src=\"p.png\" width=\"60\"> here\n"));
+    paragraph->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(paragraph->embedCellCountAt(0), 1);
+    paragraph->enterBlockAt(8);
+    EXPECT_EQ(paragraph->embedCellCountAt(0), 0);
+    EXPECT_TRUE(paragraph->displayText().contains(QStringLiteral("<img src=\"p.png\" width=\"60\">")));
+
+    const QString text = kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"40\">"));
+    auto table = editorWith(text);
+    table->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(table->embedCellCountAt(0), 1);
+    table->enterBlockAt(text.indexOf(QStringLiteral("src=")));
+    EXPECT_EQ(table->embedCellCountAt(0), 0);
+    table->enterBlockAt(2); // the header's own cell: the other cell is an image again
+    EXPECT_EQ(table->embedCellCountAt(0), 1);
+}
+
+TEST(HtmlImgTest, AMissingFileShowsTheAltInsteadOfAnImage)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto unresolved = editorWith(QStringLiteral("x <img src=\"gone.png\" alt=\"a red flash\"> y\n"));
+    unresolved->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(unresolved->embedCellCountAt(0), 1);
+    EXPECT_EQ(unresolved->embedCellLabelAt(0, 0), QStringLiteral("a red flash"));
+
+    // A path that resolves to nothing on disk is the same placeholder.
+    auto absent = editorWith(kImgTable.arg(QStringLiteral("<img src=\"gone.png\" alt=\"a red flash\">")));
+    absent->setLinkResolver([&](const QString &) { return fixture.dir.filePath(QStringLiteral("gone.png")); });
+    ASSERT_EQ(absent->embedCellCountAt(0), 1);
+    EXPECT_EQ(absent->embedCellLabelAt(0, 0), QStringLiteral("a red flash"));
+}
+
+TEST(HtmlImgTest, AMalformedTagStaysAsText)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    for (const QString &tag : {QStringLiteral("<img width=\"40\">"),            // no src
+                               QStringLiteral("<img src=\"p.png width=\"40\">"), // unclosed quote
+                               QStringLiteral("<img src=\"\">")}) {             // empty src
+        auto editor = editorWith(QStringLiteral("x %1 y\n").arg(tag));
+        editor->setLinkResolver(fixture.resolver());
+        EXPECT_EQ(editor->embedCellCountAt(0), 0) << qPrintable(tag);
+        EXPECT_TRUE(editor->displayText().contains(tag)) << qPrintable(tag);
+    }
+}
+
+TEST(HtmlImgTest, AnOddSchemeRendersNothing)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    for (const QString &src : {QStringLiteral("javascript:alert(1)"), QStringLiteral("data:image/png;base64,AAAA"),
+                               QStringLiteral("file:///etc/passwd"), QStringLiteral("//evil.example/x.png")}) {
+        auto editor = editorWith(QStringLiteral("x <img src=\"%1\" width=\"40\"> y\n").arg(src));
+        // Even a resolver that would hand back a real file for anything.
+        editor->setLinkResolver([&](const QString &) { return fixture.path; });
+        EXPECT_EQ(editor->embedCellCountAt(0), 0) << qPrintable(src);
+    }
+}
+
+TEST(HtmlImgTest, ATallImageGrowsItsRowAndSitsInsideItsCell)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto plain = editorWith(kImgTable.arg(QStringLiteral("x")));
+    plain->setLinkResolver(fixture.resolver());
+    auto withImage = editorWith(kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"300\">")));
+    withImage->setLinkResolver(fixture.resolver());
+
+    // 100x50 at 300 wide is 150 tall: the row grows by about that much.
+    EXPECT_GT(withImage->documentHeight(), plain->documentHeight() + 100);
+    const QRectF cell = withImage->tableCellRect(0, 1, 1);
+    ASSERT_FALSE(cell.isEmpty());
+    EXPECT_GT(cell.height(), 150);
+    EXPECT_GE(cell.width(), 300); // the column is as wide as the image wants
+
+    // Block-local to viewport: cell (0, 0) starts at the block's origin.
+    const QRectF origin = withImage->tableCellRect(0, 0, 0);
+    const QRectF image = withImage->embedCellRectAt(0, 0).translated(origin.topLeft());
+    EXPECT_EQ(image.size(), QSizeF(300, 150));
+    EXPECT_TRUE(cell.contains(image)) << "image and cell rects disagree";
+}
+
+TEST(HtmlImgTest, AClickOnTheImageInACellPutsTheCaretInThatCell)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    const QString text = kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"40\">"));
+    auto editor = editorWith(text);
+    editor->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(editor->embedCellCountAt(0), 1);
+
+    const QRectF origin = editor->tableCellRect(0, 0, 0);
+    const QPoint inside = (editor->embedCellRectAt(0, 0).translated(origin.topLeft())).center().toPoint();
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, inside);
+
+    const qsizetype tag = text.indexOf(QStringLiteral("<img"));
+    EXPECT_GE(editor->cursorOffset(), tag);
+    EXPECT_LE(editor->cursorOffset(), text.indexOf(QLatin1Char('>'), tag) + 1);
+    EXPECT_EQ(editor->embedCellCountAt(0), 0) << "the cell shows its source now";
+}
+
+TEST(HtmlImgTest, TwoImagesInOneCellBothDrawAndStayInIt)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(
+        kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"40\"> <img src=\"p.png\" width=\"60\">")));
+    editor->setLinkResolver(fixture.resolver());
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 2);
+    const QRectF origin = editor->tableCellRect(0, 0, 0);
+    const QRectF cell = editor->tableCellRect(0, 1, 1);
+    const QRectF first = editor->embedCellRectAt(0, 0).translated(origin.topLeft());
+    const QRectF second = editor->embedCellRectAt(0, 1).translated(origin.topLeft());
+    EXPECT_EQ(first.size(), QSizeF(40, 20));
+    EXPECT_EQ(second.size(), QSizeF(60, 30));
+    EXPECT_TRUE(cell.contains(first));
+    EXPECT_TRUE(cell.contains(second));
+    EXPECT_GE(second.left(), first.right()); // side by side, not on top of each other
+}
+
+TEST(HtmlImgTest, BothSizesAreCappedKeepingTheGivenRatio)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    for (const QString &source : {QStringLiteral("a <img src=\"p.png\" width=\"1\" height=\"99999\"> b\n"),
+                                  QStringLiteral("a ![[p.png|1x99999]] b\n")}) {
+        auto editor = editorWith(source);
+        editor->setLinkResolver(fixture.resolver());
+        ASSERT_EQ(editor->embedCellCountAt(0), 1) << qPrintable(source);
+        const QSizeF size = editor->embedCellRectAt(0, 0).size();
+        EXPECT_LE(size.height(), 4096) << qPrintable(source);
+        EXPECT_NEAR(size.width() / size.height(), 1.0 / 99999, 1e-6) << qPrintable(source);
+    }
+}
+
+TEST(HtmlImgTest, ATagOnItsOwnAcrossTwoLinesIsStillAnImgNotATranscludedFile)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    // Not an HTML block (the tag is incomplete on its first line), so the
+    // paragraph is the one tag: the sole-embed path's case.
+    auto sized = editorWith(QStringLiteral("<img src=\"p.png\"\n     height=\"25\">\n"));
+    sized->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(sized->embedCellCountAt(0), 1);
+    EXPECT_EQ(sized->embedCellRectAt(0, 0).size(), QSizeF(50, 25)); // aspect kept, not 100x25
+
+    const QString pdf = fixture.dir.filePath(QStringLiteral("doc.pdf"));
+    {
+        QFile file(pdf);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("%PDF-1.4\n");
+    }
+    auto document = editorWith(QStringLiteral("<img src=\"doc.pdf\"\n     alt=\"a doc\">\n"));
+    document->setLinkResolver([&](const QString &) { return pdf; });
+    ASSERT_EQ(document->embedCellCountAt(0), 1);
+    EXPECT_EQ(document->embedCellLabelAt(0, 0), QStringLiteral("a doc"));
+    EXPECT_TRUE(document->embedCellRectAt(0, 0).height() <= 44) << "a small card, not a PDF page";
+}
+
+TEST(HtmlImgTest, AVoidImgDoesNotBreakAnEnclosingPair)
+{
+    auto editor = editorWith(QStringLiteral("<b>one <img src=\"p.png\"> two</b>\n"));
+    // Paired and drawn: the <b> tags are hidden, not left as source.
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("<b>")));
+}
+
+// --- animated GIFs ------------------------------------------------------------
+
+namespace {
+
+// 8x8, three frames (red, green, blue), 20 ms each, looping; and the same
+// picture as a one-frame GIF. Qt has no GIF writer, so they are bytes.
+const unsigned char kAnimatedGIF[] = {0x47,0x49,0x46,0x38,0x39,0x61,0x08,0x00,0x08,0x00,0x81,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x21,0xff,0x0b,0x4e,0x45,0x54,0x53,0x43,0x41,0x50,0x45,0x32,0x2e,0x30,0x03,0x01,0x00,0x00,0x00,0x21,0xf9,0x04,0x04,0x02,0x00,0x00,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x21,0xf9,0x04,0x05,0x02,0x00,0x01,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x81,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x21,0xf9,0x04,0x05,0x02,0x00,0x01,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x81,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x3b};
+const unsigned char kOnceGIF[] = {0x47,0x49,0x46,0x38,0x39,0x61,0x08,0x00,0x08,0x00,0x81,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x21,0xf9,0x04,0x04,0x02,0x00,0x00,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x21,0xf9,0x04,0x05,0x02,0x00,0x01,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x81,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x21,0xf9,0x04,0x05,0x02,0x00,0x01,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x81,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x3b};
+const unsigned char kStillGIF[] = {0x47,0x49,0x46,0x38,0x37,0x61,0x08,0x00,0x08,0x00,0x81,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x3b};
+
+/// A directory of GIF files: g0.gif ... g(count-1).gif, animated or still.
+struct GIFfixture {
+    QTemporaryDir dir;
+    QString path(int index) const { return dir.filePath(QStringLiteral("g%1.gif").arg(index)); }
+    /// `once` is the animated picture without a loop extension: it plays out and stops.
+    GIFfixture(int count, bool animated, bool once = false)
+    {
+        for (int i = 0; i < count; ++i) {
+            QFile file(path(i));
+            if (!file.open(QIODevice::WriteOnly))
+                continue;
+            if (once)
+                file.write(QByteArray(reinterpret_cast<const char *>(kOnceGIF), sizeof kOnceGIF));
+            else
+                file.write(animated ? QByteArray(reinterpret_cast<const char *>(kAnimatedGIF), sizeof kAnimatedGIF)
+                                    : QByteArray(reinterpret_cast<const char *>(kStillGIF), sizeof kStillGIF));
+        }
+    }
+    std::function<QString(const QString &)> resolver()
+    {
+        return [this](const QString &target) {
+            return target.endsWith(QLatin1String(".gif")) ? dir.filePath(target) : QString();
+        };
+    }
+};
+
+/// A shown editor, painted once so what is on screen has started.
+std::unique_ptr<MarkdownEditor> shownEditorWith(const QString &text, GIFfixture &fixture)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(600, 300);
+    editor->setLinkResolver(fixture.resolver());
+    editor->setNoteText(text);
+    editor->show();
+    QTest::qWaitForWindowExposed(editor.get());
+    editor->viewport()->repaint();
+    return editor;
+}
+
+} // namespace
+
+TEST(GIFtest, AnAnimatedGIFPlaysWhileItIsOnScreen)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    ASSERT_EQ(QImageReader(fixture.path(0)).imageCount(), 3) << "the fixture is a three-frame GIF";
+    for (const QString &text : {QStringLiteral("![[g0.gif]]\n"),                       // alone in a block
+                                QStringLiteral("see ![](g0.gif) here\n"),              // inline in text
+                                QStringLiteral("a <img src=\"g0.gif\" width=\"40\"> b\n"),
+                                QStringLiteral("| a | b |\n|---|---|\n| x | <img src=\"g0.gif\"> |\n")}) {
+        auto editor = shownEditorWith(text, fixture);
+        EXPECT_EQ(editor->GIFmovieCount(), 1) << qPrintable(text);
+        // Frames move on by themselves, and each one repaints (the viewport is
+        // asked to update its rect, which the event loop turns into a paint).
+        const bool advanced = QTest::qWaitFor([&] { return editor->GIFframeOf(fixture.path(0)) >= 1; }, 3000);
+        EXPECT_TRUE(advanced) << qPrintable(text);
+    }
+}
+
+TEST(GIFtest, AStillGIFAndAPngNeverStartAMovie)
+{
+    GIFfixture still(1, false);
+    ASSERT_TRUE(still.dir.isValid());
+    ASSERT_EQ(QImageReader(still.path(0)).imageCount(), 1);
+    auto editor = shownEditorWith(QStringLiteral("![[g0.gif]] and ![[g0.gif]]\n"), still);
+    EXPECT_EQ(editor->GIFmovieCount(), 0);
+
+    HtmlImgFixture png;
+    ASSERT_TRUE(png.dir.isValid());
+    auto plain = std::make_unique<MarkdownEditor>();
+    plain->resize(600, 300);
+    plain->setLinkResolver(png.resolver());
+    plain->setNoteText(QStringLiteral("![[p.png]] <img src=\"p.png\">\n"));
+    plain->show();
+    QTest::qWaitForWindowExposed(plain.get());
+    plain->viewport()->repaint();
+    EXPECT_EQ(plain->GIFmovieCount(), 0);
+}
+
+TEST(GIFtest, TheSameFileTwiceIsOneMovie)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = shownEditorWith(QStringLiteral("a ![[g0.gif]] b ![[g0.gif]] c\n"), fixture);
+    EXPECT_EQ(editor->GIFmovieCount(), 1);
+}
+
+TEST(GIFtest, AMovieEndsWhenItScrollsOutHidesOrTheNoteCloses)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    QString text = QStringLiteral("![[g0.gif]]\n\n");
+    for (int i = 0; i < 80; ++i)
+        text += QStringLiteral("filler paragraph %1\n\n").arg(i);
+    auto editor = shownEditorWith(text, fixture);
+    ASSERT_EQ(editor->GIFmovieCount(), 1);
+
+    editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+    EXPECT_EQ(editor->GIFmovieCount(), 0) << "scrolled out of the viewport";
+    QTest::qWait(100);
+    editor->viewport()->repaint();
+    EXPECT_EQ(editor->GIFmovieCount(), 0) << "and a later paint does not bring it back";
+
+    editor->verticalScrollBar()->setValue(0);
+    editor->viewport()->repaint();
+    EXPECT_EQ(editor->GIFmovieCount(), 1) << "scrolled back in";
+    editor->hide();
+    EXPECT_EQ(editor->GIFmovieCount(), 0) << "hidden";
+
+    editor->show();
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            editor->viewport()->update();
+            return editor->GIFmovieCount() == 1;
+        },
+        3000))
+        << "shown again: the next paint starts it";
+    editor->setNoteText(QStringLiteral("another note\n"));
+    EXPECT_EQ(editor->GIFmovieCount(), 0) << "the note closed";
+}
+
+TEST(GIFtest, NoMoreThanEightMoviesPlayAtOnce)
+{
+    GIFfixture fixture(12, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    QString text;
+    for (int i = 0; i < 12; ++i)
+        text += QStringLiteral("![[g%1.gif]] ").arg(i);
+    auto editor = shownEditorWith(text + QStringLiteral("\n"), fixture);
+    EXPECT_EQ(editor->GIFmovieCount(), 8);
+}
+
+TEST(GIFtest, AGIFthatIsNotPaintedToTheViewportDoesNotPlay)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = std::make_unique<MarkdownEditor>(); // never shown
+    editor->resize(600, 300);
+    editor->setLinkResolver(fixture.resolver());
+    editor->setNoteText(QStringLiteral("![[g0.gif]]\n"));
+    editor->grab(); // a render to a pixmap, as an export or a screenshot does
+    EXPECT_EQ(editor->GIFmovieCount(), 0);
+}
+
+namespace {
+
+/// The pixels the shown editor really has on screen.
+QImage screenOf(MarkdownEditor &editor)
+{
+    return editor.windowHandle()->screen()->grabWindow(editor.winId()).toImage().convertToFormat(QImage::Format_RGB32);
+}
+
+int pixelsOf(const QImage &image, const QColor &colour)
+{
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x)
+            count += image.pixelColor(x, y) == colour;
+    }
+    return count;
+}
+
+} // namespace
+
+TEST(GIFtest, TheDrawnPixelsAreTheMoviesFrame)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = shownEditorWith(QStringLiteral("a <img src=\"g0.gif\" width=\"40\"> b\n"), fixture);
+    ASSERT_EQ(editor->GIFmovieCount(), 1);
+    // The fixture's frames are solid red, green, blue; at 40 px wide a frame is 1600 px of it.
+    ASSERT_TRUE(QTest::qWaitFor([&] { return pixelsOf(screenOf(*editor), Qt::green) > 1000; }, 3000))
+        << "the viewport shows the movie's second frame, not the still's first";
+    // And it keeps moving: the third frame, then back round to the first.
+    EXPECT_TRUE(QTest::qWaitFor([&] { return pixelsOf(screenOf(*editor), Qt::blue) > 1000; }, 3000));
+    EXPECT_TRUE(QTest::qWaitFor([&] { return pixelsOf(screenOf(*editor), Qt::red) > 1000; }, 3000));
+}
+
+TEST(GIFtest, AnExportRenderDrawsTheFirstFrameWhileTheScreenPlays)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = shownEditorWith(QStringLiteral("a <img src=\"g0.gif\" width=\"40\"> b\n"), fixture);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->GIFframeOf(fixture.path(0)) >= 1; }, 3000));
+
+    // A QPicture is a paint engine of its own (not the raster one the screen
+    // uses), as a PDF is: the movie is on frame 1 or 2 and this must show frame 0.
+    QPicture picture;
+    {
+        QPainter painter(&picture);
+        editor->render(&painter);
+    }
+    QImage replay(600, 300, QImage::Format_RGB32);
+    replay.fill(Qt::white);
+    {
+        QPainter painter(&replay);
+        painter.drawPicture(0, 0, picture);
+    }
+    EXPECT_GT(pixelsOf(replay, Qt::red), 1000);
+    EXPECT_EQ(pixelsOf(replay, Qt::green), 0);
+    EXPECT_EQ(pixelsOf(replay, Qt::blue), 0);
+}
+
+TEST(GIFtest, AFrameInALongTableRepaintsOnlyTheRowsBeingRepainted)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    QString text = QStringLiteral("| a | b |\n|---|---|\n| row | <img src=\"g0.gif\" width=\"40\"> |\n");
+    for (int row = 0; row < 500; ++row)
+        text += QStringLiteral("| r%1 | x |\n").arg(row);
+    auto editor = shownEditorWith(text, fixture);
+    ASSERT_EQ(editor->GIFmovieCount(), 1);
+
+    // The whole table is 1000 cells; a full repaint draws the screenful.
+    editor->viewport()->repaint();
+    EXPECT_GT(editor->tableCellsPainted(), 0);
+    EXPECT_LT(editor->tableCellsPainted(), 60);
+
+    // A frame repaints the image's own rect: one row of the table.
+    const QRectF origin = editor->tableCellRect(0, 0, 0);
+    const QRect image = editor->embedCellRectAt(0, 0).translated(origin.topLeft()).toAlignedRect();
+    editor->viewport()->repaint(image);
+    EXPECT_GT(editor->tableCellsPainted(), 0);
+    EXPECT_LE(editor->tableCellsPainted(), 4);
+}
+
+TEST(GIFtest, AMovieEndsOnResizeResolverChangeEditAndDestruction)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    const auto start = [&](const QString &text, int height) {
+        auto editor = std::make_unique<MarkdownEditor>();
+        editor->resize(600, height);
+        editor->setLinkResolver(fixture.resolver());
+        editor->setNoteText(text);
+        editor->show();
+        QTest::qWaitFor([&] {
+            editor->viewport()->update();
+            return editor->GIFmovieCount() == 1;
+        }, 3000);
+        return editor;
+    };
+    QString low;
+    for (int i = 0; i < 25; ++i)
+        low += QStringLiteral("filler paragraph %1\n\n").arg(i);
+    low += QStringLiteral("![[g0.gif]]\n");
+
+    { // resize: the GIF is below the new, shorter viewport
+        auto editor = start(low, 1500);
+        ASSERT_EQ(editor->GIFmovieCount(), 1);
+        editor->resize(600, 150);
+        EXPECT_TRUE(QTest::qWaitFor([&] { return editor->GIFmovieCount() == 0; }, 3000));
+    }
+    { // a new resolver: everything starts over
+        auto editor = start(QStringLiteral("a ![[g0.gif]] b\n"), 300);
+        ASSERT_EQ(editor->GIFmovieCount(), 1);
+        editor->setLinkResolver(fixture.resolver());
+        EXPECT_EQ(editor->GIFmovieCount(), 0);
+    }
+    { // an edit deletes the embed while it plays: released from its own frameChanged
+        const QString tag = QStringLiteral("<img src=\"g0.gif\" width=\"40\">");
+        auto editor = start(QStringLiteral("see ") + tag + QStringLiteral(" end\n"), 300);
+        ASSERT_EQ(editor->GIFmovieCount(), 1);
+        editor->setCursorOffset(4 + tag.size());
+        for (int i = 0; i < tag.size(); ++i)
+            QTest::keyClick(editor.get(), Qt::Key_Backspace);
+        ASSERT_EQ(editor->noteText(), QStringLiteral("see  end\n"));
+        EXPECT_TRUE(QTest::qWaitFor([&] { return editor->GIFmovieCount() == 0; }, 3000));
+        QTest::qWait(100); // the deferred release runs, nothing touches the freed movie
+    }
+    { // the editor goes away mid-animation
+        auto editor = start(QStringLiteral("a ![[g0.gif]] b\n"), 300);
+        ASSERT_EQ(editor->GIFmovieCount(), 1);
+        editor.reset();
+        QTest::qWait(150);
+    }
+}
+
+TEST(GIFtest, AGIFThatPlayedOutKeepsItsLastFrameAndFreesItsSlot)
+{
+    GIFfixture once(1, true, true);
+    ASSERT_TRUE(once.dir.isValid());
+    auto editor = shownEditorWith(QStringLiteral("a <img src=\"g0.gif\" width=\"40\"> b\n"), once);
+    ASSERT_EQ(editor->GIFmovieCount(), 1);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->GIFmovieCount() == 0; }, 5000)) << "finished: the slot is free";
+    EXPECT_TRUE(QTest::qWaitFor([&] { return pixelsOf(screenOf(*editor), Qt::blue) > 1000; }, 3000))
+        << "and the picture stays on the last frame";
+    editor->viewport()->repaint();
+    QTest::qWait(100);
+    EXPECT_EQ(editor->GIFmovieCount(), 0) << "a paint does not start it again";
 }
 
 // --- note embeds: whole, #Heading, #^block ----------------------------------
@@ -7794,6 +8436,11 @@ TEST(ScrollTest, AScrolledFrameMatchesAFreshOne)
     ASSERT_TRUE(editor);
     editor->show();
     ASSERT_TRUE(QTest::qWaitForWindowExposed(editor.get()));
+    // Where the pointer rests is not what is compared: the listing under it
+    // says "Copy", and which one that is depends on how tall the text above is.
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(editor.get(), &leave);
+    editor->viewport()->setAttribute(Qt::WA_UnderMouse, false);
 
     QScrollBar *bar = editor->verticalScrollBar();
     for (int step = 0; step < 60; ++step) {
@@ -8136,6 +8783,331 @@ TEST(PasteDropTest, PasteIntoATableCellStaysSafe)
 
     EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| applea\\|b c | 3 |")))
         << editor->noteText().toStdString();
+}
+
+// --- pasted rich text becomes Markdown (PasteHTML.cpp) -----------------------
+
+namespace {
+
+/// Puts `html` (when not null) and `plain` on the clipboard, pastes with
+/// Ctrl+V (Ctrl+Shift+V when `plain`) into `editor`, and returns the note.
+void putOnClipboard(const QString &html, const QString &plain)
+{
+    auto *mime = new QMimeData;
+    if (!html.isNull())
+        mime->setHtml(html);
+    mime->setText(plain);
+    QGuiApplication::clipboard()->setMimeData(mime);
+}
+
+QString pasteRich(const QString &html, const QString &plain, bool shift = false)
+{
+    auto editor = editorWith(QString());
+    putOnClipboard(html, plain);
+    QTest::keyClick(editor.get(), Qt::Key_V,
+                    shift ? Qt::ControlModifier | Qt::ShiftModifier : Qt::ControlModifier);
+    return editor->noteText();
+}
+
+/// What Chrome puts on the clipboard around a selection.
+QString chromeHTML(const QString &fragment)
+{
+    return QStringLiteral("<html><body><!--StartFragment-->") + fragment
+         + QStringLiteral("<!--EndFragment--></body></html>");
+}
+
+} // namespace
+
+TEST(PasteHTMLTest, InlineFormattingBecomesMarkdown)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<p style=\"color:rgb(0,0,0);\">Some <strong>bold</strong>, <em>italic</em>, <del>gone</del> and "
+        "<code>inline code</code> with a <a href=\"https://example.com/a_b\">link_text</a>.</p>")),
+        QStringLiteral("Some bold, italic, gone and inline code with a link_text."));
+    EXPECT_EQ(md, QStringLiteral("Some **bold**, *italic*, ~~gone~~ and `inline code` with a "
+                                 "[link_text](https://example.com/a_b)."))
+        << md.toStdString();
+}
+
+TEST(PasteHTMLTest, HeadingsKeepTheirLevel)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral("<h2>Title here</h2><h4>Deeper <em>one</em></h4>")),
+                                 QStringLiteral("Title here\nDeeper one"));
+    EXPECT_EQ(md, QStringLiteral("## Title here\n\n#### Deeper one"));
+}
+
+TEST(PasteHTMLTest, NestedBulletAndOrderedLists)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<ul><li>one</li><li>two<ul><li>nested a</li><li>nested b</li></ul></li></ul>")),
+        QStringLiteral("one\ntwo\nnested a\nnested b"));
+    EXPECT_EQ(md, QStringLiteral("- one\n- two\n  - nested a\n  - nested b"));
+
+    const QString ordered = pasteRich(chromeHTML(QStringLiteral(
+        "<ol><li>first</li><li>second<ol><li>inner</li></ol></li></ol>")),
+        QStringLiteral("first\nsecond\ninner"));
+    EXPECT_EQ(ordered, QStringLiteral("1. first\n2. second\n    1. inner")) << ordered.toStdString();
+}
+
+TEST(PasteHTMLTest, BlockquoteBecomesAQuote)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral("<blockquote>quoted text</blockquote>")),
+                                 QStringLiteral("quoted text"));
+    EXPECT_EQ(md, QStringLiteral("> quoted text"));
+}
+
+TEST(PasteHTMLTest, PreBecomesAFencedBlockKeepingEveryLine)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<pre>line1\n  line2\n    line3</pre><p>after <b>it</b></p>")),
+        QStringLiteral("line1\n  line2\n    line3\nafter it"));
+    EXPECT_EQ(md, QStringLiteral("```\nline1\n  line2\n    line3\n```\n\nafter **it**"));
+
+    const QString lang = pasteRich(chromeHTML(QStringLiteral(
+        "<pre><code class=\"language-js\">const a = 1;\nconst b = \"x\" &amp;&amp; y;</code></pre>")),
+        QStringLiteral("const a = 1;\nconst b = \"x\" && y;"));
+    EXPECT_EQ(lang, QStringLiteral("```js\nconst a = 1;\nconst b = \"x\" && y;\n```"));
+}
+
+TEST(PasteHTMLTest, TableBecomesAPipeTable)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<table><thead><tr><th>Name</th><th>Qty</th></tr></thead><tbody>"
+        "<tr><td>apple</td><td>3</td></tr><tr><td>pear</td><td>4</td></tr></tbody></table>")),
+        QStringLiteral("Name\tQty\napple\t3\npear\t4"));
+    EXPECT_EQ(md, QStringLiteral("|Name |Qty|\n|-----|---|\n|apple|3  |\n|pear |4  |")) << md.toStdString();
+}
+
+TEST(PasteHTMLTest, RemoteImagesAreLinksAndDataImagesAreDropped)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<p>see <img src=\"https://example.com/i.png\"> and <img src=\"data:image/png;base64,AAAA\"> "
+        "<img src=\"file:///tmp/clip.png\"><img src=\"cid:image001@x\"> there <b>now</b></p>")),
+        QStringLiteral("see  and  there now"));
+    EXPECT_TRUE(md.contains(QStringLiteral("![](https://example.com/i.png)"))) << md.toStdString();
+    EXPECT_FALSE(md.contains(QStringLiteral("base64"))) << md.toStdString();
+    EXPECT_FALSE(md.contains(QStringLiteral("file:"))) << md.toStdString();
+    EXPECT_FALSE(md.contains(QStringLiteral("cid:"))) << md.toStdString();
+}
+
+TEST(PasteHTMLTest, GoogleDocsBoldSpansAndItsWrapperBold)
+{
+    // Docs wraps everything in <b style="font-weight:normal"> and bolds with a 700 span.
+    const QString html = QStringLiteral(
+        "<meta charset='utf-8'><b style=\"font-weight:normal;\" id=\"docs-internal-guid-1\">"
+        "<p dir=\"ltr\" style=\"line-height:1.38;margin-top:0pt;\"><span style=\"font-size:11pt;font-weight:700;"
+        "white-space:pre-wrap;\">Bold words</span><span style=\"font-weight:400;\"> and </span>"
+        "<span style=\"font-style:italic;\">italic words</span></p></b>");
+    EXPECT_EQ(pasteRich(html, QStringLiteral("Bold words and italic words")),
+              QStringLiteral("**Bold words** and *italic words*"));
+}
+
+TEST(PasteHTMLTest, WordNonBreakingSpacesBecomeSpacesAndBulletParagraphsBecomeAList)
+{
+    const QString html = QStringLiteral(
+        "<html xmlns:o=\"urn:schemas-microsoft-com:office:office\"><head><meta name=Generator content=\"Microsoft Word 15\">"
+        "<style><!-- p.MsoNormal{margin:0cm;} --></style></head><body lang=EN-GB><!--StartFragment-->"
+        "<h1><span style='mso-ascii-font-family:Calibri'>Heading</span></h1>"
+        "<p class=MsoNormal>Plain&nbsp;para with <b>bold</b>&nbsp;and <i>it</i>.<o:p></o:p></p>"
+        "<p class=MsoListParagraph style='text-indent:-18.0pt;mso-list:l0 level1 lfo1'>"
+        "<![if !supportLists]><span>&middot;&nbsp;&nbsp;</span><![endif]>bullet one</p>"
+        "<p class=MsoListParagraph style='text-indent:-18.0pt;mso-list:l0 level2 lfo1'>"
+        "<![if !supportLists]><span>o&nbsp;&nbsp;</span><![endif]>sub bullet</p>"
+        "<p class=MsoListParagraph style='text-indent:-18.0pt;mso-list:l0 level1 lfo1'>"
+        "<![if !supportLists]><span>&middot;&nbsp;&nbsp;</span><![endif]>bullet two</p>"
+        "<!--EndFragment--></body></html>");
+    const QString md = pasteRich(html, QStringLiteral("Heading\nPlain para with bold and it.\nbullet one\nsub bullet\nbullet two"));
+    EXPECT_EQ(md, QStringLiteral("# Heading\n\nPlain para with **bold** and *it*.\n\n"
+                                 "- bullet one\n  - sub bullet\n- bullet two"));
+    EXPECT_FALSE(md.contains(QChar(0x00A0)));
+}
+
+TEST(PasteHTMLTest, TextJustWrappedInASpanIsExactlyThePlainText)
+{
+    // A terminal or plain editor: a styled span around text full of Markdown
+    // punctuation. Nothing may be escaped, reflowed or code-spanned.
+    const QString plain = QStringLiteral("use *this* and_that [x] # not heading 1. also <tag>\n  indented line\n\nlast - one");
+    const QString html = chromeHTML(QStringLiteral(
+        "<span style=\"color: rgb(204, 204, 204); font-family: Menlo, monospace; white-space: pre;\">"
+        "use *this* and_that [x] # not heading 1. also &lt;tag&gt;\n  indented line\n\nlast - one</span>"));
+    EXPECT_EQ(pasteRich(html, plain), plain);
+
+    const QString divs = QStringLiteral("<div style=\"font-family: monospace;\">$ ls -la<br>total 8<br>foo_bar *</div>");
+    EXPECT_EQ(pasteRich(divs, QStringLiteral("$ ls -la\ntotal 8\nfoo_bar *")), QStringLiteral("$ ls -la\ntotal 8\nfoo_bar *"));
+}
+
+TEST(PasteHTMLTest, StrayEscapesAndBlankLinesAreTidied)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<p><b>Ref</b> [1] and 5 * 6</p><div><br></div><div><br></div><div><br></div><p>end&nbsp;</p>")),
+        QStringLiteral("Ref [1] and 5 * 6\nend"));
+    EXPECT_EQ(md, QStringLiteral("**Ref** [1] and 5 * 6\n\nend"));
+}
+
+TEST(PasteHTMLTest, WhitespaceInsideEmphasisMovesOut)
+{
+    EXPECT_EQ(pasteRich(chromeHTML(QStringLiteral("<p>a <b>bold&nbsp;</b>tail</p>")), QStringLiteral("a bold tail")),
+              QStringLiteral("a **bold** tail"));
+}
+
+TEST(PasteHTMLTest, PasteInsideAFencedBlockIsPlain)
+{
+    const QString note = QStringLiteral("```\ncode\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(8); // after "code"
+    putOnClipboard(chromeHTML(QStringLiteral("<p>some <b>bold</b> text</p>")), QStringLiteral("some bold text"));
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\ncodesome bold text\n```\n"));
+}
+
+TEST(PasteHTMLTest, CtrlShiftVPastesPlainText)
+{
+    const QString html = chromeHTML(QStringLiteral("<p>some <b>bold</b> text</p>"));
+    EXPECT_EQ(pasteRich(html, QStringLiteral("some bold text"), true), QStringLiteral("some bold text"));
+    EXPECT_EQ(pasteRich(html, QStringLiteral("some bold text")), QStringLiteral("some **bold** text"));
+}
+
+TEST(PasteHTMLTest, HTMLOverTheSizeCapFallsBackToPlainText)
+{
+    const QString filler(2 * 1024 * 1024 + 16, QLatin1Char('x'));
+    const QString html = chromeHTML(QStringLiteral("<p>a <b>bold</b> ") + filler + QStringLiteral("</p>"));
+    QElapsedTimer timer;
+    timer.start();
+    EXPECT_EQ(pasteRich(html, QStringLiteral("a bold fallback")), QStringLiteral("a bold fallback"));
+    EXPECT_LT(timer.elapsed(), 10000);
+}
+
+TEST(PasteHTMLTest, DeeplyNestedHostileHTMLDoesNotHang)
+{
+    QString html = chromeHTML(QString());
+    QString nest;
+    for (int i = 0; i < 50000; ++i)
+        nest += QStringLiteral("<b><i>");
+    nest += QStringLiteral("deep");
+    html = chromeHTML(nest);
+    ASSERT_LT(html.size(), 2 * 1024 * 1024);
+    QElapsedTimer timer;
+    timer.start();
+    const QString md = pasteRich(html, QStringLiteral("deep"));
+    EXPECT_LT(timer.elapsed(), 10000);
+    EXPECT_EQ(md, QStringLiteral("deep"));
+}
+
+TEST(PasteHTMLTest, PagesOfUnclosedOrTornTagsFallBackToPlainTextFast)
+{
+    // Each of these made a lazy regex or QTextDocument scan to the end once per tag.
+    for (const QString &unit : {QStringLiteral("<pre>"), QStringLiteral("<style>"), QStringLiteral("<pre"),
+                                QStringLiteral("<p class=\"mso-list:l0 level1\">"), QStringLiteral("<table><tr><td>")}) {
+        QString html;
+        while (html.size() < 600 * 1024)
+            html += unit;
+        QElapsedTimer timer;
+        timer.start();
+        EXPECT_EQ(pasteRich(chromeHTML(html), QStringLiteral("fallback")), QStringLiteral("fallback"))
+            << unit.toStdString();
+        EXPECT_LT(timer.elapsed(), 10000) << unit.toStdString();
+    }
+}
+
+TEST(PasteHTMLTest, StarsInsideInlineCodeAreLeftAlone)
+{
+    EXPECT_EQ(pasteRich(chromeHTML(QStringLiteral("<p>call <code>f(**a, **b)</code> now <b>bold </b>x</p>")),
+                        QStringLiteral("call f(**a, **b) now bold x")),
+              QStringLiteral("call `f(**a, **b)` now **bold** x"));
+    EXPECT_EQ(pasteRich(chromeHTML(QStringLiteral("<p>is <code>2 ** 3 ** 4</code> and <code>a ~~ b ~~ c</code> <i>it </i>z</p>")),
+                        QStringLiteral("is 2 ** 3 ** 4 and a ~~ b ~~ c it z")),
+              QStringLiteral("is `2 ** 3 ** 4` and `a ~~ b ~~ c` *it* z"));
+}
+
+TEST(PasteHTMLTest, ResourcesAreNeverLoadedWhileConverting)
+{
+    // A named pipe is "read" the moment anything opens it: a poller thread
+    // that can open the write end without blocking (ENXIO until a reader
+    // exists) sees every attempt to load it as a stylesheet or an image.
+    const QString fifoPath = QDir::temp().filePath(QStringLiteral("notolith-paste-fifo-%1").arg(QCoreApplication::applicationPid()));
+    QFile::remove(fifoPath);
+    ASSERT_EQ(::mkfifo(fifoPath.toLocal8Bit().constData(), 0600), 0);
+    std::atomic<bool> stop{false}, read{false};
+    std::thread poller([&] {
+        while (!stop.load()) {
+            const int fd = ::open(fifoPath.toLocal8Bit().constData(), O_WRONLY | O_NONBLOCK);
+            if (fd >= 0) {
+                read = true;
+                ::close(fd);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    const QString url = QUrl::fromLocalFile(fifoPath).toString();
+    const QString closedStyle = QStringLiteral("<style>@import url(%1);</style>").arg(url);
+    const QString openStyle = QStringLiteral("<style>@import url(%1);").arg(url); // never closed
+    const QString image = QStringLiteral("<img src=\"%1\">").arg(url);
+    const QString link = QStringLiteral("<link rel=\"stylesheet\" href=\"%1\">").arg(url);
+    for (const QString &page : {closedStyle + QStringLiteral("<p>a <b>b</b></p>") + image + link,
+                                openStyle + QStringLiteral("<p>a <b>b</b></p>") + image + link,
+                                QStringLiteral("<p>a <b>b</b></p>") + openStyle}) {
+        const QString md = pasteRich(chromeHTML(page), QStringLiteral("a b"));
+        EXPECT_TRUE(md == QStringLiteral("a b") || md.startsWith(QStringLiteral("a **b**"))) << md.toStdString();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    stop = true;
+    poller.join();
+    QFile::remove(fifoPath);
+    EXPECT_FALSE(read.load()) << "converting opened a local file the page named";
+}
+
+TEST(PasteHTMLTest, PasteIntoATableCellStaysCellSafe)
+{
+    auto editor = editorWith(kTableNote);
+    editor->show();
+    const qsizetype apple = kTableNote.indexOf(QStringLiteral("apple"));
+    ASSERT_FALSE(clickInto(*editor, {apple, apple + 5}).isNull());
+    editor->setCursorOffset(apple + 5);
+    putOnClipboard(chromeHTML(QStringLiteral("<p><b>a|b</b><br>c</p>")), QStringLiteral("a|b\nc"));
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| apple**a\\|b**")))
+        << editor->noteText().toStdString();
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("\n| pear |"))) << editor->noteText().toStdString();
+}
+
+TEST(PasteHTMLTest, MarkdownCopiedFromTheEditorPastesAsItIs)
+{
+    auto editor = editorWith(QStringLiteral("**b** and *i* and 1. x_y_z [x]"));
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(editor.get(), Qt::Key_C, Qt::ControlModifier);
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("**b** and *i* and 1. x_y_z [x]**b** and *i* and 1. x_y_z [x]"));
+
+    // A copied table-cell rectangle carries text/markdown beside rich text: the Markdown wins.
+    auto *mime = new QMimeData;
+    mime->setHtml(chromeHTML(QStringLiteral("<p><b>html</b></p>")));
+    mime->setText(QStringLiteral("html"));
+    mime->setData(QStringLiteral("text/markdown"), "| md |");
+    QGuiApplication::clipboard()->setMimeData(mime);
+    auto other = editorWith(QString());
+    QTest::keyClick(other.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_EQ(other->noteText(), QStringLiteral("| md |"));
+}
+
+TEST(PasteHTMLTest, AnImageAloneStillGoesToTheAttachmentSaver)
+{
+    // Chrome's "copy image": an <img> in HTML beside the bitmap, no text.
+    auto editor = editorWith(QString());
+    QImage image(2, 2, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    auto *mime = new QMimeData;
+    mime->setHtml(QStringLiteral("<img src=\"https://example.com/i.png\">"));
+    mime->setImageData(image);
+    QGuiApplication::clipboard()->setMimeData(mime);
+    bool saved = false;
+    editor->setAttachmentSaver([&](const QString &name, const QByteArray &) {
+        saved = true;
+        return QStringLiteral("![[") + name + QStringLiteral("]]");
+    });
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_TRUE(saved);
+    EXPECT_TRUE(editor->noteText().startsWith(QStringLiteral("![[Pasted image "))) << editor->noteText().toStdString();
 }
 
 TEST(TableCellTest, AShortRowGetsItsMissingCellsWhenReached)

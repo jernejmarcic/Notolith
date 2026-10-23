@@ -4,6 +4,7 @@
 # noteAppC_index_cli targets it already builds the same way.
 qt_add_executable(noteAppC-bench Bench.cpp)
 target_link_libraries(noteAppC-bench PRIVATE noteAppC_ui Qt6::Test)
+set_target_properties(noteAppC-bench PROPERTIES ENABLE_EXPORTS ON) # modules resolve host symbols here
 
 # EPUB open/scroll rows, only when the module is built (see the root
 # CMakeLists.txt) - the same guarded-link shape tests/CMakeLists.txt uses.
@@ -23,4 +24,13 @@ target_compile_definitions(noteAppC-bench PRIVATE
 if(TARGET noteAppC_pdfview)
     target_link_libraries(noteAppC-bench PRIVATE noteAppC_pdfview)
     target_compile_definitions(noteAppC-bench PRIVATE NOTEAPPC_HAVE_PDFVIEW)
+endif()
+
+# The handwriting rows (phase `ink`): only with the ink core built, the same
+# guarded-link shape as the EPUB and PDF rows above. noteAppC_ink is the static
+# InkView library the index tests link too (it carries notolith-inkcore).
+if(TARGET noteAppC_ink)
+    target_link_libraries(noteAppC-bench PRIVATE noteAppC_ink)
+    target_compile_definitions(noteAppC-bench PRIVATE NOTEAPPC_HAVE_INK
+        NOTEAPPC_INK_MODULE_DIR="${CMAKE_BINARY_DIR}/modules")
 endif()

@@ -60,10 +60,10 @@ ___
 
 ## Line breaks
 
-Obsidian's default is "strict line breaks off": a single newline inside a
-paragraph is still just a soft wrap.
-This line and the one above are one paragraph with strict line breaks off,
-but wrap onto their own visual line with two trailing spaces:  
+Obsidian's default is "strict line breaks off": every single newline is a
+line break, so this line stands under the one above it.
+Turn "Strict line breaks" on and the lines of a paragraph join into one,
+unless a line ends with two trailing spaces:  
 like this one, which ends with two spaces.
 
 A blank line always starts a new paragraph, regardless of the setting:

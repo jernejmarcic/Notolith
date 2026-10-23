@@ -10,6 +10,7 @@ add_library(noteAppC_editor STATIC
     EditingCommands.cpp
     CodeBlockHook.cpp
     FileEmbedBlock.cpp
+    GIFplayer.cpp
     FindBar.cpp
     FindBar.h
     FootnoteMarks.cpp
@@ -26,6 +27,8 @@ add_library(noteAppC_editor STATIC
     NotebookInput.cpp
     NotebookEmbed.cpp
     PasteDrop.cpp
+    PasteHTML.cpp
+    PasteHTML.h
     TableCells.cpp
     TableHandles.cpp
     TouchInput.cpp

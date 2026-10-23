@@ -15,6 +15,7 @@
 #include <QIcon>
 #include <QImage>
 #include <QKeySequence>
+#include <QMovie>
 #include <QPageLayout>
 #include <QPageSize>
 #include <QPair>
@@ -56,6 +57,31 @@ inline constexpr int kStrikeLineProperty = QTextFormat::UserProperty + 1;
 void strikeThrough(QTextCharFormat &format, const Theme &theme);
 /// Draws the lines `kStrikeLineProperty` asked for over `layout`, drawn at `origin`.
 void paintStrikeLines(QPainter &painter, const QTextLayout &layout, const QPointF &origin);
+
+/// The tallest an explicit `height` / `|WxH` may draw an image, in px.
+inline constexpr qreal kMaxEmbedHeight = 4096;
+
+/// The size an image embed draws at, given its natural size and the width
+/// available: one of `width` / `height` keeps the aspect ratio, both are taken
+/// as given, and the result is scaled down together - the ratio kept - to fit
+/// `maxWidth` and, when a height was asked for, `kMaxEmbedHeight`. Shared by a
+/// sole image block (layoutImage) and every inline cell (buildEmbedCell).
+inline QSizeF embedImageSize(const EmbedSpan &embed, const QSize &natural, qreal maxWidth)
+{
+    qreal width = embed.width > 0 ? embed.width : natural.width();
+    qreal height = width * natural.height() / qMax(1, natural.width());
+    if (embed.height > 0) {
+        height = embed.height;
+        if (embed.width <= 0)
+            width = height * natural.width() / qMax(1, natural.height());
+    }
+    qreal scale = 1;
+    if (width > maxWidth)
+        scale = maxWidth / width;
+    if (embed.height > 0 && height * scale > kMaxEmbedHeight)
+        scale = kMaxEmbedHeight / height;
+    return {width * scale, height * scale};
+}
 
 /// Everything modal editing remembers, in the editor because a count or a
 /// register belongs to one buffer. The logic is VimEngine, in VimMode.cpp,
@@ -141,21 +167,6 @@ struct MarkdownEditor::PropertyRow {
     QRectF adder;           ///< the space after the chips that adds an item
 };
 
-/// One cell of a rendered table.
-struct MarkdownEditor::Cell {
-    Range source;
-    DisplayMap map;
-    std::unique_ptr<QTextLayout> layout;
-    QRectF rect;
-    Qt::Alignment alignment = Qt::AlignLeft;
-    int row = 0;
-    int column = 0;
-    int lead = 0; ///< display characters trimmed off the front of `layout`'s text
-    QColor fill;  ///< an HTML cell's background; invalid when it has none
-    QColor ink;   ///< an HTML cell's text colour; invalid when it has none
-    bool bold = false; ///< an HTML cell's font-weight
-};
-
 /// One embedded file inside a block that holds more than one embed,
 /// or mixes an embed with running text, drawn inline - see
 /// collectTextEmbeds' comment. Built by the same per-kind logic a
@@ -172,6 +183,24 @@ struct MarkdownEditor::EmbedCell {
     QString openPath;  ///< what a click opens - the resolved file, or a note target
     bool isNote = false; ///< opens through linkActivated rather than QDesktopServices
     QString cacheKey; ///< a note's card, until its drawing lands in this m_fileEmbedCache entry
+};
+
+/// One cell of a rendered table.
+struct MarkdownEditor::Cell {
+    Range source;
+    DisplayMap map;
+    std::unique_ptr<QTextLayout> layout;
+    QRectF rect;
+    Qt::Alignment alignment = Qt::AlignLeft;
+    int row = 0;
+    int column = 0;
+    int lead = 0; ///< display characters trimmed off the front of `layout`'s text
+    QColor fill;  ///< an HTML cell's background; invalid when it has none
+    QColor ink;   ///< an HTML cell's text colour; invalid when it has none
+    bool bold = false; ///< an HTML cell's font-weight
+    /// Images drawn inline in the cell's text (layoutTable), rects relative
+    /// to the cell's text origin.
+    std::vector<EmbedCell> embeds;
 };
 
 /// One top-level block: the unit that is laid out, cached and revealed.
@@ -887,6 +916,22 @@ struct MarkdownEditor::Private {
     AttachmentSaver m_attachmentSaver;
     FileImporter m_fileImporter;
     mutable QHash<QString, QPixmap> m_images;
+    /// What is known of a GIF file, valid while its mtime is (GIFplayer.cpp).
+    struct GIFinfo {
+        bool known = false;
+        qint64 mtime = 0;
+        bool animated = false; ///< more than one frame
+        bool broken = false;   ///< a movie of it failed: shown as its first frame from now on
+        QPixmap ended;         ///< the last frame of a GIF that played out, which it keeps showing
+    };
+    /// Playing GIF movies by file, and what is known of each GIF file seen. Both
+    /// stay empty for a note with no animated GIF.
+    mutable QHash<QString, std::shared_ptr<QMovie>> m_GIFs;
+    mutable QHash<QString, GIFinfo> m_GIFinfo;
+    /// The rect of the paint event being drawn, viewport coordinates; null
+    /// outside one (an export paints everything).
+    QRectF m_exposed;
+    mutable int m_tableCellsPainted = 0; ///< cells the last paintTable drew, for the tests
     Mode m_mode = Mode::LivePreview;
     QHash<QString, QueryCacheEntry> m_queryCache; ///< query text -> its last search
     quint64 m_queryGeneration = 0;

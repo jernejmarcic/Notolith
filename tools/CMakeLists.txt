@@ -1,5 +1,6 @@
 qt_add_executable(noteAppC_shot shot.cpp)
 target_link_libraries(noteAppC_shot PRIVATE noteAppC_ui)
+set_target_properties(noteAppC_shot PROPERTIES ENABLE_EXPORTS ON) # modules resolve host symbols here
 
 add_executable(noteAppC_index_cli index_cli.cpp)
 set_target_properties(noteAppC_index_cli PROPERTIES OUTPUT_NAME noteAppC-index)
@@ -15,6 +16,9 @@ endif()
 
 # The performance harness: the numbers every optimisation has to beat.
 add_subdirectory(bench)
+
+# The pen spike (spec section 11): a hand-run logger, never installed.
+add_subdirectory(inkspike)
 
 # The out-of-process plugin host (docs/PLUGINS.md, Tier 2).
 if(NOTEAPPC_WITH_PLUGINS)

@@ -6,6 +6,7 @@
 #include <functional>
 #include <optional>
 
+#include "ModuleHost.h"
 #include "Theme.h"
 
 class QVBoxLayout;
@@ -50,6 +51,10 @@ public:
     /// What the Community plugins page lists: null while the switch is off.
     /// Not owned.
     void setPluginRegistry(PluginRegistry *registry);
+    /// Rows the loadable modules registered (ModuleHost::registerSetting),
+    /// and the modules that could not be loaded, each with its notice. Shown
+    /// on the Core plugins page after the feature rows; rebuilds the page.
+    void setModules(const QList<ModuleHost::SettingRow> &rows, const QList<QPair<QString, QString>> &problems);
 
 signals:
     /// A row wrote to `settings`; MainWindow re-applies live and will save()
@@ -86,6 +91,8 @@ private:
     QWidget *buildCorePluginsPage();
     QWidget *buildCommunityPluginsPage();
     PluginRegistry *m_pluginRegistry = nullptr;
+    QList<ModuleHost::SettingRow> m_moduleRows;
+    QList<QPair<QString, QString>> m_moduleProblems;
     /// The keys `id` has now: noteAppC's own file, else the vault's
     /// Obsidian file, else the built-in ones.
     QList<QKeySequence> effectiveKeys(const HotkeyCommand &command) const;
@@ -108,6 +115,10 @@ private:
     void addSpinRow(QVBoxLayout *into, const QString &key, const QString &label,
                     const QString &description, int minimum, int maximum,
                     const QString &suffix = {});
+    /// A decimal sibling of addSpinRow (a separate name: an overload taking
+    /// doubles would silently capture the integer calls).
+    void addDoubleSpinRow(QVBoxLayout *into, const QString &key, const QString &label, const QString &description,
+                          double minimum, double maximum, double step, int decimals, const QString &suffix = QString());
     void addLineEditRow(QVBoxLayout *into, const QString &key, const QString &label,
                         const QString &description, const QString &placeholder = {});
     /// Two short line edits for an opening and a closing delimiter, checked

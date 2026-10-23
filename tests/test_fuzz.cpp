@@ -139,6 +139,13 @@ TEST(FuzzTest, RandomEditsKeepTheEditorsTextAndUndoPutsItBack)
         editor.setMode(MarkdownEditor::Mode::Reading);
         fresh.setMode(MarkdownEditor::Mode::Reading);
         fresh.verticalScrollBar()->setValue(editor.verticalScrollBar()->value());
+        // Both lay out the same way first: blocks off screen are only
+        // estimated, and the scrollbar's thumb is sized from the heights
+        // known so far. Lines that break at every newline make a note taller
+        // than the part laid out at once, and a thumb a line off is not a
+        // pixel of text differing.
+        (void)editor.blockBoxes();
+        (void)fresh.blockBoxes();
         EXPECT_EQ(editor.grab().toImage(), fresh.grab().toImage()) << "seed " << seed;
 
         editor.setMode(MarkdownEditor::Mode::LivePreview);

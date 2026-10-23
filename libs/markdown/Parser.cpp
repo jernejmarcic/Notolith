@@ -140,6 +140,78 @@ EmbedSpan embedOf(const Link &link)
     return embed;
 }
 
+/// An inline `<img src="..." width="..." height="..." alt="...">` is an
+/// image embed spelled in HTML: the same EmbedSpan `![alt](src)` produces,
+/// with the tag's own size, so everything that draws the one draws the other.
+/// Only a well-formed tag with a `src` qualifies - an unclosed quote, a stray
+/// token or a missing `src` leaves it as source text - and only a relative
+/// path or an http(s) URL: a `javascript:`, `data:` or `file:` source, or a
+/// protocol-relative `//host`, is never an embed (a remote URL is still the
+/// resolver's call, exactly as for a Markdown image).
+void HTMLimageEmbed(const QString &text, const Range &range, Decorations &decorations)
+{
+    const QString tag = text.mid(range.start, range.length());
+    static const QRegularExpression open(QStringLiteral("^<img\\b(.*?)/?>$"),
+                                         QRegularExpression::CaseInsensitiveOption
+                                             | QRegularExpression::DotMatchesEverythingOption);
+    const QRegularExpressionMatch head = open.match(tag);
+    if (!head.hasMatch())
+        return;
+
+    static const QRegularExpression attribute(
+        QStringLiteral("\\s*([A-Za-z_:][-\\w:.]*)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s\"'<>=`]+))"));
+    QString src;
+    QString alt;
+    int width = 0;
+    int height = 0;
+    qsizetype consumed = 0;
+    const QString attributes = head.captured(1);
+    const auto number = [](const QString &value) {
+        static const QRegularExpression px(QStringLiteral("^\\s*(\\d{1,5})\\s*(?:px)?\\s*$"),
+                                           QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpressionMatch match = px.match(value);
+        return match.hasMatch() ? match.captured(1).toInt() : 0;
+    };
+    for (auto it = attribute.globalMatch(attributes); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        if (match.capturedStart() != consumed)
+            return; // junk between two attributes
+        consumed = match.capturedEnd();
+        const QString name = match.captured(1).toLower();
+        const QString value = !match.captured(2).isNull() ? match.captured(2)
+                              : !match.captured(3).isNull() ? match.captured(3)
+                                                            : match.captured(4);
+        if (name == QLatin1String("src"))
+            src = value.trimmed();
+        else if (name == QLatin1String("alt"))
+            alt = value;
+        else if (name == QLatin1String("width"))
+            width = number(value);
+        else if (name == QLatin1String("height"))
+            height = number(value);
+    }
+    if (!attributes.mid(consumed).trimmed().isEmpty() || src.isEmpty())
+        return;
+    if (ObsidianSyntax::isExternalTarget(src)
+        && !src.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+        && !src.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
+        return;
+
+    EmbedSpan embed;
+    embed.range = range;
+    embed.html = true;
+    const qsizetype hash = src.indexOf(QLatin1Char('#'));
+    if (hash > 0) {
+        embed.subpath = src.mid(hash);
+        src = src.left(hash);
+    }
+    embed.target = QUrl::fromPercentEncoding(src.toUtf8());
+    embed.alias = alt;
+    embed.width = width;
+    embed.height = height;
+    decorations.embeds.append(embed);
+}
+
 /// Every `>` that starts a line inside a blockquote, so live preview can hide
 /// them the way Obsidian does.
 void hideQuoteMarkers(const QString &text, const Range &range, Decorations &decorations)
@@ -1456,6 +1528,8 @@ void walkItem(MD::Item *item, Walk &walk)
             if (walk.depth == 0) {
                 walk.decorations.blocks.append({BlockSpan::Kind::Html, range, 0});
                 htmlHeadings(*walk.text, range, walk.headings);
+            } else if (walk.text) {
+                HTMLimageEmbed(*walk.text, range, walk.decorations);
             }
         }
         break;

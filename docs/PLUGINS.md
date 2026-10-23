@@ -60,6 +60,20 @@ A module's settings rows appear only when it is compiled in. Today the page
 shows a Spellcheck toggle with nothing behind it; under this scheme it would
 not exist until the module did.
 
+### Tier 1b: loadable modules - compiled against the host, dlopen'd on first use
+
+A module is a Qt plugin (`QPluginLoader`) found in `<libdir>/noteAppC/modules`
+(`NOTEAPPC_MODULE_DIRS` replaces it). Its manifest is read without loading it; the library
+loads the first time one of its suffixes is opened or one of its commands runs. Nothing else
+loads a module: indexing never does. Two packages ship: `notolith-ink` (the ink core library
+and the ink module) and `notolith-hwfont` (depends on `notolith-ink`); the manifest has no
+dependency list, so a module whose core library is missing fails to load with the loader's
+message, shown in Settings. A module must match the host's ABI tag
+(`version-token-qtversion`, the token random per build directory); a second module claiming
+a suffix an earlier one claims is refused. The mechanism is in `libs/modules/`; the first two
+modules are documented in [INK.md](INK.md). Spec:
+`superpowers/specs/2026-10-21-ink-core-design.md` section 4.
+
 ### Tier 2: runtime plugins - out-of-process, over a C ABI
 
 **Status: built, 2026-09-23.** For third-party extras, and for first-party

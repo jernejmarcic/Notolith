@@ -21,6 +21,17 @@ find_package(Qt6 6.5 QUIET COMPONENTS OpenGLWidgets)
 find_package(Qt6 6.5 QUIET COMPONENTS Test)
 qt_standard_project_setup()
 
+# The ABI tag every loadable module carries (spec section 4): same build only.
+# The token is random, made once per build directory and kept in the cache: two
+# builds of one commit never share a tag, and a source tarball without git needs
+# no hash. Reconfiguring keeps it; a fresh build directory gets a new one.
+include(GNUInstallDirs)
+if(NOT DEFINED NOTEAPPC_ABI_TOKEN)
+    string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef noteappc_token)
+    set(NOTEAPPC_ABI_TOKEN "${noteappc_token}" CACHE INTERNAL "Per-build-directory token of the module ABI tag")
+endif()
+set(NOTEAPPC_ABI_TAG "${PROJECT_VERSION}-${NOTEAPPC_ABI_TOKEN}-${Qt6_VERSION}")
+
 # Neither dependency is in the Android Qt kit, so both can be turned off for a
 # mobile/cross build; NOTEAPPC_WITH_PDF also covers dropping poppler-qt6 when
 # it is installed but built against a Qt too new to link with that kit.
@@ -91,6 +102,14 @@ option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 # draw on and note, the marks kept in a sidecar note beside it. Qt Widgets
 # only - no new dependency - so it has no tool to look for, just this switch.
 option(NOTEAPPC_WITH_IMAGEVIEW "Highlight, draw on and annotate images, in a sidecar note" ON)
+# Handwriting (docs/INK.md, spec docs/superpowers/specs/2026-10-21-ink-core-design.md):
+# the ink core as a shared library and the handwritten-note tab as a loadable
+# module (libs/ext/ink), the glyph studio as another (libs/ext/hwfont). Off,
+# nothing ink is built and the app has no ink symbol; on, the modules are
+# separate install units the base binary never links (spec section 3).
+# ink-stroke-modeler is fetched and pinned in libs/ext/ink/core/CMakeLists.txt.
+option(NOTEAPPC_WITH_INK "Build the ink core and the handwritten-note module (libs/ext/ink)" ON)
+option(NOTEAPPC_WITH_HWFONT "Build the handwriting-font glyph studio module (libs/ext/hwfont)" ON)
 # Tier 2 (docs/PLUGINS.md): runtime plugins, each loaded inside its own
 # `noteAppC-plugin-host` process (tools/plugin_host), never in the app. No
 # external dependency at this level - only Qt, libdl and bubblewrap when
@@ -289,6 +308,7 @@ add_subdirectory(libs/render)
 add_subdirectory(libs/editor)
 add_subdirectory(libs/theme)
 add_subdirectory(libs/settings)
+add_subdirectory(libs/modules)
 if(TARGET PkgConfig::HUNSPELL)
     add_subdirectory(libs/ext/spell)
 endif()
@@ -322,6 +342,21 @@ if(NOTEAPPC_WITH_PDFVIEW AND noteappc_have_poppler)
 endif()
 if(NOTEAPPC_WITH_IMAGEVIEW)
     add_subdirectory(libs/ext/imageview)
+endif()
+if(NOTEAPPC_WITH_INK AND NOT ANDROID)
+    # System Abseil is required (R3): there is no bundled copy. Without it the ink
+    # core and the note module are not built, and the rest of the app is unchanged.
+    find_package(absl QUIET)
+    if(absl_FOUND)
+        add_subdirectory(libs/ext/ink)
+    else()
+        message(STATUS "Abseil not found: the ink core and the handwritten-note module are not built (install abseil-cpp)")
+        set(NOTEAPPC_WITH_INK OFF)
+    endif()
+endif()
+# Track S1b creates this directory after milestone A0; until then there is nothing to add.
+if(NOTEAPPC_WITH_HWFONT AND TARGET notolith-inkcore AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libs/ext/hwfont)
+    add_subdirectory(libs/ext/hwfont)
 endif()
 if(NOTEAPPC_WITH_PLUGINS)
     add_subdirectory(libs/ext/plugins)

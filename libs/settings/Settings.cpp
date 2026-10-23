@@ -15,15 +15,25 @@
 #include <QTextStream>
 #include <QUrl>
 
+#include <deque>
+
 namespace noteAppC {
 
 namespace {
 
+/// Module feature ids are built at runtime; Feature::id is a const char*, so
+/// the strings live here for the rest of the process (a deque never moves them).
+std::deque<QByteArray> &internedFeatureStrings()
+{
+    static std::deque<QByteArray> strings;
+    return strings;
+}
+
 /// Every setting, with the value that applies when nothing else says
 /// otherwise. Keys are grouped by the page they appear on.
-const QVariantMap &defaults()
+QVariantMap &defaults()
 {
-    static const QVariantMap map = [] {
+    static QVariantMap map = [] {
     QVariantMap map = {
         // Appearance
         {QStringLiteral("appearance.theme"), QStringLiteral("dark")}, // dark, oled, light, system
@@ -228,6 +238,8 @@ QVariant valueOf(const QString &text, const QVariant &like)
             || text == QLatin1String("1") || text.compare(QLatin1String("yes"), Qt::CaseInsensitive) == 0;
     case QMetaType::Int:
         return text.toInt();
+    case QMetaType::Double:
+        return text.toDouble();
     case QMetaType::QStringList: {
         QStringList parts;
         for (const QString &part : text.split(QLatin1Char(','), Qt::SkipEmptyParts))
@@ -592,10 +604,10 @@ QVariantMap Settings::fromObsidianConfig(const QString &vaultRoot)
     return out;
 }
 
-const QList<Settings::Feature> &Settings::features()
+static QList<Settings::Feature> &mutableFeatures()
 {
     // Obsidian's own names and wording, where it has the feature.
-    static const QList<Feature> list = {
+    static QList<Settings::Feature> list = {
         {"audio-recorder", QT_TRANSLATE_NOOP("Settings", "Audio recorder"),
          QT_TRANSLATE_NOOP("Settings", "Record audio from the microphone into an attachment, embedded in the note."),
          true},
@@ -734,9 +746,51 @@ const QList<Settings::Feature> &Settings::features()
     return list;
 }
 
+const QList<Settings::Feature> &Settings::features()
+{
+    return mutableFeatures();
+}
+
 QString Settings::featureKey(const char *id)
 {
     return QStringLiteral("plugins.") + camelOf(QString::fromLatin1(id));
+}
+
+void Settings::registerDefaults(const QVariantMap &values)
+{
+    for (auto it = values.cbegin(); it != values.cend(); ++it)
+        if (!defaults().contains(it.key()))
+            defaults().insert(it.key(), it.value());
+}
+
+void Settings::registerFeature(const QString &id, const QString &name, const QString &description)
+{
+    for (const Feature &feature : features())
+        if (id == QLatin1String(feature.id))
+            return;
+    auto &strings = internedFeatureStrings();
+    strings.push_back(id.toUtf8());
+    const char *idChars = strings.back().constData();
+    strings.push_back(name.toUtf8());
+    const char *nameChars = strings.back().constData();
+    strings.push_back(description.toUtf8());
+    const char *descriptionChars = strings.back().constData();
+    mutableFeatures().append({idChars, nameChars, descriptionChars, false});
+    defaults().insert(featureKey(idChars), true); // installing the package is the opt-in
+}
+
+void Settings::adoptStored()
+{
+    const QVariantMap stored = readINI(configFile());
+    for (auto it = stored.constBegin(); it != stored.constEnd(); ++it) {
+        if (defaults().contains(it.key()) && !m_user.contains(it.key()))
+            m_user.insert(it.key(), valueOf(it.value().toString(), defaultValue(it.key())));
+    }
+    const QVariantMap index = readINI(indexFile());
+    for (auto it = index.constBegin(); it != index.constEnd(); ++it) {
+        if (defaults().contains(it.key()) && !m_index.contains(it.key()))
+            m_index.insert(it.key(), valueOf(it.value().toString(), defaultValue(it.key())));
+    }
 }
 
 Settings Settings::load(const QString &vaultRoot)

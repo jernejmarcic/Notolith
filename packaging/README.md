@@ -18,7 +18,7 @@ any x86-64 or arm64 machine (`docs/PLATFORMS.md`).
 
 | recipe | state |
 |---|---|
-| `arch/PKGBUILD` | built and checked here: `BUILDDIR=/tmp/noteAppC-makepkg PKGDEST=/tmp makepkg -f` in `arch/`. Strips the `-march=native` CachyOS puts in makepkg.conf. |
+| `arch/PKGBUILD` | built and checked here: `BUILDDIR=/tmp/noteAppC-makepkg PKGDEST=/tmp makepkg -f` in `arch/`. Strips the `-march=native` CachyOS puts in makepkg.conf. One build, three packages: `notolith` (the application), `notolith-ink` (handwriting core library and module, needs `abseil-cpp`) and `notolith-hwfont` (glyph studio module, needs `notolith-ink`); the module packages pin the exact `notolith` version, and all three of one run are installed together (`docs/INK.md`). The split has only been checked with `makepkg --printsrcinfo`, not built. |
 | `flatpak/io.github.jernejmarcic.Notolith.yml` | not yet built: needs flatpak-builder (deferred by Jernej 2026-10-16; the command is at the top of the file). PDF embeds off, poppler is not in the KDE runtime. |
 | `appimage/build-appimage.sh` | not yet run: downloads linuxdeploy (deferred by Jernej 2026-10-16). |
 

@@ -622,15 +622,22 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     cell.source = embed.range;
 
     const QString path = m_resolver ? m_resolver(embed.target) : QString();
-    if (path.isEmpty()) {
+    // An `<img>` whose file is not there says what its author wrote in `alt`,
+    // on a card no wider than a caption needs.
+    const auto missingCard = [&](const QString &name) {
         cell.isFileCard = true;
-        cell.label = embed.target;
-        cell.rect = QRectF(0, 0, maxWidth, 44);
+        cell.label = embed.html && !embed.alias.isEmpty() ? embed.alias : name;
+        cell.rect = QRectF(0, 0, embed.html ? qMin<qreal>(maxWidth, 220) : maxWidth, 44);
         return cell;
-    }
+    };
+    if (path.isEmpty())
+        return missingCard(embed.target);
 
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QByteArrayList images = QImageReader::supportedImageFormats();
+    // An <img> is an image or it is nothing: never a PDF page or a note card.
+    if (embed.html && (suffix == QLatin1String("pdf") || !images.contains(suffix.toUtf8())))
+        return missingCard(QFileInfo(path).fileName());
     // See the same guard in layoutEmbed: some installs can technically
     // decode a PDF as a flat image, but a PDF page always goes through the
     // richer, page-aware path below instead.
@@ -646,8 +653,10 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
             // for a small thumbnail should get one here too, not the row's
             // whole share just because it is sharing a line with another
             // embed.
-            const qreal width = qMin<qreal>(maxWidth, embed.width > 0 ? embed.width : pixmap.width());
-            const qreal height = width * pixmap.height() / qMax(1, pixmap.width());
+            // |width and `width=` apply to a cell in a row too, capped by its share.
+            const QSizeF size = embedImageSize(embed, pixmap.size(), maxWidth);
+            const qreal width = size.width();
+            const qreal height = size.height();
             cell.image = pixmap;
             cell.rect = QRectF(0, 0, width, height);
             cell.openPath = path;
@@ -705,6 +714,8 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     }
 
     QFileInfo info(path);
+    if (embed.html)
+        return missingCard(info.fileName()); // an <img> of a file Qt cannot read
     cell.isFileCard = true;
     cell.label = info.fileName();
     cell.sizeText = info.exists() ? QLocale().formattedDataSize(info.size()) : QString();
@@ -731,13 +742,16 @@ void MarkdownEditor::prepareTextEmbeds(BlockView &view, const QList<const EmbedS
     // an indented line (a list item, a nested callout) runs past its right
     // edge. Per-line budgets if anyone embeds full-width files in lists.
     const qreal maxWidth = contentWidth() - (view.callout ? 28 : 0);
-    const qreal bang = QFontMetricsF(view.layout->font()).horizontalAdvance(QLatin1Char('!'));
+    const QFontMetricsF metrics(view.layout->font());
     for (const EmbedSpan *embed : embeds) {
         EmbedCell cell = buildEmbedCell(*embed, maxWidth);
+        // The carrier is the embed's first character: "!" for `![..]`, "<"
+        // for an `<img>`.
+        const qreal carrier = metrics.horizontalAdvance(d->m_text.at(embed->range.start));
         QTextCharFormat format;
         format.setForeground(Qt::transparent);
         format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
-        format.setFontLetterSpacing(cell.rect.width() - bang);
+        format.setFontLetterSpacing(cell.rect.width() - carrier);
         formats.append({int(view.map.toDisplay(embed->range.start)), 1, format});
         view.embedCells.push_back(std::move(cell));
     }
@@ -775,12 +789,18 @@ void MarkdownEditor::placeTextEmbeds(BlockView &view, qreal lineHeight)
 void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top) const
 {
-    if (view.embedCells.empty())
+    paintEmbedCellList(painter, view.embedCells, left, top);
+}
+
+void MarkdownEditor::paintEmbedCellList(QPainter &painter, const std::vector<EmbedCell> &cells,
+                                        qreal left, qreal top) const
+{
+    if (cells.empty())
         return;
 
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
     const QColor text = d->m_theme.color(QStringLiteral("--text-normal"));
-    for (const EmbedCell &cell : view.embedCells) {
+    for (const EmbedCell &cell : cells) {
         const QRectF rect = cell.rect.translated(left, top);
         if (cell.isFileCard) {
             painter.save();
@@ -799,10 +819,13 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
             painter.setPen(text);
             const qreal textLeft = iconRect.right() + 8;
             const QFontMetrics metrics(font);
-            painter.drawText(QRectF(textLeft, rect.top(), rect.width() - textLeft - 8, rect.height()),
+            // textLeft is in painter coordinates, so the room left is
+            // measured to the card's own right edge (a card at x = 240 has
+            // no negative width).
+            const qreal room = rect.right() - 8 - textLeft;
+            painter.drawText(QRectF(textLeft, rect.top(), room, rect.height()),
                              Qt::AlignVCenter | Qt::AlignLeft,
-                             metrics.elidedText(cell.label, Qt::ElideMiddle,
-                                                int(rect.width() - textLeft - 8)));
+                             metrics.elidedText(cell.label, Qt::ElideMiddle, int(room)));
             painter.restore();
             continue;
         }
@@ -810,7 +833,10 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
             painter.fillRect(rect, muted);
             continue;
         }
-        painter.drawPixmap(rect.toRect(), cell.image);
+        // A GIF cell plays; the rest (and a GIF with no slot) is the one pixmap.
+        painter.drawPixmap(rect.toRect(), cell.panel || cell.isNote
+                                              ? cell.image
+                                              : GIFframe(painter, cell.openPath, rect, cell.image));
         if (cell.panel && !cell.label.isEmpty()) {
             painter.save();
             QFont small = d->m_theme.uiFont();
@@ -824,14 +850,43 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
     }
 }
 
+const MarkdownEditor::EmbedCell *MarkdownEditor::embedCellOf(const BlockView &view, int cell,
+                                                            QPointF &origin) const
+{
+    origin = {};
+    if (cell < 0)
+        return nullptr;
+    if (size_t(cell) < view.embedCells.size())
+        return &view.embedCells[size_t(cell)];
+    size_t rest = size_t(cell) - view.embedCells.size();
+    for (const Cell &tableCell : view.cells) {
+        if (rest < tableCell.embeds.size()) {
+            origin = cellTextOrigin(view, tableCell);
+            return &tableCell.embeds[rest];
+        }
+        rest -= tableCell.embeds.size();
+    }
+    return nullptr;
+}
+
 QRectF MarkdownEditor::embedCellRectAt(qsizetype offset, int cell) const
 {
     const qsizetype index = blockAt(offset);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = d->m_blocks[size_t(index)];
-    return cell >= 0 && size_t(cell) < view.embedCells.size() ? view.embedCells[size_t(cell)].rect
-                                                               : QRectF();
+    QPointF origin;
+    const EmbedCell *found = embedCellOf(d->m_blocks[size_t(index)], cell, origin);
+    return found ? found->rect.translated(origin) : QRectF();
+}
+
+QString MarkdownEditor::embedCellLabelAt(qsizetype offset, int cell) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
+        return {};
+    QPointF origin;
+    const EmbedCell *found = embedCellOf(d->m_blocks[size_t(index)], cell, origin);
+    return found ? found->label : QString();
 }
 
 bool MarkdownEditor::isFileCardAt(qsizetype offset) const
@@ -859,7 +914,11 @@ int MarkdownEditor::embedCellCountAt(qsizetype offset) const
     const qsizetype index = blockAt(offset);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return 0;
-    return int(d->m_blocks[size_t(index)].embedCells.size());
+    const BlockView &view = d->m_blocks[size_t(index)];
+    size_t count = view.embedCells.size();
+    for (const Cell &cell : view.cells)
+        count += cell.embeds.size();
+    return int(count);
 }
 
 QString MarkdownEditor::panelTextAt(qsizetype offset) const

@@ -165,6 +165,9 @@ struct EmbedSpan {
     QString alias;
     int width = 0;  ///< 0 means "as wide as it wants, capped by the column"
     int height = 0;
+    /// An inline `<img src=... width=... alt=...>` rather than `![...]`:
+    /// `target` is its `src`, `alias` its `alt`, `range` the whole tag.
+    bool html = false;
 };
 
 /// `#|` option lines at the head of a fenced code block (PLAN.md 16.2), where
@@ -298,8 +301,8 @@ struct Decorations {
     QList<TableSpan> tables;
     QList<CalloutSpan> callouts;
     /// Ranges of every paragraph, nested ones included. A newline inside one
-    /// is a soft break - CommonMark joins the lines, and so does Obsidian
-    /// unless "Strict line breaks" is on.
+    /// is a soft break - CommonMark joins the lines; Obsidian does only
+    /// with "Strict line breaks" on, and by default breaks at every newline.
     QList<Range> paragraphs;
     QList<EmbedSpan> embeds;
     QList<ListItemSpan> listItems;

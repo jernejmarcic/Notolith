@@ -40,6 +40,8 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QEventLoop>
+#include <QElapsedTimer>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QPushButton>
@@ -79,6 +81,7 @@
 #include "NotebookController.h"
 #endif
 #include "Frontmatter.h"
+#include "InkTextBoxes.h"
 #include "MomentFormat.h"
 #include "OutgoingLinksPane.h"
 #include "MetaNotesPane.h"
@@ -176,6 +179,36 @@ QString mediaKindOf(const QString &path)
                                       QStringLiteral("mov"), QStringLiteral("mkv")};
     return video.contains(suffix) ? QStringLiteral("video") : QString();
 }
+/// A suffix the app opens itself: a module may not claim it (the registry gives
+/// such a module a problem notice and never loads it). Per kind, under the same
+/// compile-time option as isViewFile, so a build without EPUB or PDF does not
+/// forbid a module those suffixes.
+bool isBuiltInSuffix(const QString &suffix)
+{
+    if (suffix == QLatin1String("md") || suffix == QLatin1String("mdlock"))
+        return true;
+#ifdef NOTEAPPC_HAVE_EPUB
+    if (suffix == QLatin1String("epub"))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (suffix == QLatin1String("canvas"))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    if (suffix == QLatin1String("base"))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    if (suffix == QLatin1String("pdf"))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (suffix == QLatin1String("ipynb"))
+        return true;
+#endif
+    return !mediaKindOf(QStringLiteral("x.") + suffix).isEmpty();
+}
 constexpr auto kGeometry = "window/geometry";
 /// Narrower than this there is no room for a sidebar beside a readable line:
 /// a phone held upright, or a window tiled to a sliver.
@@ -217,6 +250,13 @@ MainWindow::~MainWindow()
     // for ```query blocks run on the pool against m_index, and the history's
     // last saves may still be on their way to disk.
     m_indexer->stop();
+    // A module view keeps something for the disk (a learned pen): its own destructor runs when the child widgets go, after
+    // m_settings, which it writes through. So they write now.
+    for (auto *view : findChildren<ModuleView *>())
+        view->flushSettings();
+    for (const auto &popout : m_popouts) // top-levels of their own, destroyed after m_settings too
+        for (auto *view : popout->findChildren<ModuleView *>())
+            view->flushSettings();
     m_sync.reset(); // its thread stops and joins here
 #ifdef NOTEAPPC_HAVE_SHARE
     qDeleteAll(m_sessions); // they point at the engine, which saves every share as it goes
@@ -307,6 +347,36 @@ MainWindow::MainWindow(QWidget *parent)
         m_historyPool.start([] { NoteHistory::warmUp(); });
 #endif
     m_theme = themeFromSettings();
+    m_modules = new ModuleRegistry(this);
+    m_modules->setEnabledCheck([this](const QString &featureID) { return featureOn(featureID.toUtf8().constData()); });
+    m_moduleHost.settings = &m_settings;
+    m_moduleHost.theme = &m_theme;
+    m_moduleHost.vault = &m_vault;
+    m_moduleHost.registerView = [this](const QStringList &suffixes, ModuleHost::ViewFactory factory) {
+        for (const QString &suffix : suffixes) {
+            if (!m_moduleViews.contains(suffix.toLower())) // first claim wins, as in ModuleRegistry::scan
+                m_moduleViews.insert(suffix.toLower(), factory);
+        }
+    };
+    m_moduleHost.registerCommand = [this](const QString &id, const QString &, std::function<void()> run) {
+        m_moduleCommands.insert(id, std::move(run)); // the QAction exists since the scan; this is what it runs
+    };
+    m_moduleHost.registerSetting = [this](const ModuleHost::SettingRow &row) {
+        Settings::registerDefaults({{row.key, row.defaultValue}});
+        m_moduleSettingRows << row; // loadModule() adopts the stored values and refreshes the page once, after attach()
+    };
+    m_moduleHost.registerIndexReader = nullptr;   // seam 6: S1 Task 17
+    m_moduleHost.registerTabletHandler = nullptr; // seam 2: Spec 3
+    m_moduleHost.showTab = [this](ModuleView *view, const QString &title) { showModuleTab(view, title); };
+    m_moduleHost.showStatus = [this](const QString &text, int timeoutMs) { statusBar()->showMessage(text, timeoutMs); };
+    m_moduleHost.openFile = [this](const QString &absolutePath) { return openNote(absolutePath); };
+    m_moduleHost.currentFolder = [this]() -> QString {
+        if (!m_vault.isValid())
+            return QString();
+        if (m_active && !m_active->notePath.isEmpty() && m_vault.contains(m_active->notePath))
+            return QFileInfo(m_active->notePath).absolutePath();
+        return m_vault.root();
+    };
     // The style sheet before the widgets exist, so each is styled once as it
     // is made: set after them (applyTheme), it re-polished every one, a third
     // of a cold start. applyTheme then finds it already in place.
@@ -1688,6 +1758,8 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
 {
     if (leaf->notePath.isEmpty() && !leaf->pendingPath.isEmpty())
         return QFileInfo(leaf->pendingPath).completeBaseName();
+    if (leaf->notePath.isEmpty() && !leaf->viewTitle.isEmpty())
+        return isModified(leaf) ? leaf->viewTitle + QLatin1String(" *") : leaf->viewTitle;
     if (leaf->notePath.isEmpty())
         return tr("New tab");
     QString name = QFileInfo(leaf->notePath).completeBaseName();
@@ -1861,6 +1933,8 @@ void MainWindow::dropLeaf(Leaf *leaf)
     // the Leaf pointer.
     leaf->editor->disconnect(this);
     leaf->inlineTitle->disconnect(this);
+    if (leaf->view)
+        leaf->view->disconnect(this); // a module view's modificationChanged lambda holds the Leaf pointer
 #ifdef NOTEAPPC_HAVE_CANVAS
     // Its own canvas embeds' view state goes with it too - "until the note
     // is closed" means this, not whenever Qt gets around to deleting the
@@ -2721,11 +2795,18 @@ bool MainWindow::handleGroupDrop(TabGroup *group, QDropEvent *event, const QPoin
 bool MainWindow::maybeSaveAll()
 {
     QSet<QString> asked; // a note in two tabs is one document, asked about once
-    for (const auto &leaf : m_leaves) {
-        if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || asked.contains(leaf->notePath))
+    std::vector<Leaf *> leaves; // a copy: the wait for a reloading view runs events, and the list must not change under the loop
+    for (const auto &candidate : m_leaves)
+        leaves.push_back(candidate.get());
+    for (Leaf *leaf : leaves) {
+        if (std::none_of(m_leaves.begin(), m_leaves.end(), [leaf](const auto &open) { return open.get() == leaf; }))
+            continue; // closed while an earlier tab was being asked about
+        const bool fileLess = leaf->notePath.isEmpty() && qobject_cast<ModuleView *>(leaf->view);
+        const QString key = fileLess ? QStringLiteral("view:%1").arg(quintptr(leaf)) : leaf->notePath; // file-less tabs are not one document
+        if ((leaf->notePath.isEmpty() && !fileLess) || !isModified(leaf) || asked.contains(key))
             continue;
-        asked.insert(leaf->notePath);
-        activateLeaf(leaf.get());
+        asked.insert(key);
+        activateLeaf(leaf);
         if (!maybeSave())
             return false;
     }
@@ -3062,6 +3143,9 @@ void MainWindow::updateNotebookIndex()
                                        })
                                      : Indexer::NotebookReader());
 #endif
+    // R1: a .ink file is a note whose text is its text boxes, indexed whether or not the ink module is installed, on
+    // or off: the host reads the JSON itself (QJsonDocument), so indexing never loads the module.
+    m_indexer->setForeignReader({QStringLiteral("ink")}, noteAppC::inkTextBoxes, noteAppC::kInkIndexMaxBytes);
 }
 
 void MainWindow::showNoteInPanes(const QString &path)
@@ -3436,7 +3520,11 @@ void MainWindow::buildActions()
 
     buildPopoutActions();
     buildSidebarPopoutActions();
+    rebuildHotkeyCommands();
+}
 
+void MainWindow::rebuildHotkeyCommands()
+{
     QList<SettingsPage::HotkeyCommand> rebindable;
     for (const QAction *action : std::as_const(m_commands))
         rebindable << SettingsPage::HotkeyCommand{action->objectName(), action->text(),
@@ -4001,6 +4089,10 @@ void MainWindow::applySettings()
         }
     }
 #endif
+    for (const auto &leaf : m_leaves) {
+        if (auto *module = qobject_cast<ModuleView *>(leaf->view))
+            module->applySettings(m_settings);
+    }
     if (const QString mode = m_settings.text(QStringLiteral("editor.defaultMode")); mode != m_appliedDefaultMode) {
         m_appliedDefaultMode = mode;
         for (const auto &leaf : m_leaves)
@@ -4907,6 +4999,8 @@ void MainWindow::applyTheme()
         if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
             canvas->setTheme(m_theme);
 #endif
+        if (auto *module = qobject_cast<ModuleView *>(leaf->view))
+            module->setTheme(m_theme);
 #ifdef NOTEAPPC_HAVE_PDFVIEW
         if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
             pdf->setTheme(m_theme);
@@ -5249,11 +5343,122 @@ void MainWindow::openTarget(const LaunchTarget &target)
 #endif
     }
     m_painted = true;
+    startModuleScan(); // PERFORMANCE.md rule 5: a directory listing, off the UI thread, after the first frame
     syncPlugins();
     updateSync();
     updateShare();
     watchThemeFiles();
     updateSpelling();
+}
+
+// The scan runs once per process, after the first paint. Opening another vault does not rescan:
+// modules are installed with the app, not with a vault (spec section 4, "When"), so the set found
+// here serves every vault this window opens.
+void MainWindow::startModuleScan()
+{
+    if (m_modulesScanned || m_modulesScanStarted)
+        return;
+    m_modulesScanStarted = true;
+    const QStringList directories = ModuleRegistry::defaultDirectories();
+    auto *watcher = new QFutureWatcher<QList<ModuleInfo>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        if (!m_modulesScanned) { // scanModulesNow() may have run meanwhile
+            m_modules->setModules(watcher->result());
+            onModulesScanned();
+        }
+        watcher->deleteLater();
+    });
+    watcher->setFuture(QtConcurrent::run([directories] { return ModuleRegistry::scan(directories, isBuiltInSuffix); }));
+}
+
+void MainWindow::scanModulesNow()
+{
+    m_modules->setModules(ModuleRegistry::scan(ModuleRegistry::defaultDirectories(), isBuiltInSuffix));
+    onModulesScanned();
+}
+
+void MainWindow::onModulesScanned()
+{
+    m_modulesScanned = true;
+    if (m_modules->modules().isEmpty())
+        return; // nothing installed: no feature row, no command, no rebuild - the base app pays nothing
+    bool featureRegistered = false;
+    bool commandAdded = false;
+    for (const ModuleInfo &module : m_modules->modules()) {
+        if (!module.problem.isEmpty()) {
+            qWarning("%s", qPrintable(module.problem));
+            continue;
+        }
+        Settings::registerFeature(module.featureID, module.name, module.description);
+        featureRegistered = true;
+        for (const ModuleInfo::Command &moduleCommand : module.commands) {
+            if (!command(moduleCommand.id)) { // a rescan does not duplicate
+                addModuleCommand(moduleCommand.id, moduleCommand.title);
+                commandAdded = true;
+            }
+        }
+    }
+    m_settings.adoptStored(); // a saved feature switch for a key registered just now (load() ran before the scan)
+    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems());
+    if (commandAdded)
+        rebuildHotkeyCommands();
+    if (featureRegistered)
+        applyFeatures(); // greys a disabled module's commands by their id prefix, as for every feature
+}
+
+bool MainWindow::loadModule(const ModuleInfo &module, QString *error)
+{
+    if (m_modules->isLoaded(module.id))
+        return true; // attached already: nothing new to pick up
+    const bool ok = m_modules->ensureLoaded(module, m_moduleHost, error);
+    if (ok)
+        m_settings.adoptStored(); // the module's keys exist now; load() ran before them (once, not per row)
+    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems()); // its rows, or its load failure
+    return ok;
+}
+
+QAction *MainWindow::addModuleCommand(const QString &id, const QString &title)
+{
+    auto *action = new QAction(title, this);
+    action->setObjectName(id);
+    action->setData(QString());
+    action->setShortcutContext(Qt::WindowShortcut);
+    connect(action, &QAction::triggered, this, [this, id] {
+        const std::optional<ModuleInfo> module = m_modules->moduleForCommand(id);
+        if (!module)
+            return;
+        QString error;
+        if (!loadModule(*module, &error)) {
+            statusBar()->showMessage(error, 5000);
+            return;
+        }
+        if (const auto run = m_moduleCommands.value(id))
+            run();
+    });
+    addAction(action);
+    for (const auto &popout : m_popouts)
+        popout->addAction(action); // a window opened before the scan gets the command too, as for plugin commands
+    m_commands << action;
+    return action;
+}
+
+QList<QPair<QString, QString>> MainWindow::moduleProblems() const
+{
+    QList<QPair<QString, QString>> problems;
+    for (const ModuleInfo &module : m_modules->modules()) {
+        const QString notice = module.problem.isEmpty() ? m_modules->loadFailure(module.id) : module.problem;
+        if (!notice.isEmpty())
+            problems.append({module.id, notice});
+    }
+    return problems;
+}
+
+QAction *MainWindow::command(const QString &id) const
+{
+    for (QAction *action : std::as_const(m_commands))
+        if (action->objectName() == id)
+            return action;
+    return nullptr;
 }
 
 void MainWindow::openWhenShown(const LaunchTarget &target)
@@ -6291,7 +6496,73 @@ bool MainWindow::isViewFile(const QString &path) const
         return featureOn("pdf-viewer");
 #endif
     const QString media = mediaKindOf(path);
-    return media == QLatin1String("image") || (!media.isEmpty() && featureOn("media-embeds"));
+    if (media == QLatin1String("image") || (!media.isEmpty() && featureOn("media-embeds")))
+        return true;
+    return m_modules && m_modules->moduleForSuffix(path).has_value(); // after every built-in kind, never before
+}
+
+bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **view)
+{
+    const std::optional<ModuleInfo> module = m_modules ? m_modules->moduleForSuffix(path) : std::nullopt;
+    if (!module)
+        return false;
+    if (!loadModule(*module, error))
+        return false;
+    const ModuleHost::ViewFactory factory = m_moduleViews.value(QFileInfo(path).suffix().toLower());
+    if (!factory) {
+        *error = tr("Module %1 registered no view for %2").arg(module->id, path);
+        return false;
+    }
+    ModuleView *moduleView = factory(path, m_active->area);
+    if (!moduleView)
+        return false;
+    moduleView->setTheme(m_theme);
+    // Connected before load(): what a view says while it loads (a newer file opened read-only) is shown.
+    // A view whose load fails is deleted below, which drops these connections.
+    Leaf *leaf = m_active;
+    connect(moduleView, &ModuleView::modificationChanged, this, [this, leaf](bool modified) {
+        if (leaf == m_active)
+            updateTitle();
+        else
+            syncTabs(leaf->group);
+        if (modified && m_settings.boolean(QStringLiteral("files.autosave")))
+            armAutosave(); // an ink note is kept like a note
+    });
+    connect(moduleView, &ModuleView::noteActivated, this, &MainWindow::openRelative);
+    connect(moduleView, &ModuleView::statusMessage, this,
+            [this](const QString &text, int timeout) { statusBar()->showMessage(text, timeout); });
+    if (!moduleView->load(path, error)) {
+        delete moduleView;
+        return false;
+    }
+    *view = moduleView;
+    return true;
+}
+
+void MainWindow::showModuleTab(ModuleView *view, const QString &title)
+{
+    newTab();
+    closeView(m_active);
+    m_active->note = Note{};
+    m_active->editor->setNoteText(QString());
+    m_active->editor->setEnabled(false);
+    m_active->editor->hide();
+    m_active->inlineTitle->hide();
+    view->setParent(m_active->area);
+    view->setTheme(m_theme);
+    m_active->view = view;
+    m_active->viewTitle = title;
+    Leaf *leaf = m_active;
+    connect(view, &ModuleView::modificationChanged, this, [this, leaf](bool) {
+        if (leaf == m_active)
+            updateTitle();
+        else
+            syncTabs(leaf->group); // the asterisk (tabTitle)
+    });
+    static_cast<QVBoxLayout *>(m_active->area->layout())->addWidget(view, 1);
+    view->setFocus();
+    syncTabs(m_active->group);
+    updateTitle();
 }
 
 bool MainWindow::openView(const QString &path, NavSource source, const QString &fragment)
@@ -6408,6 +6679,8 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
         }
     }
 #endif
+    if (!view)
+        openModuleView(path, &error, &view);
     if (!view) {
         if (source != NavSource::History)
             QMessageBox::warning(this, tr("Open"), tr("Could not open %1:\n%2").arg(path, error));
@@ -6431,6 +6704,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
     view->setFocus();
 
     syncTabs(m_active->group);
+    watchOpenNotes(); // a module's view follows its file
     showNoteInPanes(path);
     if (m_outline)
         m_outline->clear();
@@ -6452,12 +6726,15 @@ void MainWindow::closeView(Leaf *leaf)
     leaf->view->hide();
     leaf->view->deleteLater();
     leaf->view = nullptr;
+    leaf->viewTitle.clear();
     leaf->editor->show();
     leaf->inlineTitle->setVisible(m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
 }
 
 bool MainWindow::isModified(const Leaf *leaf) const
 {
+    if (auto *module = qobject_cast<ModuleView *>(leaf->view))
+        return module->isModified();
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
         return canvas->isModified();
@@ -6921,6 +7198,17 @@ void MainWindow::changeEncryptionPassword()
 
 bool MainWindow::saveLeaf(Leaf *target, bool quiet)
 {
+    if (auto *module = qobject_cast<ModuleView *>(target->view)) { // a file-less view too: R6
+        const QString shown = target->notePath.isEmpty() ? target->viewTitle : QFileInfo(target->notePath).fileName();
+        QString error;
+        if (!module->save(&error)) {
+            reportSaveError(shown, error, quiet);
+            return false;
+        }
+        if (!quiet)
+            statusBar()->showMessage(tr("Saved %1").arg(shown), 2000);
+        return true;
+    }
     if (target->notePath.isEmpty())
         return true;
 #ifdef NOTEAPPC_HAVE_CANVAS
@@ -7060,7 +7348,9 @@ void MainWindow::watchOpenNotes()
     QStringList wanted;
     QStringList wantedFolders;
     for (const auto &leaf : m_leaves) {
-        if (leaf->view || leaf->notePath.isEmpty() || wanted.contains(leaf->notePath))
+        // A module's view follows its file like a note does (ModuleView::reloadFromDisk); the other views do not.
+        if ((leaf->view && !qobject_cast<ModuleView *>(leaf->view)) || leaf->notePath.isEmpty()
+            || wanted.contains(leaf->notePath))
             continue;
         wanted << leaf->notePath;
         const QString folder = QFileInfo(leaf->notePath).absolutePath();
@@ -7203,6 +7493,15 @@ void MainWindow::reloadChangedNotes()
     watchOpenNotes(); // a file replaced by a rename dropped out of the watch
     followLostNotes(false);
     for (const QString &path : std::exchange(m_changedNotes, {})) {
+        bool moduleFile = false;
+        for (const auto &leaf : m_leaves) {
+            if (auto *module = leaf->notePath == path ? qobject_cast<ModuleView *>(leaf->view) : nullptr) {
+                module->reloadFromDisk();
+                moduleFile = true;
+            }
+        }
+        if (moduleFile)
+            continue;
         const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
             return !leaf->view && leaf->notePath == path;
         });
@@ -7305,9 +7604,29 @@ QStringList MainWindow::autosave()
     return QStringList(saved.cbegin(), saved.cend());
 }
 
+void MainWindow::waitForModuleLoad(Leaf *leaf)
+{
+    const QPointer<ModuleView> view = qobject_cast<ModuleView *>(leaf->view);
+    if (!view || !view->isLoading() || !view->isModified())
+        return; // nothing to keep: a tab that only has a file to parse closes at once
+    QEventLoop loop;
+    QTimer poll; // the view says nothing when its parse lands: ask
+    QElapsedTimer waited;
+    waited.start();
+    connect(&poll, &QTimer::timeout, &loop, [&] {
+        if (!view || !view->isLoading() || waited.elapsed() > kModuleLoadWaitMs)
+            loop.quit();
+    });
+    poll.start(10);
+    loop.exec(QEventLoop::ExcludeUserInputEvents); // no Ctrl+W, tab click or close button can change the tabs under the caller
+}
+
 bool MainWindow::maybeSave()
 {
-    if (m_active->notePath.isEmpty() || !isModified(m_active))
+    waitForModuleLoad(m_active); // a reload in flight is not a failed save: let it land, then see what is left to keep
+    // A file-less module tab (the glyph studio) has no path but keeps the save contract (R6).
+    const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
+    if ((m_active->notePath.isEmpty() && !fileLess) || !isModified(m_active))
         return true;
     // Obsidian's way: what is typed is kept, never asked about - unless the
     // file is gone and was not found, where saving would bring it back.
@@ -7318,8 +7637,8 @@ bool MainWindow::maybeSave()
     if (!lost && m_settings.boolean(QStringLiteral("files.autosave")) && saveLeaf(m_active, true))
         return true;
 
-    const QString shown =
-        m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();
+    const QString shown = fileLess ? m_active->viewTitle
+        : (m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName());
     const bool lossy = m_active->note.lossy;
     QString question =
         lost ? tr("%1 is gone from disk. Save it there again?").arg(shown) : tr("Save changes to %1?").arg(shown);
@@ -7348,7 +7667,9 @@ void MainWindow::onModificationChanged(bool)
 
 void MainWindow::updateTitle()
 {
-    const bool modified = !m_active->notePath.isEmpty() && isModified(m_active);
+    // A file-less module tab (the glyph studio, R6) shows the mark too: the host saves it like a note.
+    const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
+    const bool modified = (!m_active->notePath.isEmpty() || fileLess) && isModified(m_active);
     QString title;
     if (!m_active->notePath.isEmpty()) {
         title = (m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName())
@@ -7844,11 +8165,16 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath.isEmpty())
             continue;
+        const QString before = leaf->notePath;
         if (leaf->notePath == oldPath) {
             leaf->notePath = newPath;
             leaf->inlineTitle->setText(QFileInfo(newPath).completeBaseName());
         } else if (isDir && leaf->notePath.startsWith(oldPath + QLatin1Char('/'))) {
             leaf->notePath.replace(0, oldPath.size(), newPath);
+        }
+        if (leaf->notePath != before) { // a module's view keeps its own path: it must save to the new one
+            if (auto *module = qobject_cast<ModuleView *>(leaf->view))
+                module->setFilePath(leaf->notePath);
         }
     }
     for (const auto &group : m_groups)

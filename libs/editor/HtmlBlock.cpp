@@ -197,7 +197,10 @@ QList<MarkdownEditor::InlineHTMLpair> MarkdownEditor::inlineHTMLpairs(const Bloc
         const QString name = match.captured(1).toLower();
 
         if (!closing) {
-            if (raw.endsWith(QLatin1String("/>")) || name == QLatin1String("br"))
+            // An <img> is an embed (an EmbedSpan), drawn or left as source,
+            // and never has a closer to wait for.
+            if (raw.endsWith(QLatin1String("/>")) || name == QLatin1String("br")
+                || name == QLatin1String("img"))
                 continue; // self-closing or void: nothing to pair with
             stack.push_back({name, span.range});
             continue;

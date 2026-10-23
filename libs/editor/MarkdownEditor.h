@@ -104,6 +104,9 @@ public:
     bool lineNumbers() const;
 
     void setReadableLineLength(bool on);
+    /// The clear space at the left and right of the text and above the first line, in pixels (24 and 28 unless set).
+    /// A host that draws the editor into a small rect, as an ink text box does, sets both to 0.
+    void setViewportPadding(int side, int top);
     void setContentWidth(int pixels);
 
     /// CommonMark's rule: every newline is a line break. Off, a single newline
@@ -756,6 +759,15 @@ public:
     /// For the tests: where that block's `cell`-th inline embed sits,
     /// block-local.
     QRectF embedCellRectAt(qsizetype offset, int cell) const;
+    /// For the tests: how many GIF movies are playing now (0 for a note with
+    /// no animated GIF on screen), and the frame `path`'s is on (-1 if none).
+    int GIFmovieCount() const;
+    int GIFframeOf(const QString &path) const;
+    /// For the tests: how many table cells the last paintTable drew.
+    int tableCellsPainted() const;
+    /// For the tests: that cell's caption - the file name of a card, the
+    /// `alt` of an `<img>` whose file is missing. Empty for an image.
+    QString embedCellLabelAt(qsizetype offset, int cell) const;
     /// For the tests: the raw text a block containing `offset` drew through
     /// its own substituted QTextLayout - a source-file listing, a note
     /// embed's panel, a `.tex` compile's error log, a query block's message
@@ -1073,6 +1085,7 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     void scrollContentsBy(int dx, int dy) override;
     void resizeEvent(QResizeEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     // Paste and drop: a dropped file or image lands where the pointer is,
@@ -1682,6 +1695,23 @@ private:
     qreal textEmbedHeightOn(const BlockView &view, const QTextLine &line) const;
     void placeTextEmbeds(BlockView &view, qreal lineHeight);
     EmbedCell buildEmbedCell(const EmbedSpan &embed, qreal maxWidth);
+    /// The `cell`-th inline embed of `view` - its own, then every table
+    /// cell's - and where its rect is measured from. Null past the end.
+    const EmbedCell *embedCellOf(const BlockView &view, int cell, QPointF &origin) const;
+    void paintEmbedCellList(QPainter &painter, const std::vector<EmbedCell> &cells, qreal left,
+                            qreal top) const;
+    /// Animated GIFs (GIFplayer.cpp). A GIF embed that is drawn, in the
+    /// viewport, with a movie slot free, is played by a QMovie; anything else
+    /// - off screen, past the cap, one frame, the editor hidden - is its first
+    /// frame, exactly as before. `GIFframe` is what the painters draw in place
+    /// of `still`; the rest ends movies whose embed left the viewport.
+    QPixmap GIFframe(const QPainter &painter, const QString &path, const QRectF &target,
+                     const QPixmap &still) const;
+    QList<QRect> GIFrectsInView(const QString &path) const;
+    void GIFframeChanged(const QString &path);
+    void GIFstopped(const QString &path, bool finished);
+    void pruneGIFs();
+    void clearGIFs();
     void paintEmbedCells(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     bool handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,
                               qreal top);

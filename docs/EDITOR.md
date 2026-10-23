@@ -65,6 +65,75 @@ tags, text stranded in a table), and two block elements on one line
 (`<p>a</p><p>b</p>`): each block element must start its own line, because a
 block of the editor is whole lines.
 
+**Inline `<img>`** (Obsidian draws one wherever it appears): an `<img
+src="docs/hit.png" width="400">` inside a paragraph, list item, quote or
+callout, or a pipe-table cell, is drawn as the image when the caret
+is not in it. It is the same inline embed `![[p.png|400]]` and `![](p.png)`
+produce (the parser emits the same `EmbedSpan`, marked `html`, and
+`collectTextEmbeds` / `layoutTable` draw it), so resolving, the size cap,
+the image cache and the reveal are shared with them:
+
+- `src` resolves as a Markdown image's does (vault-relative, note-relative,
+  attachment folder, through the window's link resolver). Only a relative
+  path or an `http(s)` URL is an image at all, and a remote URL is the
+  resolver's call exactly as for `![](https://...)`: nothing is fetched here.
+  `javascript:`, `data:`, `file:` and `//host` sources are never drawn; the
+  tag stays as source text. A target that is not a decodable image (a PDF, a
+  note) is a missing file, not an embed of it.
+- `width` and `height` are pixels, bare or with `px` (a `%` is ignored, so
+  the image shows at its own size). One of them keeps the aspect ratio; both
+  are taken as given and, with the width capped, scaled down together (a
+  height is also capped at 4096 px, ratio kept, as for `|WxH`); the width is capped at the readable column (at 66% of
+  it, in a table cell). `alt` is shown on a small card when the file is
+  missing or unreadable (the file name when there is no `alt`).
+- The tag is source while the caret is in it, or anywhere in the block (the
+  cell, for a table), like any embed.
+- A tag with no `src`, an unclosed quote or a stray token stays source text.
+- A top-level `<img>` on a line of its own is still an HTML block drawn by
+  litehtml (above), not this path, while the same tag after `- ` in a list or
+  `> ` in a quote takes this one; an `<img>` inside an HTML `<table>` also stays
+  with litehtml (the table is an HTML block). Not done: `%` widths, and
+  `<img>` as a link target or in the backlink index.
+- A Markdown image, `![[p.png|40]]` or `![](p.png)`, in a table cell is drawn
+  by the same code now (it showed as source text before); a PDF, note or
+  other file embed in a cell is still text.
+
+Tests: `HtmlImgTest.*` in `tests/test_editor.cpp`.
+
+**Animated GIFs** play, as in Obsidian: `![[x.gif]]`, `![](x.gif)` and
+`<img src="x.gif">`, alone in a block, inline in text, in a list or quote, or in
+a pipe-table cell (`libs/editor/GIFplayer.cpp`, one `QMovie` per file).
+
+- A movie runs only for a GIF with more than one frame that is drawn inside the
+  viewport of a shown editor, to the screen. A one-frame GIF, a GIF past the
+  cap, one that is off screen, and any render through another paint engine (a
+  PDF, a printer, a `QPicture`) show the first frame, as every other image does.
+  (A `grab()` of a shown editor is a raster paint of the same widget and shows
+  the frame on screen.)
+- At most 8 movies play at once; the ninth GIF on screen stays on its first
+  frame. The same file embedded twice is one movie.
+- A movie ends when its embed scrolls out of the viewport (on the scroll itself),
+  when the editor is resized so it no longer shows, when the editor is hidden,
+  when the note is replaced or the link resolver changes, and when an edit
+  removes the embed (at its next frame). It starts again from the first frame
+  when it is shown again.
+- A GIF that plays once (no loop extension) stops on its last frame and frees
+  its slot; a file that fails mid-way stays on its first frame. Neither is
+  restarted by the next paint, until the note or the resolver changes.
+- What is known of a file (more than one frame or not) is kept per file and
+  `mtime`: one scan, not one per paint, and a replaced file is looked at again.
+- Each frame repaints only the embed's own rectangle, and `paintTable` draws
+  only the cells inside the rectangle being repainted, so a GIF in a 500-row
+  table repaints its own row.
+- A note with no animated GIF on screen constructs no `QMovie`, no timer and no
+  connection.
+- A GIF in an HTML block (top-level `<img>` line, litehtml) is still one frame.
+  Frames are not cached beyond what `QMovie` keeps, so a huge GIF costs its
+  decode while it plays; the cap bounds that at 8.
+
+Tests: `GIFtest.*` in `tests/test_editor.cpp` (the fixtures are tiny GIFs held
+as bytes in the test, since Qt has no GIF writer).
+
 **Borders in the litehtml image** (`libs/render/HtmlRenderer.cpp`): every
 CSS 2.1 border style is drawn. A uniform `solid`, `dotted` or `dashed` border is
 one stroke round the box; any other case (sides that differ in width, colour

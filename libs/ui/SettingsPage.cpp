@@ -2,6 +2,7 @@
 
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QDir>
 #include <QFileDialog>
 #include <QFrame>
@@ -105,6 +106,15 @@ void SettingsPage::setPluginRegistry(PluginRegistry *registry)
     if (registry == m_pluginRegistry)
         return;
     m_pluginRegistry = registry;
+    m_needsRebuild = true;
+    if (isVisible())
+        rebuild();
+}
+
+void SettingsPage::setModules(const QList<ModuleHost::SettingRow> &rows, const QList<QPair<QString, QString>> &problems)
+{
+    m_moduleRows = rows;
+    m_moduleProblems = problems;
     m_needsRebuild = true;
     if (isVisible())
         rebuild();
@@ -333,6 +343,26 @@ void SettingsPage::addSpinRow(QVBoxLayout *into, const QString &key, const QStri
     });
     addRow(into, {key}, label, description, spin,
           [this, key, spin] { spin->setValue(m_settings->integer(key)); });
+}
+
+void SettingsPage::addDoubleSpinRow(QVBoxLayout *into, const QString &key, const QString &label,
+                                    const QString &description, double minimum, double maximum, double step,
+                                    int decimals, const QString &suffix)
+{
+    auto *spin = new QDoubleSpinBox(this);
+    spin->setObjectName(QStringLiteral("settingsSpin_") + key);
+    spin->setDecimals(decimals);
+    spin->setRange(minimum, maximum);
+    spin->setSingleStep(step);
+    if (!suffix.isEmpty())
+        spin->setSuffix(suffix);
+    spin->setValue(m_settings->value(key).toDouble());
+    connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this, key](double value) {
+        m_settings->setValue(key, value);
+        changed();
+    });
+    addRow(into, {key}, label, description, spin,
+          [this, key, spin] { spin->setValue(m_settings->value(key).toDouble()); });
 }
 
 void SettingsPage::addLineEditRow(QVBoxLayout *into, const QString &key, const QString &label,
@@ -714,7 +744,8 @@ QWidget *SettingsPage::buildEditorPage()
                    "counts, visual mode, / search and :w :q. Off, the editor is unchanged. "
                    "See docs/EDITOR.md."));
     addToggleRow(layout, QStringLiteral("editor.strictLineBreaks"), tr("Strict line breaks"),
-                tr("Treat every newline as a line break, the way CommonMark does."));
+                tr("Join the lines of a paragraph into one, the way CommonMark does. Off, every newline is a "
+                   "line break."));
 #ifdef NOTEAPPC_HAVE_SPELLCHECK
     // Only in a build with the spellcheck module: without it there is nothing
     // behind the switch, and a switch that does nothing is worse than none.
@@ -933,6 +964,24 @@ QWidget *SettingsPage::buildCorePluginsPage()
         if (!missing.contains(feature.id))
             addToggleRow(layout, Settings::featureKey(feature.id), QCoreApplication::translate("Settings", feature.name),
                         QCoreApplication::translate("Settings", feature.description));
+    }
+    // What the installed modules asked for, and the ones that could not load.
+    for (const ModuleHost::SettingRow &row : std::as_const(m_moduleRows)) {
+        if (!row.options.isEmpty())
+            addComboRow(layout, row.key, row.label, row.description, row.options);
+        else if (row.defaultValue.typeId() == QMetaType::Bool)
+            addToggleRow(layout, row.key, row.label, row.description);
+        else if (row.decimals > 0)
+            addDoubleSpinRow(layout, row.key, row.label, row.description, row.minimum, row.maximum, row.step, row.decimals);
+        else
+            addSpinRow(layout, row.key, row.label, row.description, int(row.minimum), int(row.maximum));
+    }
+    for (const auto &[id, problem] : std::as_const(m_moduleProblems)) {
+        auto *notice = new QLabel(problem, page);
+        notice->setObjectName(QStringLiteral("moduleProblem_") + id);
+        notice->setWordWrap(true);
+        notice->setEnabled(false);
+        layout->addWidget(notice);
     }
 
 #ifdef NOTEAPPC_HAVE_CANVAS

@@ -58,9 +58,91 @@ if(noteappc_have_poppler)
     set_tests_properties(pdfpage_race PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+# The loadable-module tier (libs/modules): fake modules built from one or two
+# sources, differing in their configure_file'd manifest and a compile flag - a
+# good one, one built for another Notolith (wrong ABI tag), a twin claiming the
+# same suffix, one whose manifest has no id, a Qt plugin that is not a Notolith
+# module, and one whose library cannot resolve a symbol. Headers only from the
+# host: no host static library is linked.
+function(noteappc_fake_module target id abi suffix source)
+    set(FAKE_ID "${id}")
+    set(FAKE_ABI "${abi}")
+    set(FAKE_SUFFIX "${suffix}")
+    configure_file(fakemodule/manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/${target}/manifest.json @ONLY)
+    add_library(${target} MODULE fakemodule/${source})
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/${target})
+    target_compile_definitions(${target} PRIVATE FAKE_ID="${id}" FAKE_SUFFIX="${suffix}" ${ARGN})
+    target_link_libraries(${target} PRIVATE noteAppC_modules_headers Qt6::Widgets)
+    set_target_properties(${target} PROPERTIES AUTOMOC ON PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fakemodules)
+endfunction()
+noteappc_fake_module(fake_good fake "${NOTEAPPC_ABI_TAG}" fake FakeModule.cpp)
+noteappc_fake_module(fake_badabi fake-badabi "0.0.0-deadbeef-6.0.0" fake FakeModule.cpp)
+noteappc_fake_module(fake_twin fake-twin "${NOTEAPPC_ABI_TAG}" fake FakeModule.cpp)
+noteappc_fake_module(fake_noid "" "${NOTEAPPC_ABI_TAG}" fakenoid FakeModule.cpp)
+noteappc_fake_module(fake_notmodule fake-notmodule "${NOTEAPPC_ABI_TAG}" fakenotmod NotAModule.cpp)
+noteappc_fake_module(fake_unresolved fake-unresolved "${NOTEAPPC_ABI_TAG}" fakeunres FakeModule.cpp FAKE_UNRESOLVED)
+set(NOTEAPPC_FAKE_MODULE_TARGETS fake_good fake_badabi fake_twin fake_noid fake_notmodule fake_unresolved)
+
+add_executable(test_modules test_modules.cpp)
+target_link_libraries(test_modules PRIVATE noteAppC_modules Qt6::Widgets GTest::gtest)
+target_compile_definitions(test_modules PRIVATE NOTEAPPC_FAKE_MODULES_DIR="${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
+set_target_properties(test_modules PROPERTIES ENABLE_EXPORTS ON) # the fake module resolves ModuleView here
+add_dependencies(test_modules ${NOTEAPPC_FAKE_MODULE_TARGETS})
+if(TARGET notolith-ink) # the R2 case: the real module, copied away from its core library
+    target_compile_definitions(test_modules PRIVATE NOTEAPPC_INK_MODULE_PATH="$<TARGET_FILE:notolith-ink>")
+    add_dependencies(test_modules notolith-ink)
+endif()
+# The no-load gate is its own ctest entry (M1): in a process where another test had already
+# mapped fake_good, "the scan did not load it" would prove nothing. The filter is in the
+# command, so it wins over the GTEST_FILTER the run commands pass: run each entry whole.
+add_test(NAME modules_gate COMMAND test_modules --gtest_filter=ModuleGateTest.*)
+add_test(NAME modules COMMAND test_modules --gtest_filter=-ModuleGateTest.*)
+set_tests_properties(modules_gate modules PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+# AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads is its own entry: it needs fake.width
+# unregistered when the window is made, and an earlier test in the same process registers it,
+# after which the stored value is read without adoptStored(). The test skips itself unless this
+# entry's environment says so, which leaves the `window` entry without a filter of its own:
+# GTEST_FILTER focuses it. This entry's filter is in its command: run it whole.
+set(noteappc_window_adopt WindowTest.AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads)
 add_test(NAME window COMMAND test_window)
+add_test(NAME window_modules_adopt COMMAND test_window --gtest_filter=${noteappc_window_adopt})
+set_tests_properties(window_modules_adopt PROPERTIES ENVIRONMENT "NOTEAPPC_WINDOW_ADOPT_ENTRY=1")
+# Modules load into the test's process: export the host symbols, and point the
+# registry at the build's modules (the fake ones; Task 8 adds the real ones).
+set_target_properties(test_window PROPERTIES ENABLE_EXPORTS ON)
+add_dependencies(test_window ${NOTEAPPC_FAKE_MODULE_TARGETS})
+# The real ink module sits behind the fake ones: ${CMAKE_BINARY_DIR}/modules holds notolith-ink.so
+# and the libnotolith-inkcore.so it needs (neither exists with NOTEAPPC_WITH_INK off).
+set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT
+    "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules:${CMAKE_BINARY_DIR}/modules")
+if(TARGET notolith-ink)
+    add_dependencies(test_window notolith-ink)
+    target_compile_definitions(test_window PRIVATE NOTEAPPC_HAVE_INK_MODULE) # the ink tests in test_window.cpp
+    # The ink tests read the canvas of the module's view (document(), tool(), zoom()): the core library is
+    # the one the module loads (same soname, found in modules/), never a second copy of InkView.
+    target_link_libraries(test_window PRIVATE notolith-inkcore)
+    set_property(TARGET test_window APPEND PROPERTY BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+endif()
+# Track S1b's glyph studio (libs/ext/hwfont): S1b creates the directory and
+# tests/test_hwfont.cpp; until noteAppC_hwfont exists this block does nothing.
+# test_hwfont drives the studio view and the module through the registry, so it
+# links the host (noteAppC_ui) and the static hwfont library only: the module
+# is loaded from ${CMAKE_BINARY_DIR}/modules, never linked. IsolatedHome.cpp is
+# added to every test_* target by the loop at the end of this file.
+if(TARGET noteAppC_hwfont)
+    add_executable(test_hwfont test_hwfont.cpp)
+    target_link_libraries(test_hwfont PRIVATE noteAppC_hwfont noteAppC_ui Qt6::Test GTest::gtest)
+    set_target_properties(test_hwfont PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+    add_test(NAME hwfont COMMAND test_hwfont)
+    set_tests_properties(hwfont PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
+    if(TARGET notolith-hwfont)
+        add_dependencies(test_hwfont notolith-hwfont)
+    endif()
+endif()
 target_compile_definitions(test_window PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
 foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
     if(TARGET ${module})
@@ -107,7 +189,7 @@ foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteA
 endforeach()
 add_test(NAME demo COMMAND test_demo)
 set_tests_properties(demo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-set_tests_properties(window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The DICT client talks to a QTcpServer on loopback, never to a real server.
 add_executable(test_lookup test_lookup.cpp)
@@ -281,7 +363,10 @@ endif()
 
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
-add_test(NAME settings COMMAND test_settings)
+# The two SettingsModuleTest cases register keys and a feature in Settings' process-wide
+# tables (M1): alone in their process they cannot leak into another test. Run each entry whole.
+add_test(NAME settings COMMAND test_settings --gtest_filter=-SettingsModuleTest.*)
+add_test(NAME settings_modules COMMAND test_settings --gtest_filter=SettingsModuleTest.*)
 
 add_executable(test_plugins test_plugins.cpp)
 target_link_libraries(test_plugins PRIVATE noteAppC_vault noteAppC_ui Qt6::Test GTest::gtest)
@@ -347,7 +432,49 @@ add_executable(test_lists test_lists.cpp)
 target_link_libraries(test_lists PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
 add_test(NAME lists COMMAND test_lists)
 
-# No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC.
+# The ink core (libs/ext/ink/core): model, format, outline, input, canvas.
+if(TARGET notolith-inkcore)
+    add_executable(test_ink test_ink.cpp)
+    find_package(ZLIB REQUIRED) # the gzip helper in the format tests (imported targets are directory-scoped)
+    target_link_libraries(test_ink PRIVATE notolith-inkcore Qt6::Test GTest::gtest ZLIB::ZLIB)
+    target_compile_definitions(test_ink PRIVATE NOTEAPPC_INK_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/fixtures/ink/golden")
+    set_target_properties(test_ink PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+    add_test(NAME ink COMMAND test_ink)
+    set_tests_properties(ink PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # The position and overlay maths again at device pixel ratio 2 (PADD): the offscreen platform honours QT_SCALE_FACTOR.
+    add_test(NAME ink_dpr2 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
+    set_tests_properties(ink_dpr2 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
+    # A fractional ratio: a cell is 341.33 logical px wide, still a whole 512 device px.
+    add_test(NAME ink_dpr15 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
+    set_tests_properties(ink_dpr15 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5")
+    # The tab itself (InkView, the static library the module links), without dlopen: what it does about a
+    # file that changes under it and about a newer file. The host's Settings, Theme, Vault and ModuleView come from noteAppC_modules.
+    if(TARGET noteAppC_ink)
+        add_executable(test_inkview test_inkview.cpp)
+        # noteAppC_editor: InkView draws a text box with MarkdownEditor, which the module takes from the host.
+        target_link_libraries(test_inkview PRIVATE noteAppC_ink noteAppC_modules noteAppC_editor Qt6::Test GTest::gtest)
+        set_target_properties(test_inkview PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+        add_test(NAME inkview COMMAND test_inkview)
+        set_tests_properties(inkview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
+endif()
+
+# The host-side .ink text-box reader (R1): JSON only, no module, no inkcore.
+find_package(ZLIB REQUIRED)
+add_executable(test_inktextboxes test_inktextboxes.cpp)
+target_link_libraries(test_inktextboxes PRIVATE noteAppC_ui Qt6::Test GTest::gtest_main ZLIB::ZLIB)
+add_test(NAME inktextboxes COMMAND test_inktextboxes)
+
+# An .ink note in the index after a rename (the host reader plus inkcore, to prove the file still opens).
+if(TARGET notolith-inkcore)
+    add_executable(test_inkindex test_inkindex.cpp)
+    target_link_libraries(test_inkindex PRIVATE noteAppC_ui noteAppC_index noteAppC_vault notolith-inkcore Qt6::Test GTest::gtest)
+    set_target_properties(test_inkindex PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+    add_test(NAME inkindex COMMAND test_inkindex)
+endif()
+
+# No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none
+# sees the modules installed on the machine (NOTEAPPC_MODULE_DIRS, below).
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
 # settings.ini, so without this a test's result depended on how the person
 # running it had set up their own copy of the app - Settings.defaultsAreCompiledIn
@@ -356,10 +483,18 @@ add_test(NAME lists COMMAND test_lists)
 # test above this block: a test added below it runs against the real home.
 get_property(noteappc_tests DIRECTORY PROPERTY TESTS)
 foreach(test IN LISTS noteappc_tests)
+    get_property(noteappc_test_environment TEST ${test} PROPERTY ENVIRONMENT)
     set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
         "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/config"
         "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/cache"
         "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/data")
+    # M8: what is installed on the machine never reaches a test. A test that wants modules
+    # (window: the fake ones) has set NOTEAPPC_MODULE_DIRS above this block; every other
+    # gets a directory that does not exist, so a scan finds nothing.
+    if(NOT noteappc_test_environment MATCHES "NOTEAPPC_MODULE_DIRS=")
+        set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
+            "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/modules")
+    endif()
 endforeach()
 
 # The same homes for a test binary run by hand (IsolatedHome.cpp runs before main).

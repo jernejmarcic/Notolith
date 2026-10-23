@@ -292,6 +292,7 @@ void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> res
 {
     m_resolver = std::move(resolver);
     d->m_images.clear();
+    clearGIFs();
     invalidateLayouts();
     updateLayout();
     viewport()->update();
@@ -707,6 +708,7 @@ void MarkdownEditor::setMode(Mode mode)
 void MarkdownEditor::setNoteText(const QString &text)
 {
     finishPropertyEdit(false); // a different note: what was typed belongs to the old one
+    clearGIFs();
     if (d->m_media)
         d->m_media->stop();
     d->m_text = text;
@@ -1003,6 +1005,18 @@ void MarkdownEditor::setReadableLineLength(bool on)
         return;
     d->m_readable = on;
     relayoutIfWidthChanged();
+    viewport()->update();
+}
+
+void MarkdownEditor::setViewportPadding(int side, int top)
+{
+    side = qMax(0, side);
+    top = qMax(0, top);
+    if (d->m_minimumSideMargin == side && d->m_topPadding == top)
+        return;
+    d->m_minimumSideMargin = side;
+    d->m_topPadding = top;
+    relayoutIfWidthChanged(); // the side margin changes the width; the layout pass places the blocks under the top one
     viewport()->update();
 }
 
@@ -2569,7 +2583,9 @@ bool MarkdownEditor::softBreakAt(qsizetype source) const
 {
     // Source mode shows the file as it is written: one line of the file is one
     // line on screen, the way Obsidian's own source mode lays out.
-    if (d->m_strictLineBreaks || d->m_mode == Mode::Source)
+    // Obsidian's default (strict off) honours every newline; only the strict
+    // setting follows CommonMark and joins the lines of a paragraph.
+    if (!d->m_strictLineBreaks || d->m_mode == Mode::Source)
         return false;
     // A hard break: two spaces or a backslash before the newline.
     if (source >= 2 && d->m_text.at(source - 1) == QLatin1Char(' ')
@@ -2908,7 +2924,9 @@ const TableSpan *MarkdownEditor::tableFor(const BlockView &view) const
 const EmbedSpan *MarkdownEditor::soleEmbedOf(const BlockView &view) const
 {
     for (const EmbedSpan &embed : d->m_decorations.embeds) {
-        if (!embed.range.overlaps(view.span.range))
+        // An <img> is always an inline cell (buildEmbedCell): it never
+        // transcludes a note or a PDF the way a whole-block `![[x]]` does.
+        if (embed.html || !embed.range.overlaps(view.span.range))
             continue;
         // Only when the embed is the whole block; an image in the middle of a
         // sentence stays inline until Phase 3 finishes inline objects.
@@ -3016,10 +3034,9 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
     }
 
     // Obsidian caps an image at the readable column and honours |WxH.
-    int width = embed.width > 0 ? embed.width : pixmap.width();
-    width = qMin(width, contentWidth());
-    int height = embed.height > 0 ? embed.height
-                                  : int(qreal(width) * pixmap.height() / pixmap.width());
+    const QSizeF size = embedImageSize(embed, pixmap.size(), contentWidth());
+    const int width = qMax(1, qRound(size.width()));
+    const int height = qMax(1, qRound(size.height()));
 
     view.image = pixmap;
     view.imageSize = QSize(width, height);
@@ -3342,6 +3359,25 @@ bool MarkdownEditor::layoutTable(BlockView &view)
     const qreal padX = 10;
     const qreal padY = 6;
     const qreal minimum = QFontMetricsF(font).horizontalAdvance(QLatin1Char('m')) * 3;
+    // Obsidian does not squeeze a table into the readable column: every column
+    // keeps the width its content wants, and a table too wide to fit scrolls
+    // sideways inside its own block. Only a single runaway column is capped,
+    // so one long cell wraps instead of pushing everything else off screen.
+    const qreal available = contentWidth();
+    const qreal columnCap = qMax(minimum * 4, available * 0.66);
+    static const QByteArrayList imageFormats = QImageReader::supportedImageFormats();
+    // Every embed by where it starts, so each cell finds its own with a binary
+    // search instead of walking the note's every embed. Which of them a cell
+    // draws (an <img> or an image file; a PDF, a note or a file card stays
+    // text) is decided per embed that lands in a cell, not per embed of the note.
+    std::vector<const EmbedSpan *> tableEmbeds;
+    if (d->m_features.fileEmbeds) {
+        tableEmbeds.reserve(size_t(d->m_decorations.embeds.size()));
+        for (const EmbedSpan &embed : d->m_decorations.embeds)
+            tableEmbeds.push_back(&embed);
+        std::sort(tableEmbeds.begin(), tableEmbeds.end(),
+                  [](const EmbedSpan *a, const EmbedSpan *b) { return a->range.start < b->range.start; });
+    }
 
     // Natural widths first, so the columns can be sized from their content
     // the way Obsidian does, then scaled down together if they do not fit.
@@ -3373,6 +3409,31 @@ bool MarkdownEditor::layoutTable(BlockView &view)
                 if (marker.overlaps(cell.source))
                     hidden.append(marker);
             }
+            // An image in the cell - `![[p.png|40]]`, `![](p.png)`, `<img
+            // src="p.png" width="40">` - is drawn inline, the way collectTextEmbeds
+            // does in a paragraph: its first character stays as a transparent
+            // carrier the image's width is reserved on, the rest is hidden.
+            // The cell holding the caret shows the source instead.
+            for (auto it = editing ? tableEmbeds.end()
+                                   : std::lower_bound(tableEmbeds.begin(), tableEmbeds.end(), cell.source.start,
+                                                      [](const EmbedSpan *embed, qsizetype start) {
+                                                          return embed->range.start < start;
+                                                      });
+                 it != tableEmbeds.end() && (*it)->range.start < cell.source.end; ++it) {
+                const EmbedSpan &embed = **it;
+                if (embed.range.end > cell.source.end)
+                    continue;
+                if (!embed.html && !imageFormats.contains(QFileInfo(embed.target).suffix().toLower().toUtf8()))
+                    continue;
+                EmbedCell built = buildEmbedCell(embed, columnCap - 2 * padX);
+                if (built.image.isNull() && !(built.isFileCard && embed.html))
+                    continue; // an unresolved Markdown image stays its source
+                hidden.removeIf([&](const Range &marker) {
+                    return marker.start >= embed.range.start && marker.end <= embed.range.end;
+                });
+                hidden.append({embed.range.start + 1, embed.range.end});
+                cell.embeds.push_back(std::move(built));
+            }
             // An entity stays one character even in the cell being edited.
             cell.map = DisplayMap::build(d->m_text, cell.source, hidden, d->m_decorations.substitutions);
 
@@ -3391,10 +3452,22 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             else if (r < table->headerRows)
                 cellFont.setWeight(QFont::DemiBold);
             cell.layout->setFont(cellFont);
-            cell.layout->setFormats(formatsIn(view, cell.source, cell.map));
+            QList<QTextLayout::FormatRange> formats = formatsIn(view, cell.source, cell.map);
+            const QFontMetricsF cellMetrics(cellFont);
+            qreal imageExtra = 0;
+            for (const EmbedCell &embed : cell.embeds) {
+                const qreal carrier = cellMetrics.horizontalAdvance(d->m_text.at(embed.source.start));
+                QTextCharFormat format;
+                format.setForeground(Qt::transparent);
+                format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
+                format.setFontLetterSpacing(embed.rect.width() - carrier);
+                formats.append({qMax(0, int(cell.map.toDisplay(embed.source.start)) - cell.lead), 1, format});
+                imageExtra += embed.rect.width() - carrier;
+            }
+            cell.layout->setFormats(formats);
 
             natural[c] = qMax(natural.at(c),
-                              QFontMetricsF(cellFont).horizontalAdvance(shown) + 2 * padX);
+                              cellMetrics.horizontalAdvance(shown) + imageExtra + 2 * padX);
             cells.push_back(std::move(cell));
         }
         // A row shorter than the header still draws its missing cells, as
@@ -3410,13 +3483,6 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             cells.push_back(std::move(cell));
         }
     }
-
-    // Obsidian does not squeeze a table into the readable column: every column
-    // keeps the width its content wants, and a table too wide to fit scrolls
-    // sideways inside its own block. Only a single runaway column is capped,
-    // so one long cell wraps instead of pushing everything else off screen.
-    const qreal available = contentWidth();
-    const qreal columnCap = qMax(minimum * 4, available * 0.66);
 
     QList<qreal> widths;
     QList<qreal> offsets;
@@ -3440,10 +3506,27 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             if (!line.isValid())
                 break;
             line.setLineWidth(qMax<qreal>(10, width));
-            line.setPosition(QPointF(0, height));
-            height += lineHeight;
+            // A line carrying an image taller than the text grows above the
+            // text to hold it, as in a paragraph.
+            qreal grow = 0;
+            for (const EmbedCell &embed : cell.embeds) {
+                const qsizetype carrier = qMax<qsizetype>(0, cell.map.toDisplay(embed.source.start) - cell.lead);
+                if (carrier >= line.textStart() && carrier < line.textStart() + line.textLength())
+                    grow = qMax(grow, embed.rect.height() - lineHeight);
+            }
+            line.setPosition(QPointF(0, height + grow));
+            height += lineHeight + grow;
         }
         cell.layout->endLayout();
+        for (EmbedCell &embed : cell.embeds) {
+            const int carrier = qMax(0, int(cell.map.toDisplay(embed.source.start)) - cell.lead);
+            const QTextLine line = cell.layout->lineForTextPosition(carrier);
+            if (!line.isValid())
+                continue;
+            const qreal h = embed.rect.height();
+            embed.rect.moveTo(line.cursorToX(carrier),
+                              h > lineHeight ? line.y() + lineHeight - h : line.y() + (lineHeight - h) / 2);
+        }
         rowHeights[cell.row] = qMax(rowHeights.at(cell.row), height + 2 * padY);
     }
 
@@ -3492,10 +3575,18 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     QColor pickedFill = d->m_theme.color(QStringLiteral("--interactive-accent"));
     pickedFill.setAlphaF(0.22f);
 
+    // Only the cells inside the rectangle being repainted: a GIF frame in one
+    // cell repaints that cell's rect, not every cell of a long table. Null
+    // outside a paint event (an export paints the whole table).
+    const QRectF exposed = d->m_exposed;
+    int painted = 0;
     for (const Cell &cell : view.cells) {
         const QRectF rect = cell.rect.translated(left + shift, top);
         if (rect.right() < window.left() - 2 || rect.left() > window.right() + 2)
             continue;
+        if (!exposed.isNull() && (rect.bottom() < exposed.top() - 2 || rect.top() > exposed.bottom() + 2))
+            continue;
+        ++painted;
         if (cell.row < view.headerRows)
             painter.fillRect(rect, header);
         if (cell.fill.isValid())
@@ -3539,8 +3630,13 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         cell.layout->draw(&painter, cellTextOrigin(view, cell) + QPointF(left, top), selected);
         if (strikeLines)
             paintStrikeLines(painter, *cell.layout, cellTextOrigin(view, cell) + QPointF(left, top));
+        if (!cell.embeds.empty()) {
+            const QPointF origin = cellTextOrigin(view, cell);
+            paintEmbedCellList(painter, cell.embeds, origin.x() + left, origin.y() + top);
+        }
         painter.restore();
     }
+    d->m_tableCellsPainted = painted;
     if (!picked.isNull()) {
         const auto cellAt = [&](int row, int column) {
             return view.cells[size_t(row) * size_t(tableFor(view)->columns) + size_t(column)].rect;
@@ -4010,9 +4106,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // character it does break on. Same length, so every display offset the
     // DisplayMap computed still points at the same glyph.
     //
-    // Which newlines actually break is CommonMark's rule, which is also
-    // Obsidian's default: a newline inside a paragraph joins the lines, one
-    // between blocks does not. Two trailing spaces still force a break.
+    // With "Strict line breaks" on, a newline inside a paragraph joins the
+    // lines (CommonMark's rule), one between blocks does not, and two trailing
+    // spaces still force a break. Off, the default, every newline breaks.
     QString shown = view.map.text();
     for (qsizetype i = 0; i < shown.size(); ++i) {
         if (shown.at(i) != QLatin1Char('\n'))
@@ -4480,6 +4576,7 @@ void MarkdownEditor::scrollContentsBy(int dx, int dy)
     // The property editor is a widget over the table, and would stay put
     // while the table moved away under it.
     finishPropertyEdit(true);
+    pruneGIFs(); // a GIF that scrolled out of view stops here, not a frame later
     // Blocks scrolling into reach need their real layout; the rest of what
     // updateLayout() settles does not change with the scroll position, so a
     // note already laid out around the new position is left alone. That pass
@@ -4677,7 +4774,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
                 view.imageCentred ? left + (contentWidth() - view.imageSize.width()) / 2.0 : left;
             const QRectF target(imageX, top + view.textTop, view.imageSize.width(),
                                 view.imageSize.height());
-            painter.drawPixmap(target.toRect(), view.image);
+            painter.drawPixmap(target.toRect(), GIFframe(painter, view.imagePath, target, view.image));
             continue;
         }
         if (view.isBase && !view.cells.empty()) {
@@ -4747,6 +4844,8 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
     });
     QPainter painter(viewport());
     painter.setRenderHint(QPainter::Antialiasing);
+    d->m_exposed = QRectF(event->rect());
+    const auto leftPaint = qScopeGuard([this] { d->m_exposed = QRectF(); });
     // After a scroll only the strip that came into view is exposed; blocks
     // outside it are skipped rather than drawn and clipped away. The margin
     // covers what a block paints past its own edges, like a code panel's.
@@ -5086,6 +5185,13 @@ void MarkdownEditor::resizeEvent(QResizeEvent *event)
     // Also called for the viewport's own resize (a scrollbar showing).
     relayoutIfWidthChanged();
     positionFindBar();
+    pruneGIFs();
+}
+
+void MarkdownEditor::hideEvent(QHideEvent *event)
+{
+    clearGIFs(); // nothing plays in a hidden editor; the next paint starts what is on screen again
+    QAbstractScrollArea::hideEvent(event);
 }
 
 // --- cursor ---------------------------------------------------------------

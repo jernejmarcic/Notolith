@@ -8,6 +8,7 @@
 #include <QHash>
 #include <QList>
 #include <QPair>
+#include <optional>
 #include <QObject>
 #include <QSqlDatabase>
 #include <QString>
@@ -209,6 +210,13 @@ public:
                                const Vault &vault, QString *error = nullptr,
                                const QStringList &extraCandidates = {});
 
+    /// Files the host reads as text through a reader instead of as Markdown (a notebook, an .ink file; the
+    /// Indexer sets these from its foreign readers). `handles(absolutePath)` says a file is one; `text(absolutePath)`
+    /// is the text it is indexed by, nullopt when it cannot be read. updateLinksAfterRename indexes such a file
+    /// by that text after it rewrote the links inside (JSON files: the new name is escaped as a JSON string).
+    void setForeignFiles(std::function<bool(const QString &)> handles,
+                         std::function<std::optional<QString>(const QString &)> text);
+
     // --- Bases (libs/ext/bases) -----------------------------------------
     // One read-only block for the optional Bases module (NOTEAPPC_WITH_BASES).
     // Nothing above this point reads or writes it, and it changes no table.
@@ -270,6 +278,8 @@ private:
     static void eachMatch(const QString &databasePath, const SearchQuery &query, int limit,
                           const std::function<void(NoteContext &&, SearchOutcome &&)> &onMatch);
 
+    std::function<bool(const QString &)> m_foreignHandles;
+    std::function<std::optional<QString>(const QString &)> m_foreignText;
     QSqlDatabase m_db;
     QString m_connectionName;
     QString m_databasePath;
