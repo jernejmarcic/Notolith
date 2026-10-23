@@ -490,11 +490,6 @@ public:
     void setBaseRunner(
         std::function<void(const QString &yamlText, const QString &viewName, const BaseDeliver &deliver)>
             runner);
-    /// A file may have appeared (created, restored, moved in): every block
-    /// whose `![[target]]` had no file when it was laid out, and has one now,
-    /// is laid out again. Cheap when there are none; the window calls it when
-    /// the vault's scan finishes.
-    void retryMissingEmbeds();
     /// The index changed: every rendered ```` ```base ```` block's table is
     /// dropped from the cache and evaluated again. Debounced like
     /// refreshQueries().

@@ -1117,10 +1117,6 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 m_active->editor->setFocus();
             });
     connect(&m_index, &Index::changed, editor, &MarkdownEditor::refreshQueries);
-    // A scan ends after the vault's watches saw a file come or go - an
-    // attachment included, which Index::changed does not announce: an embed
-    // that had no file yet is looked up again.
-    connect(m_indexer, &Indexer::finished, editor, &MarkdownEditor::retryMissingEmbeds);
     // A hooked embed's own card (a `.canvas`'s file node) or its own file
     // (double-clicking empty space in one) opened the same way every other
     // pane's noteActivated already is.

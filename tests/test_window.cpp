@@ -4770,7 +4770,8 @@ TEST_F(WindowTest, ANoteOpenedBeforeItsCSVExistsShowsTheTableWhenTheFileAppears)
 {
     ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets"))); // a folder of its own: not the note's, so only the vault scan sees into it
     // the real resolver answers {} for a file that is not there, so layout never even
-    // reaches the CSV code: the editor has to remember what did not resolve
+    // reaches the CSV code; what brings the table back is the scan that follows the
+    // file's creation (Index::changed -> refreshLinkStatus), which this pins
     write(QStringLiteral("Table.md"), "![[Assets/later.csv]]\n");
     MainWindow window;
     window.openVault(dir.path());

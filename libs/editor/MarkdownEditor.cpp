@@ -2970,10 +2970,8 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
         return false;
 
     const QString path = m_resolver(embed->target);
-    if (path.isEmpty()) {
-        view.unresolvedEmbed = embed->target;
+    if (path.isEmpty())
         return false;
-    }
 
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QByteArrayList images = QImageReader::supportedImageFormats();
@@ -3941,7 +3939,6 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.baseYAML.clear();
     view.baseRows.clear();
     view.CSVpath.clear();
-    view.unresolvedEmbed.clear();
     view.embedCells.clear();
     view.isFileCard = false;
     view.isHtml = false;
