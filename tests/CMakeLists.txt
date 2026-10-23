@@ -163,9 +163,12 @@ if(TARGET notolith-pdfview)
     noteappc_lazy_test(lazy_pdf_start PdfNothingMappedUntilAPdfIsOpened "${noteappc_lazy_modules}")
     noteappc_lazy_test(lazy_pdf_embed PdfEmbedResolvesWithoutThePluginFace "${noteappc_lazy_modules}")
     noteappc_lazy_test(lazy_pdf_prescan PdfOpensBeforeAnyScan "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_pdf_restore PdfTabRestoredFromTheWorkspaceOpens "${noteappc_lazy_modules}")
     # No NOTEAPPC_MODULE_DIRS here: the loop at the end of this file gives it a directory that does not exist.
     noteappc_lazy_test(lazy_pdf_missing PdfWithoutTheModuleIsNotAViewFile)
+    noteappc_lazy_test(lazy_pdf_restore_missing PdfTabIsKeptInTheWorkspaceWithoutTheModule)
     list(APPEND noteappc_exe_forbidden "poppler")
+    list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-pdfview> $<TARGET_FILE:notolith-pdfpage>)
     # A module takes the host's symbols from the executable: it must not carry a copy of a host library.
     add_test(NAME needed_pdfview COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-pdfview>
         "libnoteAppC_" "libnotolith-ink")
@@ -182,11 +185,22 @@ if(TARGET notolith-share)
     noteappc_lazy_test(lazy_share_off ShareOffMapsNothing "${noteappc_lazy_modules}")
     noteappc_lazy_test(lazy_share_missing ShareWithoutTheModuleSaysWhatIsMissing)
     list(APPEND noteappc_exe_forbidden "protobuf" "datachannel" "avahi" "absl")
+    list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-share>)
     add_test(NAME needed_share COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-share>
         "libnoteAppC_")
 endif()
 # The link-time side of the same fact, with no process started: the executable names none of the libraries
 # a module brings.
+# What NEEDED cannot see: a host static library linked into a module defines the same noteAppC symbols as the
+# executable (a second Settings, CrdtDoc, SyncCrypto). The self-test hands the script the executable twice, which
+# overlaps everywhere, and must fail: a check that cannot fail proves nothing.
+if(noteappc_symbol_modules)
+    add_test(NAME symbols_modules COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_symbols.sh $<TARGET_FILE:noteAppC>
+        ${noteappc_symbol_modules})
+    add_test(NAME symbols_selftest COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_symbols.sh $<TARGET_FILE:noteAppC>
+        $<TARGET_FILE:noteAppC>)
+    set_tests_properties(symbols_selftest PROPERTIES WILL_FAIL TRUE)
+endif()
 if(noteappc_exe_forbidden)
     add_test(NAME needed_exe COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:noteAppC>
         ${noteappc_exe_forbidden})

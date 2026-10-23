@@ -4,20 +4,28 @@
 // fact about the whole process, and an earlier test in it would already have mapped what a later one asserts absent.
 #include <gtest/gtest.h>
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QListWidget>
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPdfWriter>
 #include <QPainter>
+#include <QStatusBar>
 #include <QTemporaryDir>
 
 #include "LoadedObjects.h"
 #include "MainWindow.h"
+#include "MarkdownEditor.h"
 #include "ModuleHost.h"
 #include "ModuleRegistry.h"
 #include "PdfPage.h"
 #include "SecretStore.h"
 #include "Settings.h"
+#include "Workspaces.h"
 #include "ShareEngineBase.h"
 #include "WaitFor.h"
 
@@ -68,6 +76,22 @@ QString mappedNames(const QStringList &needles)
     return names.join(QLatin1Char(' '));
 }
 
+/// The Settings toggle of `feature`: the page builds a page when first shown, so look on each in turn, as a person clicks the nav.
+QAbstractButton *featureToggle(MainWindow &window, const char *feature)
+{
+    window.openSettings();
+    const QString name = QStringLiteral("settingsToggle_") + Settings::featureKey(feature);
+    if (auto *found = window.findChild<QAbstractButton *>(name))
+        return found;
+    auto *nav = window.findChild<QListWidget *>(QStringLiteral("settingsNav"));
+    for (int row = 0; nav && row < nav->count(); ++row) {
+        nav->setCurrentRow(row);
+        if (auto *found = window.findChild<QAbstractButton *>(name))
+            return found;
+    }
+    return nullptr;
+}
+
 /// Starts the way main() does (openTarget runs after the first paint) and waits for the module scan that follows it.
 void startAndScan(MainWindow &window, const QString &vaultRoot)
 {
@@ -75,6 +99,24 @@ void startAndScan(MainWindow &window, const QString &vaultRoot)
     window.openTarget(resolveLaunchTarget(vaultRoot));
     QApplication::processEvents();
     ASSERT_TRUE(QTest::qWaitFor([&] { return !window.modules()->modules().isEmpty(); }, 10000)) << "no module scan result";
+}
+
+/// The workspace a session left behind: one split, one group, one tab showing `file` (a PDF, which only a module opens).
+void seedWorkspaceWith(const QString &vaultRoot, const QString &file)
+{
+    const QJsonObject tab{{QStringLiteral("id"), QStringLiteral("t1")}, {QStringLiteral("type"), QStringLiteral("leaf")},
+                          {QStringLiteral("state"), QJsonObject{{QStringLiteral("type"), QStringLiteral("pdf")},
+                                                               {QStringLiteral("state"), QJsonObject{{QStringLiteral("file"), file}}}}}};
+    const QJsonObject group{{QStringLiteral("id"), QStringLiteral("g1")}, {QStringLiteral("type"), QStringLiteral("tabs")},
+                            {QStringLiteral("currentTab"), 0}, {QStringLiteral("children"), QJsonArray{tab}}};
+    const QJsonObject main{{QStringLiteral("id"), QStringLiteral("s1")}, {QStringLiteral("type"), QStringLiteral("split")},
+                           {QStringLiteral("direction"), QStringLiteral("vertical")}, {QStringLiteral("children"), QJsonArray{group}}};
+    ASSERT_TRUE(Workspaces::saveCurrent(vaultRoot, {{QStringLiteral("main"), main}, {QStringLiteral("active"), QStringLiteral("t1")}}));
+}
+
+bool workspaceNames(const QString &vaultRoot, const QString &file)
+{
+    return QJsonDocument(Workspaces::current(vaultRoot)).toJson().contains(file.toUtf8());
 }
 
 } // namespace
@@ -139,6 +181,20 @@ TEST(LazyModules, PdfWithoutTheModuleIsNotAViewFile)
     EXPECT_EQ(PdfPage::pageCount(vault.pdfPath()), 0);
     EXPECT_TRUE(PdfPage::render(vault.pdfPath(), 0, 300).isNull());
     EXPECT_FALSE(window.openNote(vault.pdfPath()));
+    // The settings row is still there, switched off and naming the package.
+    auto *toggle = featureToggle(window, "pdf-embeds");
+    ASSERT_NE(toggle, nullptr) << "the PDF embeds row vanished";
+    EXPECT_FALSE(toggle->isEnabled());
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("notolith-pdfview")))
+        << window.statusBar()->currentMessage().toStdString();
+    // An embed of a perfectly good PDF says what is missing, not that the file is broken.
+    MarkdownEditor editor;
+    editor.resize(900, 600);
+    editor.setNoteText(QStringLiteral("![[Paper.pdf]]\n"));
+    editor.setLinkResolver([&](const QString &) { return vault.pdfPath(); });
+    const MarkdownEditor::PdfEmbedInfo info = editor.pdfEmbedInfoAt(0);
+    ASSERT_TRUE(info.isPdfEmbed);
+    EXPECT_TRUE(info.error.contains(QStringLiteral("notolith-pdfview"))) << info.error.toStdString();
     EXPECT_FALSE(anyMapped(kPoppler));
 }
 
@@ -263,9 +319,45 @@ TEST(LazyModules, ShareWithoutTheModuleSaysWhatIsMissing)
     window.scanModulesNow();
     QString error;
     EXPECT_FALSE(window.ensureShare(&error));
+    auto *toggle = featureToggle(window, "share");
+    ASSERT_NE(toggle, nullptr) << "the Share a note row vanished";
+    EXPECT_FALSE(toggle->isEnabled());
     EXPECT_TRUE(error.contains(QStringLiteral("notolith-share"))) << error.toStdString();
     EXPECT_EQ(window.shareEngine(), nullptr);
     EXPECT_FALSE(anyMapped(kShareStack));
+}
+
+// 13. The last session ended with a PDF open: the restored tab opens it although no module scan has run yet,
+// and the saved workspace keeps it.
+TEST(LazyModules, PdfTabRestoredFromTheWorkspaceOpens)
+{
+    LazyVault vault;
+    seedWorkspaceWith(vault.root(), QStringLiteral("Paper.pdf"));
+    {
+        MainWindow window;
+        window.show();
+        window.openTarget(resolveLaunchTarget(vault.root()));
+        EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("pdfview"))) << "the tab was dropped";
+        EXPECT_EQ(window.findChildren<ModuleView *>().size(), 1);
+        window.close();
+    }
+    EXPECT_TRUE(workspaceNames(vault.root(), QStringLiteral("Paper.pdf"))) << "the workspace lost the tab";
+}
+
+// 14. The same with no module installed (the ctest entry points the registry at a directory that is not there):
+// nothing opens, and the workspace still names the file, for the day the package is installed.
+TEST(LazyModules, PdfTabIsKeptInTheWorkspaceWithoutTheModule)
+{
+    LazyVault vault;
+    seedWorkspaceWith(vault.root(), QStringLiteral("Paper.pdf"));
+    {
+        MainWindow window;
+        window.show();
+        window.openTarget(resolveLaunchTarget(vault.root()));
+        EXPECT_EQ(window.findChildren<ModuleView *>().size(), 0);
+        window.close();
+    }
+    EXPECT_TRUE(workspaceNames(vault.root(), QStringLiteral("Paper.pdf"))) << "the workspace lost the tab";
 }
 
 int main(int argc, char **argv)

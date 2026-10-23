@@ -1776,8 +1776,15 @@ void MainWindow::activateLeaf(Leaf *leaf)
     // before there is one.
     if (!m_rightPanes)
         return;
-    if (!leaf->pendingPath.isEmpty() && openNote(std::exchange(leaf->pendingPath, QString())))
-        return; // opening it filled the panes
+    if (!leaf->pendingPath.isEmpty()) {
+        const QString pending = std::exchange(leaf->pendingPath, QString());
+        if (openNote(pending))
+            return; // opening it filled the panes
+        // A file only a module opens, and none is installed (or it will not load): the tab stays in the saved
+        // workspace for the day it does, rather than being dropped from it.
+        if (!Vault::isNote(pending) && !isViewFile(pending))
+            leaf->pendingPath = pending;
+    }
     const QString &path = leaf->notePath;
     showNoteInPanes(path);
     if (!path.isEmpty()) {
@@ -5614,8 +5621,10 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     }
     if (!Vault::isNote(path) && !Vault::isEncryptedNote(path) && !isNotebookFile(path)) {
         if (source != NavSource::History) {
-            statusBar()->showMessage(tr("%1 is not a note - editors for other file types come later")
-                                         .arg(QFileInfo(path).fileName()),
+            statusBar()->showMessage(path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)
+                                         ? tr("PDF support is not installed (the notolith-pdfview package)")
+                                         : tr("%1 is not a note - editors for other file types come later")
+                                               .arg(QFileInfo(path).fileName()),
                                      4000);
         }
         return false;
@@ -5940,6 +5949,13 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
         popout->show();
     }
 
+    // A tab whose file only a module can open (a PDF, an .ink page): the scan that finds the module runs after the
+    // first paint, later than this, so the open below would find no owner. One directory listing, and only then.
+    if (!m_modulesScanned && std::ranges::any_of(m_leaves, [](const auto &leaf) {
+            const QString &path = leaf->pendingPath;
+            return !path.isEmpty() && !Vault::isNote(path) && !isBuiltInSuffix(QFileInfo(path).suffix().toLower());
+        }))
+        scanModulesNow();
     // Each split's own tab first, the focused one last so it ends up active.
     for (const auto &[group, index] : std::as_const(shown)) {
         if (!group->leaves.isEmpty())

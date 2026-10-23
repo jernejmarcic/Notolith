@@ -210,6 +210,8 @@ JoinShareDialog::JoinShareDialog(ShareEngineBase *engine, std::function<bool(con
         m_error->setText(why);
         m_error->show();
     });
+    if (engine)
+        connect(engine, &QObject::destroyed, this, &QDialog::reject); // sharing was switched off, or the vault changed
     connect(m_code, &QLineEdit::textChanged, this, &JoinShareDialog::check);
     layout->addWidget(buttons);
     resize(520, sizeHint().height());
