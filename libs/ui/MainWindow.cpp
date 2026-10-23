@@ -222,6 +222,10 @@ class NoIcons : public QFileIconProvider {
 public:
     QIcon icon(IconType) const override { return {}; }
     QIcon icon(const QFileInfo &) const override { return {}; }
+    /// The Type column is hidden and never sorted by; the base class asks the
+    /// MIME database about every file in a listed directory. Not an empty
+    /// string: QFileSystemModel then lists no rows (WindowTest caught it).
+    QString type(const QFileInfo &) const override { return QStringLiteral("File"); }
 };
 
 NoIcons *noIcons()
