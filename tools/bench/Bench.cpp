@@ -2577,7 +2577,9 @@ int main(int argc, char *argv[])
         // The app's style and stylesheet: its scrollbars repaint with every
         // scroll step, and a bare Fusion one costs something else entirely.
         QApplication::setStyle(new noteAppC::PopupStyle);
-        app.setStyleSheet(noteAppC::Theme().styleSheet());
+        const noteAppC::Theme theme = noteAppC::Theme::builtin(); // the window's: dark, as the app starts
+        app.setPalette(theme.palette());
+        app.setStyleSheet(theme.styleSheet());
         QSize panel(1533, 958); // 2560x1600 / 1.67, the window full screen
         if (const QStringList wh = parser.value(sizeOption).split(QLatin1Char('x')); wh.size() == 2)
             panel = QSize(wh.at(0).toInt(), wh.at(1).toInt());
