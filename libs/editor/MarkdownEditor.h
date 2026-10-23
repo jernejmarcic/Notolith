@@ -2079,6 +2079,15 @@ private:
     /// text - cellSafe()'d either way. Inserts at the caret.
     void insertMimeData(const QMimeData *mime);
     void removeSelectionOrChar(int direction);
+    /// Where Ctrl+Left (direction -1) or Ctrl+Right (1) takes a caret at
+    /// `from`: past the spaces, over one word or one run of punctuation, on the
+    /// line; at a line's edge the break itself, as the plain arrows. In a drawn
+    /// table cell never past the cell. Never inside an entity drawn as one
+    /// character.
+    qsizetype wordTarget(qsizetype from, int direction) const;
+    /// Ctrl+Backspace (-1) and Ctrl+Delete (1): the selection if there is one,
+    /// else up to wordTarget().
+    void removeWord(int direction);
     void moveCursor(qsizetype offset, bool keepAnchor);
     void moveVertically(int lines, bool keepAnchor);
     Range selection() const;

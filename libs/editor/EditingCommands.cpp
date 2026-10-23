@@ -18,6 +18,7 @@
 #include <QPixmap>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QTextBoundaryFinder>
 
 #include <algorithm>
 
@@ -332,6 +333,86 @@ bool MarkdownEditor::handleAutoPair(QChar typed)
     applyEdit(at, 0, QString(typed) + close);
     setSelectionRange(at + 1, at + 1);
     return true;
+}
+
+qsizetype MarkdownEditor::wordTarget(qsizetype from, int direction) const
+{
+    const QString &text = d->m_text;
+    const qsizetype lineStart = lineStartOf(text, from);
+    const qsizetype lineEnd = lineEndOf(text, from);
+    // The line break is a step of its own, so the keys never skip a line.
+    if (direction < 0 && from == lineStart)
+        return qMax<qsizetype>(0, from - 1);
+    if (direction > 0 && from == lineEnd)
+        return qMin<qsizetype>(text.size(), from + 1);
+
+    // ponytail: the whole line is handed to the boundary finder, which is
+    // linear in it; a megabyte on one line costs a keypress tens of ms.
+    const QString line = text.mid(lineStart, lineEnd - lineStart);
+    QTextBoundaryFinder finder(QTextBoundaryFinder::Word, line);
+    enum class Kind { Space, Word, Punct };
+    const auto kindOf = [&line](qsizetype a, qsizetype b) {
+        bool space = true;
+        for (qsizetype i = a; i < b; ++i) {
+            char32_t c = line.at(i).unicode();
+            if (QChar::isHighSurrogate(c) && i + 1 < b && line.at(i + 1).isLowSurrogate())
+                c = QChar::surrogateToUcs4(c, line.at(++i).unicode());
+            if (!QChar::isSpace(c))
+                space = false;
+            if (QChar::isLetterOrNumber(c) || QChar::isMark(c) || c == U'_')
+                return Kind::Word;
+        }
+        return space ? Kind::Space : Kind::Punct;
+    };
+
+    // Windows and Qt's own rule, and what Ctrl+Left does in every text field:
+    // spaces first, then the word - or the run of punctuation - behind them.
+    qsizetype pos = from - lineStart;
+    bool taken = false;
+    Kind takenKind = Kind::Word;
+    while (direction < 0 ? pos > 0 : pos < line.size()) {
+        finder.setPosition(pos);
+        const qsizetype edge = direction < 0 ? finder.toPreviousBoundary() : finder.toNextBoundary();
+        if (edge < 0)
+            break;
+        const Kind kind = direction < 0 ? kindOf(edge, pos) : kindOf(pos, edge);
+        if (kind == Kind::Space && !taken) {
+            pos = edge;
+            continue;
+        }
+        if (taken && !(kind == Kind::Punct && takenKind == Kind::Punct))
+            break;
+        taken = true;
+        takenKind = kind;
+        pos = edge;
+        if (kind == Kind::Word)
+            break;
+    }
+    qsizetype target = lineStart + pos;
+
+    // A drawn table's cell is its own field: the word step stops at its edge,
+    // and the caller crosses it the way a plain arrow does.
+    if (d->m_anchor == d->m_cursor) {
+        const CellRef cell = tableCellAt(from);
+        if (cell.valid() && cell.row >= 0 && tableRenderedAt(from))
+            target = qBound(cell.range.start, target, cell.range.end);
+    }
+    return stepOverSubstitution(target, direction);
+}
+
+void MarkdownEditor::removeWord(int direction)
+{
+    if (d->m_mode == Mode::Reading)
+        return;
+    if (selection().length() > 0) {
+        removeSelectionOrChar(direction);
+        return;
+    }
+    const qsizetype target = wordTarget(d->m_cursor, direction);
+    if (target == d->m_cursor)
+        return;
+    pushUndo();
+    applyEdit(qMin(target, d->m_cursor), qAbs(target - d->m_cursor), QString());
 }
 
 bool MarkdownEditor::deleteAutoPair()

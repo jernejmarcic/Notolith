@@ -533,6 +533,11 @@ add_executable(test_lists test_lists.cpp)
 target_link_libraries(test_lists PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
 add_test(NAME lists COMMAND test_lists)
 
+# Word keys (Ctrl+Backspace/Delete/Left/Right, and with Shift): real key events into the editor.
+add_executable(test_wordkeys test_wordkeys.cpp)
+target_link_libraries(test_wordkeys PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
+add_test(NAME wordkeys COMMAND test_wordkeys)
+
 # The ink core (libs/ext/ink/core): model, format, outline, input, canvas.
 if(TARGET notolith-inkcore)
     add_executable(test_ink test_ink.cpp)
