@@ -160,35 +160,98 @@ TEST_F(MarkmapBlockTest, TheFoldingIsKeptByTheRendererPerSourceAndNeverWrittenBa
     EXPECT_EQ(ask(rendererFor(), kMap)->result.image.size(), open->result.image.size());
     EXPECT_EQ(ask(renderer, kMap + QStringLiteral("\n- extra"))->result.image.size(),
               ask(rendererFor(), kMap + QStringLiteral("\n- extra"))->result.image.size());
-    // The map the cache holds - what publish and PDF export read - is the source's own, unfolded.
+    // What publish and PDF export draw is the source's own, unfolded.
     EXPECT_TRUE(noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Dark)).contains("beta one"));
 }
 
-TEST_F(MarkmapBlockTest, TheSVGIsKeptWhereDiagramsAreSoPublishAndPDFExportFindIt)
+TEST_F(MarkmapBlockTest, TwoViewsOfTheSameMapAgreeWhicheverOneClicksFirst)
 {
-    EXPECT_TRUE(noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Dark)).isEmpty());
-    ask(rendererFor(), kMap);
-    const QByteArray svg = noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Dark));
-    EXPECT_TRUE(wellFormed(svg));
-    for (const char *text : {"Root", "Alpha", "alpha one", "Beta"})
-        EXPECT_TRUE(svg.contains(text)) << text;
-    // In any theme, as the other kinds: the most recent in other colours when none is for this theme.
-    EXPECT_FALSE(noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Light)).isEmpty());
+    // A note open in two splits: both show Alpha open. A folds it; B, still showing the old picture, clicks the
+    // same circle - it asked to fold what it saw open, so it ends folded too, rather than flipping back.
+    const auto renderer = rendererFor();
+    const auto viewA = ask(renderer, kMap);
+    const auto viewB = ask(renderer, kMap);
+    const auto foldedByA = click(*viewA, 1);
+    const auto foldedByB = click(*viewB, 1);
+    EXPECT_LT(foldedByA->result.image.height(), viewA->result.image.height());
+    EXPECT_EQ(foldedByB->result.image, foldedByA->result.image);
+    // And back: B's picture is now the folded one, whose click opens it.
+    EXPECT_EQ(click(*foldedByB, 1)->result.image, viewA->result.image);
 }
 
-TEST_F(MarkmapBlockTest, PdfExportDrawsTheMapTheEditorMadeAndOtherwiseTheListing)
+TEST_F(MarkmapBlockTest, ARememberedFoldIsNotLostWhenManyOtherMapsHaveBeenFolded)
 {
-    const auto exportImages = [&] {
+    const auto renderer = rendererFor();
+    const auto onlyAlpha = click(*ask(renderer, kMap), 1);
+    for (int i = 0; i < 255; ++i) // 256 sources in all: the limit
+        click(*ask(renderer, QStringLiteral("# R\n- x%1").arg(i)), 0);
+    // Clicking Beta of the map folded at Alpha must find Alpha still folded: two rows (Alpha, Beta), where
+    // Beta folded alone leaves Alpha's two leaves and Beta, three.
+    const auto both = click(*ask(renderer, kMap), 4);
+    const auto onlyBeta = click(*ask(rendererFor(), kMap), 4); // what it would show had Alpha's fold been lost
+    EXPECT_GT(onlyBeta->result.image.height(), onlyAlpha->result.image.height());
+    EXPECT_EQ(both->result.image.height(), onlyAlpha->result.image.height());
+}
+
+TEST_F(MarkmapBlockTest, PublishAndPDFExportAskForTheMapAndGetItDrawnFromTheTextInTheirOwnTheme)
+{
+    // Nothing was drawn by an editor and nothing is kept: the map comes from the fence's text, in the theme asked.
+    const QByteArray dark = noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Dark));
+    const QByteArray light = noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Light));
+    EXPECT_TRUE(wellFormed(dark));
+    for (const char *text : {"Root", "Alpha", "alpha one", "Beta"})
+        EXPECT_TRUE(dark.contains(text)) << text;
+    EXPECT_TRUE(dark.contains(Theme::builtin(Theme::Mode::Dark).color(QStringLiteral("--background-primary")).name().toUtf8()));
+    EXPECT_TRUE(light.contains(Theme::builtin(Theme::Mode::Light).color(QStringLiteral("--background-primary")).name().toUtf8()));
+    EXPECT_NE(dark, light);
+    // And the editor's own drawing leaves nothing on disk for them to find.
+    ask(rendererFor(), kMap);
+    EXPECT_FALSE(QDir(noteAppC::diagramCacheDirectory(noteAppC::DiagramKind::Markmap)).exists());
+}
+
+TEST_F(MarkmapBlockTest, PdfExportDrawsTheMapInTheLightThemeOnPaperAndAListingWhenThePluginIsOff)
+{
+    const auto exportPDF = [&](bool mindMaps) {
         const QString path = dir.filePath(QStringLiteral("out.pdf"));
+        MarkdownEditor::PdfOptions options;
+        options.mindMaps = mindMaps;
         QString error;
-        EXPECT_TRUE(MarkdownEditor::exportPdf(path, kNote, QStringLiteral("T"), {}, MarkdownEditor::PdfOptions{}, &error)) << qPrintable(error);
+        EXPECT_TRUE(MarkdownEditor::exportPdf(path, kNote, QStringLiteral("T"), {}, options, &error)) << qPrintable(error);
+        return path;
+    };
+    const auto imagesIn = [](const QString &path) {
         QFile file(path);
         EXPECT_TRUE(file.open(QIODevice::ReadOnly));
         return file.readAll().count("/Subtype /Image");
     };
-    EXPECT_EQ(exportImages(), 0) << "never drawn: the listing";
-    ask(rendererFor(), kMap);
-    EXPECT_GE(exportImages(), 1) << "drawn in the editor: its image";
+    // An app in its dark theme has drawn the map in dark colours: the paper does not get that one.
+    ask(rendererFor(Theme::Mode::Dark), kMap);
+    const QString path = exportPDF(true);
+    EXPECT_GE(imagesIn(path), 1) << "never opened in an editor, still a map";
+    // The picture itself: the PDF holds it as a JPEG, whose corner is the map's own background (the card).
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    const QByteArray pdf = file.readAll();
+    const qsizetype filter = pdf.indexOf("/Filter /DCTDecode");
+    ASSERT_GE(filter, 0);
+    const qsizetype begin = pdf.indexOf("stream\n", filter) + 7;
+    const QImage picture = QImage::fromData(pdf.mid(begin, pdf.indexOf("endstream", begin) - begin), "JPEG");
+    ASSERT_FALSE(picture.isNull());
+    const auto near = [](const QColor &a, const QColor &b) {
+        return qAbs(a.red() - b.red()) < 14 && qAbs(a.green() - b.green()) < 14 && qAbs(a.blue() - b.blue()) < 14;
+    };
+    const QColor light = Theme::builtin(Theme::Mode::Light).color(QStringLiteral("--background-primary"));
+    const QColor dark = Theme::builtin(Theme::Mode::Dark).color(QStringLiteral("--background-primary"));
+    ASSERT_FALSE(near(light, dark));
+    int lightPixels = 0, darkPixels = 0;
+    for (int y = 0; y < picture.height(); ++y)
+        for (int x = 0; x < picture.width(); ++x) {
+            lightPixels += near(picture.pixelColor(x, y), light);
+            darkPixels += near(picture.pixelColor(x, y), dark);
+        }
+    EXPECT_GT(lightPixels, picture.width() * picture.height() / 2) << "the paper's light card";
+    EXPECT_LT(darkPixels, picture.width() * picture.height() / 50) << "none of the window's dark one";
+    EXPECT_EQ(imagesIn(exportPDF(false)), 0) << "the plugin is off: the listing";
 }
 
 TEST_F(MarkmapBlockTest, AMapIsDrawnInPlaceOfItsFenceAndTheCaretBringsTheSourceBack)
@@ -322,16 +385,13 @@ TEST_F(MarkmapWindowTest, OnAMapIsDrawnInTheWindow)
 {
     MainWindow window;
     EXPECT_FALSE(openAndWait(window).isEmpty());
-    // Publish and PDF export find what the window drew by the fence's content.
-    EXPECT_FALSE(noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Dark)).isEmpty());
 }
 
-TEST_F(MarkmapWindowTest, OffTheFenceIsAPlainCodeBlockAndNothingIsMade)
+TEST_F(MarkmapWindowTest, OffTheFenceIsAPlainCodeBlock)
 {
     configure(false);
     MainWindow window;
     EXPECT_TRUE(openAndWait(window).isEmpty());
-    EXPECT_TRUE(noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Dark)).isEmpty());
 }
 
 TEST_F(MarkmapWindowTest, ShowAsMindMapIsACommandOfThePluginAndDrawsTheNotesHeadings)

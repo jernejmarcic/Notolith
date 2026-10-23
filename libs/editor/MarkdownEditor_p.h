@@ -681,7 +681,7 @@ struct MarkdownEditor::CodeBlockCacheEntry {
     bool pending = true;
     quint64 generation = 0;
     QList<CodeBlockResult::Hotspot> hotspots; ///< CodeBlockResult's, of the picture shown
-    std::function<void(int, const std::function<void(CodeBlockResult)> &)> activate;
+    decltype(CodeBlockResult::activate) activate;
 };
 
 // --- input() from a running block, NotebookInput.cpp ----------------

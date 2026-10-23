@@ -1,5 +1,7 @@
 #include "MermaidCache.h"
 
+#include "Markmap.h"
+
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
@@ -126,6 +128,9 @@ QByteArray mermaidCachedSVG(const QString &path)
 
 QByteArray diagramCachedSVG(DiagramKind kind, const QString &source, const Theme &theme)
 {
+    // No tool and nothing worth keeping: the map is drawn from the text, in `theme`'s own colours.
+    if (kind == DiagramKind::Markmap)
+        return drawMarkmap(parseMarkmap(source), markmapLook(diagramConfig(kind, theme))).svg;
     if (const QByteArray exact = mermaidCachedSVG(diagramCachePath(kind, source, diagramConfig(kind, theme))); !exact.isEmpty())
         return exact;
     // Not in this theme's colours (the app's own may carry a user's accent, which

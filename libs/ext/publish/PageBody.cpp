@@ -614,9 +614,9 @@ private:
     }
 
     /// The diagram the editor already made for a fence's source (mermaid,
-    /// plantuml, tikz, dot, markmap) as an <img>, or empty (the fence is then an
-    /// ordinary code block, its source in a <pre>). Publishing never starts a
-    /// tool. An <img>, not inlined: an SVG drawn as an image never runs
+    /// plantuml, tikz, dot) or the map drawn from it (markmap) as an <img>, or
+    /// empty (the fence is then an ordinary code block, its source in a <pre>).
+    /// Publishing never starts a tool. An <img>, not inlined: an SVG drawn as an image never runs
     /// script or loads anything, and a note decides what goes into its SVG
     /// (TikZ's \special{dvisvgm:raw ...} writes markup straight through), so
     /// inlining would need a full SVG sanitiser. Its ids stay its own too.
@@ -676,6 +676,8 @@ private:
                                                  noteAppC::DiagramKind::Markmap}) {
             if (!noteAppC::diagramLanguages(kind).contains(lang, Qt::CaseInsensitive))
                 continue;
+            if (kind == noteAppC::DiagramKind::Markmap && !m_env.mindMaps)
+                continue; // the plugin is off: a listing, as for any language nobody draws
             const QString diagram = cachedDiagram(kind, note.text.mid(fence.content.start, fence.content.length()));
             if (!diagram.isEmpty())
                 return diagram;

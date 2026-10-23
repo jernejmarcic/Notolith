@@ -412,29 +412,34 @@ TEST(PublishTest, ADiagramsOwnMarkupNeverReachesThePage)
     EXPECT_FALSE(css.contains(QStringLiteral("mermaid-diagram")));
 }
 
-// A ```markmap fence is published as the mind map the editor made of it (the same cache the diagrams use): an <img>,
-// the map as the fence's own text asks for it.
-TEST(PublishTest, AMindMapTheEditorMadeIsPublishedAsAnImage)
+// A ```markmap fence is published as the mind map drawn from its text right there - no editor has to have drawn it
+// first, so a vault published in one go is all maps - and as the plain listing when the plugin is off.
+TEST(PublishTest, AMindMapIsDrawnFromTheFencesTextEvenInANoteNeverOpened)
 {
     QTemporaryDir env;
     ASSERT_TRUE(env.isValid());
     const QByteArray oldCache = qgetenv("XDG_CACHE_HOME");
-    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8());
-    const QString source = QStringLiteral("# Root\n## Branch\n- leaf");
-    const QByteArray config = noteAppC::diagramConfig(noteAppC::DiagramKind::Markmap, Theme::builtin(Theme::Mode::Dark));
-    ASSERT_TRUE(mermaidCacheStore(noteAppC::diagramCachePath(noteAppC::DiagramKind::Markmap, source, config),
-                                  noteAppC::drawMarkmap(noteAppC::parseMarkmap(source), noteAppC::markmapLook(config)).svg));
-    TestSite site({{QStringLiteral("Note.md"), "```markmap\n# Root\n## Branch\n- leaf\n```\n\n```markmap\n# never drawn\n```\n"}});
+    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8()); // empty: nothing was drawn before
+    TestSite site({{QStringLiteral("Note.md"), "```markmap\n# Root\n## Branch\n- leaf\n```\n"}});
     site.publish();
     const QString page = site.read(QStringLiteral("note.html"));
+    const QStringList images = diagramImages(page);
+    ASSERT_EQ(images.size(), 1) << page.toStdString();
+    EXPECT_TRUE(images.first().contains(QStringLiteral(">leaf</text>")));
+    EXPECT_TRUE(images.first().contains(Theme::builtin(Theme::Mode::Dark).color(QStringLiteral("--background-primary")).name()))
+        << "in the site's dark theme, like the other diagrams";
+
+    TestSite off({{QStringLiteral("Note.md"), "```markmap\n# Root\n## Branch\n- leaf\n```\n"}});
+    Options options;
+    options.mindMaps = false;
+    off.publish(options);
+    const QString plain = off.read(QStringLiteral("note.html"));
+    EXPECT_TRUE(diagramImages(plain).isEmpty());
+    EXPECT_TRUE(plain.contains(QStringLiteral("# Root"))) << "the plugin is off: the listing";
     if (oldCache.isNull())
         qunsetenv("XDG_CACHE_HOME");
     else
         qputenv("XDG_CACHE_HOME", oldCache);
-    const QStringList images = diagramImages(page);
-    ASSERT_EQ(images.size(), 1) << page.toStdString();
-    EXPECT_TRUE(images.first().contains(QStringLiteral(">leaf</text>")));
-    EXPECT_TRUE(page.contains(QStringLiteral("never drawn"))) << "a map nobody drew stays its listing";
 }
 
 // The picture's words, for a screen reader and the site's search: the source is the alt text, escaped (a

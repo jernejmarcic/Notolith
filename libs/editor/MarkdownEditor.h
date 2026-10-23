@@ -294,6 +294,9 @@ public:
         /// Paper is white, so the light theme unless a caller passes its own
         /// (the person's formatting colours on top of it).
         std::optional<Theme> theme;
+        /// The markmap plugin: on, a ```markmap fence prints as the map, drawn
+        /// from its text in `theme`; off, as the listing.
+        bool mindMaps = true;
     };
     /// Renders `text` in reading view, light theme, onto paper, page by page.
     /// A page breaks between blocks; only a block taller than a page is cut.

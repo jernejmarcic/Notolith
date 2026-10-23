@@ -4577,6 +4577,7 @@ void MainWindow::exportPdf()
     QString error;
     MarkdownEditor::PdfOptions pdf = options.options();
     pdf.taskStates = featureOn("task-states");
+    pdf.mindMaps = featureOn("markmap");
     pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
     applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
@@ -5023,13 +5024,14 @@ void MainWindow::publishSite()
     // (a built-in scheme has none), on the worker with the rest.
     const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
     const bool taskStates = featureOn("task-states");
+    const bool mindMaps = featureOn("markmap");
     // The formatting colours too, read here: Settings is not for the worker.
     QHash<QString, QString> colours;
     for (const FormatRow &row : formatRows())
         for (const FormatColour &colour : row.colours)
             for (const bool dark : {true, false})
                 colours.insert(formatColourKey(colour, dark), m_settings.text(formatColourKey(colour, dark)));
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates] {
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates, mindMaps] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -5044,6 +5046,7 @@ void MainWindow::publishSite()
         options.siteName = choices.siteName.isEmpty() ? vault.name() : choices.siteName;
         options.theme = publish::Options::ThemeMode(choices.theme);
         options.parse.taskStates = taskStates;
+        options.mindMaps = mindMaps;
         for (const Theme::Mode mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
             Theme theme = schemePath.isEmpty() ? Theme::builtin(mode) : Scheme::apply(schemePath, mode);
             applyUserColours(theme, [&colours](const QString &key) { return colours.value(key); });

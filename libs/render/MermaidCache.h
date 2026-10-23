@@ -17,8 +17,8 @@ namespace noteAppC {
 /// PlantUML, TikZ and Graphviz fences are kept the same way, each kind in a
 /// directory of its own; the mermaid* functions are the Mermaid case of the
 /// diagram* ones. A ```` ```markmap ```` fence is the odd one out: no tool, its
-/// SVG is made in-process (Markmap.h) - but the editor keeps it here as well,
-/// so publish and PDF export read it the same way.
+/// SVG is made in-process (Markmap.h), so diagramCachedSVG draws it from the
+/// source, in the theme asked, and nothing of it is kept on disk.
 
 enum class DiagramKind { Mermaid, PlantUML, TikZ, Graphviz, Markmap };
 
@@ -36,7 +36,8 @@ QString diagramCacheDirectory(DiagramKind kind);
 /// mermaidCachePath for any kind.
 QString diagramCachePath(DiagramKind kind, const QString &source, const QByteArray &config);
 
-/// mermaidCachedSVG(source, theme) for any kind.
+/// mermaidCachedSVG(source, theme) for any kind; for Markmap the map drawn
+/// from `source` in `theme`'s colours (needs a QGuiApplication, for the fonts).
 QByteArray diagramCachedSVG(DiagramKind kind, const QString &source, const Theme &theme);
 
 /// The config JSON handed to `mmdr -c`: Mermaid's own `theme` and

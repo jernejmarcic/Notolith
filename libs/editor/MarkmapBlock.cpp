@@ -1,7 +1,7 @@
 /// ```markmap fences (MarkmapBlock.h has the contract). The layout and the
 /// SVG are libs/render/Markmap.cpp's; this is the editor's side: a pool
-/// thread, the raster, the disk copy for publish and PDF export, and the
-/// fold state a click on a circle changes.
+/// thread, the raster, and the fold state a click on a circle changes. Nothing
+/// is kept on disk: publish and PDF export draw a map from its text themselves.
 
 #include "MarkmapBlock.h"
 
@@ -17,15 +17,12 @@
 #include <QThreadPool>
 #include <QtConcurrent>
 
-#include <atomic>
 #include <memory>
 
 namespace noteAppC {
 
 namespace {
 
-constexpr int kCacheDays = 30;
-constexpr qint64 kCacheBytes = 50 * 1024 * 1024;
 constexpr int kRememberedFolds = 256; ///< sources whose folding is kept
 
 using Result = MarkdownEditor::CodeBlockResult;
@@ -61,13 +58,6 @@ void draw(const std::shared_ptr<State> &state, const QString &source, const QByt
         toggled = state->toggled.value(hashOf(source));
     }
     const MarkmapDrawn drawn = drawMarkmap(parseMarkmap(source), markmapLook(config), toggled);
-    // What publish and PDF export read: the map as the source itself asks for it, not as the view folded it.
-    if (toggled.isEmpty()) {
-        mermaidCacheStore(diagramCachePath(DiagramKind::Markmap, source, config), drawn.svg);
-        static std::atomic_flag pruned;
-        if (!pruned.test_and_set())
-            pruneMermaidCache(diagramCacheDirectory(DiagramKind::Markmap), kCacheDays, kCacheBytes);
-    }
     qreal scale = 1;
     Result result{false, QString(), rasteriseSVG(drawn.svg, width, ratio, &scale)};
     if (result.image.isNull()) {
@@ -76,13 +66,18 @@ void draw(const std::shared_ptr<State> &state, const QString &source, const QByt
     }
     for (const MarkmapToggle &toggle : drawn.toggles)
         result.hotspots.append({QRectF(toggle.rect.topLeft() * scale, toggle.rect.size() * scale), toggle.node});
-    result.activate = [state, source, config, width, ratio](int node, const std::function<void(Result)> &answer) {
+    // What this picture shows is what a click flips, not what the set holds by now: a second view of the
+    // same note (a split) may still show the old picture, and its click has to agree with what it saw.
+    result.activate = [state, source, config, width, ratio, shown = toggled](int node, const std::function<void(Result)> &answer) {
         {
             QMutexLocker lock(&state->mutex);
-            if (state->toggled.size() >= kRememberedFolds)
-                state->toggled.clear();
-            QSet<int> &folds = state->toggled[hashOf(source)];
-            if (!folds.remove(node))
+            const QByteArray key = hashOf(source);
+            if (!state->toggled.contains(key) && state->toggled.size() >= kRememberedFolds)
+                state->toggled.clear(); // the other sources' folds go, never the one being clicked
+            QSet<int> &folds = state->toggled[key];
+            if (shown.contains(node))
+                folds.remove(node);
+            else
                 folds.insert(node);
         }
         (void)QtConcurrent::run(pool(), [state, source, config, width, ratio, answer] { draw(state, source, config, width, ratio, answer); });
