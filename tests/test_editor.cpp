@@ -874,57 +874,39 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
     EXPECT_LT(largeMs, 60.0);
 }
 
-// A parse landing is the one place every pause in typing used to cost work in
-// proportion to the whole note (every block rebuilt and its layout dropped):
-// 13 ms on a megabyte, 4.5 times a 200 kB note's. Blocks nothing has drawn are
-// kept now, 4 ms and about 3 times; what is left is the passes that still walk
-// every block (the parts, the index, the heights). Five times the text must not
-// cost more than four times the wait, nor a megabyte more than 8 ms.
+// A parse landing was the one place every pause in typing cost work in
+// proportion to the whole note: every block rebuilt, its layout dropped (13 ms
+// on a megabyte). Blocks nothing has drawn are kept now. Counted in views made
+// again, not in milliseconds, so a busy machine cannot move it: the landing
+// remakes the few views near the caret (about 90 here), against 7 600 at 200 kB
+// and 37 000 at a megabyte when every one was rebuilt.
 TEST(EditorPerfTest, ParseLandingCostTracksTheEditNotTheNote)
 {
-    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
-    const auto landingMs = [](const QString &note) {
+    const auto rebuiltByALanding = [](const QString &note, quint64 *rebuilt) {
         auto editor = parsedEditorWith(note);
         if (!editor)
-            return 1e9;
+            return false; // the first parse never came back
         editor->setCursorOffset(note.size() / 2);
         editor->enterBlockAt(note.size() / 2);
         (void)editor->grab();
-        QElapsedTimer clock;
-        bool landed = false;
-        // The word count is the landing's first act, so the debounce and the
-        // parse on the pool are outside the timing.
-        QObject::connect(editor.get(), &MarkdownEditor::wordCountChanged, editor.get(), [&](int) {
-            clock.start();
-            landed = true;
-        });
+        QTest::keyClicks(editor.get(), QStringLiteral(" x"));
+        (void)editor->grab();
         QSignalSpy counted(editor.get(), &MarkdownEditor::wordCountChanged);
-        double best = 1e9;
-        for (int run = 0; run < 7; ++run) {
-            QTest::keyClicks(editor.get(), QStringLiteral(" x"));
-            (void)editor->grab();
-            landed = false;
-            counted.clear();
-            if (!counted.wait(10000) || !landed)
-                return 1e9;
-            (void)editor->grab();
-            best = qMin(best, clock.nsecsElapsed() / 1e6);
-        }
-        return best;
+        const quint64 before = editor->rebuiltViewCount();
+        if (!counted.wait(10000))
+            return false; // the landing never came
+        *rebuilt = editor->rebuiltViewCount() - before;
+        return true;
     };
-    const QString small = generateNote(200);
-    const QString large = generateNote(1000);
-    double smallMs = 1e9;
-    double largeMs = 1e9;
-    for (int round = 0; round < 3; ++round) {
-        smallMs = qMin(smallMs, landingMs(small));
-        largeMs = qMin(largeMs, landingMs(large));
-    }
-    std::printf("[ PERF     ] parse landing: %.0f kB %.2f ms, %.0f kB %.2f ms (%.1fx)\n", small.size() / 1024.0,
-                smallMs, large.size() / 1024.0, largeMs, largeMs / qMax(0.001, smallMs));
-    ASSERT_LT(smallMs, 1e8) << "the parse never came back";
-    EXPECT_LT(largeMs, smallMs * 4.0);
-    EXPECT_LT(largeMs, 8.0);
+    quint64 small = 0;
+    quint64 large = 0;
+    ASSERT_TRUE(rebuiltByALanding(generateNote(200), &small)) << "the 200 kB parse never came back";
+    ASSERT_TRUE(rebuiltByALanding(generateNote(1000), &large)) << "the 1 MB parse never came back";
+    std::printf("[ PERF     ] parse landing rebuilt %llu views at 200 kB, %llu at 1 MB\n",
+                static_cast<unsigned long long>(small), static_cast<unsigned long long>(large));
+    EXPECT_GT(small, 0u);
+    EXPECT_LT(small, 400u);
+    EXPECT_LT(large, 400u);
 }
 
 TEST(MarkdownEditorTest, FinishParseAdoptsABigNotesParseWithoutRunningTheEventLoop)

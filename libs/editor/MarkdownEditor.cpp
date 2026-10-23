@@ -637,6 +637,11 @@ quint64 MarkdownEditor::layoutCount() const
     return d->m_layoutCount;
 }
 
+quint64 MarkdownEditor::rebuiltViewCount() const
+{
+    return d->m_rebuiltViews;
+}
+
 const MarkdownEditor::Features &MarkdownEditor::features() const
 {
     return d->m_features;
@@ -1664,37 +1669,49 @@ void MarkdownEditor::rebuildBlocks()
     if (!parts.empty() && !footnotesList && parts.size() == d->m_blocks.size()) {
         // The same blocks as before, as after most pauses in typing: a view
         // nothing has laid out or highlighted yet is a default one with its
-        // span, so it stays where it is, reset, and only the blocks that
-        // changed - or that were ever drawn - are made again. Rebuilding all
-        // of them cost 77 % of a parse landing, 10 ms of a megabyte's 13.
-        std::vector<std::pair<std::size_t, BlockView>> replaced; // made before any old view is touched
+        // span (the invariant on BlockView::touched), so it stays where it is,
+        // reset, and only the blocks that changed - or that were ever drawn -
+        // are made again. Rebuilding all of them cost 77 % of a parse landing,
+        // 10 ms of a megabyte's 13.
+        std::vector<std::size_t> changed;
         for (std::size_t i = 0; i < parts.size(); ++i) {
             const BlockView &old = d->m_blocks[i];
             const Part &part = parts[i];
             if (old.touched || old.isFootnotesList || old.piece != part.piece || old.pieces != part.pieces
                 || old.span.kind != part.span.kind || old.span.level != part.span.level
                 || !(old.span.range == part.span.range))
-                fillView(replaced.emplace_back(i, BlockView()).second, part);
+                changed.push_back(i);
         }
-        std::size_t next = 0;
-        for (std::size_t i = 0; i < d->m_blocks.size(); ++i) {
-            BlockView &view = d->m_blocks[i];
-            if (next < replaced.size() && replaced[next].first == i) {
-                view = std::move(replaced[next++].second);
-                continue;
+        // More than half of them made again (a note scrolled through end to end
+        // has every view laid out) is the full path's work: it moves each view
+        // once, this would move it twice.
+        if (changed.size() * 2 <= parts.size()) {
+            // Made before any old view is touched: they look the old ones up.
+            std::vector<BlockView> fresh(changed.size());
+            for (std::size_t k = 0; k < changed.size(); ++k)
+                fillView(fresh[k], parts[changed[k]]);
+            std::size_t next = 0;
+            for (std::size_t i = 0; i < d->m_blocks.size(); ++i) {
+                BlockView &view = d->m_blocks[i];
+                if (next < changed.size() && changed[next] == i) {
+                    view = std::move(fresh[next++]);
+                    continue;
+                }
+                view.y = 0;
+                view.height = 0;
+                view.active = false;
+                view.laidOut = false;
+                view.heightEstimated = false;
+                view.foldHidden = false;
+                view.editedAsSource = false;
+                view.editedListing = false;
             }
-            view.y = 0;
-            view.height = 0;
-            view.active = false;
-            view.laidOut = false;
-            view.heightEstimated = false;
-            view.foldHidden = false;
-            view.editedAsSource = false;
-            view.editedListing = false;
+            d->m_rebuiltViews += changed.size();
+            d->m_activeBlock = blockAt(d->m_cursor);
+            return;
         }
-        d->m_activeBlock = blockAt(d->m_cursor);
-        return;
     }
+    d->m_rebuiltViews += parts.size();
 
     // Sized once, here, for the parts and a footnotes list: a BlockView is 1.6 kB,
     // and moving each into place cost a seventh of opening a 1 MB note.

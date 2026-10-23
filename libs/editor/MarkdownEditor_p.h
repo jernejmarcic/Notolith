@@ -242,8 +242,11 @@ struct MarkdownEditor::BlockView {
     /// the way the properties table (PropertyRow) already does.
     bool isFootnotesList = false;
     /// Set the first time a layout or a highlight writes to this view, and
-    /// never cleared. A view without it is a default one with its span, which
-    /// is what lets a parse that changed nothing here keep it (rebuildBlocks).
+    /// never cleared. The invariant: an untouched view is a default one plus its
+    /// span, and every function that puts content into a view (layoutBlock and
+    /// what it calls, highlightPiece) sets this first. That is what lets a parse
+    /// that changed nothing here keep the view (rebuildBlocks): a new writer that
+    /// fills a view without going through those two would leave stale state in it.
     bool touched = false;
     qreal y = 0;
     qreal height = 0;
@@ -893,6 +896,7 @@ struct MarkdownEditor::Private {
     LanguageStyles m_languageStyles = LanguageStyles::load();
     bool m_complexCodeBlocks = true;
     quint64 m_layoutCount = 0;
+    quint64 m_rebuiltViews = 0;
     SyntaxStyles m_themeSyntax; ///< m_theme's `syntax` layer, rebuilt in setTheme
     QFileSystemWatcher *m_configWatcher = nullptr;
     Parser m_parser;

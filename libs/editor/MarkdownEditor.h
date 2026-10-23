@@ -348,6 +348,10 @@ public:
     /// How many blocks have been laid out since the editor was built. For
     /// tests: the difference across an action is how much it relaid.
     quint64 layoutCount() const;
+    /// How many block views rebuildBlocks has made afresh since the editor was
+    /// built (a parse that left the blocks as they were keeps most). For tests:
+    /// the difference across a landing is how much of the note it rebuilt.
+    quint64 rebuiltViewCount() const;
 
     /// One rendered row of a ```` ```query ```` block's results: `rect` in
     /// viewport coordinates, matching what a click there activates - public
