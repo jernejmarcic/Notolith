@@ -179,6 +179,17 @@ struct PrivateConfig {
     ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
 };
 
+/// A settings directory as every real user has one: it exists and holds what the app remembers.
+/// The big-note scroll tests run against it - they were exact only while the directory did not
+/// exist yet, because the editor re-laid the note out whenever anything was saved into it.
+void useAConfigDirectory()
+{
+    QDir().mkpath(Settings::configDirectory());
+    QFile remembered(Settings::indexFile());
+    ASSERT_TRUE(remembered.open(QIODevice::WriteOnly));
+    remembered.write("[state]\nrecent-vaults = /nowhere\n");
+}
+
 /// A vault with one LF note, one CRLF note and one non-note file.
 class WindowTest : public ::testing::Test {
 protected:
@@ -262,7 +273,7 @@ int topLine(MarkdownEditor *editor)
 // remembered scroll pixel alone means different text in the two.
 TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 {
-    PrivateConfig config; // the scroll is only exact against a settings directory that starts empty
+    useAConfigDirectory();
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -286,7 +297,7 @@ TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 
 TEST_F(WindowTest, AReopenedClosedTabOfABigNoteLandsAtTheTextItWasClosedAt)
 {
-    PrivateConfig config; // the scroll is only exact against a settings directory that starts empty
+    useAConfigDirectory();
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -7958,6 +7969,7 @@ protected:
         // Real vaults, so a note in one is known for it whatever the settings remember.
         ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
         ASSERT_TRUE(QDir(other.path()).mkpath(QStringLiteral(".obsidian")));
+        wasSet = qEnvironmentVariableIsSet("NOTEAPPC_INSTANCE_SOCKET");
         previous = qgetenv("NOTEAPPC_INSTANCE_SOCKET");
         qputenv("NOTEAPPC_INSTANCE_SOCKET", sockets.filePath(QStringLiteral("n")).toUtf8());
         QFile note(other.filePath(QStringLiteral("Other.md")));
@@ -7970,7 +7982,13 @@ protected:
         stray.close();
     }
 
-    void TearDown() override { qputenv("NOTEAPPC_INSTANCE_SOCKET", previous); }
+    void TearDown() override
+    {
+        if (wasSet)
+            qputenv("NOTEAPPC_INSTANCE_SOCKET", previous);
+        else
+            qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    }
 
     void lastUsed(const QStringList &vaults)
     {
@@ -8025,6 +8043,7 @@ protected:
     PrivateConfig config;
     QTemporaryDir sockets, other, loose;
     QByteArray previous;
+    bool wasSet = false;
 };
 
 } // namespace
@@ -8236,9 +8255,9 @@ TEST_F(InstanceTest, LaunchesOfOneVaultInTheSameMomentEndInOneProcess)
             owner = each.get();
         }
     }
-    if (waited.elapsed() < 1500) {
-        EXPECT_EQ(done, 1) << "exactly one takes the lock; the others wait for it to listen";
-    }
+    if (waited.elapsed() >= 1500)
+        GTEST_SKIP() << "the machine was too busy to tell who was still waiting (" << waited.elapsed() << " ms)";
+    EXPECT_EQ(done, 1) << "exactly one takes the lock; the others wait for it to listen";
     ASSERT_NE(owner, nullptr);
 
     MainWindow window;
@@ -8290,6 +8309,24 @@ TEST_F(InstanceTest, ALockLeftByADeadProcessIsTakenOver)
     auto starting = finished(handed);
     ASSERT_NE(starting, nullptr);
     EXPECT_LT(waited.elapsed(), 1500) << "no waiting for an owner that is gone";
+}
+
+// No test process reaches the sockets of a Notolith someone is using: IsolatedHome.cpp (and the
+// CMake environment) put the runtime directory and the name prefix under the test's own, and no
+// test leaves them pointing back at the real ones - InstanceTest included, which sets its own
+// and puts the isolated one back.
+TEST(InstanceIsolation, EveryTestProcessNamesItsSocketsUnderItsOwnRuntimeDirectory)
+{
+    const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    ASSERT_FALSE(runtime.isEmpty());
+    EXPECT_NE(runtime, QStringLiteral("/run/user/%1").arg(::getuid())) << "the real runtime directory";
+    ASSERT_TRUE(qEnvironmentVariableIsSet("NOTEAPPC_INSTANCE_SOCKET"));
+    EXPECT_TRUE(qEnvironmentVariable("NOTEAPPC_INSTANCE_SOCKET").startsWith(runtime));
+    for (const QString &name : {QString(), QStringLiteral("/tmp")}) {
+        EXPECT_FALSE(SingleInstance::nameForVault(name).startsWith(QStringLiteral("/run/user/")))
+            << SingleInstance::nameForVault(name).toStdString();
+        EXPECT_TRUE(SingleInstance::nameForVault(name).startsWith(runtime));
+    }
 }
 
 TEST_F(WindowTest, FormattingColourRowsResetAndRecolourTheEditor)
