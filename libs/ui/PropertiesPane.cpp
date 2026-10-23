@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QShowEvent>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -88,7 +89,7 @@ void PropertiesPane::setIndex(Index *index)
 {
     m_index = index;
     if (m_index)
-        connect(m_index, &Index::changed, this, &PropertiesPane::refresh);
+        connect(m_index, &Index::changed, this, &PropertiesPane::onIndexChanged);
     refresh();
 }
 
@@ -105,8 +106,25 @@ void PropertiesPane::setTheme(const Theme &theme)
     refresh();
 }
 
+void PropertiesPane::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    if (m_stale)
+        refresh();
+}
+
+void PropertiesPane::onIndexChanged()
+{
+    // Every save lands here; a pane nobody can see waits until it is shown.
+    if (isVisible())
+        refresh();
+    else
+        m_stale = true;
+}
+
 void PropertiesPane::refresh()
 {
+    m_stale = false;
     m_list->clear();
     if (!m_index || !m_index->isOpen()) {
         m_header->setText(tr("Properties"));

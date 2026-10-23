@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <cstdio>
 #include <functional>
+#include <map>
 
 #include <QDialogButtonBox>
 #include <QAbstractButton>
@@ -61,6 +62,7 @@
 #include <QWheelEvent>
 
 #include "InkTestSupport.h"
+#include "Perf.h"
 #include "WaitFor.h"
 #include "SingleInstance.h"
 #include "FileTree.h"
@@ -113,6 +115,7 @@
 #include "OutlinePane.h"
 #include "BookmarksPane.h"
 #include "BacklinksPane.h"
+#include "SearchPane.h"
 #include "ModuleHost.h"
 #include "ModuleRegistry.h"
 #ifdef NOTEAPPC_HAVE_INK_MODULE
@@ -315,6 +318,103 @@ TEST_F(WindowTest, TagsPaneListsTagsNestedAndSortedByCount)
     ASSERT_EQ(list->topLevelItem(0)->childCount(), 1);
     EXPECT_EQ(list->topLevelItem(0)->child(0)->text(0), QStringLiteral("alpha"));
     EXPECT_EQ(list->topLevelItem(1)->text(0), QStringLiteral("area"));
+}
+
+namespace {
+
+QTreeWidget *treeOf(MainWindow &window, const char *paneName)
+{
+    return window.findChild<QWidget *>(QLatin1String(paneName))->findChild<QTreeWidget *>();
+}
+
+} // namespace
+
+// A pane nobody can see must not pay for Index::changed: it marks itself stale
+// and rebuilds when shown, with the content an always-on refresh would give.
+// The lists are emptied by hand first, so a refresh that still runs shows up.
+TEST_F(WindowTest, HiddenPanesDoNotRefreshOnIndexChange)
+{
+    write(QStringLiteral("Target.md"), "---\nstatus: draft\n---\n# Target\nzebra\n");
+    write(QStringLiteral("Mid.md"), "See [[Target]] and [[Nowhere]].\n");
+    write(QStringLiteral("Source.md"), "See [[Mid]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Mid.md")));
+
+    struct Row {
+        const char *pane;
+        const char *tab;
+    };
+    const Row rows[] = {{"backlinksPane", "backlinksTabButton"},
+                        {"outgoingLinksPane", "outgoingLinksTabButton"},
+                        {"propertiesPane", "propertiesTabButton"},
+                        {"searchPane", "searchTabButton"}};
+    const auto showEach = [&](const std::function<bool(const Row &, QTreeWidget *)> &check) {
+        window.show();
+        for (const Row &row : rows) {
+            ASSERT_NE(window.findChild<QToolButton *>(QLatin1String(row.tab)), nullptr) << row.tab;
+            window.findChild<QToolButton *>(QLatin1String(row.tab))->click();
+            auto *list = treeOf(window, row.pane);
+            EXPECT_TRUE(QTest::qWaitFor([&] { return check(row, list); }, 5000)) << row.pane;
+        }
+    };
+
+    // The content as a user who opened every pane has it.
+    window.findChild<noteAppC::SearchPane *>()->setQuery(QStringLiteral("zebra"));
+    std::map<std::string, int> shown;
+    showEach([&](const Row &row, QTreeWidget *list) {
+        shown[row.pane] = list->topLevelItemCount();
+        return list->topLevelItemCount() > 0;
+    });
+    ASSERT_EQ(shown.size(), std::size(rows));
+
+    // Hide, empty the lists, let the index announce a change: nothing may come back.
+    window.hide();
+    for (const Row &row : rows)
+        treeOf(window, row.pane)->clear();
+    window.index()->notifyChanged();
+    QTest::qWait(300); // a search, were one wrongly started, finishes well inside this
+    for (const Row &row : rows)
+        EXPECT_EQ(treeOf(window, row.pane)->topLevelItemCount(), 0) << row.pane << " refreshed while hidden";
+
+    // Showing a pane catches up, with the content it had.
+    showEach([&](const Row &row, QTreeWidget *list) { return list->topLevelItemCount() == shown[row.pane]; });
+}
+
+// 20 index changes with the panes hidden cost a tenth of what they cost with
+// the pane in view (T9: 5-15 ms per save at 20 000 notes, none of it seen).
+TEST_F(WindowTest, HiddenPanesMakeIndexChangesCheap)
+{
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    for (int note = 0; note < 400; ++note)
+        write(QStringLiteral("N%1.md").arg(note),
+              QStringLiteral("---\nkey%1: v\nstatus: x\n---\nSee [[N%2]] and [[N%3]].\n")
+                  .arg(note % 40).arg((note + 1) % 400).arg((note + 7) % 400).toUtf8());
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(10000));
+    QTest::qWait(500); // the indexer's last batches
+    window.openNote(path(QStringLiteral("N0.md")));
+
+    const auto twentyChanges = [&] {
+        QElapsedTimer timer;
+        timer.start();
+        for (int at = 0; at < 20; ++at) {
+            window.index()->notifyChanged();
+            QCoreApplication::processEvents();
+        }
+        return double(timer.nsecsElapsed()) / 1e6;
+    };
+    const double hidden = perf::bestOf([&] { return twentyChanges(); }, 5, 0.5);
+    window.show();
+    window.findChild<QToolButton *>(QStringLiteral("propertiesTabButton"))->click();
+    ASSERT_TRUE(window.findChild<QWidget *>(QStringLiteral("propertiesPane"))->isVisible());
+    const double visible = perf::bestOf([&] { return twentyChanges(); }, 5);
+    EXPECT_LE(hidden, visible * 0.1) << "hidden " << hidden << " ms, visible " << visible << " ms";
 }
 
 TEST_F(WindowTest, ClickingATagSearchesForItAndAResultOpensTheNoteAtTheMatch)
@@ -4547,6 +4647,8 @@ TEST_F(WindowTest, ThePropertiesViewListsEveryPropertyWithItsCount)
     QSignalSpy indexed(window.index(), &Index::changed);
     window.openVault(dir.path());
     ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    window.findChild<QToolButton *>(QStringLiteral("propertiesTabButton"))->click(); // showing rebuilds a stale pane
     auto *pane = window.findChild<noteAppC::PropertiesPane *>();
     ASSERT_NE(pane, nullptr);
     auto *list = pane->findChild<QTreeWidget *>();
@@ -6831,6 +6933,7 @@ TEST_F(WindowTest, TheMetaNotesPaneVaultModeListsEveryNoteWithRunsAndDrillsDown)
     EXPECT_EQ(pane->findChild<QWidget *>(QStringLiteral("metaVaultSearch")), nullptr) << "built on the first press";
 
     const auto queryBoxes = window.findChildren<QLineEdit *>(QStringLiteral("quickSwitcherQuery")).size();
+    window.findChild<QToolButton *>(QStringLiteral("metaNotesTabButton"))->click(); // a hidden pane does not follow index changes
     window.findChild<QToolButton *>(QStringLiteral("metaNotesVaultButton"))->click();
     QTreeWidget *list = nullptr;
     WAIT_TRUE((list = pane->findChild<QTreeWidget *>(QStringLiteral("metaVaultList"))) && list->topLevelItemCount() == 2, 8000);

@@ -7,6 +7,7 @@
 #include "Search.h"
 
 class QLabel;
+class QShowEvent;
 class QLineEdit;
 class QTimer;
 class QTreeWidget;
@@ -50,6 +51,9 @@ signals:
     /// for a query that is entirely path:/file: fields.
     void matchActivated(const QString &relativePath, qsizetype offset);
 
+protected:
+    void showEvent(QShowEvent *event) override;
+
 private slots:
     void onTextEdited(const QString &text);
     void onDebounceElapsed();
@@ -68,6 +72,7 @@ private:
     QTimer *m_debounce = nullptr;
     QFutureWatcher<QList<SearchResult>> m_watcher;
     quint64 m_generation = 0;
+    bool m_stale = false; ///< Index::changed arrived while hidden, with a query to rerun
     quint64 m_pendingGeneration = 0;
     QList<SearchResult> m_lastResults; ///< so a theme change can re-render without a new search
     QColor m_mutedColor;
