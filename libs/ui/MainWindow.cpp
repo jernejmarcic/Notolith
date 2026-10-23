@@ -167,9 +167,6 @@ namespace {
 QString mediaKindOf(const QString &path)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
-    static const QByteArrayList images = QImageReader::supportedImageFormats();
-    if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8()))
-        return QStringLiteral("image");
     static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
                                       QStringLiteral("ogg"), QStringLiteral("3gp"), QStringLiteral("flac"),
                                       QStringLiteral("opus"), QStringLiteral("oga")};
@@ -177,7 +174,25 @@ QString mediaKindOf(const QString &path)
         return QStringLiteral("audio");
     static const QStringList video = {QStringLiteral("mp4"), QStringLiteral("webm"), QStringLiteral("ogv"),
                                       QStringLiteral("mov"), QStringLiteral("mkv")};
-    return video.contains(suffix) ? QStringLiteral("video") : QString();
+    if (video.contains(suffix))
+        return QStringLiteral("video");
+    // Asking Qt for its image formats dlopens every image plugin (libheif, libjxl
+    // and what they pull in) on the UI thread, and the first note opened would
+    // pay for it: the common suffixes are answered from a list, the notes and
+    // views the app opens itself never reach the plugins, and only a suffix
+    // nothing else claims is looked up there.
+    static const QStringList images = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                                       QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("svg"),
+                                       QStringLiteral("webp"), QStringLiteral("avif")};
+    if (images.contains(suffix))
+        return QStringLiteral("image");
+    static const QStringList notImages = {QString(), QStringLiteral("md"), QStringLiteral("mdlock"),
+                                          QStringLiteral("pdf"), QStringLiteral("canvas"), QStringLiteral("base"),
+                                          QStringLiteral("ipynb"), QStringLiteral("epub")};
+    if (notImages.contains(suffix))
+        return {};
+    static const QByteArrayList plugged = QImageReader::supportedImageFormats();
+    return plugged.contains(suffix.toUtf8()) ? QStringLiteral("image") : QString();
 }
 /// A suffix the app opens itself: a module may not claim it (the registry gives
 /// such a module a problem notice and never loads it). Per kind, under the same
@@ -222,6 +237,10 @@ class NoIcons : public QFileIconProvider {
 public:
     QIcon icon(IconType) const override { return {}; }
     QIcon icon(const QFileInfo &) const override { return {}; }
+    /// The Type column is hidden and never sorted by; the base class asks the
+    /// MIME database about every file in a listed directory. Not an empty
+    /// string: QFileSystemModel then lists no rows (WindowTest caught it).
+    QString type(const QFileInfo &) const override { return QStringLiteral("File"); }
 };
 
 NoIcons *noIcons()
@@ -3028,14 +3047,14 @@ void MainWindow::applyFeatures()
 #ifdef NOTEAPPC_HAVE_GRAPH
         {"graph", m_localGraph,
          [this, parent] {
-             // The factory runs on first use (the first time the pane is shown),
-             // because setIndex() below starts the index read at once.
+             // The factory runs at start, shown or not; setIndex() below defers
+             // the whole-vault read to the pane's first show.
              m_localGraph = new GraphView(parent);
              m_localGraph->setObjectName(QStringLiteral("localGraph"));
              wireGraphOptions(m_localGraph);
              m_localGraph->setLocalGraph(true);
              m_localGraph->setTheme(m_theme);
-             m_localGraph->setIndex(&m_index);
+             m_localGraph->setIndex(&m_index, true); // read when the pane is first shown
              connect(m_localGraph, &GraphView::noteActivated, this, &MainWindow::openRelative);
              connect(m_localGraph, &GraphView::noteActivatedInNewTab, this, &MainWindow::openRelativeInNewTab);
              return m_localGraph.data();

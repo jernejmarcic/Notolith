@@ -172,8 +172,10 @@ public:
     /// Pulls Index::graphData() and rebuilds. Reconnects to Index::changed()
     /// so a vault edit refreshes the graph automatically; pass nullptr to
     /// detach (the graph then keeps showing whatever it last had). The Index
-    /// is not owned.
-    void setIndex(Index *index);
+    /// is not owned. `deferRead`: a graph that is not visible yet takes the
+    /// first read when it is shown, not now (a pane built at start that nobody
+    /// has opened must not read the whole vault).
+    void setIndex(Index *index, bool deferRead = false);
     Index *index() const { return m_index; }
 
     /// The direct data entry point, independent of Index - what setIndex()
@@ -335,6 +337,7 @@ private:
     Palette m_palette;
 
     bool m_localMode = false;
+    bool m_deferRead = false;    ///< setIndex(): no read of the vault while hidden, option changes included
     bool m_staleData = false;   ///< the index changed while hidden
     bool m_staleLayout = false; ///< the local graph's note changed while hidden
     QString m_currentNote;
