@@ -5,6 +5,12 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QIcon>
+#include <QTimer>
+
+#include <thread>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 
 #include "MainWindow.h"
 #include "PopupStyle.h"
@@ -153,6 +159,17 @@ int main(int argc, char *argv[])
     window.show();
     startLog("shown");
     window.openWhenShown(target);
+
+#ifdef __GLIBC__
+    // The cold index and the first notes leave a third of the heap free but
+    // resident, scattered through 24 worker arenas that glibc never hands back
+    // on its own: 460 MB resident at 20 000 notes and a 1 MB note, 347 MB after
+    // this (5 ms on a worker thread; once, so an idle window still wakes for
+    // the caret alone). Capping the arenas (M_ARENA_MAX=2) got 415 MB but made
+    // the cold index 28% slower. A big vault that is still indexing at 8 s
+    // keeps what it has; the ceiling is one pass, not a policy.
+    QTimer::singleShot(8000, &app, [] { std::thread([] { malloc_trim(0); }).detach(); });
+#endif
 
     return app.exec();
 }
