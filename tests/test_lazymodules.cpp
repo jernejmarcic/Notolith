@@ -16,7 +16,9 @@
 #include "ModuleHost.h"
 #include "ModuleRegistry.h"
 #include "PdfPage.h"
+#include "SecretStore.h"
 #include "Settings.h"
+#include "ShareEngineBase.h"
 #include "WaitFor.h"
 
 using namespace noteAppC;
@@ -24,6 +26,9 @@ using namespace noteAppC;
 namespace {
 
 const QStringList kPoppler = {QStringLiteral("libpoppler")};
+/// What the share engine brings: none of it may be mapped until sharing is wanted.
+const QStringList kShareStack = {QStringLiteral("libprotobuf"), QStringLiteral("libdatachannel"),
+                                 QStringLiteral("libavahi"), QStringLiteral("libabsl")};
 
 /// A vault with one note that embeds nothing and a two-page PDF next to it.
 class LazyVault {
@@ -137,10 +142,146 @@ TEST(LazyModules, PdfWithoutTheModuleIsNotAViewFile)
     EXPECT_FALSE(anyMapped(kPoppler));
 }
 
+void setShareFeature(bool on)
+{
+    Settings settings = Settings::load();
+    settings.setValue(Settings::featureKey("share"), on);
+    ASSERT_TRUE(settings.save());
+}
+
+/// A window on `vault` with the share engine pointed at throw-away places: nothing on the network, no real store.
+void configureShare(MainWindow &window, const QString &storeDirectory)
+{
+    ShareEngineBase::Config config;
+    config.port = 0;
+    config.mDNS = false;
+    config.identityKey = QStringLiteral("lazy-test-identity");
+    config.hosts = {QStringLiteral("127.0.0.1")};
+    config.storeDirectory = storeDirectory;
+    window.setShareConfigForTests(config);
+}
+
+// 7. Sharing is on (its default) and the vault holds no share: the module stays on disk and nothing of its stack is mapped.
+TEST(LazyModules, ShareNothingMappedWhileTheVaultHoldsNoShare)
+{
+    LazyVault vault;
+    QTemporaryDir store;
+    MainWindow window;
+    configureShare(window, store.path());
+    startAndScan(window, vault.root());
+    QTest::qWait(300); // what updateShare would still do after the scan
+    EXPECT_EQ(window.shareEngine(), nullptr);
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("share")));
+    EXPECT_FALSE(anyMapped(kShareStack)) << mappedNames(kShareStack).toStdString();
+}
+
+// 8. A vault that holds a share resumes it: the module loads after the paint, with the scan, and the engine starts.
+TEST(LazyModules, ShareLoadsWhenTheVaultHoldsAShare)
+{
+    LazyVault vault;
+    QTemporaryDir store;
+    ShareRecord record;
+    record.shareID = QByteArray(16, '\x11');
+    record.owner = QByteArray(32, '\x22');
+    record.key = QByteArray(32, '\x33');
+    record.members = QByteArray(8, '\x44'); // the store only needs it non-empty; the engine checks its signature when it starts
+    record.backend = 2;
+    record.clientID = 7;
+    record.relativePath = QStringLiteral("Note.md");
+    record.title = QStringLiteral("Note");
+    record.owned = true;
+    ASSERT_TRUE(ShareStore(store.path()).save(record, QByteArray(), QStringLiteral("# Note\n")));
+    MainWindow window;
+    configureShare(window, store.path());
+    window.show();
+    window.openTarget(resolveLaunchTarget(vault.root()));
+    EXPECT_FALSE(anyMapped(kShareStack)) << "not before the scan: " << mappedNames(kShareStack).toStdString();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return window.shareEngine() != nullptr; }, 10000)) << "the engine was not built";
+    EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("share")));
+    EXPECT_FALSE(loadedObjectsMatching(QStringLiteral("libprotobuf")).isEmpty());
+    EXPECT_TRUE(QTest::qWaitFor([&] { return window.shareEngine()->isRunning(); }, 10000)) << window.shareEngine()->error().toStdString();
+}
+
+// 9. Nothing stored, but something asks (Share this note, Join): the module loads then, and not before.
+TEST(LazyModules, ShareLoadsWhenAskedFor)
+{
+    LazyVault vault;
+    QTemporaryDir store;
+    MainWindow window;
+    configureShare(window, store.path());
+    startAndScan(window, vault.root());
+    ASSERT_EQ(window.shareEngine(), nullptr);
+    QString error;
+    ASSERT_TRUE(window.ensureShare(&error)) << error.toStdString();
+    ASSERT_NE(window.shareEngine(), nullptr);
+    EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("share")));
+    EXPECT_FALSE(loadedObjectsMatching(QStringLiteral("libprotobuf")).isEmpty());
+    EXPECT_FALSE(window.shareEngine()->isRunning()) << "built, not started: no keys read, no socket";
+}
+
+// 10. Asked for before any scan has run (the command is the first thing a session does): it scans itself.
+TEST(LazyModules, ShareAskedForBeforeAnyScan)
+{
+    LazyVault vault;
+    QTemporaryDir store;
+    MainWindow window;
+    configureShare(window, store.path());
+    window.show();
+    window.openTarget(resolveLaunchTarget(vault.root()));
+    QString error;
+    ASSERT_TRUE(window.ensureShare(&error)) << error.toStdString();
+    EXPECT_NE(window.shareEngine(), nullptr);
+}
+
+// 11. The feature is off: nothing is built and nothing is mapped, even when something asks.
+TEST(LazyModules, ShareOffMapsNothing)
+{
+    QTemporaryDir config; // the switch is stored: not in the home the other entries share
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    setShareFeature(false);
+    LazyVault vault;
+    QTemporaryDir store;
+    MainWindow window;
+    configureShare(window, store.path());
+    startAndScan(window, vault.root());
+    QString error;
+    EXPECT_FALSE(window.ensureShare(&error));
+    EXPECT_TRUE(error.contains(QStringLiteral("Share a note"))) << error.toStdString();
+    EXPECT_EQ(window.shareEngine(), nullptr);
+    EXPECT_FALSE(anyMapped(kShareStack));
+}
+
+// 12. No module installed (the ctest entry points the registry at a directory that is not there).
+TEST(LazyModules, ShareWithoutTheModuleSaysWhatIsMissing)
+{
+    LazyVault vault;
+    QTemporaryDir store;
+    MainWindow window;
+    configureShare(window, store.path());
+    window.show();
+    window.openTarget(resolveLaunchTarget(vault.root()));
+    window.scanModulesNow();
+    QString error;
+    EXPECT_FALSE(window.ensureShare(&error));
+    EXPECT_TRUE(error.contains(QStringLiteral("notolith-share"))) << error.toStdString();
+    EXPECT_EQ(window.shareEngine(), nullptr);
+    EXPECT_FALSE(anyMapped(kShareStack));
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
+    // Never the real keyring (a silent secret-service costs 15 s a call).
+    static QHash<QString, QByteArray> memory;
+    noteAppC::secrets::setStore({[](const QString &key, QByteArray *value) {
+                                     if (!memory.contains(key))
+                                         return false;
+                                     *value = memory.value(key);
+                                     return true;
+                                 },
+                                 [](const QString &key, const QByteArray &value) { return memory.insert(key, value) != memory.end(); },
+                                 [](const QString &key) { return memory.remove(key) > 0; }});
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

@@ -34,8 +34,7 @@
 #include "SecretStore.h"
 #include "Settings.h"
 #include "ShareDialog.h"
-#include "ShareEngine.h"
-#include "ShareFrame.h"
+#include "ShareEngineBase.h"
 #include "ShareSession.h"
 
 // Sharing through the window (docs/SHARE.md "In the window"): two MainWindows on
@@ -49,7 +48,7 @@ using noteAppC::Settings;
 using noteAppC::CrdtDoc;
 using noteAppC::JoinShareDialog;
 using noteAppC::ShareDialog;
-using noteAppC::ShareEngine;
+using noteAppC::ShareEngineBase;
 using noteAppC::ShareSession;
 
 namespace {
@@ -87,6 +86,10 @@ void setShareFeature(bool on)
     ASSERT_TRUE(settings.save());
 }
 
+/// The CRDT engine tags of share.proto, as an invitation code carries them.
+constexpr int kBackendYrs = 1;
+constexpr int kBackendNative = 2;
+
 /// Set by the fixture: every share in a test runs on this engine.
 CrdtDoc::Backend backendUnderTest = CrdtDoc::Backend::Yrs;
 
@@ -109,7 +112,7 @@ struct Side {
     {
         window = std::make_unique<MainWindow>();
         window->setAutosaveIntervalsForTests(50, 200);
-        ShareEngine::Config config;
+        ShareEngineBase::Config config;
         config.port = 0;
         config.mDNS = false;
         config.identityKey = identity;
@@ -125,6 +128,9 @@ struct Side {
             return true;
         });
         window->openTarget(noteAppC::resolveLaunchTarget(vault.path()));
+        // The engine is the notolith-share module, found by the module scan; a vault that holds shares builds it
+        // there. Nothing stored: it is built by the first share or join (MainWindow::ensureShare).
+        window->scanModulesNow();
     }
 
     QString path(const QString &relative) const { return vault.filePath(relative); }
@@ -138,7 +144,7 @@ struct Side {
     QString read(const QString &relative) const { return readFile(path(relative)); }
     MarkdownEditor *editor() const { return window->editor(); }
     QString text() const { return editor()->noteText(); }
-    ShareEngine *engine() const { return window->shareEngine(); }
+    ShareEngineBase *engine() const { return window->shareEngine(); }
     QAction *command(const char *id) const { return window->findChild<QAction *>(QString::fromLatin1(id)); }
 
     void typeAt(qsizetype offset, const QString &text) const
@@ -176,8 +182,8 @@ QByteArray share(Side &owner, Side &joiner, const QString &name, const QString &
         ADD_FAILURE() << error.toStdString();
         return {};
     }
-    const auto invite = ShareEngine::parseInvite(code, &error);
-    if (!invite || invite->backend != (backendUnderTest == CrdtDoc::Backend::Yrs ? noteAppC::ShareFrame::kBackendYrs : noteAppC::ShareFrame::kBackendNative)) {
+    const auto invite = owner.engine()->parseInviteCode(code, &error);
+    if (!invite || invite->backend != (backendUnderTest == CrdtDoc::Backend::Yrs ? kBackendYrs : kBackendNative)) {
         ADD_FAILURE() << "the share is not on the engine under test";
         return {};
     }
@@ -369,7 +375,7 @@ TEST_P(ShareWindowTest, OpeningASharedNoteInASecondTabKeepsOneDocument)
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"));
     ASSERT_FALSE(id.isEmpty());
     int batches = 0;
-    QObject::connect(b.engine(), &ShareEngine::remoteEdits, b.engine(), [&batches] { ++batches; });
+    QObject::connect(b.engine(), &ShareEngineBase::remoteEdits, b.engine(), [&batches] { ++batches; });
 
     MarkdownEditor *first = a.editor();
     a.command("workspace:new-tab")->trigger();
@@ -579,7 +585,12 @@ TEST_P(ShareWindowTest, NothingIsConstructedWhileTheFeatureIsOff)
     Side on(QStringLiteral("a"));
     on.write(QStringLiteral("Note.md"), QStringLiteral("hello\n"));
     ASSERT_TRUE(on.window->openNote(on.path(QStringLiteral("Note.md"))));
+    EXPECT_EQ(on.engine(), nullptr) << "on, but the vault holds no share and nothing asked: the module is not loaded";
+    EXPECT_FALSE(on.window->modules()->isLoaded(QStringLiteral("share")));
+    QString engineError;
+    ASSERT_TRUE(on.window->ensureShare(&engineError)) << engineError.toStdString();
     ASSERT_NE(on.engine(), nullptr);
+    EXPECT_TRUE(on.window->modules()->isLoaded(QStringLiteral("share")));
     EXPECT_FALSE(on.engine()->isRunning()) << "no keys read, no socket, until a note is shared";
     EXPECT_EQ(on.engine()->port(), 0);
 }
@@ -705,7 +716,7 @@ TEST_P(ShareWindowTest, TheShareDialogGivesTheCodeAndTheJoinDialogTakesIt)
     EXPECT_EQ(memberRow(dialog, bKey)->text(2), a.engine()->safetyNumberWith(bKey));
     EXPECT_EQ(memberRow(dialog, bKey)->text(2), b.engine()->safetyNumberWith(a.engine()->publicKey()));
     EXPECT_FALSE(memberRow(dialog, bKey)->text(2).isEmpty());
-    EXPECT_EQ(memberRow(dialog, bKey)->text(1), ShareEngine::fingerprintOf(bKey));
+    EXPECT_EQ(memberRow(dialog, bKey)->text(1), b.engine()->deviceFingerprint(bKey));
     ASSERT_TRUE(waitFor([&] { return shareBadge(a)->text() == QStringLiteral("Shared - 1 here"); }));
     EXPECT_TRUE(tabMarked(b, QStringLiteral("Note")));
 }

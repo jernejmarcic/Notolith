@@ -101,12 +101,12 @@ if(TARGET noteAppC_sync)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SYNC)
 endif()
 
-# Sharing a note (docs/SHARE.md): the engine's header is in MainWindow.h, hence PUBLIC.
-if(TARGET noteAppC_shareengine)
-    target_sources(noteAppC_ui PRIVATE ShareSession.cpp ShareSession.h ShareDialog.cpp ShareDialog.h)
-    target_link_libraries(noteAppC_ui PUBLIC noteAppC_shareengine)
-    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SHARE)
-endif()
+# Sharing a note (docs/SHARE.md): the window sees the engine as ShareEngineBase (its header is in MainWindow.h,
+# hence PUBLIC); the engine is the notolith-share module, which the window loads when it is wanted. Always
+# compiled in: with no module installed, sharing reports that it needs the package.
+target_sources(noteAppC_ui PRIVATE ShareSession.cpp ShareSession.h ShareDialog.cpp ShareDialog.h)
+target_link_libraries(noteAppC_ui PUBLIC noteAppC_sharebase)
+target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SHARE)
 
 if(TARGET noteAppC_plugins)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_plugins)

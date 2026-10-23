@@ -384,7 +384,7 @@ if(NOTEAPPC_HAVE_LINK)
     add_subdirectory(libs/ext/link)
 endif()
 if(TARGET noteAppC_share_crdt AND TARGET noteAppC_link AND TARGET noteAppC_sync)
-    add_subdirectory(libs/ext/shareengine)
+    add_subdirectory(libs/ext/shareengine) # the notolith-share module: not linked into the executable
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

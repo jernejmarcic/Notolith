@@ -23,7 +23,7 @@
 #include "FileIcons.h"
 #include "Vault.h"
 #ifdef NOTEAPPC_HAVE_SHARE
-#include "ShareEngine.h"
+#include "ShareEngineBase.h"
 #endif
 
 class QDialog;
@@ -180,11 +180,16 @@ public:
     static bool isBuiltInSuffixForTests(const QString &suffix);
 
 #ifdef NOTEAPPC_HAVE_SHARE
-    /// Sharing (docs/SHARE.md): null while the "Share a note" feature is off
-    /// or no vault is open. With it on, the engine exists but is not running
-    /// (no keys read, no socket) until a note is shared or joined, or the
-    /// vault already holds shares.
-    ShareEngine *shareEngine() const { return m_share.get(); }
+    /// Sharing (docs/SHARE.md): null while the "Share a note" feature is off,
+    /// no vault is open, or nothing has asked for it: the engine is the
+    /// notolith-share module, loaded when the vault already holds shares (after
+    /// the first paint) or on ensureShare(). Built, it is not running (no keys
+    /// read, no socket) until a note is shared or joined, or the vault holds shares.
+    ShareEngineBase *shareEngine() const { return m_share.get(); }
+    /// Builds the engine now, loading the module (scanning for modules first if that has not
+    /// happened): what sharing or joining a note does, and the tests. False, with *error, when
+    /// the feature is off, no vault is open, or the module is missing or will not load.
+    bool ensureShare(QString *error = nullptr);
     /// Shares the note in the active tab; returns its invitation code, or ""
     /// with *error. "Share: Share this note" shows the code.
     QString shareNote(QString *error);
@@ -197,7 +202,7 @@ public:
     /// For the tests: the engine's settings (ports, keyring entry, store),
     /// read when the engine is built; and who answers the "device asks to join"
     /// question, in place of the dialog.
-    void setShareConfigForTests(ShareEngine::Config config);
+    void setShareConfigForTests(ShareEngineBase::Config config);
     void setShareApprovalForTests(std::function<bool(const QString &name, const QString &safetyNumber)> approve);
     /// Who answers "run this block of a shared note?", in place of the dialog;
     /// gets the members' names, one per line.
@@ -513,7 +518,9 @@ private:
     void updateSync();
     void syncSignIn();
     /// Sharing: an engine for this vault while the feature is on (after the
-    /// first paint only), started when the vault holds shares already.
+    /// first paint only) and the vault holds shares or one was asked for
+    /// (ensureShare); it is the notolith-share module's, loaded here, and
+    /// started when the vault holds shares already.
     void updateShare();
 #ifdef NOTEAPPC_HAVE_SHARE
     bool startShare();
@@ -948,9 +955,14 @@ QLabel *m_vimStatus = nullptr;
     QString m_syncPassword; ///< from syncSignIn, handed to the next engine once
     bool m_syncNeedsPassword = false; ///< the engine found no keys in the keyring and has no password
 #ifdef NOTEAPPC_HAVE_SHARE
-    std::unique_ptr<ShareEngine> m_share;
-    QString m_shareFor; ///< the vault root the engine was built for
-    ShareEngine::Config m_shareConfig;
+    std::unique_ptr<ShareEngineBase> m_share;
+    QString m_shareFor; ///< the vault root updateShare last settled for (an engine, or none wanted)
+    QString m_shareProblem; ///< why updateShare could not build the engine, "" when it could
+    bool m_shareDemanded = false; ///< a command or a test asked for the engine: build it even though the vault holds no share
+    ModuleHost::ShareEngineFactory m_makeShare; ///< what the notolith-share module registered when it attached
+    ShareEngineBase::Config m_shareConfig;
+    /// The records the store holds for this vault, read without the engine.
+    QList<ShareRecord> storedShares() const;
     QHash<QByteArray, ShareSession *> m_sessions; ///< by share id, children of the window
     std::function<bool(const QString &, const QString &)> m_shareApproval;
     std::function<bool(const QString &)> m_sharedRunApproval;

@@ -1,0 +1,9 @@
+{
+    "id": "share",
+    "feature": "share",
+    "name": "Share a note",
+    "description": "Share a note with other devices on your network and edit it together, end to end encrypted. A loadable module; Notolith never loads it until a vault holds a share or you share a note.",
+    "suffixes": [],
+    "commands": [],
+    "abi": "@NOTEAPPC_ABI_TAG@"
+}

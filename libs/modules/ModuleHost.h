@@ -17,6 +17,8 @@ namespace noteAppC {
 class Settings;
 class Theme;
 class Vault;
+class ShareEngineBase;
+struct ShareEngineConfig;
 
 /// A tab's widget supplied by a module: what MainWindow::openView needs from
 /// a view it cannot name (save, modified, theme), as PdfView and CanvasView
@@ -99,6 +101,10 @@ struct ModuleHost {
     std::function<ModuleView *()> currentView;
     /// Writes out every note save still in flight; run before a command that reads or rewrites notes on disk.
     std::function<void()> flushSaves;
+    /// The sharing module's one registration: how the window builds its ShareEngineBase (libs/ext/share). Stateless,
+    /// so a second window's attach() registers the same factory.
+    using ShareEngineFactory = std::function<ShareEngineBase *(const QString &vaultRoot, const ShareEngineConfig &config, QObject *parent)>;
+    std::function<void(ShareEngineFactory factory)> registerShareEngine;
 
     Settings *settings = nullptr;
     const Theme *theme = nullptr;

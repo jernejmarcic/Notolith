@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <QCryptographicHash>
+#include <QScopeGuard>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QClipboard>
@@ -402,6 +403,9 @@ MainWindow::MainWindow(QWidget *parent)
         return m_active ? qobject_cast<ModuleView *>(m_active->view) : nullptr;
     };
     m_moduleHost.flushSaves = [this] { flushSaves(); };
+#ifdef NOTEAPPC_HAVE_SHARE
+    m_moduleHost.registerShareEngine = [this](ModuleHost::ShareEngineFactory factory) { m_makeShare = std::move(factory); };
+#endif
     m_moduleHost.currentFolder = [this]() -> QString {
         if (!m_vault.isValid())
             return QString();
@@ -1816,7 +1820,7 @@ void MainWindow::updateShareStatus()
     if (!session)
         return;
     m_shareStatus->setText(tr("Shared - %1 here").arg(m_share->membersHere(session->shareID())));
-    const ShareEngine::Counters counters = m_share->counters(session->shareID());
+    const ShareEngineBase::Counters counters = m_share->counters(session->shareID());
     m_shareStatus->setToolTip(counters.dropped ? tr("%1 messages refused, the last: %2").arg(counters.dropped).arg(counters.lastReason)
                                                : tr("Everyone connected sees your edits as you type"));
 #endif
@@ -3469,7 +3473,12 @@ void MainWindow::buildActions()
             statusBar()->showMessage(tr("This note is not shared"), 5000);
     });
     add(QStringLiteral("share:join"), tr("Share: Join a shared note"), QString(), [this] {
-        auto *dialog = new JoinShareDialog([this](const QString &code, QString *error) { return joinShare(code, error); },
+        QString error;
+        if (!ensureShare(&error)) { // the dialog checks the code with the engine's own parser
+            statusBar()->showMessage(error, 8000);
+            return;
+        }
+        auto *dialog = new JoinShareDialog(m_share.get(), [this](const QString &code, QString *error) { return joinShare(code, error); },
                                            this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->open();
@@ -5404,6 +5413,8 @@ void MainWindow::scanModulesNow()
 void MainWindow::onModulesScanned()
 {
     m_modulesScanned = true;
+    // A vault that holds shares waits for this: the share module is found by this scan.
+    const auto shareNow = qScopeGuard([this] { updateShare(); });
     if (m_modules->modules().isEmpty())
         return; // nothing installed: no feature row, no command, no rebuild - the base app pays nothing
     bool featureRegistered = false;
@@ -6144,7 +6155,7 @@ void MainWindow::syncSignIn()
 }
 
 #ifdef NOTEAPPC_HAVE_SHARE
-void MainWindow::setShareConfigForTests(ShareEngine::Config config)
+void MainWindow::setShareConfigForTests(ShareEngineBase::Config config)
 {
     m_shareConfig = std::move(config);
 }
@@ -6197,22 +6208,58 @@ bool MainWindow::allowSharedRun(const MarkdownEditor *editor, const QString &lan
 }
 #endif
 
+QList<ShareRecord> MainWindow::storedShares() const
+{
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (!m_vault.isValid())
+        return {};
+    return ShareStore(m_shareConfig.storeDirectory.isEmpty() ? ShareStore::directoryFor(m_vault.root())
+                                                             : m_shareConfig.storeDirectory)
+        .all();
+#else
+    return {};
+#endif
+}
+
 void MainWindow::updateShare()
 {
 #ifdef NOTEAPPC_HAVE_SHARE
     const bool wanted = m_painted && m_openMode == OpenMode::Vault && m_vault.isValid() && featureOn("share");
     const QString root = wanted ? m_vault.root() : QString();
-    if (root == m_shareFor && (m_share != nullptr) == wanted)
-        return;
+    if (!wanted)
+        m_shareDemanded = false;
+    if (root == m_shareFor && (m_share != nullptr || !m_shareDemanded))
+        return; // settled for this vault: an engine, or nothing to build one for
     qDeleteAll(m_sessions);
     m_sessions.clear();
     m_share.reset(); // nothing built, nothing listening, with the feature off
-    m_shareFor = root;
+    m_shareFor.clear();
     updateShareStatus();
     if (!wanted)
         return;
-    m_share = std::make_unique<ShareEngine>(root, m_shareConfig);
-    connect(m_share.get(), &ShareEngine::joinRequested, this,
+    // The engine is the notolith-share module, which maps protobuf, Abseil and libdatachannel: it is loaded
+    // for a vault that holds shares to resume, or when a command asks (ensureShare), never for a vault that
+    // merely has the feature on.
+    if (!m_shareDemanded && storedShares().isEmpty()) {
+        m_shareFor = root;
+        return;
+    }
+    if (!m_modulesScanned)
+        return; // onModulesScanned() runs this again; m_shareFor stays empty so that call is not taken for settled
+    m_shareFor = root;
+    m_shareDemanded = false;
+    m_shareProblem.clear();
+    const std::optional<ModuleInfo> module = m_modules->moduleForFeature(QStringLiteral("share"));
+    if (!module)
+        m_shareProblem = tr("Sharing needs the notolith-share package");
+    else if (loadModule(*module, &m_shareProblem) && !m_makeShare)
+        m_shareProblem = tr("The notolith-share module did not offer a sharing engine");
+    if (!m_shareProblem.isEmpty()) {
+        statusBar()->showMessage(m_shareProblem, 8000);
+        return;
+    }
+    m_share.reset(m_makeShare(root, m_shareConfig, this));
+    connect(m_share.get(), &ShareEngineBase::joinRequested, this,
             [this](const QByteArray &shareID, const QByteArray &joiner, const QString &name, const QString &safetyNumber) {
                 bool approved = false;
                 if (m_shareApproval) {
@@ -6236,14 +6283,38 @@ void MainWindow::updateShare()
                 else
                     m_share->refuse(shareID, joiner);
             });
-    connect(m_share.get(), &ShareEngine::joined, this, &MainWindow::placeJoinedNote);
-    connect(m_share.get(), &ShareEngine::peersChanged, this, &MainWindow::updateShareStatus);
-    connect(m_share.get(), &ShareEngine::membersChanged, this, &MainWindow::updateShareStatus);
-    connect(m_share.get(), &ShareEngine::presenceChanged, this, &MainWindow::updateShareStatus); // here through the owner
-    connect(m_share.get(), &ShareEngine::failed, this,
+    connect(m_share.get(), &ShareEngineBase::joined, this, &MainWindow::placeJoinedNote);
+    connect(m_share.get(), &ShareEngineBase::peersChanged, this, &MainWindow::updateShareStatus);
+    connect(m_share.get(), &ShareEngineBase::membersChanged, this, &MainWindow::updateShareStatus);
+    connect(m_share.get(), &ShareEngineBase::presenceChanged, this, &MainWindow::updateShareStatus); // here through the owner
+    connect(m_share.get(), &ShareEngineBase::failed, this,
             [this](const QByteArray &, const QString &message) { statusBar()->showMessage(message, 8000); });
     if (m_share->hasStoredShares())
         startShare();
+#endif
+}
+
+bool MainWindow::ensureShare(QString *error)
+{
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (m_share)
+        return true;
+    const auto fail = [error](const QString &message) {
+        if (error)
+            *error = message;
+        return false;
+    };
+    if (!m_painted || m_openMode != OpenMode::Vault || !m_vault.isValid() || !featureOn("share"))
+        return fail(tr("Turn on \"Share a note\" in Settings, Core plugins"));
+    m_shareDemanded = true;
+    if (!m_modulesScanned)
+        scanModulesNow(); // a command asked: the one directory listing now, not after the next paint
+    updateShare();
+    m_shareDemanded = false;
+    return m_share ? true : fail(m_shareProblem);
+#else
+    Q_UNUSED(error);
+    return false;
 #endif
 }
 
@@ -6327,8 +6398,9 @@ QString MainWindow::shareNote(QString *error)
             *error = message;
         return QString();
     };
-    if (!m_share)
-        return fail(tr("Turn on \"Share a note\" in Settings, Core plugins"));
+    QString engineError;
+    if (!ensureShare(&engineError))
+        return fail(engineError);
     Leaf *leaf = m_active;
     if (leaf && Vault::isEncryptedNote(leaf->notePath))
         return fail(tr("An encrypted note cannot be shared"));
@@ -6351,11 +6423,8 @@ QString MainWindow::shareNote(QString *error)
 
 bool MainWindow::joinShare(const QString &code, QString *error)
 {
-    if (!m_share) {
-        if (error)
-            *error = tr("Turn on \"Share a note\" in Settings, Core plugins");
+    if (!ensureShare(error))
         return false;
-    }
     if (!m_share->join(code, QString(), error))
         return false;
     startShare();
@@ -6974,9 +7043,7 @@ bool MainWindow::isSharedNote(const MarkdownEditor *editor) const
     // text came from a share. Stopping the share here removes the record, and
     // the note is an ordinary one again.
     const QString relative = m_vault.relative(path);
-    const ShareStore store(m_shareConfig.storeDirectory.isEmpty() ? ShareStore::directoryFor(m_vault.root())
-                                                                   : m_shareConfig.storeDirectory);
-    const QList<ShareRecord> records = store.all();
+    const QList<ShareRecord> records = storedShares();
     return std::ranges::any_of(records, [&](const ShareRecord &record) { return record.relativePath == relative; });
 #else
     Q_UNUSED(editor);

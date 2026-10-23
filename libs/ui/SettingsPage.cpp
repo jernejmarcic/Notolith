@@ -957,6 +957,8 @@ QWidget *SettingsPage::buildCorePluginsPage()
         // Asking PdfPage::isAvailable() instead would map poppler just to draw this page.
         missing << "pdf-viewer" << "pdf-embeds";
     }
+    if (!m_moduleFeatures.contains(QLatin1String("share")))
+        missing << "share"; // the engine is the notolith-share module
     if (!MediaPlayback::isAvailable())
         missing << "media-embeds";
     if (!HtmlRenderer::isAvailable())

@@ -65,6 +65,8 @@ public:
     /// pointer into the registry's list.
     std::optional<ModuleInfo> moduleForSuffix(const QString &path) const;
     std::optional<ModuleInfo> moduleForCommand(const QString &commandID) const;
+    /// The enabled, loadable module that owns a feature switch (the share module is asked for by feature: it owns no suffix or command).
+    std::optional<ModuleInfo> moduleForFeature(const QString &featureID) const;
 
     /// What ensureLoaded last said about a module that failed to load (the loader's
     /// message, or "not a Notolith module"); empty when it has not failed.

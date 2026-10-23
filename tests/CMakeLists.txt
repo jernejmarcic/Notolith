@@ -149,6 +149,9 @@ endif()
 # libraries and a session that never uses them maps none. One process per test: see test_lazymodules.cpp.
 add_executable(test_lazymodules test_lazymodules.cpp)
 target_link_libraries(test_lazymodules PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+if(TARGET noteAppC_sync) # the in-memory secret store: the share module's identity never reaches the real keyring
+    target_link_libraries(test_lazymodules PRIVATE noteAppC_sync)
+endif()
 set_target_properties(test_lazymodules PROPERTIES ENABLE_EXPORTS ON)
 function(noteappc_lazy_test name filter)
     add_test(NAME ${name} COMMAND test_lazymodules --gtest_filter=LazyModules.${filter})
@@ -162,14 +165,31 @@ if(TARGET notolith-pdfview)
     noteappc_lazy_test(lazy_pdf_prescan PdfOpensBeforeAnyScan "${noteappc_lazy_modules}")
     # No NOTEAPPC_MODULE_DIRS here: the loop at the end of this file gives it a directory that does not exist.
     noteappc_lazy_test(lazy_pdf_missing PdfWithoutTheModuleIsNotAViewFile)
-    # The link-time side of the same fact, with no process started.
-    add_test(NAME needed_exe COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:noteAppC>
-        "poppler")
+    list(APPEND noteappc_exe_forbidden "poppler")
     # A module takes the host's symbols from the executable: it must not carry a copy of a host library.
     add_test(NAME needed_pdfview COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-pdfview>
         "libnoteAppC_" "libnotolith-ink")
     add_test(NAME needed_pdfpage COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-pdfpage>
         "libnoteAppC_")
+endif()
+if(TARGET notolith-share)
+    add_dependencies(test_lazymodules notolith-share)
+    set(noteappc_lazy_modules "NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
+    noteappc_lazy_test(lazy_share_idle ShareNothingMappedWhileTheVaultHoldsNoShare "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_stored ShareLoadsWhenTheVaultHoldsAShare "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_asked ShareLoadsWhenAskedFor "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_prescan ShareAskedForBeforeAnyScan "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_off ShareOffMapsNothing "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_missing ShareWithoutTheModuleSaysWhatIsMissing)
+    list(APPEND noteappc_exe_forbidden "protobuf" "datachannel" "avahi" "absl")
+    add_test(NAME needed_share COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-share>
+        "libnoteAppC_")
+endif()
+# The link-time side of the same fact, with no process started: the executable names none of the libraries
+# a module brings.
+if(noteappc_exe_forbidden)
+    add_test(NAME needed_exe COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:noteAppC>
+        ${noteappc_exe_forbidden})
 endif()
 
 # Track S1b's glyph studio (libs/ext/hwfont): S1b creates the directory and
@@ -367,7 +387,9 @@ endif()
 # of the real home.
 if(TARGET noteAppC_shareengine)
     add_executable(test_share test_share.cpp)
-    target_link_libraries(test_share PRIVATE noteAppC_shareengine Qt6::Test GTest::gtest)
+    # The engine takes the host's CrdtDoc, store and crypto as headers only (the ink rule); here they are linked in.
+    target_link_libraries(test_share PRIVATE noteAppC_shareengine noteAppC_sharebase noteAppC_share_crdt noteAppC_sync
+        Qt6::Test GTest::gtest)
     add_test(NAME share COMMAND test_share)
     set_tests_properties(share PROPERTIES TIMEOUT 300
         ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-data;XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-state")
@@ -375,11 +397,16 @@ endif()
 
 # Sharing through the window: two MainWindows on two temporary vaults, loopback only
 # (docs/SHARE.md "In the window"). The XDG directories are temporary ones, see main().
-if(TARGET noteAppC_shareengine AND TARGET noteAppC_ui)
+# The engine is the notolith-share module, loaded into the test's process from ${CMAKE_BINARY_DIR}/modules: the
+# test links the window and the static ShareEngineBase, never the engine (a second copy beside the module's).
+if(TARGET notolith-share AND TARGET noteAppC_ui)
     add_executable(test_share_window test_share_window.cpp)
-    target_link_libraries(test_share_window PRIVATE noteAppC_ui noteAppC_shareengine Qt6::Test GTest::gtest)
+    target_link_libraries(test_share_window PRIVATE noteAppC_ui noteAppC_sync Qt6::Test GTest::gtest)
+    set_target_properties(test_share_window PROPERTIES ENABLE_EXPORTS ON)
+    add_dependencies(test_share_window notolith-share)
     add_test(NAME share_window COMMAND test_share_window)
-    set_tests_properties(share_window PROPERTIES TIMEOUT 600 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(share_window PROPERTIES TIMEOUT 600
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
 endif()
 
 if(TARGET noteAppC_crypt)

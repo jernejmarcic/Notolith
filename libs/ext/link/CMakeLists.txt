@@ -10,6 +10,8 @@ add_library(noteAppC_link STATIC
     net/node.cpp
     net/tailnet.cpp
     proto/link.proto)
+# linked into the notolith-share module (libs/ext/shareengine), a shared object
+set_target_properties(noteAppC_link PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # include root for "core/..." and "net/..."; the generated link.pb.h lands in the binary dir
 target_include_directories(noteAppC_link PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 protobuf_generate(TARGET noteAppC_link IMPORT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/proto

@@ -131,6 +131,14 @@ std::optional<ModuleInfo> ModuleRegistry::moduleForCommand(const QString &comman
     return std::nullopt;
 }
 
+std::optional<ModuleInfo> ModuleRegistry::moduleForFeature(const QString &featureID) const
+{
+    for (const ModuleInfo &module : m_modules)
+        if (module.problem.isEmpty() && isEnabled(module) && module.featureID == featureID)
+            return module;
+    return std::nullopt;
+}
+
 bool ModuleRegistry::ensureLoaded(const ModuleInfo &module, ModuleHost &host, QString *error)
 {
     if (m_loaded.contains(module.id))
