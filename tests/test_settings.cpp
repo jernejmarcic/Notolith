@@ -811,3 +811,28 @@ TEST(Settings, OpeningANoteInAnAlreadyFirstVaultMakesItTheLastUsedOne)
     ASSERT_TRUE(first.save());
     EXPECT_EQ(Settings::load().recentVaults(), (QStringList{QStringLiteral("/vaults/one"), QStringLiteral("/vaults/two")}));
 }
+
+// Opening a vault asks for no file: the other window's newest recent file must not be passed by
+// this window's older one, and a loose note (no vault) must not re-front this window's vault.
+TEST(Settings, AnOpenThatNamesNothingForAListDoesNotReorderIt)
+{
+    SharedConfig config;
+    Settings first = Settings::load();
+    Settings second = Settings::load();
+    first.noteOpened(QStringLiteral("/vaults/one"), QStringLiteral("/vaults/one/a.md"));
+    ASSERT_TRUE(first.save());
+    second.noteOpened(QStringLiteral("/vaults/two"), QStringLiteral("/vaults/two/b.md"));
+    ASSERT_TRUE(second.save());
+
+    first.noteOpened(QStringLiteral("/vaults/one"), QString()); // openVault: no note yet
+    ASSERT_TRUE(first.save());
+    const Settings afterVault = Settings::load();
+    EXPECT_EQ(afterVault.recentVaults().value(0), QStringLiteral("/vaults/one"));
+    EXPECT_EQ(afterVault.recentFiles().value(0), QStringLiteral("/vaults/two/b.md")) << "no file was opened here";
+
+    second.noteOpened(QString(), QStringLiteral("/tmp/loose.md")); // a note outside every vault
+    ASSERT_TRUE(second.save());
+    const Settings afterLoose = Settings::load();
+    EXPECT_EQ(afterLoose.recentVaults().value(0), QStringLiteral("/vaults/one")) << "no vault was opened there";
+    EXPECT_EQ(afterLoose.recentFiles().value(0), QStringLiteral("/tmp/loose.md"));
+}

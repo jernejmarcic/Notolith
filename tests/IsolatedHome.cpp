@@ -16,8 +16,13 @@ const bool isolatedHome = [] {
     // named under a runtime directory of its own, whatever the person's $XDG_RUNTIME_DIR holds.
     // A directory per process, short enough for a unix socket path, removed when it ends.
     static std::string run = [] {
+        // A unix socket path is 107 bytes at most, and a name is "/n-" + 16 digits + ".sock" (25)
+        // after the directory: a deep $TMPDIR falls back to /tmp.
         const char *tmp = std::getenv("TMPDIR");
-        std::string pattern = std::string(tmp && *tmp ? tmp : "/tmp") + "/noteAppC-run-XXXXXX";
+        std::string base = tmp && *tmp ? tmp : "/tmp";
+        if (base.size() + std::string("/nac-XXXXXX").size() + 25 > 107)
+            base = "/tmp";
+        std::string pattern = base + "/nac-XXXXXX";
         return mkdtemp(pattern.data()) ? pattern : std::string();
     }();
     if (!run.empty()) {

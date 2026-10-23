@@ -1021,9 +1021,11 @@ void Settings::noteOpened(const QString &vaultRoot, const QString &filePath)
     };
     setValue(QStringLiteral("state.recentVaults"), push(recentVaults(), vaultRoot));
     setValue(QStringLiteral("state.recentFiles"), push(recentFiles(), filePath));
-    // Even when it changed nothing here, this vault is now the one last used: save() puts it first.
-    m_touched.insert(QStringLiteral("state.recentVaults"));
-    m_touched.insert(QStringLiteral("state.recentFiles"));
+    // Even when it changed nothing here, an entry named now is the one last used: save() puts it first.
+    if (!vaultRoot.isEmpty())
+        m_touched.insert(QStringLiteral("state.recentVaults"));
+    if (!filePath.isEmpty())
+        m_touched.insert(QStringLiteral("state.recentFiles"));
 }
 
 std::optional<Settings::NotePosition> Settings::notePosition(const QString &path) const

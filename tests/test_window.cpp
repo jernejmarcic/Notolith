@@ -182,12 +182,14 @@ struct PrivateConfig {
 /// A settings directory as every real user has one: it exists and holds what the app remembers.
 /// The big-note scroll tests run against it - they were exact only while the directory did not
 /// exist yet, because the editor re-laid the note out whenever anything was saved into it.
+/// Write it into a PrivateConfig of the test's own (put back after) and call this through
+/// ASSERT_NO_FATAL_FAILURE, so a failed write fails the test instead of running it without.
 void useAConfigDirectory()
 {
-    QDir().mkpath(Settings::configDirectory());
+    ASSERT_TRUE(QDir().mkpath(Settings::configDirectory()));
     QFile remembered(Settings::indexFile());
     ASSERT_TRUE(remembered.open(QIODevice::WriteOnly));
-    remembered.write("[state]\nrecent-vaults = /nowhere\n");
+    ASSERT_GT(remembered.write("[state]\nrecent-vaults = /nowhere\n"), 0);
 }
 
 /// A vault with one LF note, one CRLF note and one non-note file.
@@ -273,7 +275,8 @@ int topLine(MarkdownEditor *editor)
 // remembered scroll pixel alone means different text in the two.
 TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 {
-    useAConfigDirectory();
+    PrivateConfig config; // a used one of its own, the suite's shared one left as it was
+    ASSERT_NO_FATAL_FAILURE(useAConfigDirectory());
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -297,7 +300,8 @@ TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 
 TEST_F(WindowTest, AReopenedClosedTabOfABigNoteLandsAtTheTextItWasClosedAt)
 {
-    useAConfigDirectory();
+    PrivateConfig config; // a used one of its own, the suite's shared one left as it was
+    ASSERT_NO_FATAL_FAILURE(useAConfigDirectory());
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
