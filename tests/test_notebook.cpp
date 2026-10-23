@@ -2154,3 +2154,45 @@ TEST(IpynbWriteBackTest, AFortyPlotNotebookIsStillOpenedWithoutDecodingAnyOutput
     EXPECT_EQ(last.executionCount, 40);
     EXPECT_EQ(last.outputs.value(0).kind, NotebookOutput::Kind::ImagePng);
 }
+
+TEST(IpynbNewTest, ANewNotebookIsOneEmptyCodeCellAndTheKernelsOwnSpec)
+{
+    KernelSpec kernel;
+    kernel.name = QStringLiteral("python3");
+    kernel.displayName = QStringLiteral("Python 3 (ipykernel)");
+    kernel.language = QStringLiteral("python");
+    const KernelSpec *const none = nullptr;
+    for (const KernelSpec *spec : {static_cast<const KernelSpec *>(&kernel), none}) {
+        const QByteArray file = newIpynb(spec);
+        IpynbDocument document;
+        QString error;
+        ASSERT_TRUE(parseIpynb(file, &document, &error)) << error.toStdString();
+        EXPECT_EQ(document.root.value(QStringLiteral("nbformat")).toInt(), 4);
+        EXPECT_EQ(document.nbformatMinor, 5);
+        EXPECT_EQ(document.language, QStringLiteral("python"));
+        const QJsonArray cells = document.root.value(QStringLiteral("cells")).toArray();
+        ASSERT_EQ(cells.size(), 1);
+        const QJsonObject cell = cells.at(0).toObject();
+        EXPECT_EQ(cell.value(QStringLiteral("cell_type")).toString(), QStringLiteral("code"));
+        EXPECT_FALSE(cell.value(QStringLiteral("id")).toString().isEmpty());
+        EXPECT_TRUE(cell.value(QStringLiteral("source")).toArray().isEmpty());
+        EXPECT_TRUE(cell.value(QStringLiteral("outputs")).toArray().isEmpty());
+        EXPECT_TRUE(cell.value(QStringLiteral("execution_count")).isNull());
+        const QJsonObject metadata = document.root.value(QStringLiteral("metadata")).toObject();
+        if (spec) {
+            EXPECT_EQ(metadata.value(QStringLiteral("kernelspec")).toObject().value(QStringLiteral("name")).toString(),
+                      QStringLiteral("python3"));
+            EXPECT_FALSE(metadata.contains(QStringLiteral("language_info")));
+        } else {
+            EXPECT_FALSE(metadata.contains(QStringLiteral("kernelspec")));
+            EXPECT_EQ(metadata.value(QStringLiteral("language_info")).toObject().value(QStringLiteral("name")).toString(),
+                      QStringLiteral("python"));
+        }
+        EXPECT_EQ(dumpIpynbJSON(document.root), file) << "written the way nbformat writes it";
+        expectNbformatValid(file);
+        // It opens as one empty code block.
+        QString text;
+        ASSERT_TRUE(readIpynb(file, &text));
+        EXPECT_EQ(text, QStringLiteral("```python\n\n```\n"));
+    }
+}

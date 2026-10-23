@@ -3358,6 +3358,22 @@ void MainWindow::buildActions()
     });
 #endif
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+    // Where New note puts a note (newNoteFolder), the next free "Untitled", opened at once. A python kernel is the
+    // notebook's kernelspec when one is installed; without, only the language says python.
+    add(QStringLiteral("notebooks:new"), tr("Notebooks: Create new notebook"), QString(), [this] {
+        if (!m_vault.isValid())
+            return;
+        const notebook::KernelSpec kernel = notebook::kernelSpecsByLanguage().value(QStringLiteral("python"));
+        QString error;
+        const QString path = m_vault.createNote(newNoteFolder(), tr("Untitled"), &error, QStringLiteral(".ipynb"),
+                                                QString::fromUtf8(notebook::newIpynb(kernel.name.isEmpty() ? nullptr : &kernel)));
+        if (path.isEmpty()) {
+            QMessageBox::warning(this, tr("New notebook"), tr("Could not create the notebook:\n%1").arg(error));
+            return;
+        }
+        m_indexer->reindex(path);
+        openNote(path);
+    });
     add(QStringLiteral("notebooks:run-block"), tr("Notebooks: Run the code block at the cursor"),
         QStringLiteral("Ctrl+Shift+Return"), [this] {
             if (!m_active->view)

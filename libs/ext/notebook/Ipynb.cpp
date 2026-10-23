@@ -1,5 +1,6 @@
 #include "Ipynb.h"
 
+#include "KernelSpec.h"
 #include "NotebookOutputs.h"
 
 #include <QJsonArray>
@@ -622,6 +623,22 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
     QJsonObject root = document.root;
     root.insert(QStringLiteral("cells"), rebuilt);
     return dumpIpynbJSON(root);
+}
+
+QByteArray newIpynb(const KernelSpec *kernel)
+{
+    QJsonObject metadata;
+    if (kernel) {
+        metadata.insert(QStringLiteral("kernelspec"), QJsonObject{{QStringLiteral("display_name"), kernel->displayName},
+                                                                   {QStringLiteral("language"), kernel->language},
+                                                                   {QStringLiteral("name"), kernel->name}});
+    } else {
+        metadata.insert(QStringLiteral("language_info"), QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}});
+    }
+    return dumpIpynbJSON({{QStringLiteral("cells"), QJsonArray{newCell({Cell::Type::Code, QString()}, 5)}},
+                          {QStringLiteral("metadata"), metadata},
+                          {QStringLiteral("nbformat"), 4},
+                          {QStringLiteral("nbformat_minor"), 5}});
 }
 
 } // namespace noteAppC::notebook

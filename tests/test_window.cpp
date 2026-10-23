@@ -5626,6 +5626,45 @@ TEST_F(WindowTest, RunBelowRunsTheCursorsBlockAndEveryOneAfterIt)
               30000);
 }
 
+// "New notebook": the next free Untitled.ipynb where New note puts a note, one
+// empty python cell, opened at once; greyed out with the notebooks feature off.
+TEST_F(WindowTest, NewNotebookCreatesAnUntitledNotebookAndOpensIt)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    QAction *create = window.findChild<QAction *>(QStringLiteral("notebooks:new"));
+    ASSERT_NE(create, nullptr);
+    ASSERT_TRUE(create->isEnabled());
+    create->trigger();
+    const QString first = path(QStringLiteral("Untitled.ipynb"));
+    ASSERT_TRUE(QFileInfo::exists(first));
+    const QJsonObject root = QJsonDocument::fromJson(readAll(first)).object();
+    EXPECT_EQ(root.value(QStringLiteral("nbformat")).toInt(), 4);
+    EXPECT_EQ(root.value(QStringLiteral("nbformat_minor")).toInt(), 5);
+    const QJsonArray cells = root.value(QStringLiteral("cells")).toArray();
+    ASSERT_EQ(cells.size(), 1);
+    EXPECT_EQ(cells.at(0).toObject().value(QStringLiteral("cell_type")).toString(), QStringLiteral("code"));
+    EXPECT_FALSE(cells.at(0).toObject().value(QStringLiteral("id")).toString().isEmpty());
+    EXPECT_TRUE(window.windowTitle().contains(QStringLiteral("Untitled"))) << window.windowTitle().toStdString();
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("```python\n\n```\n")) << "it is open, as a code cell";
+
+    const QByteArray firstBytes = readAll(first);
+    create->trigger();
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Untitled 1.ipynb")))) << "the next free name";
+    EXPECT_EQ(readAll(first), firstBytes) << "the first is left alone";
+
+    Settings config = Settings::load();
+    config.setValue(Settings::featureKey("notebooks"), false);
+    ASSERT_TRUE(config.save());
+    MainWindow off;
+    off.show();
+    off.openVault(dir.path());
+    EXPECT_FALSE(off.findChild<QAction *>(QStringLiteral("notebooks:new"))->isEnabled());
+    config.setValue(Settings::featureKey("notebooks"), true);
+    config.save();
+}
+
 // Two cells that read the same are two results: each block shows the output
 // its own cell had, not one that was cached under the shared text.
 TEST_F(WindowTest, IdenticalNotebookCellsShowTheirOwnOutputs)

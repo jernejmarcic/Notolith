@@ -13,6 +13,7 @@
 // Pure data: no widgets, no kernel. The window calls readIpynb when it opens
 // one and mergeIpynb when it saves (docs/NOTEBOOKS.md, "Jupyter notebooks").
 
+#include "KernelSpec.h"
 #include "NotebookCache.h"
 #include "NotebookSandbox.h"
 
@@ -64,6 +65,11 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, QStr
 /// came out different).
 QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, const QSet<QString> &dirtyKeys,
                       QString *error = nullptr);
+
+/// A new, empty notebook as a file: nbformat 4.5, one empty code cell with an
+/// id, the kernelspec `kernel` names (the default python3's), or - none found -
+/// only `language_info.name = python`.
+QByteArray newIpynb(const KernelSpec *kernel = nullptr);
 
 /// nbformat's JSON style (Python's `json.dumps(indent=1, sort_keys=True,
 /// ensure_ascii=False)` and a final newline), so a notebook kept in git changes
