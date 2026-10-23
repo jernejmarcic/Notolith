@@ -128,13 +128,14 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime, bool dropped)
         const QString plain = mime->text().trimmed();
         for (const QUrl &url : urls) {
             if (!url.isLocalFile()) {
-                if (!dropped) {
-                    if (url.isValid() && selection().length() == 0 && url.toString().size() <= 2000)
-                        parts << url.toString(); // a paste is the URL as copied
-                } else if (url.isValid() && isLinkScheme(url))
+                if (dropped && url.isValid() && isLinkScheme(url)) {
                     parts << browserLink(url, mozTitles, plain, urls.size() == 1);
-                else if (url.isValid() && url.toString().size() <= 2000) // javascript:, data: ...: text, never a link
+                } else if (url.isValid() && (dropped || selection().length() == 0)) {
+                    // A paste is the URL as copied; a drop of javascript:, data: ... is text, never a link.
                     parts << url.toString();
+                    if (url.toString().size() > 2000)
+                        emit noticeRaised(tr("A %n character URL was inserted as plain text", nullptr, int(url.toString().size())));
+                }
                 continue;
             }
             const QString path = url.toLocalFile();

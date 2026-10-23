@@ -1098,8 +1098,17 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         if (leaf == m_active)
             updateModeButton();
     });
-    editor->setLinkResolver([this, leaf](const QString &target) { return resolveLinkFrom(target, leaf->notePath); });
+    // Looked up by editor, never by the Leaf pointer: dropLeaf frees the Leaf at once and the editor (and the
+    // nested editors that copy this resolver) a moment later, and a posted completion may ask in between.
+    editor->setLinkResolver([this, editor = QPointer<MarkdownEditor>(editor)](const QString &target) -> QString {
+        for (const auto &owned : m_leaves) {
+            if (owned->editor == editor)
+                return resolveLinkFrom(target, owned->notePath);
+        }
+        return {};
+    });
     connect(editor, &MarkdownEditor::linkActivated, this, &MainWindow::followLink);
+    connect(editor, &MarkdownEditor::noticeRaised, this, [this](const QString &message) { statusBar()->showMessage(message, 6000); });
     connect(editor, &MarkdownEditor::linkHovered, this,
             [this](const QString &target, const QPoint &globalPos) {
                 if (!featureOn("page-preview"))
@@ -7183,8 +7192,10 @@ template<typename Leaves>
 void retarget(Leaves &leaves, const QString &from, const QString &to)
 {
     for (const auto &leaf : leaves) {
-        if (leaf->notePath == from)
+        if (leaf->notePath == from) {
             leaf->notePath = to;
+            leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
+        }
     }
 }
 
@@ -7723,6 +7734,7 @@ void MainWindow::followLostNotes(bool final)
             for (const auto &leaf : m_leaves) {
                 if (!leaf->view && leaf->notePath == path) {
                     leaf->notePath = moved;
+                    leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
                     leaf->inlineTitle->setText(QFileInfo(moved).completeBaseName());
                 }
             }
@@ -8482,6 +8494,7 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
             leaf->notePath.replace(0, oldPath.size(), newPath);
         }
         if (leaf->notePath != before) { // a module's view keeps its own path: it must save to the new one
+            leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
             if (auto *module = qobject_cast<ModuleView *>(leaf->view))
                 module->setFilePath(leaf->notePath);
         }

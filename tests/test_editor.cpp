@@ -10327,6 +10327,20 @@ TEST(PasteDropTest, DropOfAScriptOrDataLinkIsPlainTextNeverALink)
     }
 }
 
+TEST(PasteDropTest, ADroppedNonLinkUrlOverTwoThousandCharactersIsTextAndSaysSo)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    QSignalSpy notice(editor.get(), &MarkdownEditor::noticeRaised);
+    const QString raw = QStringLiteral("data:text/plain,") + QString(3000, QLatin1Char('a'));
+    QMimeData mime;
+    mime.setUrls({QUrl(raw)});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n") + raw + QStringLiteral("below\n"));
+    EXPECT_EQ(notice.count(), 1);
+}
+
 TEST(PasteDropTest, DropOfAMailLinkTitlesItByTheAddressNotTheWholeUrl)
 {
     auto editor = editorWith(QStringLiteral("above\nbelow\n"));

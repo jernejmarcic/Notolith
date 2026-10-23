@@ -5091,6 +5091,36 @@ TEST_F(WindowTest, ARelativeEmbedInTheInactiveSplitPaneSurvivesTheOtherPanesInde
     EXPECT_FALSE(left->displayText().contains(QStringLiteral("img.png"))) << "still the picture";
 }
 
+// The tab's Leaf is freed at once, its editor a moment later: an editor that is still
+// asked about a link in between must not read the Leaf (nor resolve as if it were open).
+TEST_F(WindowTest, AClosedTabsEditorNeverReadsItsFreedLeafForALink)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Projects/sub")));
+    QImage picture(32, 32, QImage::Format_RGB32);
+    picture.fill(Qt::red);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Projects/sub/img.png"))));
+    write(QStringLiteral("Projects/A.md"), "![[sub/img.png]]\n");
+    write(QStringLiteral("Other.md"), "plain\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Projects/A.md")));
+    QPointer<MarkdownEditor> closing = window.editor();
+    settleIndexer(window);
+    ASSERT_FALSE(closing->displayText().contains(QStringLiteral("img.png")));
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    window.openNote(path(QStringLiteral("Other.md")));
+    closing->setFocus();
+    QApplication::processEvents();
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+
+    ASSERT_NE(closing.data(), nullptr) << "deleted later, by DeferredDelete";
+    closing->refreshLinkStatus(); // a posted completion would do this
+    EXPECT_TRUE(closing->displayText().contains(QStringLiteral("img.png"))) << "no leaf: nothing resolves";
+    flushDeletes();
+}
+
 // A link to a file that never existed: it appears, and only the vault's file signal says so.
 TEST_F(WindowTest, ALinkedImageThatIsCreatedFlipsItsLinkWithoutAnIndexChange)
 {

@@ -1110,6 +1110,8 @@ signals:
     void lookupRequested(const QString &text, const QPoint &globalPos);
     /// It left that link, or let go of it by leaving the editor.
     void linkHoverEnded();
+    /// Something the user should be told that is no error: the window shows it in the status bar.
+    void noticeRaised(const QString &message);
     /// A result in a rendered ```query``` block was clicked: `relativePath`
     /// is the note it matched, `offset` the first match inside it.
     void queryResultActivated(const QString &relativePath, qsizetype offset);
