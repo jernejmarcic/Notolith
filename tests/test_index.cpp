@@ -2012,3 +2012,26 @@ TEST_F(IndexTest, AWarmWalkReindexesExactlyTheFilesThatChanged)
     EXPECT_EQ(index.attachmentCount(), 1);
     EXPECT_EQ(index.contentRowCount(), index.noteCount());
 }
+
+// graphData() resolves each link from the linking note's vault-relative path;
+// that must stay what resolve() says for the same note, folder preference
+// between two notes of one name included.
+TEST_F(IndexTest, GraphLinksResolveAsResolveDoesFromTheLinkingNote)
+{
+    write(QStringLiteral("Projects/Home.md"), "# Other home\n\nSee [[Ideas]] and [[Projects/noteAppC]].\n");
+    write(QStringLiteral("Projects/Linker.md"), "[[Home]] [[../Ideas]] [[Missing]]\n");
+    Index index;
+    build(index);
+    const Index::GraphData data = index.graphData();
+    ASSERT_GE(data.links.size(), 7);
+    bool sawFolderPreference = false;
+    for (const Index::GraphLinkInfo &link : data.links) {
+        EXPECT_EQ(link.toPath, index.resolve(link.targetName, vault.absolute(link.fromPath)))
+            << qPrintable(link.fromPath + QStringLiteral(" -> ") + link.targetName);
+        if (link.fromPath == QStringLiteral("Projects/Linker.md") && link.targetName == QStringLiteral("Home")) {
+            EXPECT_EQ(link.toPath, QStringLiteral("Projects/Home.md")) << "the linking note's own folder wins";
+            sawFolderPreference = true;
+        }
+    }
+    EXPECT_TRUE(sawFolderPreference);
+}

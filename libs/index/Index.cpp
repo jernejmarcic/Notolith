@@ -774,8 +774,11 @@ QString Index::resolve(const QString &target, const QString &fromPath) const
     return resolveIn(m_names, m_vaultRoot, target, fromPath);
 }
 
-QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString &vaultRoot,
-                         const QString &target, const QString &fromPath)
+namespace {
+
+/// resolveIn() for a linking note already given vault-relative.
+QString resolveFrom(const QHash<QString, QStringList> &names, const QString &vaultRoot, const QString &target,
+                    const QString &fromRelative)
 {
     QString wanted = normaliseTarget(target);
     if (wanted.isEmpty())
@@ -784,9 +787,6 @@ QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString
     // An absolute path inside the vault is just a vault-relative one.
     if (wanted.startsWith(vaultRoot + QLatin1Char('/')))
         wanted = wanted.mid(vaultRoot.size() + 1);
-
-    const QString fromRelative =
-        fromPath.isEmpty() ? QString() : QDir(vaultRoot).relativeFilePath(fromPath);
 
     // A target with a slash is a path: try it relative to the linking note
     // first, then relative to the vault root, the way Obsidian does.
@@ -818,7 +818,7 @@ QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString
     QString best;
     int bestDepth = std::numeric_limits<int>::max();
     for (const QString &candidate : candidates) {
-        if (!fromPath.isEmpty() && QFileInfo(candidate).path() == fromFolder)
+        if (!fromRelative.isEmpty() && QFileInfo(candidate).path() == fromFolder)
             return candidate;
         const int depth = candidate.count(QLatin1Char('/'));
         if (depth < bestDepth || (depth == bestDepth && candidate < best)) {
@@ -827,6 +827,15 @@ QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString
         }
     }
     return best;
+}
+
+} // namespace
+
+QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString &vaultRoot,
+                         const QString &target, const QString &fromPath)
+{
+    return resolveFrom(names, vaultRoot, target,
+                       fromPath.isEmpty() ? QString() : QDir(vaultRoot).relativeFilePath(fromPath));
 }
 
 QList<Link> Index::outgoingLinks(const QString &path) const
@@ -1640,7 +1649,6 @@ Index::GraphData readGraphData(QSqlDatabase &db, const QString &vaultRoot,
         result.files.append(file);
     }
 
-    const QDir vaultDir(vaultRoot);
     QSqlQuery links(db);
     links.exec(QStringLiteral(
         "SELECT src.path, links.target FROM links "
@@ -1652,7 +1660,7 @@ Index::GraphData readGraphData(QSqlDatabase &db, const QString &vaultRoot,
         // resolveIn() is an in-memory hash lookup (see m_names), not a query,
         // so running it once per link here still holds the "no per-note
         // queries" budget.
-        link.toPath = Index::resolveIn(names, vaultRoot, link.targetName, vaultDir.absoluteFilePath(link.fromPath));
+        link.toPath = resolveFrom(names, vaultRoot, link.targetName, link.fromPath);
         result.links.append(link);
     }
     return result;
