@@ -5,9 +5,10 @@
 #   cd packaging/arch
 #   BUILDDIR=/tmp/noteAppC-makepkg PKGDEST=/tmp makepkg -f
 #
-# One build, three packages (docs/INK.md): notolith (the application),
-# notolith-ink (the handwriting core library and module) and notolith-hwfont
-# (the glyph studio module). Install all three of one run together: a module
+# One build, four packages (docs/INK.md): notolith (the application),
+# notolith-ink (the handwriting core library and module), notolith-hwfont
+# (the glyph studio module) and notolith-pdfview (the PDF viewer module and the
+# poppler half of PDF embeds). Install every one of a run together: a module
 # is only loaded by the build that made it (the ABI tag).
 #
 # The first build fetches md4qt, MicroTeX and tinyxml2 (pinned in the root
@@ -16,14 +17,15 @@
 # a later change can vendor it.
 
 pkgbase=notolith
-pkgname=('notolith' 'notolith-ink' 'notolith-hwfont')
+pkgname=('notolith' 'notolith-ink' 'notolith-hwfont' 'notolith-pdfview')
 pkgver=0.1.0
 pkgrel=1
 arch=('x86_64' 'aarch64')
 license=('GPL-3.0-or-later')
 # abseil-cpp is the system Abseil that the ink core requires (docs/INK.md): without it the ink
 # packages would silently not be built.
-makedepends=('cmake' 'ninja' 'git' 'gtest' 'abseil-cpp')
+# poppler-qt6 is the PDF module's, not the application's: the executable links none of it.
+makedepends=('cmake' 'ninja' 'git' 'gtest' 'abseil-cpp' 'poppler-qt6')
 
 build() {
     # A distribution's makepkg.conf may target the build machine's own CPU
@@ -51,7 +53,7 @@ package_notolith() {
     replaces=('noteappc')
     # bubblewrap is a hard dependency: without it code blocks, TeX and plugins
     # would fall back to running unsandboxed.
-    depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell' 'poppler-qt6'
+    depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell'
              'syntax-highlighting' 'litehtml' 'libgit2' 'libarchive' 'curl' 'libsodium'
              'qtkeychain-qt6' 'zeromq' 'libseccomp' 'bubblewrap')
     optdepends=('hunspell-en_gb: British English spelling'
@@ -79,4 +81,14 @@ package_notolith-hwfont() {
     # No manifest "dependencies" key: pacman enforces this one.
     depends=("notolith-ink=$pkgver-$pkgrel")
     install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" build/modules/notolith-hwfont.so
+}
+
+package_notolith-pdfview() {
+    pkgdesc='Notolith PDF viewer and annotation, and PDF embeds in notes'
+    # poppler-qt6 is GPL; keeping it out of the base package keeps it out of every start that meets no PDF.
+    # Both libraries install side by side: the module finds libnotolith-pdfpage.so through $ORIGIN, the
+    # application finds the same file by directory (libs/render/PdfPage.cpp).
+    depends=("notolith=$pkgver-$pkgrel" 'poppler-qt6')
+    install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
+        build/modules/libnotolith-pdfpage.so build/modules/notolith-pdfview.so
 }

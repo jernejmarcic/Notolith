@@ -65,8 +65,11 @@ not exist until the module did.
 A module is a Qt plugin (`QPluginLoader`) found in `<libdir>/noteAppC/modules`
 (`NOTEAPPC_MODULE_DIRS` replaces it). Its manifest is read without loading it; the library
 loads the first time one of its suffixes is opened or one of its commands runs. Nothing else
-loads a module: indexing never does. Two packages ship: `notolith-ink` (the ink core library
-and the ink module) and `notolith-hwfont` (depends on `notolith-ink`); the manifest has no
+loads a module: indexing never does. Three packages ship: `notolith-ink` (the ink core library
+and the ink module), `notolith-hwfont` (depends on `notolith-ink`) and `notolith-pdfview` (the
+PDF viewer module, and `libnotolith-pdfpage.so`, poppler behind a three-function C face that
+PDF embeds and the hover preview resolve by name on first use from any thread, so the base
+executable links no poppler); the manifest has no
 dependency list, so a module whose core library is missing fails to load with the loader's
 message, shown in Settings. A module must match the host's ABI tag
 (`version-token-qtversion`, the token random per build directory); a second module claiming

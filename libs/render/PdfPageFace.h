@@ -1,0 +1,17 @@
+#pragma once
+
+#include <QImage>
+#include <QSizeF>
+#include <QString>
+
+/// What libnotolith-pdfpage.so exports and PdfPage.cpp resolves: the C face of
+/// the pdfview package's poppler half. C linkage, so a lookup by name needs no
+/// mangling; the Qt types in the signatures are the same on both sides because
+/// the first function names the build (notolith_pdf_abi), and PdfPage.cpp refuses
+/// a library built for another Notolith.
+extern "C" {
+const char *notolith_pdf_abi();
+int notolith_pdf_page_count(const QString &path);
+QSizeF notolith_pdf_page_size(const QString &path, int page);
+QImage notolith_pdf_render(const QString &path, int page, int widthPixels, bool hideAnnotations);
+}

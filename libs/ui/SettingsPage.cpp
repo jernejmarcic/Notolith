@@ -37,7 +37,6 @@
 #include "Parser.h"
 #include "Hotkeys.h"
 #include "MediaPlayback.h"
-#include "PdfPage.h"
 #include "Scheme.h"
 #include "Settings.h"
 #include "Theme.h"
@@ -111,10 +110,12 @@ void SettingsPage::setPluginRegistry(PluginRegistry *registry)
         rebuild();
 }
 
-void SettingsPage::setModules(const QList<ModuleHost::SettingRow> &rows, const QList<QPair<QString, QString>> &problems)
+void SettingsPage::setModules(const QList<ModuleHost::SettingRow> &rows, const QList<QPair<QString, QString>> &problems,
+                              const QStringList &features)
 {
     m_moduleRows = rows;
     m_moduleProblems = problems;
+    m_moduleFeatures = features;
     m_needsRebuild = true;
     if (isVisible())
         rebuild();
@@ -941,9 +942,6 @@ QWidget *SettingsPage::buildCorePluginsPage()
 #ifndef NOTEAPPC_HAVE_EPUB
         "epub-reader",
 #endif
-#ifndef NOTEAPPC_HAVE_PDFVIEW
-        "pdf-viewer",
-#endif
 #ifndef NOTEAPPC_HAVE_IMAGEVIEW
         "image-annotation",
 #endif
@@ -954,8 +952,11 @@ QWidget *SettingsPage::buildCorePluginsPage()
         "sync",
 #endif
     };
-    if (!PdfPage::isAvailable())
-        missing << "pdf-embeds";
+    if (!m_moduleFeatures.contains(QLatin1String("pdf-viewer"))) {
+        // notolith-pdfview carries the tab and the poppler half of the embeds: not installed, neither works.
+        // Asking PdfPage::isAvailable() instead would map poppler just to draw this page.
+        missing << "pdf-viewer" << "pdf-embeds";
+    }
     if (!MediaPlayback::isAvailable())
         missing << "media-embeds";
     if (!HtmlRenderer::isAvailable())

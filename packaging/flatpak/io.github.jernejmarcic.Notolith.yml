@@ -68,7 +68,7 @@ modules:
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
       - -DBUILD_TESTING=OFF
-      - -DNOTEAPPC_WITH_PDF=OFF
+      - -DNOTEAPPC_WITH_PDFVIEW=OFF
       - -DFETCHCONTENT_FULLY_DISCONNECTED=ON
       - -DFETCHCONTENT_SOURCE_DIR_MD4QT=/run/build/noteAppC/deps/md4qt
       - -DFETCHCONTENT_SOURCE_DIR_TINYXML2=/run/build/noteAppC/deps/tinyxml2

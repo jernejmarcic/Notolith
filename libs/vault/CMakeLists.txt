@@ -1,6 +1,8 @@
 add_library(noteAppC_vault STATIC
     Snapshots.cpp
     Snapshots.h
+    PdfRecovery.cpp
+    PdfRecovery.h
     Vault.cpp
     Vault.h
     MomentFormat.cpp

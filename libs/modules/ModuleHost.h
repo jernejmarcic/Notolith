@@ -47,6 +47,9 @@ public:
     /// The window is going away (or the view is): write what the view keeps back in the host's Settings to disk. The
     /// view's own destructor runs after the window's Settings are gone, so the host calls this first.
     virtual void flushSettings() {}
+    /// A link to this file carried a `#fragment` (a PDF's `#page=3`): show what it names. Called after load(), only
+    /// when there is one.
+    virtual void openFragment(const QString &fragment) { Q_UNUSED(fragment) }
 
 signals:
     void modificationChanged(bool modified);
@@ -91,6 +94,11 @@ struct ModuleHost {
     std::function<bool(const QString &absolutePath)> openFile;
     /// The folder of the active note, else the vault root; empty without a vault.
     std::function<QString()> currentFolder;
+    /// The module view in the active tab, null when the tab shows anything else: what a command on "the open PDF"
+    /// acts on. The caller checks it is one of its own views (qobject_cast).
+    std::function<ModuleView *()> currentView;
+    /// Writes out every note save still in flight; run before a command that reads or rewrites notes on disk.
+    std::function<void()> flushSaves;
 
     Settings *settings = nullptr;
     const Theme *theme = nullptr;

@@ -657,8 +657,9 @@ private:
     /// keys the module registered and a refresh of the Settings page (its rows, or its load failure).
     bool loadModule(const ModuleInfo &module, QString *error);
     QList<QPair<QString, QString>> moduleProblems() const; ///< (id, notice) of every module that cannot load
+    QStringList moduleFeatures() const;                    ///< the feature ids of the modules that can
     QAction *addModuleCommand(const QString &id, const QString &title);
-    bool openModuleView(const QString &path, QString *error, QWidget **view);
+    bool openModuleView(const QString &path, QString *error, QWidget **view, const QString &fragment = QString());
     void showModuleTab(ModuleView *view, const QString &title);
     /// A module view that is still parsing a reload (`ModuleView::isLoading()`) holds the document the load is about to
     /// replace, and its save() refuses until then. Closing or quitting waits for the load (an event loop, at most

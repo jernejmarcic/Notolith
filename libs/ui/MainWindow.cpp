@@ -126,10 +126,7 @@
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
 #include "ImageView.h"
 #endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
 #include "PdfRecovery.h"
-#include "PdfView.h"
-#endif
 #ifdef NOTEAPPC_HAVE_CANVAS
 #include "CanvasView.h"
 #endif
@@ -198,8 +195,8 @@ QString mediaKindOf(const QString &path, bool askPlugins = true)
 }
 /// A suffix the app opens itself: a module may not claim it (the registry gives
 /// such a module a problem notice and never loads it). Per kind, under the same
-/// compile-time option as isViewFile, so a build without EPUB or PDF does not
-/// forbid a module those suffixes.
+/// compile-time option as isViewFile, so a build without EPUB does not
+/// forbid a module that suffix. A PDF is a module's (notolith-pdfview).
 bool isBuiltInSuffix(const QString &suffix)
 {
     if (suffix == QLatin1String("md") || suffix == QLatin1String("mdlock"))
@@ -214,10 +211,6 @@ bool isBuiltInSuffix(const QString &suffix)
 #endif
 #ifdef NOTEAPPC_HAVE_BASES
     if (suffix == QLatin1String("base"))
-        return true;
-#endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (suffix == QLatin1String("pdf"))
         return true;
 #endif
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
@@ -405,6 +398,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_moduleHost.showTab = [this](ModuleView *view, const QString &title) { showModuleTab(view, title); };
     m_moduleHost.showStatus = [this](const QString &text, int timeoutMs) { statusBar()->showMessage(text, timeoutMs); };
     m_moduleHost.openFile = [this](const QString &absolutePath) { return openNote(absolutePath); };
+    m_moduleHost.currentView = [this]() -> ModuleView * {
+        return m_active ? qobject_cast<ModuleView *>(m_active->view) : nullptr;
+    };
+    m_moduleHost.flushSaves = [this] { flushSaves(); };
     m_moduleHost.currentFolder = [this]() -> QString {
         if (!m_vault.isValid())
             return QString();
@@ -3418,22 +3415,6 @@ void MainWindow::buildActions()
                 showRightPane(m_localGraph);
         });
 #endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    add(QStringLiteral("pdf-viewer:extract-annotations"), tr("PDF: Extract annotations to a note"), QString(),
-        [this] {
-            auto *pdf = qobject_cast<PdfView *>(m_active->view);
-            if (!pdf) {
-                statusBar()->showMessage(tr("Open a PDF first"), 3000);
-                return;
-            }
-            flushSaves(); // the note it extracts into may be open, with a commit in flight
-            QString error;
-            if (!pdf->extractAnnotations(QString(), &error))
-                QMessageBox::warning(this, tr("Extract annotations"), error);
-            else
-                statusBar()->showMessage(tr("Annotations extracted"), 3000);
-        });
-#endif
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
     add(QStringLiteral("image-annotation:extract-annotations"), tr("Image: Extract annotations to a note"), QString(),
         [this] {
@@ -5039,10 +5020,6 @@ void MainWindow::applyTheme()
 #endif
         if (auto *module = qobject_cast<ModuleView *>(leaf->view))
             module->setTheme(m_theme);
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-        if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
-            pdf->setTheme(m_theme);
-#endif
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
         if (auto *image = qobject_cast<ImageView *>(leaf->view))
             image->setTheme(m_theme);
@@ -5341,13 +5318,23 @@ void MainWindow::openSingleFile(const QString &path)
 
 void MainWindow::openTarget(const LaunchTarget &target)
 {
+    // A file that is no note (a PDF, an .ink page) is a module's to open: the scan that tells which module
+    // runs after the first paint, so the open that paint queued - a path on the command line, the last
+    // session's note - would find no owner for it. One directory listing, and only for such a file.
+    const auto scanFor = [this](const QString &path) {
+        if (!m_modulesScanned && !path.isEmpty() && !Vault::isNote(path))
+            scanModulesNow();
+    };
     switch (target.mode) {
     case OpenMode::Vault:
         openVault(target.vaultRoot);
-        if (!target.filePath.isEmpty())
+        if (!target.filePath.isEmpty()) {
+            scanFor(target.filePath);
             openNote(target.filePath);
+        }
         break;
     case OpenMode::SingleFile:
+        scanFor(target.filePath);
         openSingleFile(target.filePath);
         break;
     case OpenMode::Empty: {
@@ -5361,6 +5348,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
             // lives under this vault's root.
             for (const QString &candidate : m_settings.rememberedNotes()) {
                 if (m_vault.contains(candidate) && QFileInfo(candidate).exists()) {
+                    scanFor(candidate);
                     openNote(candidate);
                     break;
                 }
@@ -5376,9 +5364,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
         // Old snapshots go once a session, with the window already up.
         const qint64 keep = qint64(m_settings.integer(QStringLiteral("fileRecovery.keepDays"))) * 24 * 3600 * 1000;
         Snapshots::prune(keep);
-#ifdef NOTEAPPC_HAVE_PDFVIEW
         PdfRecovery::prune(keep);
-#endif
     }
     m_painted = true;
     startModuleScan(); // PERFORMANCE.md rule 5: a directory listing, off the UI thread, after the first frame
@@ -5437,7 +5423,7 @@ void MainWindow::onModulesScanned()
         }
     }
     m_settings.adoptStored(); // a saved feature switch for a key registered just now (load() ran before the scan)
-    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems());
+    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems(), moduleFeatures());
     if (commandAdded)
         rebuildHotkeyCommands();
     if (featureRegistered)
@@ -5451,7 +5437,7 @@ bool MainWindow::loadModule(const ModuleInfo &module, QString *error)
     const bool ok = m_modules->ensureLoaded(module, m_moduleHost, error);
     if (ok)
         m_settings.adoptStored(); // the module's keys exist now; load() ran before them (once, not per row)
-    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems()); // its rows, or its load failure
+    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems(), moduleFeatures()); // its rows, or its load failure
     return ok;
 }
 
@@ -5489,6 +5475,17 @@ QList<QPair<QString, QString>> MainWindow::moduleProblems() const
             problems.append({module.id, notice});
     }
     return problems;
+}
+
+/// The feature ids of the installed modules that can load: what the Core plugins page offers a switch for when the
+/// feature is a module's alone (the PDF viewer).
+QStringList MainWindow::moduleFeatures() const
+{
+    QStringList features;
+    for (const ModuleInfo &module : m_modules->modules())
+        if (module.problem.isEmpty())
+            features << module.featureID;
+    return features;
 }
 
 QAction *MainWindow::command(const QString &id) const
@@ -6529,17 +6526,13 @@ bool MainWindow::isViewFile(const QString &path) const
     if (path.endsWith(QLatin1String(".base"), Qt::CaseInsensitive))
         return featureOn("bases");
 #endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive))
-        return featureOn("pdf-viewer");
-#endif
     const QString media = mediaKindOf(path);
     if (media == QLatin1String("image") || (!media.isEmpty() && featureOn("media-embeds")))
         return true;
     return m_modules && m_modules->moduleForSuffix(path).has_value(); // after every built-in kind, never before
 }
 
-bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **view)
+bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **view, const QString &fragment)
 {
     const std::optional<ModuleInfo> module = m_modules ? m_modules->moduleForSuffix(path) : std::nullopt;
     if (!module)
@@ -6573,6 +6566,8 @@ bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **v
         delete moduleView;
         return false;
     }
+    if (!fragment.isEmpty())
+        moduleView->openFragment(fragment);
     *view = moduleView;
     return true;
 }
@@ -6620,29 +6615,6 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
             connect(epub, &EpubView::statusMessage, this,
                     [this](const QString &text, int timeout) { statusBar()->showMessage(text, timeout); });
             view = epub;
-        }
-    }
-#endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) {
-        auto *pdf = new PdfView(m_active->area);
-        pdf->setTheme(m_theme);
-        if (!pdf->load(path, &error)) {
-            delete pdf;
-        } else {
-            if (!fragment.isEmpty())
-                pdf->openFragment(fragment);
-            Leaf *leaf = m_active;
-            connect(pdf, &PdfView::modificationChanged, this, [this, leaf](bool modified) {
-                if (leaf == m_active)
-                    updateTitle();
-                else
-                    syncTabs(leaf->group);
-                if (modified && m_settings.boolean(QStringLiteral("files.autosave")))
-                    armAutosave(); // annotations are kept like a note's text
-            });
-            connect(pdf, &PdfView::noteActivated, this, &MainWindow::openRelative);
-            view = pdf;
         }
     }
 #endif
@@ -6718,7 +6690,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
     }
 #endif
     if (!view)
-        openModuleView(path, &error, &view);
+        openModuleView(path, &error, &view, fragment);
     if (!view) {
         if (source != NavSource::History)
             QMessageBox::warning(this, tr("Open"), tr("Could not open %1:\n%2").arg(path, error));
@@ -6776,10 +6748,6 @@ bool MainWindow::isModified(const Leaf *leaf) const
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
         return canvas->isModified();
-#endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
-        return pdf->isModified();
 #endif
     return leaf->editor->isModified();
 }
@@ -7258,18 +7226,6 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
     if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;
         if (!canvas->save(QString(), &error)) {
-            reportSaveError(target->notePath, error, quiet);
-            return false;
-        }
-        if (!quiet)
-            statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(target->notePath).fileName()), 2000);
-        return true;
-    }
-#endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (auto *pdf = qobject_cast<PdfView *>(target->view)) {
-        QString error;
-        if (!pdf->save(&error)) {
             reportSaveError(target->notePath, error, quiet);
             return false;
         }

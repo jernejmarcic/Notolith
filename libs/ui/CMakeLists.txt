@@ -113,11 +113,6 @@ if(TARGET noteAppC_plugins)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_PLUGINS)
 endif()
 
-if(TARGET noteAppC_pdfview)
-    target_link_libraries(noteAppC_ui PRIVATE noteAppC_pdfview)
-    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_PDFVIEW)
-endif()
-
 if(TARGET noteAppC_publish)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_publish)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_PUBLISH)

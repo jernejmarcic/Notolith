@@ -25,10 +25,10 @@ class Lifeline;
 /// panel, which PdfView.cpp composes around this.
 ///
 /// Page rasters are cached by (path, mtime, page, zoom bucket) and rendered
-/// off the UI thread through PdfPage - the same async/placeholder/Lifeline
+/// off the UI thread through PdfPageImpl - the same async/placeholder/Lifeline
 /// shape libs/editor/PdfEmbedBlock.cpp already uses for embedded PDF pages -
 /// with poppler's own baked-in annotation drawing turned off
-/// (PdfPage::render's hideAnnotations): every annotation, existing or just
+/// (PdfPageImpl::render's hideAnnotations): every annotation, existing or just
 /// added, is drawn here instead, straight off PdfDocument, so an edit is
 /// visible the instant it happens rather than waiting on a re-render.
 class PdfPagesArea : public QAbstractScrollArea {

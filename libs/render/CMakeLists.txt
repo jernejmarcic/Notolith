@@ -63,9 +63,10 @@ add_library(noteAppC_render STATIC
 
 set_target_properties(noteAppC_render PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# noteAppC_modules: PdfPage finds libnotolith-pdfpage.so in the module directories and checks the ABI tag.
 target_link_libraries(noteAppC_render
     PUBLIC Qt6::Gui noteAppC_theme
-    PRIVATE microtex Qt6::Svg noteAppC_sandbox)
+    PRIVATE microtex Qt6::Svg noteAppC_sandbox noteAppC_modules)
 target_compile_definitions(noteAppC_render PRIVATE
     NOTEAPPC_MICROTEX_RES="${CMAKE_BINARY_DIR}/microtex/res")
 
@@ -77,27 +78,6 @@ elseif(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING)
     message(STATUS "noteAppC: KF6 SyntaxHighlighting not found, code blocks will be uncoloured")
 else()
     message(STATUS "noteAppC: syntax highlighting disabled (NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF)")
-endif()
-
-# PDF embeds. Optional: poppler is GPL, so a permissive build can drop it and
-# PdfPage then reports itself unavailable; NOTEAPPC_WITH_PDF also lets it be
-# switched off when it is installed but built against a Qt the target kit
-# cannot link against (the system poppler-qt6 here is built against Qt 6.11).
-if(NOTEAPPC_WITH_PDF)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(POPPLER_QT6 IMPORTED_TARGET poppler-qt6)
-    endif()
-endif()
-if(TARGET PkgConfig::POPPLER_QT6)
-    # Global, because the imported target is only visible in this directory
-    # and the tests need to know which build they are checking.
-    set_property(GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER TRUE)
-    target_link_libraries(noteAppC_render PRIVATE PkgConfig::POPPLER_QT6)
-    target_compile_definitions(noteAppC_render PRIVATE NOTEAPPC_HAVE_POPPLER)
-    message(STATUS "noteAppC: PDF embeds enabled (poppler-qt6)")
-else()
-    message(STATUS "noteAppC: poppler-qt6 not found, PDF embeds disabled")
 endif()
 
 # HTML blocks. Optional: litehtml (BSD-3-Clause) plus gumbo is a small,

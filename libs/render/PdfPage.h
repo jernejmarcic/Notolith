@@ -4,16 +4,15 @@
 #include <QSizeF>
 #include <QString>
 
-namespace Poppler {
-class Document;
-}
-
 namespace noteAppC {
 
 /// One page of a PDF, rendered to an image through poppler-qt6.
 ///
 /// Kept behind this small surface so poppler's headers - and its GPL, which
-/// is why the CMake component is optional - stay out of the editor.
+/// is why the package is optional - stay out of the editor and out of the
+/// executable: the poppler half is libnotolith-pdfpage.so (libs/ext/pdfview,
+/// the notolith-pdfview package), resolved here on the first call from any
+/// thread and never loaded by a note that holds no PDF.
 ///
 /// Every function here is safe to call from a worker thread: `Poppler::
 /// Document` is not itself thread-safe to share, so each calling thread gets
@@ -28,8 +27,8 @@ namespace noteAppC {
 /// in, unguarded, by whichever thread's render reaches them first - and
 /// text extraction builds the same state. `render` forces that first
 /// fill-in to happen alone, before any concurrent render can race it; code
-/// that drives its own Poppler::Document calls `warmUp` first. See the
-/// comment on `warmUp` in the .cpp.
+/// that drives its own Poppler::Document calls `PdfPageImpl::warmUp` first
+/// (libs/ext/pdfview), which is where the comment on it lives.
 class PdfPage {
 public:
     /// 0 when the file is not a PDF poppler can open.
@@ -54,12 +53,8 @@ public:
     /// own rendering, unchanged.
     static QImage render(const QString &path, int page, int widthPixels, bool hideAnnotations = false);
 
-    /// For code that renders or extracts text through its own
-    /// Poppler::Document: run once before it, on any thread. Cheap after
-    /// the first call in the process.
-    static void warmUp(Poppler::Document *document);
-
-    /// False in a build configured without poppler.
+    /// False when the library is not installed or was built for another
+    /// Notolith. Resolves it, so the first call can map poppler (about 4 ms).
     static bool isAvailable();
 };
 

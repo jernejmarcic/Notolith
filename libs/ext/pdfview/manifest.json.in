@@ -1,0 +1,9 @@
+{
+    "id": "pdfview",
+    "feature": "pdf-viewer",
+    "name": "PDF viewer",
+    "description": "Open PDFs in a tab to read and annotate: highlight, underline, strike out, ink, notes and boxes, saved into the file. A loadable module; Notolith never loads it until a PDF is opened.",
+    "suffixes": ["pdf"],
+    "commands": [{"id": "pdf-viewer:extract-annotations", "title": "PDF: Extract annotations to a note"}],
+    "abi": "@NOTEAPPC_ABI_TAG@"
+}

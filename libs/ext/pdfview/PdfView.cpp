@@ -45,10 +45,10 @@ QIcon colorSwatchIcon(const QColor &color)
 } // namespace
 
 PdfView::PdfView(QWidget *parent)
-    : QWidget(parent)
+    : ModuleView(parent)
 {
     m_pages = new PdfPagesArea(this);
-    connect(m_pages, &PdfPagesArea::modificationChanged, this, &PdfView::modificationChanged);
+    connect(m_pages, &PdfPagesArea::modificationChanged, this, &ModuleView::modificationChanged);
     connect(m_pages, &PdfPagesArea::currentPageChanged, this, [this](int) { refreshPageField(); });
     connect(m_pages, &PdfPagesArea::zoomChanged, this, [this](double zoom) {
         if (m_zoomLabel)

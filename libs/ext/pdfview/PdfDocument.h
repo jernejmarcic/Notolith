@@ -83,9 +83,9 @@ struct PdfWordBox {
 ///
 /// Not thread-safe, and not meant to be used from one: every call here runs
 /// on the UI thread, same as the rest of the interactive edit. Rendering
-/// pixels is a different, read-only concern and goes through PdfPage on a
+/// pixels is a different, read-only concern and goes through PdfPageImpl on a
 /// worker thread instead, against the file on disk - see PdfView.cpp for how
-/// the two stay visually consistent (PdfPage's hideAnnotations flag).
+/// the two stay visually consistent (PdfPageImpl's hideAnnotations flag).
 class PdfDocument {
 public:
     PdfDocument();
@@ -111,7 +111,7 @@ public:
 
     /// One match, as (0-based page, point-space rect on it), page by page in
     /// order. Static and against the file on disk through its own
-    /// thread-local Document cache (mirrors PdfPage.cpp's) rather than the
+    /// thread-local Document cache (mirrors PdfPageImpl.cpp's) rather than the
     /// live, possibly mid-edit m_doc - safe to call from a worker thread,
     /// which is the point: PdfView runs this off the UI thread so Ctrl+F on
     /// a big PDF never blocks scrolling. Annotating never changes a page's

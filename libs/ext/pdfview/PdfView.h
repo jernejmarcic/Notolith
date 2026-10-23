@@ -2,6 +2,7 @@
 
 #include <QWidget>
 
+#include "ModuleHost.h"
 #include "PdfDocument.h"
 #include "Theme.h"
 
@@ -21,38 +22,32 @@ class PdfPagesArea;
 /// A PDF opened as a tab: the toolbar (page field, zoom, fit, the annotation
 /// tools and their colours, an outline toggle), the outline panel, the page
 /// canvas (PdfPagesArea, which does the real work) and the find bar, wired
-/// together. This is MainWindow::openView's `.pdf` counterpart to CanvasView
-/// - see the wiring snippets this lane sent back for the exact hookup.
-class PdfView : public QWidget {
+/// together. A ModuleView: the notolith-pdfview module registers it for `.pdf`
+/// and the window opens it like any module's tab.
+class PdfView : public ModuleView {
     Q_OBJECT
 
 public:
     explicit PdfView(QWidget *parent = nullptr);
 
-    bool load(const QString &path, QString *error = nullptr);
-    bool save(QString *error = nullptr);
-    bool isModified() const;
+    bool load(const QString &path, QString *error = nullptr) override;
+    bool save(QString *error = nullptr) override;
+    bool isModified() const override;
     QString path() const;
     QUndoStack *undoStack() const;
 
-    void setTheme(const Theme &theme);
+    void setTheme(const Theme &theme) override;
 
     /// Applies a link's subpath fragment (`#page=3`, Obsidian's own PDF
     /// grammar - see libs/render/PdfArgs.h, reused rather than reparsed) by
-    /// jumping the view there. What MainWindow::openView passes the
-    /// fragment of a `.pdf#page=N` link through to.
-    void openFragment(const QString &subpath);
+    /// jumping the view there. What the window passes the fragment of a
+    /// `.pdf#page=N` link through to.
+    void openFragment(const QString &subpath) override;
 
     /// pdf:extract-annotations. `notePath` empty uses
     /// defaultAnnotationsNotePath(path()) - the wiring snippet passes the
     /// vault's attachment-folder path instead when it has one configured.
     bool extractAnnotations(const QString &notePath = QString(), QString *error = nullptr);
-
-signals:
-    void modificationChanged(bool modified);
-    /// A file link inside the PDF, resolved by MainWindow the same way any
-    /// other relative path is (openRelative's own signature).
-    void noteActivated(const QString &relativePath);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;

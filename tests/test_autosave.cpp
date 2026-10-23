@@ -153,8 +153,7 @@ TEST(ModuleSuffixTest, OnlyAPluginImageSuffixAsksThePlugins)
     ASSERT_EQ(imagePluginsLoaded(), 0) << "an earlier test loaded them";
     for (const char *suffix : {"ink", "md", "png", "pdf", "mp3", "glyphs"})
         EXPECT_EQ(MainWindow::isBuiltInSuffixForTests(QString::fromLatin1(suffix)),
-                  QByteArray(suffix) == "md" || QByteArray(suffix) == "png" || QByteArray(suffix) == "pdf"
-                      || QByteArray(suffix) == "mp3")
+                  QByteArray(suffix) == "md" || QByteArray(suffix) == "png" || QByteArray(suffix) == "mp3") // a PDF is the pdfview module's
             << suffix;
     EXPECT_EQ(imagePluginsLoaded(), 0) << "the scan loaded the image plugins for suffixes none of them reads";
     for (const char *suffix : {"tiff", "heic", "jxl"}) {
