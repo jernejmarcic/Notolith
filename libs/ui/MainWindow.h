@@ -325,6 +325,10 @@ private:
         /// Obsidian defers its background tabs: a layout of ten tabs costs
         /// one note's open at startup, not ten.
         QString pendingPath;
+        /// A restored tab's file that nothing could open (a PDF with no pdfview package): the tab shows nothing,
+        /// and the saved workspace still names the file. Never retried by focus; retried when the set of
+        /// modules changes or the user picks the tab from the tab bar. Cleared by any open into the tab.
+        QString keptPath;
         /// Opening another note here opens it in a new tab instead; the tab's
         /// close button is a pin that unpins it.
         bool pinned = false;
@@ -367,6 +371,8 @@ private:
     /// A file a tab shows in a view of its own rather than the editor: a
     /// .canvas or a .base, when those modules are built and switched on.
     bool isViewFile(const QString &path) const;
+    /// Why a .pdf has no viewer: the package is missing, the module was refused, or the feature is switched off.
+    QString pdfViewerProblem() const;
     /// The other tabs showing the note `leaf` shows in the editor.
     QList<Leaf *> viewsOfSameNote(const Leaf *leaf) const;
     /// maybeSave() for the focused tab leaving its note - closed, or opening

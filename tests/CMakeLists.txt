@@ -167,6 +167,7 @@ if(TARGET notolith-pdfview)
     # No NOTEAPPC_MODULE_DIRS here: the loop at the end of this file gives it a directory that does not exist.
     noteappc_lazy_test(lazy_pdf_missing PdfWithoutTheModuleIsNotAViewFile)
     noteappc_lazy_test(lazy_pdf_restore_missing PdfTabIsKeptInTheWorkspaceWithoutTheModule)
+    noteappc_lazy_test(lazy_pdf_kept_focus KeptPdfTabIgnoresFocusAndEndsWhenANoteOpensInIt)
     list(APPEND noteappc_exe_forbidden "poppler")
     list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-pdfview> $<TARGET_FILE:notolith-pdfpage>)
     # A module takes the host's symbols from the executable: it must not carry a copy of a host library.

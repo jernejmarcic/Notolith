@@ -360,6 +360,50 @@ TEST(LazyModules, PdfTabIsKeptInTheWorkspaceWithoutTheModule)
     EXPECT_TRUE(workspaceNames(vault.root(), QStringLiteral("Paper.pdf"))) << "the workspace lost the tab";
 }
 
+// Focus is not a retry: a kept tab that is focused again and again says nothing, leaves Settings alone, and a note
+// opened into it ends the keeping.
+TEST(LazyModules, KeptPdfTabIgnoresFocusAndEndsWhenANoteOpensInIt)
+{
+    LazyVault vault;
+    seedWorkspaceWith(vault.root(), QStringLiteral("Paper.pdf"));
+    {
+        MainWindow window;
+        window.show();
+        window.openTarget(resolveLaunchTarget(vault.root()));
+        window.scanModulesNow(); // no module: nothing to wait for
+        QApplication::processEvents();
+        ASSERT_EQ(window.findChildren<ModuleView *>().size(), 0);
+        int messages = 0;
+        QObject::connect(window.statusBar(), &QStatusBar::messageChanged, [&messages](const QString &text) {
+            if (!text.isEmpty())
+                ++messages;
+        });
+        window.openSettings();
+        ASSERT_TRUE(window.settingsOpen());
+        const auto toggle = featureToggle(window, "pdf-embeds");
+        ASSERT_NE(toggle, nullptr);
+        EXPECT_FALSE(toggle->isChecked()) << "an unavailable feature shows off";
+        EXPECT_FALSE(toggle->isEnabled());
+        ASSERT_TRUE(window.settingsOpen());
+        messages = 0;
+        for (int round = 0; round < 5; ++round) {
+            QFocusEvent out(QEvent::FocusOut);
+            QApplication::sendEvent(window.editor(), &out);
+            QFocusEvent in(QEvent::FocusIn);
+            QApplication::sendEvent(window.editor(), &in);
+        }
+        EXPECT_EQ(messages, 0) << "focus retried the kept PDF";
+        EXPECT_TRUE(window.settingsOpen()) << "focus closed Settings";
+        ASSERT_TRUE(window.openNote(vault.notePath()));
+        QFocusEvent in(QEvent::FocusIn);
+        QApplication::sendEvent(window.editor(), &in);
+        EXPECT_EQ(messages, 0);
+        window.close();
+    }
+    EXPECT_TRUE(workspaceNames(vault.root(), QStringLiteral("Note.md")));
+    EXPECT_FALSE(workspaceNames(vault.root(), QStringLiteral("Paper.pdf"))) << "the opened note did not end the keeping";
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

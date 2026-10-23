@@ -986,7 +986,10 @@ MainWindow::TabGroup *MainWindow::newGroup()
     connect(group->tabs, &QTabBar::currentChanged, this, [this, group](int index) {
         if (m_syncingTabs || index < 0 || index >= group->leaves.size())
             return;
-        activateLeaf(group->leaves.at(index));
+        Leaf *picked = group->leaves.at(index);
+        if (picked->notePath.isEmpty() && !picked->view && !picked->keptPath.isEmpty())
+            picked->pendingPath = std::exchange(picked->keptPath, QString()); // the user picked it: one more try
+        activateLeaf(picked);
         m_active->editor->setFocus();
     });
     connect(group->tabs, &QTabBar::tabMoved, this,
@@ -1782,8 +1785,8 @@ void MainWindow::activateLeaf(Leaf *leaf)
             return; // opening it filled the panes
         // A file only a module opens, and none is installed (or it will not load): the tab stays in the saved
         // workspace for the day it does, rather than being dropped from it.
-        if (!Vault::isNote(pending) && !isViewFile(pending))
-            leaf->pendingPath = pending;
+        if (leaf->notePath.isEmpty() && !leaf->view && !Vault::isNote(pending) && !isViewFile(pending))
+            leaf->keptPath = pending; // shows nothing meanwhile; focus never retries it
     }
     const QString &path = leaf->notePath;
     showNoteInPanes(path);
@@ -1801,6 +1804,8 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
 {
     if (leaf->notePath.isEmpty() && !leaf->pendingPath.isEmpty())
         return QFileInfo(leaf->pendingPath).completeBaseName();
+    if (leaf->notePath.isEmpty() && !leaf->view && !leaf->keptPath.isEmpty())
+        return QFileInfo(leaf->keptPath).completeBaseName();
     if (leaf->notePath.isEmpty() && !leaf->viewTitle.isEmpty())
         return isModified(leaf) ? leaf->viewTitle + QLatin1String(" *") : leaf->viewTitle;
     if (leaf->notePath.isEmpty())
@@ -1905,7 +1910,8 @@ void MainWindow::syncTabs(TabGroup *group)
 {
     const bool soleEmpty = m_leaves.size() == 1 && group->leaves.size() == 1
                         && group->leaves.constFirst()->notePath.isEmpty()
-                        && group->leaves.constFirst()->pendingPath.isEmpty();
+                        && group->leaves.constFirst()->pendingPath.isEmpty()
+                        && group->leaves.constFirst()->keptPath.isEmpty();
     const int wanted = soleEmpty ? 0 : int(group->leaves.size());
     m_layoutSave.start();
     m_syncingTabs = true;
@@ -5424,6 +5430,11 @@ void MainWindow::onModulesScanned()
     const auto shareNow = qScopeGuard([this] { updateShare(); });
     if (m_modules->modules().isEmpty())
         return; // nothing installed: no feature row, no command, no rebuild - the base app pays nothing
+    // The module set is known now: a tab that kept a file for want of its module tries it once more.
+    if (m_active && m_active->notePath.isEmpty() && !m_active->view && !m_active->keptPath.isEmpty()) {
+        m_active->pendingPath = std::exchange(m_active->keptPath, QString());
+        activateLeaf(m_active);
+    }
     bool featureRegistered = false;
     bool commandAdded = false;
     for (const ModuleInfo &module : m_modules->modules()) {
@@ -5579,6 +5590,14 @@ void MainWindow::onTreeClicked(const QModelIndex &index)
 
 bool MainWindow::openNote(const QString &rawPath, NavSource source, const QString &fragment)
 {
+    // A tab that kept a file nothing could open keeps it only while it shows nothing: any open into it ends that.
+    Leaf *const target = m_active;
+    const QString kept = target ? std::exchange(target->keptPath, QString()) : QString();
+    const auto keepIfStillEmpty = qScopeGuard([&] {
+        if (!kept.isEmpty() && target->notePath.isEmpty() && !target->view
+            && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [target](const auto &open) { return open.get() == target; }))
+            target->keptPath = kept;
+    });
     // Any navigation - the tree, the switcher, a link, history - leaves the
     // settings page if it was open, even below, where a same-path or
     // not-a-note early return means nothing else here runs: a click behind an
@@ -5607,7 +5626,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
         if (openNote(path, source, fragment))
             return true;
         // Not opened (a cancelled password, an unreadable file): no blank tab left behind.
-        if (fresh->notePath.isEmpty() && fresh->pendingPath.isEmpty()
+        if (fresh->notePath.isEmpty() && fresh->pendingPath.isEmpty() && fresh->keptPath.isEmpty()
             && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [fresh](const auto &open) { return open.get() == fresh; })) {
             dropLeaf(fresh);
             activateLeaf(pinned);
@@ -5622,7 +5641,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     if (!Vault::isNote(path) && !Vault::isEncryptedNote(path) && !isNotebookFile(path)) {
         if (source != NavSource::History) {
             statusBar()->showMessage(path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)
-                                         ? tr("PDF support is not installed (the notolith-pdfview package)")
+                                         ? pdfViewerProblem()
                                          : tr("%1 is not a note - editors for other file types come later")
                                                .arg(QFileInfo(path).fileName()),
                                      4000);
@@ -5735,7 +5754,9 @@ QJsonObject MainWindow::layoutJSON() const
         int currentTab = 0;
         for (int i = 0; i < group->leaves.size(); ++i) {
             const Leaf *leaf = group->leaves.at(i);
-            const QString path = leaf->notePath.isEmpty() ? leaf->pendingPath : leaf->notePath;
+            const QString path = !leaf->notePath.isEmpty() ? leaf->notePath
+                                : !leaf->pendingPath.isEmpty() ? leaf->pendingPath
+                                : leaf->view ? QString() : leaf->keptPath;
             QJsonObject view{{QStringLiteral("type"), QStringLiteral("empty")},
                              {QStringLiteral("state"), QJsonObject()}};
             if (!path.isEmpty() && m_vault.isValid()) {
@@ -6595,6 +6616,20 @@ QList<MainWindow::Leaf *> MainWindow::viewsOfSameNote(const Leaf *leaf) const
             views << other.get();
     }
     return views;
+}
+
+QString MainWindow::pdfViewerProblem() const
+{
+    for (const ModuleInfo &module : m_modules->modules()) {
+        if (module.featureID != QLatin1String("pdf-viewer"))
+            continue;
+        if (!module.problem.isEmpty())
+            return module.problem; // built for another Notolith, say
+        if (!featureOn("pdf-viewer"))
+            return tr("The PDF viewer is switched off in Settings, Core plugins");
+        return tr("The PDF viewer could not be loaded");
+    }
+    return tr("PDF support is not installed (the notolith-pdfview package)");
 }
 
 bool MainWindow::isViewFile(const QString &path) const

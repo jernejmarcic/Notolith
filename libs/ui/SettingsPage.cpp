@@ -976,8 +976,11 @@ QWidget *SettingsPage::buildCorePluginsPage()
             description += QLatin1Char(' ') + reason;
         addToggleRow(layout, key, QCoreApplication::translate("Settings", feature.name), description);
         if (!reason.isEmpty())
-            if (auto *toggle = page->findChild<ToggleSwitch *>(QStringLiteral("settingsToggle_") + key))
+            if (auto *toggle = page->findChild<ToggleSwitch *>(QStringLiteral("settingsToggle_") + key)) {
+                const QSignalBlocker quiet(toggle); // shows off without writing "off" to the config
+                toggle->setChecked(false);
                 toggle->setEnabled(false);
+            }
     }
     // What the installed modules asked for, and the ones that could not load.
     for (const ModuleHost::SettingRow &row : std::as_const(m_moduleRows)) {

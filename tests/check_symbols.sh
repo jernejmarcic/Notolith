@@ -4,6 +4,8 @@
 # host static library linked into the module, so the process holds two copies of its tables (a second Settings, CrdtDoc,
 # SyncCrypto). A static archive adds no NEEDED entry, which is why check_needed.sh cannot see it. Deterministic, no
 # process started. Symbols the module imports from the executable are undefined in the module and do not count.
+# Scope: global strong symbols only (nm T D B R S G). Local and weak (inline, template, vague-linkage) symbols are not
+# compared - a duplicated library is caught by its strong tables and functions, and weak ones merge at load by design.
 exe=$1
 shift
 tmp=$(mktemp -d) || exit 2
