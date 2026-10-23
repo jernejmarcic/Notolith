@@ -472,7 +472,9 @@ void Index::setNames(const QString &relative, const QStringList &names)
 void Index::beginBatch()
 {
     if (!m_inBatch && m_db.isOpen()) {
-        m_db.transaction();
+        // IMMEDIATE: the write lock is taken here, waiting if another connection holds it. A plain BEGIN that reads
+        // and then writes fails at once ("database is locked") if another connection committed in between.
+        QSqlQuery(m_db).exec(QStringLiteral("BEGIN IMMEDIATE"));
         m_inBatch = true;
     }
 }
@@ -562,13 +564,49 @@ void Index::remove(const QString &path)
     m_linkTargetsValid = m_aliasesValid = false;
 }
 
+namespace {
+
+/// Deleting a note's `files` row cascades into every child table by `file`;
+/// unindexed, each cascade scanned the whole table, on every save and in a
+/// re-index of a vault whose notes all changed. The Writer's job, not
+/// createSchema()'s: that runs on the UI thread at every open, and building
+/// these on an already-populated cache is a one-time pass that belongs here.
+/// A failure is logged and leaves the cache slow, not wrong: the next scan tries again.
+bool createChildIndexes(const QSqlDatabase &db)
+{
+    bool all = true;
+    QSqlQuery query(db);
+    for (const char *table : {"headings", "links", "tags", "blocks", "tasks", "props", "meta_notes", "names"}) {
+        if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS %1_file ON %1(file)").arg(QLatin1String(table)))) {
+            qWarning("index: cannot create %s_file: %s", table, qPrintable(query.lastError().text()));
+            all = false;
+        }
+    }
+    return all;
+}
+
+} // namespace
+
 struct Index::Writer::Private {
     QString connection;
     QString vaultRoot;
     QSqlDatabase db;
     std::optional<NoteRows> rows;
     QSqlQuery current;
+    struct Row {
+        qint64 mtime;
+        qint64 size;
+        qint64 words;
+    };
+    QHash<QString, Row> known; // loadCurrent(); valid only while `loaded`
+    bool loaded = false;
+    bool indexesPending = false; // createChildIndexes() waits for the end of a from-scratch build
 
+    void forgetCurrent()
+    {
+        loaded = false;
+        known.clear();
+    }
     QString relative(const QString &path) const { return QDir(vaultRoot).relativeFilePath(path); }
 };
 
@@ -586,6 +624,14 @@ Index::Writer::Writer(const QString &databasePath, const QString &vaultRoot)
     QSqlQuery pragma(d->db);
     pragma.exec(QStringLiteral("PRAGMA synchronous = NORMAL"));
     pragma.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
+    // An empty cache is being built from scratch: nothing is deleted, and the
+    // child indexes are cheaper as one bulk build at the end than as eight
+    // incremental ones through every insert. A populated one needs them first.
+    QSqlQuery any(d->db);
+    d->indexesPending = !(any.exec(QStringLiteral("SELECT 1 FROM files LIMIT 1")) && any.next());
+    any.finish();
+    if (!d->indexesPending)
+        createChildIndexes(d->db);
     d->rows.emplace(d->db);
     d->current = QSqlQuery(d->db);
     d->current.prepare(QStringLiteral("SELECT mtime, size, words FROM files WHERE path = ?"));
@@ -595,6 +641,7 @@ Index::Writer::~Writer()
 {
     d->rows.reset();
     d->current = QSqlQuery();
+    finish();
     d->db.close();
     d->db = QSqlDatabase();
     QSqlDatabase::removeDatabase(d->connection);
@@ -605,8 +652,24 @@ bool Index::Writer::isOpen() const
     return d->db.isOpen();
 }
 
+void Index::Writer::loadCurrent()
+{
+    d->known.clear();
+    QSqlQuery query(d->db);
+    if (!query.exec(QStringLiteral("SELECT path, mtime, size, words FROM files")))
+        return;
+    while (query.next())
+        d->known.insert(query.value(0).toString(), {query.value(1).toLongLong(), query.value(2).toLongLong(),
+                                                    query.value(3).toLongLong()});
+    d->loaded = true;
+}
+
 bool Index::Writer::isCurrent(const QString &path, qint64 mtime, qint64 size, bool asNote)
 {
+    if (d->loaded) {
+        const auto row = d->known.constFind(d->relative(path));
+        return row != d->known.cend() && row->mtime == mtime && row->size == size && (row->words >= 0) == asNote;
+    }
     d->current.bindValue(0, d->relative(path));
     const bool same = d->current.exec() && d->current.next() && d->current.value(0).toLongLong() == mtime
                    && d->current.value(1).toLongLong() == size && (d->current.value(2).toLongLong() >= 0) == asNote;
@@ -634,8 +697,16 @@ void Index::Writer::commit()
     d->db.commit();
 }
 
+void Index::Writer::finish()
+{
+    if (d->indexesPending && d->db.isOpen())
+        createChildIndexes(d->db);
+    d->indexesPending = false;
+}
+
 QStringList Index::Writer::put(const Metadata &metadata, const QString &body)
 {
+    d->forgetCurrent();
     const QString relative = d->relative(metadata.path);
     d->rows->erase(relative);
     const QStringList names = noteNames(relative, metadata);
@@ -644,6 +715,7 @@ QStringList Index::Writer::put(const Metadata &metadata, const QString &body)
 
 QStringList Index::Writer::putAttachment(const QString &path, qint64 mtime, qint64 size)
 {
+    d->forgetCurrent();
     const QString relative = d->relative(path);
     d->rows->erase(relative);
     const QStringList names = attachmentNames(relative);
@@ -652,6 +724,7 @@ QStringList Index::Writer::putAttachment(const QString &path, qint64 mtime, qint
 
 void Index::Writer::remove(const QString &path)
 {
+    d->forgetCurrent();
     d->rows->erase(d->relative(path));
 }
 
@@ -714,8 +787,11 @@ QString Index::resolve(const QString &target, const QString &fromPath) const
     return resolveIn(m_names, m_vaultRoot, target, fromPath);
 }
 
-QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString &vaultRoot,
-                         const QString &target, const QString &fromPath)
+namespace {
+
+/// resolveIn() for a linking note already given vault-relative.
+QString resolveFrom(const QHash<QString, QStringList> &names, const QString &vaultRoot, const QString &target,
+                    const QString &fromRelative)
 {
     QString wanted = normaliseTarget(target);
     if (wanted.isEmpty())
@@ -724,9 +800,6 @@ QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString
     // An absolute path inside the vault is just a vault-relative one.
     if (wanted.startsWith(vaultRoot + QLatin1Char('/')))
         wanted = wanted.mid(vaultRoot.size() + 1);
-
-    const QString fromRelative =
-        fromPath.isEmpty() ? QString() : QDir(vaultRoot).relativeFilePath(fromPath);
 
     // A target with a slash is a path: try it relative to the linking note
     // first, then relative to the vault root, the way Obsidian does.
@@ -758,7 +831,7 @@ QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString
     QString best;
     int bestDepth = std::numeric_limits<int>::max();
     for (const QString &candidate : candidates) {
-        if (!fromPath.isEmpty() && QFileInfo(candidate).path() == fromFolder)
+        if (!fromRelative.isEmpty() && QFileInfo(candidate).path() == fromFolder)
             return candidate;
         const int depth = candidate.count(QLatin1Char('/'));
         if (depth < bestDepth || (depth == bestDepth && candidate < best)) {
@@ -767,6 +840,15 @@ QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString
         }
     }
     return best;
+}
+
+} // namespace
+
+QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString &vaultRoot,
+                         const QString &target, const QString &fromPath)
+{
+    return resolveFrom(names, vaultRoot, target,
+                       fromPath.isEmpty() ? QString() : QDir(vaultRoot).relativeFilePath(fromPath));
 }
 
 QList<Link> Index::outgoingLinks(const QString &path) const
@@ -1580,7 +1662,6 @@ Index::GraphData readGraphData(QSqlDatabase &db, const QString &vaultRoot,
         result.files.append(file);
     }
 
-    const QDir vaultDir(vaultRoot);
     QSqlQuery links(db);
     links.exec(QStringLiteral(
         "SELECT src.path, links.target FROM links "
@@ -1592,7 +1673,7 @@ Index::GraphData readGraphData(QSqlDatabase &db, const QString &vaultRoot,
         // resolveIn() is an in-memory hash lookup (see m_names), not a query,
         // so running it once per link here still holds the "no per-note
         // queries" budget.
-        link.toPath = Index::resolveIn(names, vaultRoot, link.targetName, vaultDir.absoluteFilePath(link.fromPath));
+        link.toPath = resolveFrom(names, vaultRoot, link.targetName, link.fromPath);
         result.links.append(link);
     }
     return result;

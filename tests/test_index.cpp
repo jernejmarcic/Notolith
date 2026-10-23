@@ -1885,3 +1885,216 @@ TEST_F(WatchedVaultTest, AnInAppSaveCausesNoWholeWalkAndNoSecondChange)
     EXPECT_EQ(changed.size(), 1) << "the folder's read found the note current";
     EXPECT_FALSE(index.search(QStringLiteral("saved in the app")).isEmpty());
 }
+
+namespace {
+/// The eight per-file child tables of the schema: each is deleted by `file` when a note is re-put.
+const QStringList kChildTables = {QStringLiteral("headings"),   QStringLiteral("links"),
+                                  QStringLiteral("tags"),       QStringLiteral("blocks"),
+                                  QStringLiteral("tasks"),      QStringLiteral("props"),
+                                  QStringLiteral("meta_notes"), QStringLiteral("names")};
+
+/// Names of the indexes the cache file holds, read on a connection of its own.
+QStringList indexNamesIn(const QString &cache)
+{
+    QStringList names;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("index-names"));
+        db.setDatabaseName(cache);
+        if (db.open()) {
+            QSqlQuery query(db);
+            query.exec(QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'index'"));
+            while (query.next())
+                names << query.value(0).toString();
+        }
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("index-names"));
+    return names;
+}
+
+bool hasAllChildIndexes(const QString &cache)
+{
+    const QStringList names = indexNamesIn(cache);
+    return std::all_of(kChildTables.cbegin(), kChildTables.cend(),
+                       [&](const QString &table) { return names.contains(table + QStringLiteral("_file")); });
+}
+
+QStringList capturedWarnings;
+void captureWarnings(QtMsgType type, const QMessageLogContext &, const QString &message)
+{
+    if (type == QtWarningMsg || type == QtCriticalMsg)
+        capturedWarnings << message;
+}
+} // namespace
+
+// Deleting a note's row cascades into eight child tables. Without an index on
+// each `file` column that is a full scan of each table per deleted note, so a
+// save, and a re-index of a vault whose notes all changed, were quadratic.
+TEST_F(IndexTest, ACacheWrittenBeforeTheChildIndexesGainsThemAndKeepsItsRows)
+{
+    const QString cache = Index::cachePathFor(dir.path());
+    {
+        Index first;
+        build(first);
+    }
+    ASSERT_TRUE(hasAllChildIndexes(cache)) << "a from-scratch build ends with them";
+    // The cache as an older build left it: same schema version, no child indexes.
+    {
+        QSqlDatabase old = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("old-cache"));
+        old.setDatabaseName(cache);
+        ASSERT_TRUE(old.open());
+        QSqlQuery query(old);
+        for (const QString &table : kChildTables)
+            ASSERT_TRUE(query.exec(QStringLiteral("DROP INDEX IF EXISTS %1_file").arg(table)));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("old-cache"));
+    for (const QString &table : kChildTables)
+        ASSERT_FALSE(indexNamesIn(cache).contains(table + QStringLiteral("_file")));
+
+    // Every note changed since: the scan re-puts all of them, each a cascade delete.
+    write(QStringLiteral("Home.md"), "# Home\n\nSee [[Projects/noteAppC]] and [[Ideas|my ideas]]. Edited.\n\n#home\n");
+    write(QStringLiteral("Ideas.md"), "---\naliases: [Brainwaves]\nid: 01J9\n---\n\nBack to [[Home]]. Edited.\n");
+
+    Index index;
+    build(index);
+    const QStringList names = indexNamesIn(cache);
+    for (const QString &table : kChildTables)
+        EXPECT_TRUE(names.contains(table + QStringLiteral("_file"))) << qPrintable(table);
+    EXPECT_EQ(index.noteCount(), 3);
+    EXPECT_EQ(index.resolve(QStringLiteral("Brainwaves")), QStringLiteral("Ideas.md"));
+    EXPECT_FALSE(index.allTags().contains(QStringLiteral("thinking"))) << "the old row's tags went with it";
+    EXPECT_EQ(index.backlinks(vault.absolute(QStringLiteral("Home.md"))).size(), 2);
+    EXPECT_EQ(index.contentRowCount(), index.noteCount());
+}
+
+TEST_F(IndexTest, ReindexingEveryChangedNoteCostsAboutWhatAColdIndexDoes)
+{
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    constexpr int kNotes = 1500;
+    QDir(dir.path()).mkpath(QStringLiteral("bulk"));
+    const auto writeAll = [&](const char *tail) {
+        for (int i = 0; i < kNotes; ++i) {
+            QByteArray body = "# Note " + QByteArray::number(i) + "\n\n#tag" + QByteArray::number(i % 40) + "\n\n";
+            for (int link = 1; link <= 6; ++link)
+                body += "- See [[Note " + QByteArray::number((i * 7 + link * 13) % kNotes) + "]]\n";
+            write(QStringLiteral("bulk/Note %1.md").arg(i), body + tail);
+        }
+    };
+    writeAll("");
+    Index index;
+    QElapsedTimer clock;
+    clock.start();
+    build(index);
+    const double cold = double(clock.elapsed());
+    ASSERT_GE(index.noteCount(), kNotes);
+
+    writeAll("changed\n"); // a different size, so every row is stale
+    clock.start();
+    build(index);
+    const double stale = double(clock.elapsed());
+    EXPECT_EQ(index.contentRowCount(), index.noteCount());
+    // Quadratic it was 40x and worse; the bound is generous so a busy machine does not trip it.
+    EXPECT_LT(stale, cold * 4 + 100) << "cold " << cold << " ms, every note stale " << stale << " ms";
+}
+
+// A whole walk checks every file against the cache; that is one read of the
+// table, and it must still tell an unchanged file from a changed one, and a
+// note from a plain file the cache holds under the same path.
+TEST_F(IndexTest, AWarmWalkReindexesExactlyTheFilesThatChanged)
+{
+    const auto scan = [&](Index &index) {
+        Indexer indexer(&index);
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(vault);
+        EXPECT_TRUE(done.wait(20000));
+        return done.isEmpty() ? -1 : done.first().first().toInt();
+    };
+    Index index;
+    EXPECT_EQ(scan(index), 3);
+    EXPECT_EQ(scan(index), 0) << "nothing changed";
+
+    write(QStringLiteral("Home.md"), "# Home\n\nEdited, and longer than before.\n");
+    write(QStringLiteral("Added.md"), "# Added\n");
+    write(QStringLiteral("Projects/notes.txt"), "still not a note, but different\n");
+    EXPECT_EQ(scan(index), 2) << "the edited note and the new one; the changed .txt is an attachment";
+    EXPECT_EQ(scan(index), 0);
+    EXPECT_EQ(index.noteCount(), 4);
+    EXPECT_EQ(index.attachmentCount(), 1);
+    EXPECT_EQ(index.contentRowCount(), index.noteCount());
+}
+
+// graphData() resolves each link from the linking note's vault-relative path;
+// that must stay what resolve() says for the same note, folder preference
+// between two notes of one name included.
+TEST_F(IndexTest, GraphLinksResolveAsResolveDoesFromTheLinkingNote)
+{
+    write(QStringLiteral("Projects/Home.md"), "# Other home\n\nSee [[Ideas]] and [[Projects/noteAppC]].\n");
+    write(QStringLiteral("Projects/Linker.md"), "[[Home]] [[../Ideas]] [[Missing]]\n");
+    Index index;
+    build(index);
+    const Index::GraphData data = index.graphData();
+    ASSERT_GE(data.links.size(), 7);
+    bool sawFolderPreference = false;
+    for (const Index::GraphLinkInfo &link : data.links) {
+        EXPECT_EQ(link.toPath, index.resolve(link.targetName, vault.absolute(link.fromPath)))
+            << qPrintable(link.fromPath + QStringLiteral(" -> ") + link.targetName);
+        if (link.fromPath == QStringLiteral("Projects/Linker.md") && link.targetName == QStringLiteral("Home")) {
+            EXPECT_EQ(link.toPath, QStringLiteral("Projects/Home.md")) << "the linking note's own folder wins";
+            sawFolderPreference = true;
+        }
+    }
+    EXPECT_TRUE(sawFolderPreference);
+}
+
+// The scan thread makes a from-scratch build's indexes before it reports the scan done: afterwards the UI thread
+// writes to the cache, and DDL still in flight on the scan thread could fail that write. Read at the moment
+// finished() lands, on a connection of its own, so the Writer destructor's fallback cannot hide a late finish().
+TEST_F(IndexTest, TheChildIndexesExistWhenFinishedLandsAndMakingThemWarnsOfNothing)
+{
+    const QString cache = Index::cachePathFor(dir.path());
+    // Enough rows that making the indexes takes longer than the UI thread needs to notice the scan is done.
+    QDir(dir.path()).mkpath(QStringLiteral("bulk"));
+    for (int i = 0; i < 3000; ++i) {
+        write(QStringLiteral("bulk/N%1.md").arg(i),
+              QStringLiteral("# N%1\n\n#t%2 [[N%3]] [[N%4]] [[Home]]\n\n- [ ] a task\n").arg(i).arg(i % 50).arg((i + 1) % 3000).arg((i * 7) % 3000).toUtf8());
+    }
+    capturedWarnings.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureWarnings);
+    bool atFinished = false;
+    {
+        Index index;
+        Indexer indexer(&index);
+        QObject::connect(&indexer, &Indexer::finished, &indexer, [&] { atFinished = hasAllChildIndexes(cache); });
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(vault);
+        ASSERT_TRUE(done.wait(20000));
+    }
+    qInstallMessageHandler(previous);
+    EXPECT_TRUE(atFinished);
+    EXPECT_TRUE(capturedWarnings.isEmpty()) << qPrintable(capturedWarnings.join(QLatin1Char('\n')));
+}
+
+// A UI batch that reads and then writes must not lose the write because another connection committed in
+// between (SQLite answers such an upgrade "database is locked" at once, without waiting): the batch takes the
+// write lock when it begins. The other connection does not wait here, so it is the one that is refused.
+TEST_F(IndexTest, ABatchKeepsItsWriteWhenAnotherConnectionWantsToWriteFirst)
+{
+    Index index;
+    build(index);
+    const int before = index.noteCount();
+    ASSERT_GT(before, 0);
+
+    index.beginBatch();
+    (void)index.noteCount(); // the batch has read: it holds a snapshot
+    {
+        QSqlDatabase other = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("other-writer"));
+        other.setDatabaseName(Index::cachePathFor(dir.path()));
+        other.setConnectOptions(QStringLiteral("QSQLITE_BUSY_TIMEOUT=0"));
+        ASSERT_TRUE(other.open());
+        QSqlQuery query(other);
+        query.exec(QStringLiteral("INSERT OR REPLACE INTO state(key, value) VALUES('other', '1')")); // refused or not
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("other-writer"));
+    index.remove(vault.absolute(QStringLiteral("Home.md")));
+    index.endBatch();
+    EXPECT_EQ(index.noteCount(), before - 1) << "the batch's own write went through";
+}
