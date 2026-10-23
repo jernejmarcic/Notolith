@@ -79,6 +79,22 @@ public:
     /// decode - a real diff is never empty.
     virtual QByteArray diffSince(const QByteArray &remoteStateVector) const = 0;
 
+    /// A place in the text that stays on its character: a few bytes naming
+    /// the character just before `offset` (the start of the note for 0), so
+    /// every replica that has that character puts it in the same place
+    /// whatever edits it has seen since, in whatever order. This is how a
+    /// share draws a member's caret where they meant it. Typing at the position
+    /// itself leaves it ahead of the new text; when its character is deleted it
+    /// closes up on the hole. Empty if `offset` is outside the text. Opaque
+    /// like an update, and backend-specific the same way.
+    virtual QByteArray encodePosition(qsizetype offset) const = 0;
+
+    /// The offset an encodePosition() result stands at now, in this replica's
+    /// text; -1 if it does not decode or names a character this replica has
+    /// not seen yet (then the caller keeps whatever offset it has). Safe on
+    /// bytes from a peer.
+    virtual qsizetype resolvePosition(const QByteArray &position) const = 0;
+
     /// The whole document, for storing on disk.
     virtual QByteArray encodeState() const = 0;
 

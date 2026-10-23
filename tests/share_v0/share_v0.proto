@@ -1,0 +1,110 @@
+// A frozen copy of libs/ext/shareengine/share.proto as of 305aed9 (before Presence gained anchor_pos and
+// head_pos), compiled as package notolith.share.v0 into test_share only: it stands for the build that
+// shuttlepod-1 runs, so the tests can read a new Presence the way that build does. Never edit it.
+// The wire format of a shared note between Notolith devices (docs/SHARE.md
+// "The engine"): invitation, membership and the CRDT updates. Every message
+// travels inside the identity-authenticated link (libs/ext/link) and a
+// Frame's content is sealed under the share's key besides, so a relay in the
+// middle would see ids and sizes only.
+syntax = "proto3";
+
+package notolith.share.v0;
+
+message Member {
+  bytes key = 1;     // Ed25519 device key, 32
+  bytes box_key = 2; // X25519 key the share key is sealed to, 32
+  string name = 3;   // a label, at most 64 characters
+}
+
+message MemberListBody {
+  bytes share_id = 1;
+  uint32 epoch = 2;
+  bytes owner = 3;
+  uint32 backend = 4; // 1 = Yrs, 2 = Native
+  repeated Member members = 5;
+}
+
+// sig = owner's Ed25519 over "notolith-members-v1" || body; body is parsed
+// only after the signature verified.
+message MemberList {
+  bytes body = 1;
+  bytes sig = 2;
+}
+
+// proof = keyed BLAKE2b(invite token, the joiner's link key).
+message Join {
+  bytes share_id = 1;
+  bytes proof = 2;
+  bytes box_key = 3;
+  string name = 4;
+  uint32 backend = 5;
+}
+
+message WelcomeBody {
+  MemberList members = 1;
+  bytes state = 2;
+  string title = 3;
+}
+
+// sealed_key = sealed box to the joiner's box key of be32(epoch) || share key;
+// box = the share key's AEAD over a WelcomeBody, bound to (share, epoch, owner,
+// joiner), so neither the text nor the member list crosses the wire in clear.
+message Welcome {
+  bytes share_id = 1;
+  bytes sealed_key = 2;
+  bytes box = 3;
+}
+
+// sealed_key empty: the member list only, same epoch.
+message Rekey {
+  bytes share_id = 1;
+  uint32 epoch = 2;
+  bytes sealed_key = 3;
+  MemberList members = 4;
+}
+
+message Refused {
+  bytes share_id = 1;
+  string reason = 2;
+}
+
+// box = the share key's AEAD over a Payload, bound to (share, epoch, sender,
+// seq); sig = sender's Ed25519 over "notolith-frame-v1" || share_id ||
+// be32(epoch) || sender || be64(seq) || box.
+message Frame {
+  bytes share_id = 1;
+  uint32 epoch = 2;
+  bytes sender = 3;
+  uint64 seq = 4;
+  bytes box = 5;
+  bytes sig = 6;
+}
+
+message Payload {
+  oneof kind {
+    bytes update = 1;
+    bytes state_vector = 2;
+    bytes diff = 3; // an update that answers a state vector (it starts no further exchange)
+    bytes presence = 4; // a serialized Presence
+  }
+}
+
+// Where a member's caret is, in UTF-16 offsets of the text as its author had
+// it. Members pass it on like an update; `counter` rises with every one an
+// author sends, so a copy arriving twice, or late, is ignored.
+message Presence {
+  bytes author = 1;
+  uint64 counter = 2;
+  uint32 anchor = 3;
+  uint32 head = 4;
+}
+
+message Envelope {
+  oneof m {
+    Join join = 1;
+    Welcome welcome = 2;
+    Rekey rekey = 3;
+    Refused refused = 4;
+    Frame frame = 5;
+  }
+}

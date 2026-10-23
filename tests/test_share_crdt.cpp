@@ -870,6 +870,168 @@ TEST_P(CrdtDocTest, SizesAndMemoryAtAMegabyte)
     EXPECT_GT(diff, 0);
 }
 
+// Positions that stay on their characters (the carets a share draws): a
+// position is a few bytes naming the character before it, so every replica
+// that has seen the character puts it in the same place whatever else it has
+// seen, in whatever order.
+TEST_P(CrdtDocTest, AnEncodedPositionStaysOnItsCharacterThroughAThirdMembersEdits)
+{
+    std::unique_ptr<CrdtDoc> docs[3] = {make(1), make(2), make(3)};
+    CrdtDoc &a = *docs[0], &b = *docs[1], &c = *docs[2];
+    const QByteArray start = a.localEdit(0, 0, QStringLiteral("hello world"));
+    deliver(b, start);
+    deliver(c, start);
+
+    const QByteArray beforeW = a.encodePosition(6);  // "hello |world"
+    const QByteArray afterWo = b.encodePosition(8);  // "hello wo|rld"
+    ASSERT_FALSE(beforeW.isEmpty());
+    ASSERT_FALSE(afterWo.isEmpty());
+    const auto expectAll = [&](qsizetype first, qsizetype second, const char *when) {
+        for (const auto &doc : docs) {
+            EXPECT_EQ(doc->resolvePosition(beforeW), first) << when;
+            EXPECT_EQ(doc->resolvePosition(afterWo), second) << when;
+        }
+    };
+    expectAll(6, 8, "untouched");
+
+    const QByteArray insert = c.localEdit(0, 0, QStringLiteral(">> ")); // before both
+    deliver(a, insert);
+    // b has not heard of it yet: its own view is unchanged, a's and c's moved
+    EXPECT_EQ(b.resolvePosition(beforeW), 6);
+    EXPECT_EQ(a.resolvePosition(beforeW), 9);
+    EXPECT_EQ(c.resolvePosition(afterWo), 11);
+    deliver(b, insert);
+    expectAll(9, 11, "after c typed before them");
+
+    const QByteArray erase = c.localEdit(3, 6, QString()); // ">> world": the first caret's character is gone
+    deliver(a, erase);
+    deliver(b, erase);
+    EXPECT_EQ(c.text(), QStringLiteral(">> world"));
+    expectAll(3, 5, "after c deleted around the first and before the second");
+
+    // Typing at the position itself leaves it where it was, ahead of the new text
+    deliver(b, a.localEdit(5, 0, QStringLiteral("XY")));
+    EXPECT_EQ(b.resolvePosition(afterWo), 5);
+    EXPECT_EQ(b.text(), QStringLiteral(">> woXYrld"));
+}
+
+TEST_P(CrdtDocTest, PositionsAreTheSameWhenEditsArriveInAnotherOrder)
+{
+    auto a = make(1), b = make(2), c = make(3);
+    const QByteArray start = a->localEdit(0, 0, QStringLiteral("0123456789"));
+    deliver(*b, start);
+    deliver(*c, start);
+    const QByteArray atFive = a->encodePosition(5);
+    const QByteArray fromB = b->localEdit(2, 0, QStringLiteral("bb"));
+    const QByteArray fromC = c->localEdit(3, 4, QStringLiteral("c"));
+    // a hears b then c, b hears c, c hears b: three orders of the same two edits
+    deliver(*a, fromB);
+    deliver(*a, fromC);
+    deliver(*b, fromC);
+    deliver(*c, fromB);
+    ASSERT_EQ(a->text(), b->text());
+    ASSERT_EQ(a->text(), c->text());
+    EXPECT_EQ(a->resolvePosition(atFive), b->resolvePosition(atFive));
+    EXPECT_EQ(a->resolvePosition(atFive), c->resolvePosition(atFive));
+    // (position 5 followed the '4' that c deleted; where it closes up is the backend's call, but it is one place)
+    EXPECT_GE(a->resolvePosition(atFive), 0);
+    EXPECT_LE(a->resolvePosition(atFive), a->text().size());
+}
+
+TEST_P(CrdtDocTest, PositionsAtTheEdgesAndWhenNotOnOffer)
+{
+    auto a = make(1), b = make(2);
+    EXPECT_EQ(a->resolvePosition(a->encodePosition(0)), 0) << "an empty note has a start";
+    deliver(*b, a->localEdit(0, 0, QStringLiteral("abc")));
+    const QByteArray start = b->encodePosition(0), end = b->encodePosition(3);
+    ASSERT_FALSE(start.isEmpty());
+    ASSERT_FALSE(end.isEmpty());
+    deliver(*b, a->localEdit(0, 0, QStringLiteral("<")));
+    deliver(*b, a->localEdit(4, 0, QStringLiteral(">")));
+    EXPECT_EQ(b->resolvePosition(start), 0) << "the start stays the start";
+    EXPECT_EQ(b->resolvePosition(end), 4) << "after the last 'c', before what was typed there";
+    EXPECT_TRUE(b->encodePosition(-1).isEmpty());
+    EXPECT_TRUE(b->encodePosition(b->text().size() + 1).isEmpty());
+
+    // A character this replica has not seen: no answer, the caller falls back
+    auto c = make(3);
+    const QByteArray typed = c->localEdit(0, 0, QStringLiteral("zz"));
+    const QByteArray unseen = c->encodePosition(2);
+    EXPECT_EQ(b->resolvePosition(unseen), -1);
+    deliver(*b, typed);
+    EXPECT_EQ(b->resolvePosition(unseen), b->text().indexOf(QStringLiteral("zz")) + 2);
+}
+
+TEST_P(CrdtDocTest, GarbagePositionsAreRefusedNotTrusted)
+{
+    auto doc = make(1);
+    doc->localEdit(0, 0, QStringLiteral("hello"));
+    EXPECT_EQ(doc->resolvePosition({}), -1);
+    EXPECT_EQ(doc->resolvePosition(QByteArray("\x00\x01\x02", 3)), -1);
+    EXPECT_EQ(doc->resolvePosition(QByteArray(100000, '\xff')), -1);
+    QRandomGenerator rng(7);
+    for (int i = 0; i < 2000; ++i) {
+        QByteArray noise(int(rng.bounded(1, 40)), 0);
+        for (char &ch : noise)
+            ch = char(rng.bounded(256));
+        const qsizetype at = doc->resolvePosition(noise);
+        EXPECT_GE(at, -1);
+        EXPECT_LE(at, doc->text().size());
+    }
+    QByteArray good = doc->encodePosition(3);
+    ASSERT_FALSE(good.isEmpty());
+    for (qsizetype cut = 0; cut < good.size(); ++cut)
+        EXPECT_EQ(doc->resolvePosition(good.left(cut)), -1) << "cut at " << cut;
+    EXPECT_EQ(doc->resolvePosition(good + "x"), -1) << "nothing may trail";
+}
+
+TEST_P(CrdtDocTest, PositionsFollowTheirCharactersUnderRandomEdits)
+{
+    std::unique_ptr<CrdtDoc> docs[3] = {make(11), make(22), make(33)};
+    QRandomGenerator rng(2026);
+    const auto broadcast = [&](int from, const QByteArray &update) {
+        for (int i = 0; i < 3; ++i)
+            if (i != from)
+                deliver(*docs[i], update);
+    };
+    broadcast(0, docs[0]->localEdit(0, 0, QString::fromUtf8("the quick \xF0\x9F\x98\x80 brown fox jumps over the lazy dog")));
+    // Neither a position nor an edit may fall between the halves of a surrogate pair.
+    const auto snap = [](const QString &text, qsizetype i) {
+        return i > 0 && i < text.size() && text.at(i - 1).isHighSurrogate() && text.at(i).isLowSurrogate() ? i + 1 : i;
+    };
+    const QString alphabet[] = {QStringLiteral("a"), QStringLiteral("ab"), QString::fromUtf8("\xF0\x9F\x98\x80")};
+    for (int round = 0; round < 600; ++round) {
+        // a position somebody holds ...
+        const int owner = int(rng.bounded(3));
+        const QString before = docs[owner]->text();
+        const qsizetype offset = snap(before, rng.bounded(qsizetype(before.size()) + 1));
+        const QByteArray pos = docs[owner]->encodePosition(offset);
+        ASSERT_FALSE(pos.isEmpty());
+        // ... and another member's edit (an insertion, a deletion or a replacement), which every replica then has
+        const int editor = int((owner + 1 + rng.bounded(2)) % 3);
+        const qsizetype size = docs[editor]->text().size();
+        const qsizetype at = snap(before, rng.bounded(size + 1));
+        const bool erase = size > at && rng.bounded(3) > 0;
+        const qsizetype removed = erase ? snap(before, qMin<qsizetype>(at + rng.bounded(qsizetype(1), 7), size)) - at : 0;
+        const bool insert = !erase || rng.bounded(2);
+        const QString inserted = insert ? alphabet[rng.bounded(3)] : QString();
+        broadcast(editor, docs[editor]->localEdit(at, removed, inserted));
+        qsizetype expected = offset; // at or before the edit: it stays, ahead of any new text
+        if (offset > at + removed || (removed == 0 && offset > at))
+            expected = offset - removed + inserted.size();
+        else if (offset > at)
+            // its character is gone: it closes up on the hole. Where the replacement text sits relative to the
+            // hole is each backend's own (Native puts it before the deleted run, yrs after it); both are stable.
+            expected = GetParam() == Backend::Native ? at + inserted.size() : at;
+        for (const auto &doc : docs)
+            ASSERT_EQ(doc->resolvePosition(pos), expected)
+                << "round " << round << " offset " << offset << " edit at " << at << " removed " << removed
+                << " inserted " << inserted.size();
+        ASSERT_EQ(docs[0]->text(), docs[1]->text());
+        ASSERT_EQ(docs[0]->text(), docs[2]->text());
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(Backends, CrdtDocTest, ::testing::Values(Backend::Yrs, Backend::Native),
                          [](const ::testing::TestParamInfo<Backend> &info) {
                              return info.param == Backend::Yrs ? "Yrs" : "Native";

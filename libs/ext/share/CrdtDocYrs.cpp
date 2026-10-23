@@ -19,6 +19,8 @@ int ncrdt_local_edit(NHandle *, uint32_t at, uint32_t removed, const uint8_t *in
 int ncrdt_apply(NHandle *, const uint8_t *update, size_t len, NBuf *delta);
 int ncrdt_state_vector(NHandle *, NBuf *out);
 int ncrdt_diff(NHandle *, const uint8_t *sv, size_t svLen, NBuf *out);
+int ncrdt_encode_position(NHandle *, uint32_t offset, NBuf *out);
+int ncrdt_resolve_position(NHandle *, const uint8_t *pos, size_t len, uint32_t *at);
 }
 
 namespace noteAppC {
@@ -83,6 +85,20 @@ public:
     }
 
     QByteArray encodeState() const override { return diffSince({}); }
+
+    QByteArray encodePosition(qsizetype offset) const override
+    {
+        Owned out;
+        if (offset < 0 || offset > kMaxUnits || ncrdt_encode_position(m_h, uint32_t(offset), &out.buf) != 0)
+            return {};
+        return out.bytes();
+    }
+
+    qsizetype resolvePosition(const QByteArray &position) const override
+    {
+        uint32_t at = 0;
+        return ncrdt_resolve_position(m_h, raw(position), size_t(position.size()), &at) == 0 ? qsizetype(at) : -1;
+    }
 
     bool loadState(const QByteArray &state) override
     {

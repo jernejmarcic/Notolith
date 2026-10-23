@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    Doc, GetString, Observable, OffsetKind, Options, ReadTxn, StateVector, Text, TextRef, Transact,
-    Update,
+    Assoc, Doc, GetString, IndexedSequence, Observable, OffsetKind, Options, ReadTxn, StateVector,
+    StickyIndex, Text, TextRef, Transact, Update,
 };
 use yrs::types::Delta;
 use yrs::Out;
@@ -328,5 +328,67 @@ pub unsafe extern "C" fn ncrdt_diff(h: *mut Handle, sv: *const u8, sv_len: usize
         let txn = h.doc.transact();
         give(out, txn.encode_state_as_update_v1(&state));
         OK
+    })
+}
+
+// A position that stays on its character: a yrs sticky index attached to the
+// character before `offset` (the start of the text for 0), which is what a
+// caret drawn on another replica needs. The bytes are the index's own v1
+// encoding.
+
+/// A caret position's bytes, in `out`. ERR_ARG when `offset` is beyond the text.
+///
+/// # Safety
+/// `h` valid; `out` points at a Buf.
+#[no_mangle]
+pub unsafe extern "C" fn ncrdt_encode_position(h: *mut Handle, offset: u32, out: *mut Buf) -> i32 {
+    empty(out);
+    guarded(|| {
+        let h = &*h;
+        let txn = h.doc.transact();
+        if offset > h.text.len(&txn) {
+            return ERR_ARG; // yrs would take len + 1 for a position after the last character
+        }
+        match h.text.sticky_index(&txn, offset, Assoc::Before) {
+            Some(index) => {
+                give(out, index.encode_v1());
+                OK
+            }
+            None => ERR_ARG,
+        }
+    })
+}
+
+// A position from a peer is untrusted: it must be short, decode, re-encode to
+// the very same bytes (so nothing trails and nothing is spelled twice), and
+// name this text, not another type of the document.
+// The engine caps what it stores at the same number (kMaxPositionBytes in ShareEngine.cpp).
+const MAX_POSITION_BYTES: usize = 64;
+
+/// The offset a position stands at now, in `at`. ERR_DECODE if the bytes are
+/// not one of ours, ERR_ARG if the character is not known here yet.
+///
+/// # Safety
+/// `h` valid; `pos` points at `len` bytes; `at` points at a u32.
+#[no_mangle]
+pub unsafe extern "C" fn ncrdt_resolve_position(h: *mut Handle, pos: *const u8, len: usize, at: *mut u32) -> i32 {
+    guarded(|| {
+        let h = &*h;
+        if len == 0 || len > MAX_POSITION_BYTES {
+            return ERR_DECODE;
+        }
+        let bytes = std::slice::from_raw_parts(pos, len);
+        let Ok(index) = StickyIndex::decode_v1(bytes) else { return ERR_DECODE };
+        if index.encode_v1() != bytes {
+            return ERR_DECODE;
+        }
+        let txn = h.doc.transact();
+        match index.get_offset(&txn) {
+            Some(found) if std::ptr::eq(&*found.branch, h.text.as_ref()) => {
+                *at = found.index;
+                OK
+            }
+            _ => ERR_ARG,
+        }
     })
 }

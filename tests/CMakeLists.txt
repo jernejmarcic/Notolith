@@ -410,6 +410,12 @@ if(TARGET noteAppC_shareengine)
     # The engine takes the host's CrdtDoc, store and crypto as headers only (the ink rule); here they are linked in.
     target_link_libraries(test_share PRIVATE noteAppC_shareengine noteAppC_sharebase noteAppC_share_crdt noteAppC_sync
         Qt6::Test GTest::gtest)
+    # The wire format of the build before Presence gained positions, as package notolith.share.v0, to read
+    # what the new build sends the way the old one does (share_v0/share_v0.proto).
+    target_sources(test_share PRIVATE share_v0/share_v0.proto)
+    target_include_directories(test_share PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    protobuf_generate(TARGET test_share IMPORT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/share_v0
+        PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
     add_test(NAME share COMMAND test_share)
     set_tests_properties(share PROPERTIES TIMEOUT 300
         ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-data;XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-state")
