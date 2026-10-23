@@ -362,6 +362,7 @@ pub unsafe extern "C" fn ncrdt_encode_position(h: *mut Handle, offset: u32, out:
 // A position from a peer is untrusted: it must be short, decode, re-encode to
 // the very same bytes (so nothing trails and nothing is spelled twice), and
 // name this text, not another type of the document.
+// The engine caps what it stores at the same number (kMaxPositionBytes in ShareEngine.cpp).
 const MAX_POSITION_BYTES: usize = 64;
 
 /// The offset a position stands at now, in `at`. ERR_DECODE if the bytes are

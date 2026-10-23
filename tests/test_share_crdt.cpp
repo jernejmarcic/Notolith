@@ -994,30 +994,35 @@ TEST_P(CrdtDocTest, PositionsFollowTheirCharactersUnderRandomEdits)
             if (i != from)
                 deliver(*docs[i], update);
     };
-    broadcast(0, docs[0]->localEdit(0, 0, QStringLiteral("the quick brown fox jumps over the lazy dog")));
-    for (int round = 0; round < 300; ++round) {
+    broadcast(0, docs[0]->localEdit(0, 0, QString::fromUtf8("the quick \xF0\x9F\x98\x80 brown fox jumps over the lazy dog")));
+    // Neither a position nor an edit may fall between the halves of a surrogate pair.
+    const auto snap = [](const QString &text, qsizetype i) {
+        return i > 0 && i < text.size() && text.at(i - 1).isHighSurrogate() && text.at(i).isLowSurrogate() ? i + 1 : i;
+    };
+    const QString alphabet[] = {QStringLiteral("a"), QStringLiteral("ab"), QString::fromUtf8("\xF0\x9F\x98\x80")};
+    for (int round = 0; round < 600; ++round) {
         // a position somebody holds ...
         const int owner = int(rng.bounded(3));
-        const qsizetype offset = rng.bounded(qsizetype(docs[owner]->text().size()) + 1);
+        const QString before = docs[owner]->text();
+        const qsizetype offset = snap(before, rng.bounded(qsizetype(before.size()) + 1));
         const QByteArray pos = docs[owner]->encodePosition(offset);
         ASSERT_FALSE(pos.isEmpty());
-        // ... and another member's edit, which every replica then has
+        // ... and another member's edit (an insertion, a deletion or a replacement), which every replica then has
         const int editor = int((owner + 1 + rng.bounded(2)) % 3);
         const qsizetype size = docs[editor]->text().size();
-        const qsizetype at = rng.bounded(size + 1);
-        const bool erase = size > at && rng.bounded(2);
-        const qsizetype removed = erase ? rng.bounded(qsizetype(1), qMin<qsizetype>(6, size - at) + 1) : 0;
-        const QString inserted = erase ? QString() : QStringLiteral("ab").left(1 + rng.bounded(2));
+        const qsizetype at = snap(before, rng.bounded(size + 1));
+        const bool erase = size > at && rng.bounded(3) > 0;
+        const qsizetype removed = erase ? snap(before, qMin<qsizetype>(at + rng.bounded(qsizetype(1), 7), size)) - at : 0;
+        const bool insert = !erase || rng.bounded(2);
+        const QString inserted = insert ? alphabet[rng.bounded(3)] : QString();
         broadcast(editor, docs[editor]->localEdit(at, removed, inserted));
-        qsizetype expected = offset;
-        if (erase) {
-            if (offset >= at + removed)
-                expected = offset - removed;
-            else if (offset > at)
-                expected = at; // its character is gone: the position closes up on the hole
-        } else if (offset > at) {
-            expected = offset + inserted.size(); // typed at the position itself: it stays ahead of the new text
-        }
+        qsizetype expected = offset; // at or before the edit: it stays, ahead of any new text
+        if (offset > at + removed || (removed == 0 && offset > at))
+            expected = offset - removed + inserted.size();
+        else if (offset > at)
+            // its character is gone: it closes up on the hole. Where the replacement text sits relative to the
+            // hole is each backend's own (Native puts it before the deleted run, yrs after it); both are stable.
+            expected = GetParam() == Backend::Native ? at + inserted.size() : at;
         for (const auto &doc : docs)
             ASSERT_EQ(doc->resolvePosition(pos), expected)
                 << "round " << round << " offset " << offset << " edit at " << at << " removed " << removed

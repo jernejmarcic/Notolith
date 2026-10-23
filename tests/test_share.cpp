@@ -26,6 +26,7 @@
 #include "ShareStore.h"
 #include "core/debuglog.h"
 #include "net/node.h"
+#include "share_v0.pb.h" // the wire format before positions: tests/share_v0/share_v0.proto
 
 // The sharing engine over loopback: two or three engines in one process, and a
 // bare link Node ("RawMember") that can put any bytes on the wire. Nothing
@@ -36,6 +37,7 @@
 
 using namespace noteAppC;
 using namespace notolith::share;
+namespace v0 = notolith::share::v0;
 
 namespace {
 
@@ -933,11 +935,56 @@ TEST(ShareFrameTest, ThePresenceFieldsAreAppendedNeverRenumbered)
     Presence parsed;
     ASSERT_TRUE(parsed.ParseFromString(both.SerializeAsString()));
     EXPECT_EQ(parsed.anchor_pos(), "PA");
-    // what an old build writes (fields 1-4, hand-encoded) still reads, with no positions
-    Presence onlyOffsets;
-    ASSERT_TRUE(onlyOffsets.ParseFromString("\x0a\x01x\x10\x07\x18\x03\x20\x04"));
-    EXPECT_TRUE(onlyOffsets.anchor_pos().empty());
-    EXPECT_EQ(onlyOffsets.head(), 4u);
+}
+
+TEST(ShareFrameTest, AnOldBuildReadsANewPresenceAndANewBuildReadsAnOldOne)
+{
+    // v0 is share.proto as main had it before positions, compiled next to the real one.
+    Presence fresh;
+    fresh.set_author(std::string(32, 'k'));
+    fresh.set_counter(1234567);
+    fresh.set_anchor(3);
+    fresh.set_head(4);
+    fresh.set_anchor_pos(std::string("P\x01\x01\x05\x02", 5));
+    fresh.set_head_pos(std::string("P\x01\x00", 3));
+
+    // new -> old: the offsets arrive intact and 5 and 6 are skipped, not an error; an old hub relays
+    // the message it parsed, and the unknown fields (the positions) go with it
+    v0::Presence old;
+    ASSERT_TRUE(old.ParseFromString(fresh.SerializeAsString()));
+    EXPECT_EQ(old.author(), fresh.author());
+    EXPECT_EQ(old.counter(), 1234567u);
+    EXPECT_EQ(old.anchor(), 3u);
+    EXPECT_EQ(old.head(), 4u);
+    EXPECT_EQ(old.SerializeAsString(), fresh.SerializeAsString()) << "an old relay keeps the positions";
+
+    // old -> new: what an old build writes is byte for byte what the new class writes with no positions,
+    // and reads back with its offsets and no positions (the caret is then placed by offset)
+    v0::Presence written;
+    written.set_author(fresh.author());
+    written.set_counter(99);
+    written.set_anchor(7);
+    written.set_head(9);
+    Presence read;
+    ASSERT_TRUE(read.ParseFromString(written.SerializeAsString()));
+    EXPECT_EQ(read.anchor(), 7u);
+    EXPECT_EQ(read.head(), 9u);
+    EXPECT_TRUE(read.anchor_pos().empty());
+    EXPECT_TRUE(read.head_pos().empty());
+    Presence same;
+    same.set_author(fresh.author());
+    same.set_counter(99);
+    same.set_anchor(7);
+    same.set_head(9);
+    EXPECT_EQ(written.SerializeAsString(), same.SerializeAsString());
+
+    // a caret that is gone (head 0xFFFFFFFF) has no positions in either build
+    v0::Presence gone;
+    gone.set_anchor(0xFFFFFFFFu);
+    gone.set_head(0xFFFFFFFFu);
+    Presence goneRead;
+    ASSERT_TRUE(goneRead.ParseFromString(gone.SerializeAsString()));
+    EXPECT_EQ(goneRead.head(), 0xFFFFFFFFu);
 }
 
 TEST(ShareEngineTest, OfflineEditsOnBothSidesMergeOnReconnect)

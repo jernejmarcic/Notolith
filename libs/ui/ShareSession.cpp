@@ -97,6 +97,7 @@ bool ShareSession::attach(MarkdownEditor *view, const QString &diskText)
             [this, view](qsizetype at, qsizetype removed, const QString &inserted) {
                 onLocalEdit(view, at, removed, inserted);
                 sendCaret(view); // typing moves the caret without a cursorMoved
+                showCarets(); // a caret typed at stays ahead of the text, as its position says, not after it
             });
     connect(view, &MarkdownEditor::cursorMoved, this, [this, view] { sendCaret(view); });
     const QString now = doc->text();
@@ -130,12 +131,13 @@ void ShareSession::send(const QByteArray &update)
     m_engine->broadcast(m_id, update);
 }
 
-void ShareSession::applyToViews(qsizetype at, qsizetype removed, const QString &inserted)
+void ShareSession::applyToViews(qsizetype at, qsizetype removed, const QString &inserted, bool sendCarets)
 {
     for (const QPointer<MarkdownEditor> &view : std::as_const(m_views)) {
         if (view) {
             view->applyExternalEdit(at, removed, inserted);
-            sendCaret(view); // the text moved under it: the others hold the offset from before
+            if (sendCarets)
+                sendCaret(view); // the text moved under it: the others hold the offset from before
         }
     }
 }
@@ -222,8 +224,13 @@ void ShareSession::onRemoteEdits(const QByteArray &shareID, const QList<CrdtEdit
 {
     if (shareID != m_id || !hasViews())
         return;
+    // The caret goes out once, after the whole batch: the document is ahead of the view
+    // until the last edit is in, and a position encoded then would name text the view lacks.
     for (const CrdtEdit &edit : edits)
-        applyToViews(edit.at, edit.removed, edit.inserted);
+        applyToViews(edit.at, edit.removed, edit.inserted, false);
+    for (const QPointer<MarkdownEditor> &view : std::as_const(m_views))
+        if (view)
+            sendCaret(view);
     showCarets(); // held by their characters: they stand where those characters went
     emit remoteApplied();
 }

@@ -69,7 +69,7 @@ signals:
 private:
     void onLocalEdit(MarkdownEditor *from, qsizetype at, qsizetype removed, const QString &inserted);
     void onRemoteEdits(const QByteArray &shareID, const QList<CrdtEdit> &edits);
-    void applyToViews(qsizetype at, qsizetype removed, const QString &inserted);
+    void applyToViews(qsizetype at, qsizetype removed, const QString &inserted, bool sendCarets = true);
     /// Makes every view hold the document's text.
     void followDocument();
     void send(const QByteArray &update);

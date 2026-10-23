@@ -70,7 +70,9 @@ std::optional<ShareEngine::InviteInfo::Host> privateHost(const QString &text)
 
 /// A Presence whose head is this: its author closed the note.
 constexpr quint32 kCaretGone = 0xFFFFFFFFu;
-constexpr size_t kMaxPositionBytes = 64; ///< a CrdtDoc position is a few bytes; more is not one
+/// A CrdtDoc position is a few bytes; more is not one. The Yrs decoder has its own copy of this
+/// number (MAX_POSITION_BYTES in yrs-ffi/src/lib.rs); the Native one needs none, its reader is bounded.
+constexpr size_t kMaxPositionBytes = 64;
 
 /// A frame of ours has a reader there: it has sent us one we could open, so
 /// it holds this epoch's key. Presence waits for that, so a member still
@@ -909,7 +911,11 @@ void ShareEngine::setCaret(const QByteArray &shareID, qsizetype anchor, qsizetyp
     if (it == m_shares.constEnd())
         return;
     Share &share = **it;
-    if (share.myCaret && share.myCaret->first == anchor && share.myCaret->second == head)
+    // Same offsets is not always the same characters: a remote edit that replaced the text just before
+    // the caret leaves its offset alone and its old positions on deleted characters.
+    if (share.myCaret && share.myCaret->first == anchor && share.myCaret->second == head
+        && (!share.doc
+            || (share.doc->resolvePosition(share.myAnchorPos) == anchor && share.doc->resolvePosition(share.myHeadPos) == head)))
         return;
     share.myCaret = std::pair(anchor, head);
     share.myAnchorPos = share.doc ? share.doc->encodePosition(anchor) : QByteArray();
