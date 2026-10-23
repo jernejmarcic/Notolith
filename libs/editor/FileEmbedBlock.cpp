@@ -424,6 +424,28 @@ bool MarkdownEditor::handleFileCardClick(const BlockView &view, const QPoint &po
 
 // --- .canvas, .base and anything else the window hooked up -----------------
 
+void MarkdownEditor::retryMissingEmbeds()
+{
+    if (!m_resolver)
+        return;
+    bool touched = false;
+    for (BlockView &block : d->m_blocks) {
+        // The resolver is asked again only for blocks that had no answer; any
+        // that has one now is laid out afresh, the rest are left alone.
+        if (block.unresolvedEmbed.isEmpty() || m_resolver(block.unresolvedEmbed).isEmpty())
+            continue;
+        block.layout.reset();
+        block.cells.clear();
+        block.laidOut = false;
+        block.heightEstimated = false;
+        touched = true;
+    }
+    if (touched) {
+        updateLayout();
+        viewport()->update();
+    }
+}
+
 QString MarkdownEditor::fileEmbedCacheKey(const QString &path, const QString &subpath, int width) const
 {
     const qint64 mtime = QFileInfo(path).lastModified().toSecsSinceEpoch();

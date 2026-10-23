@@ -428,6 +428,11 @@ struct MarkdownEditor::BlockView {
     /// block: what deliverCSV matches a block back on. Such a block is also
     /// isBase, which only means "painted as a data table".
     QString CSVpath;
+    /// The target of a sole `![[...]]` the link resolver had no file for when
+    /// this block was laid out; empty for any other block. What
+    /// retryMissingEmbeds looks at - a file that was not there yet, or was
+    /// deleted and put back, is found without anything else relaying the block.
+    QString unresolvedEmbed;
 
     /// Set when this block is a raw HTML block (top-level `<div>`,
     /// `<table>`, `<details>`... - not inline HTML inside a paragraph)

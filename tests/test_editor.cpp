@@ -8325,6 +8325,52 @@ TEST(CSVEmbedTest, ADeletedAndRecreatedFolderComesBack)
         [&] { return editor->tableCellTextsAt(0).size() == 2 && editor->tableCellTextsAt(0).at(1) == wanted; }, 5000));
 }
 
+TEST(EmbedRetryTest, RetryMissingEmbedsRelaysOutOnlyWhatResolvesNow)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("a.csv"), "a,b\n1,2\n");
+    bool present = false;
+    auto editor = editorWith(QStringLiteral("![[a.csv]]\n\n![[nowhere.csv]]\n"));
+    editor->setLinkResolver([&](const QString &target) {
+        return present && target == QLatin1String("a.csv") ? path : QString();
+    });
+    const quint64 before = editor->layoutCount();
+    editor->retryMissingEmbeds();
+    EXPECT_EQ(editor->layoutCount(), before) << "nothing resolves yet: nothing is laid out again";
+
+    present = true;
+    editor->retryMissingEmbeds();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->tableCellTextsAt(0).isEmpty(); }, 5000));
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("nowhere.csv")));
+    const quint64 settled = editor->layoutCount();
+    editor->retryMissingEmbeds();
+    EXPECT_EQ(editor->layoutCount(), settled) << "the one that came back is no longer on the list";
+}
+
+TEST(CSVEmbedTest, ARestoredFileWithTheSameMtimeAndSizeComesBack)
+{
+    // a move out of the trash, cp -p, Syncthing restoring an unchanged file
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("same.csv"), "a,b\n1,2\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+    const QDateTime mtime = QFileInfo(path).lastModified();
+
+    ASSERT_TRUE(QFile::remove(path));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("same.csv")); }, 5000));
+    EXPECT_EQ(editor->CSVcacheSize(), 0) << "a deleted file's read is not kept";
+    QTest::qWait(400);
+
+    writeTextFile(dir, QStringLiteral("same.csv"), "a,b\n1,2\n");
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(file.setFileTime(mtime, QFileDevice::FileModificationTime));
+    file.close();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->tableCellTextsAt(0).isEmpty(); }, 5000));
+}
+
 TEST(CSVEmbedTest, AFileAppendedToContinuouslyStillRefreshes)
 {
     QTemporaryDir dir;

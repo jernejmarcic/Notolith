@@ -50,8 +50,8 @@ constexpr int kCSVmaxColumns = 64;
 constexpr int kCSVmaxCellChars = 1000;
 constexpr qint64 kCSVmaxBytes = 32 * 1024 * 1024;
 
-// setCSVreadHookForTests', set before a read starts and cleared after it ends.
-std::function<void(const QString &)> gCSVreadHook;
+// setCSVreadHookForTests': read by worker threads, so atomic.
+std::atomic<void (*)(const QString &)> gCSVreadHook{nullptr};
 
 // A cell is drawn through a QTextLayout, where a line break inside one is
 // U+2028 rather than a newline.
@@ -72,8 +72,8 @@ MarkdownEditor::CSVcacheEntry MarkdownEditor::readCSVfile(const QString &path, b
 {
     CSVcacheEntry out;
     out.pending = false;
-    if (gCSVreadHook)
-        gCSVreadHook(path);
+    if (const auto hook = gCSVreadHook.load())
+        hook(path);
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         out.table.error = unreadable;
@@ -126,8 +126,12 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     watchCSV(path);
 
     const QFileInfo info(path);
-    if (!info.isFile())
+    if (!info.isFile()) {
+        // Gone: its read goes too, or a restore with the same mtime and size
+        // (a move out of the trash, cp -p) would look like nothing happened.
+        d->m_CSVcache.remove(path);
         return false;
+    }
 
     const qint64 mtime = info.lastModified().toMSecsSinceEpoch();
     const qint64 size = info.size();
@@ -306,9 +310,9 @@ void MarkdownEditor::dropCSVcache()
     }
 }
 
-void MarkdownEditor::setCSVreadHookForTests(std::function<void(const QString &)> hook)
+void MarkdownEditor::setCSVreadHookForTests(void (*hook)(const QString &))
 {
-    gCSVreadHook = std::move(hook);
+    gCSVreadHook.store(hook);
 }
 
 int MarkdownEditor::CSVcacheSize() const
