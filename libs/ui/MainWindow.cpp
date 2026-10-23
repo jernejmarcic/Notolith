@@ -265,6 +265,7 @@ MainWindow::~MainWindow()
         m_graphSave.stop();
         saveGraphOptions(); // a change made in the last half second still counts
     }
+    flushSaves(); // an autosave in flight reaches the disk and the index first
     // The indexer's scan, which posts to the index, stops first. Searches
     // for ```query blocks run on the pool against m_index, and the history's
     // last saves may still be on their way to disk.
@@ -329,7 +330,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_autosave.setInterval(2000); // Obsidian's pause, near enough
     m_autosaveMax.setSingleShot(true);
     m_autosaveMax.setInterval(30000); // typing without a pause still saves
-    connect(&m_autosaveMax, &QTimer::timeout, this, &MainWindow::autosave);
+    connect(&m_autosaveMax, &QTimer::timeout, this, &MainWindow::autosaveInBackground);
     m_layoutSave.setSingleShot(true);
     m_layoutSave.setInterval(1000);
     connect(&m_layoutSave, &QTimer::timeout, this, &MainWindow::saveLayout);
@@ -343,7 +344,7 @@ MainWindow::MainWindow(QWidget *parent)
         statusBar()->showMessage(tr("Encrypted notes locked"), 4000);
     });
 #endif
-    connect(&m_autosave, &QTimer::timeout, this, &MainWindow::autosave);
+    connect(&m_autosave, &QTimer::timeout, this, &MainWindow::autosaveInBackground);
     m_noteWatcher = new QFileSystemWatcher(this);
     m_noteChanges.setSingleShot(true);
     m_noteChanges.setInterval(100); // a write in place can come in more than one go
@@ -358,6 +359,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_lostRetry.setSingleShot(true);
     m_lostRetry.setInterval(1000);
     connect(&m_lostRetry, &QTimer::timeout, this, [this] { followLostNotes(true); });
+    m_savePool.setMaxThreadCount(1);
+    m_savePool.setExpiryTimeout(-1);
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
 #ifdef NOTEAPPC_HAVE_HISTORY
@@ -7051,6 +7054,7 @@ void retarget(Leaves &leaves, const QString &from, const QString &to)
 
 void MainWindow::encryptCurrentNote()
 {
+    flushSaves(); // an autosave in flight would write the plain file back after it is gone
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
     const QString from = m_active->notePath;
     if (!m_vault.isValid() || m_active->view || !Vault::isNote(from) || !m_vault.contains(from)) {
@@ -7107,6 +7111,7 @@ void MainWindow::encryptCurrentNote()
 
 void MainWindow::decryptCurrentNote()
 {
+    flushSaves(); // an autosave in flight would write the plain file back after it is gone
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
     const QString from = m_active->notePath;
     if (m_active->view || !Vault::isEncryptedNote(from))
@@ -7215,8 +7220,10 @@ void MainWindow::changeEncryptionPassword()
 #endif
 }
 
-bool MainWindow::saveLeaf(Leaf *target, bool quiet)
+bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
 {
+    if (!background)
+        flushSaves(); // the file and the tab's baseline are the last save's before this one reads them
     if (auto *module = qobject_cast<ModuleView *>(target->view)) { // a file-less view too: R6
         const QString shown = target->notePath.isEmpty() ? target->viewTitle : QFileInfo(target->notePath).fileName();
         QString error;
@@ -7289,8 +7296,18 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     const bool encrypted = Vault::isEncryptedNote(target->notePath);
     const bool snapshots =
         !encrypted && featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(target->notePath);
-    if (snapshots && Snapshots::versions(target->notePath).isEmpty() && note.text != target->note.text)
-        Snapshots::record(target->notePath, target->note.text, 0);
+    // An autosave: the text is encoded here, the commit (fdatasync, 5-25 ms on
+    // a flushing disk) and the recovery copies are another thread's, and
+    // finishSave() does the rest. A note that needs the notebook merge or a
+    // password stays on the synchronous path.
+    const bool inBackground = background && !encrypted && !isNotebookFile(target->notePath) && !note.lossy;
+    QString firstVersion; // what the note held before its first save here, for the job to keep
+    if (snapshots && Snapshots::versions(target->notePath).isEmpty() && note.text != target->note.text) {
+        if (inBackground)
+            firstVersion = target->note.text;
+        else
+            Snapshots::record(target->notePath, target->note.text, 0);
+    }
     // A change from outside (a sync client) that the watcher has not reported
     // yet - it waits for writes to settle - would be written over unseen.
     if (snapshots) {
@@ -7300,6 +7317,29 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
             statusBar()->showMessage(
                 tr("%1 had changed on disk: that version is in file recovery").arg(QFileInfo(target->notePath).fileName()),
                 8000);
+    }
+
+    if (inBackground) {
+        note = Vault::asWritten(note);
+        auto *watcher = new QFutureWatcher<SaveResult>(this);
+        connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] { finishSave(watcher); });
+        m_saveJobs.append({target->notePath, note, watcher});
+        watcher->setFuture(QtConcurrent::run(
+            &m_savePool,
+            [path = target->notePath, bytes = Vault::encode(note), text = snapshots ? note.text : QString(),
+             firstVersion, interval = qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000,
+             snapshots] {
+                if (!firstVersion.isEmpty())
+                    Snapshots::record(path, firstVersion, 0);
+                SaveResult result;
+                if (!Vault::writeBytes(path, bytes, &result.error))
+                    return SaveResult{result.error.isEmpty() ? QStringLiteral("the file could not be written")
+                                                             : result.error};
+                if (snapshots)
+                    Snapshots::record(path, text, interval);
+                return SaveResult{};
+            }));
+        return true;
     }
 
     QString error;
@@ -7338,6 +7378,59 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     return true;
 }
 
+
+void MainWindow::flushSaves()
+{
+    while (!m_saveJobs.isEmpty()) {
+        QFutureWatcher<SaveResult> *watcher = m_saveJobs.first().watcher;
+        watcher->waitForFinished();
+        finishSave(watcher); // its queued finished() finds the job gone
+    }
+}
+
+void MainWindow::finishSave(QFutureWatcher<SaveResult> *watcher)
+{
+    const auto at = std::find_if(m_saveJobs.begin(), m_saveJobs.end(),
+                                 [watcher](const SaveJob &job) { return job.watcher == watcher; });
+    if (at == m_saveJobs.end())
+        return;
+    const SaveJob job = *at;
+    m_saveJobs.erase(at);
+    const SaveResult result = watcher->result();
+    watcher->deleteLater();
+    if (!result.error.isEmpty()) {
+        reportSaveError(job.path, result.error, true); // the tab stays modified; the next pause tries again
+        return;
+    }
+    recordHistory(job.path, job.note.text);
+    notifyPlugins("note-saved", job.path);
+#ifdef NOTEAPPC_HAVE_SYNC
+    if (m_sync)
+        m_sync->noteChanged();
+#endif
+    // Every tab on the note is as saved as the text it held when the save was
+    // queued; one that has been typed in since stays modified (and is saved
+    // again) and must not be reset to the older text, as showDiskNote() would.
+    bool newer = false;
+    for (const auto &leaf : m_leaves) {
+        if (leaf->view || leaf->notePath != job.path)
+            continue;
+        leaf->note = job.note;
+        if (leaf->editor->noteText() == job.note.text)
+            leaf->editor->setModified(false);
+        else
+            newer = true;
+    }
+    if (newer)
+        armAutosave();
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (ShareSession *session = sessionFor(job.path))
+        session->noteSaved(job.note.text);
+#endif
+    watchOpenNotes();
+    if (m_vault.isValid())
+        m_indexer->reindex(job.path);
+}
 
 void MainWindow::showDiskNote(const QString &path, const Note &note)
 {
@@ -7509,6 +7602,7 @@ void MainWindow::followLostNotes(bool final)
 
 void MainWindow::reloadChangedNotes()
 {
+    flushSaves(); // an own save still being committed is not a change from outside
     watchOpenNotes(); // a file replaced by a rename dropped out of the watch
     followLostNotes(false);
     for (const QString &path : std::exchange(m_changedNotes, {})) {
@@ -7608,8 +7702,15 @@ void MainWindow::armAutosave()
         m_autosaveMax.start();
 }
 
-QStringList MainWindow::autosave()
+void MainWindow::autosaveInBackground()
 {
+    autosave(true);
+}
+
+QStringList MainWindow::autosave(bool background)
+{
+    if (!background)
+        flushSaves();
     m_autosaveMax.stop();
     QSet<QString> saved; // a note in two tabs is one document, saved once
     for (const auto &leaf : m_leaves) {
@@ -7617,8 +7718,11 @@ QStringList MainWindow::autosave()
             continue;
         if (m_lostNotes.value(leaf->notePath, false))
             continue; // gone from disk and not found: writing it back is for the person to decide
+        if (std::any_of(m_saveJobs.cbegin(), m_saveJobs.cend(),
+                        [&](const SaveJob &job) { return job.path == leaf->notePath; }))
+            continue; // its last save is still being committed; finishSave() arms the next one if it is behind
         saved.insert(leaf->notePath);
-        saveLeaf(leaf.get(), true);
+        saveLeaf(leaf.get(), true, background);
     }
     return QStringList(saved.cbegin(), saved.cend());
 }
@@ -8090,6 +8194,7 @@ void MainWindow::renamePathAt(const QModelIndex &index)
 
 bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QString &newName, QString *error)
 {
+    flushSaves(); // an autosave in flight would write the old name back
     // The link rewrite below reads each linking note from disk. Typed text
     // not on disk yet would be written back over it by the next autosave,
     // [[Old]] and all, so it goes first - whatever files.autosave says, a
@@ -8274,6 +8379,7 @@ void MainWindow::commitInlineTitle(Leaf *leaf)
 
 bool MainWindow::deleteVaultPath(const QString &path, QString *error)
 {
+    flushSaves(); // an autosave in flight would write the file back after it is gone
     const QString mode = m_settings.text(QStringLiteral("files.deletedFiles"));
     if (mode == QLatin1String("permanent")) {
         const QFileInfo info(path);

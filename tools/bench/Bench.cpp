@@ -567,6 +567,38 @@ Timing benchSave(const QString &scratchDir, int kb, int runs)
     return reduce(QStringLiteral("Save"), QStringLiteral("%1 kB note, in a vault").arg(kb), samples);
 }
 
+/// The same note and the same edit, saved the way the autosave timers do it:
+/// the UI thread encodes and hands the commit to another thread. The first row
+/// is what the UI thread is blocked for, the second until the file is durable
+/// (flushSaves() returned), which is what the save row above is made of.
+std::vector<Timing> benchAutosave(const QString &scratchDir, int kb, int runs)
+{
+    QTemporaryDir vault(scratchDir + QStringLiteral("/autosave-vault-XXXXXX"));
+    const QString notePath = vault.path() + QStringLiteral("/Save.md");
+    writeNote(notePath, buildNote(kb));
+    auto window = std::make_unique<MainWindow>();
+    window->openVault(vault.path());
+    window->openNote(notePath);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    MarkdownEditor *editor = window->editor();
+    editor->setCursorOffset(editor->noteText().size() / 2);
+
+    std::vector<double> blocked;
+    std::vector<double> durable;
+    for (int i = 0; i < runs; ++i) {
+        QTest::keyClick(editor, Qt::Key_X);
+        QElapsedTimer clock;
+        clock.start();
+        QMetaObject::invokeMethod(window.get(), "autosaveInBackground");
+        blocked.push_back(double(clock.nsecsElapsed()) / 1e6);
+        QMetaObject::invokeMethod(window.get(), "flushSaves");
+        durable.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    const QString detail = QStringLiteral("%1 kB note, in a vault").arg(kb);
+    return {reduce(QStringLiteral("Autosave, UI thread blocked"), detail, blocked),
+            reduce(QStringLiteral("Autosave, until durable"), detail, durable)};
+}
+
 Timing benchKeystroke(const QString &noteText, const QString &detail, int runs)
 {
     auto editor = std::make_unique<MarkdownEditor>();
@@ -2710,6 +2742,10 @@ int main(int argc, char *argv[])
     if (runs("save")) {
         for (int kb : {200, 1024})
             timings << benchSave(workDir.path(), kb, 15);
+        for (int kb : {200, 1024}) {
+            for (const Timing &timing : benchAutosave(workDir.path(), kb, 15))
+                timings << timing;
+        }
     }
 
     // Relayouts that are not keystrokes: a resize, a fold, an embed's late

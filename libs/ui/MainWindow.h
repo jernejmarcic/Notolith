@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QMainWindow>
 #include <QPointer>
+#include <QFutureWatcher>
 #include <QThreadPool>
 #include <QSet>
 #include <QTimer>
@@ -226,6 +227,14 @@ protected:
 private slots:
     void chooseVault();
     bool save();
+    /// What the autosave timers run: every modified plain note is encoded here
+    /// and its file committed (fdatasync) on a thread of its own; flushSaves()
+    /// waits for them. Anything that must see the file on disk goes through
+    /// saveLeaf(), autosave() or reloadChangedNotes(), which flush first.
+    void autosaveInBackground();
+    /// Waits for every background save and runs what follows each (history,
+    /// plugins, the tab's modified mark, the index).
+    void flushSaves();
     /// Enter/double-click/Return on the current row: opens a note, ignores a
     /// folder (which toggles from onTreeClicked() or the Enter key filter
     /// instead, so a double-click's extra activation does not toggle it a
@@ -664,7 +673,16 @@ private:
     bool maybeSave();
     /// Saves `leaf`'s note; `quiet` for autosave: no "Saved" message, and a
     /// failure in the status bar rather than a box.
-    bool saveLeaf(Leaf *leaf, bool quiet);
+    bool saveLeaf(Leaf *leaf, bool quiet, bool background = false);
+    struct SaveResult {
+        QString error; ///< empty: the file is on disk
+    };
+    struct SaveJob {
+        QString path;
+        Note note; ///< as written
+        QFutureWatcher<SaveResult> *watcher = nullptr;
+    };
+    void finishSave(QFutureWatcher<SaveResult> *watcher);
     /// `note` is what `path` holds on disk now: every tab showing it takes
     /// it, carets and scroll kept, and is unmodified after.
     void showDiskNote(const QString &path, const Note &note);
@@ -686,7 +704,7 @@ private:
     /// Every tab with unsaved changes, a moment after typing stops - or
     /// m_autosaveMax after the first edit, however long the typing goes on.
     /// Returns the notes it saved.
-    QStringList autosave();
+    QStringList autosave(bool background = false);
     /// An edit was made: restarts the pause, starts the max wait if idle.
     void armAutosave();
     void updateTitle();
@@ -841,6 +859,9 @@ void updateVimStatus();
     /// Every history call runs on this one thread, in order: libgit2's
     /// repository is not to be shared between threads.
     QThreadPool m_historyPool;
+    /// One thread commits the autosaves, in the order they were queued.
+    QThreadPool m_savePool;
+    QList<SaveJob> m_saveJobs; ///< in flight, oldest first
     std::shared_ptr<NoteHistory> m_noteHistory;
     QString m_noteHistoryRoot;
     int m_historyRecords = 0;
