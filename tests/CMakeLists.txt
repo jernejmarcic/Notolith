@@ -100,6 +100,11 @@ add_test(NAME modules_gate COMMAND test_modules --gtest_filter=ModuleGateTest.*)
 add_test(NAME modules COMMAND test_modules --gtest_filter=-ModuleGateTest.*)
 set_tests_properties(modules_gate modules PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_autosave test_autosave.cpp)
+target_link_libraries(test_autosave PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+target_compile_definitions(test_autosave PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
+add_test(NAME autosave COMMAND test_autosave)
+
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 # AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads is its own entry: it needs fake.width
