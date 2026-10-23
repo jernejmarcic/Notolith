@@ -1408,6 +1408,36 @@ Timing benchMediaArrival(int kilobytes, int runs)
     return reduce(QStringLiteral("Media arrival to painted"), QStringLiteral("%1 kB note").arg(kilobytes), samples);
 }
 
+/// A parse landing on the UI thread: the word typed, the pause, the pool's parse
+/// back, then everything the editor does with it, to the painted frame. Timed
+/// from the word count the landing sets (its first act) so the debounce and the
+/// parse on the pool are not in it.
+Timing benchParseLanding(int kilobytes, int runs)
+{
+    qsizetype at = 0;
+    const QString note = noteWithBlockInMiddle(kilobytes, QString(), &at);
+    auto editor = settledEditor(note, at);
+    QElapsedTimer clock;
+    qint64 landed = -1;
+    QObject::connect(editor.get(), &MarkdownEditor::wordCountChanged, editor.get(), [&](int) {
+        clock.start();
+        landed = 0;
+    });
+    QSignalSpy parsed(editor.get(), &MarkdownEditor::wordCountChanged);
+    std::vector<double> samples;
+    for (int i = 0; i < runs; ++i) {
+        QTest::keyClicks(editor.get(), QStringLiteral(" x"));
+        (void)paintedFrame(editor.get());
+        landed = -1;
+        parsed.clear();
+        if (!parsed.wait(30000) || landed < 0)
+            break;
+        (void)paintedFrame(editor.get());
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Parse landing to painted"), QStringLiteral("%1 kB note").arg(kilobytes), samples);
+}
+
 /// Source mode, a pipe table in the middle of a long note: a character typed
 /// into a cell and Tab straight after it, inside the parse debounce, so the
 /// table is realigned before the reparse of the typing has run.
@@ -2722,6 +2752,7 @@ int main(int argc, char *argv[])
             timings << benchResize(kb, 640, 600, QStringLiteral("text rewrapped"), 20);
             timings << benchFold(kb, 20);
             timings << benchMediaArrival(kb, 20);
+            timings << benchParseLanding(kb, 15);
         }
         timings << benchSourceTableTab(1024, 15);
     }
