@@ -291,6 +291,8 @@ public:
         qreal marginMillimetres = 25.4; ///< "Default", about an inch
         int downscalePercent = 100;
         bool taskStates = false; ///< ParseOptions::taskStates: the note's own checkbox states
+        bool codeStyler = false; ///< ParseOptions::codeStyler: Code Styler's syntax, drawn as on screen
+        QString codeHighlights;  ///< the `editor.codeHighlights` setting: the names `info:2` may use
         /// Paper is white, so the light theme unless a caller passes its own
         /// (the person's formatting colours on top of it).
         std::optional<Theme> theme;

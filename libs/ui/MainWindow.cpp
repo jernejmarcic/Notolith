@@ -1484,6 +1484,11 @@ ParseOptions MainWindow::parseOptions() const
     }
     options.ignoreFormatting = m_settings.boolean(QStringLiteral("editor.countIgnoreFormatting"));
     options.taskStates = featureOn("task-states");
+    options.codeStyler = featureOn("advanced-code-blocks");
+    if (options.codeStyler) {
+        for (const auto &kind : parseHighlightKinds(m_settings.text(QStringLiteral("editor.codeHighlights"))))
+            options.highlightKinds.append(kind.first);
+    }
     return options;
 }
 
@@ -4520,6 +4525,8 @@ void MainWindow::exportPdf()
     QString error;
     MarkdownEditor::PdfOptions pdf = options.options();
     pdf.taskStates = featureOn("task-states");
+    pdf.codeStyler = featureOn("advanced-code-blocks");
+    pdf.codeHighlights = m_settings.text(QStringLiteral("editor.codeHighlights"));
     pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
     applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
@@ -4966,13 +4973,14 @@ void MainWindow::publishSite()
     // (a built-in scheme has none), on the worker with the rest.
     const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
     const bool taskStates = featureOn("task-states");
+    const ParseOptions codeStylerOptions = parseOptions(); // codeStyler and the highlight names, which are all of it
     // The formatting colours too, read here: Settings is not for the worker.
     QHash<QString, QString> colours;
     for (const FormatRow &row : formatRows())
         for (const FormatColour &colour : row.colours)
             for (const bool dark : {true, false})
                 colours.insert(formatColourKey(colour, dark), m_settings.text(formatColourKey(colour, dark)));
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates] {
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates, codeStylerOptions] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -4987,6 +4995,8 @@ void MainWindow::publishSite()
         options.siteName = choices.siteName.isEmpty() ? vault.name() : choices.siteName;
         options.theme = publish::Options::ThemeMode(choices.theme);
         options.parse.taskStates = taskStates;
+        options.parse.codeStyler = codeStylerOptions.codeStyler;
+        options.parse.highlightKinds = codeStylerOptions.highlightKinds;
         for (const Theme::Mode mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
             Theme theme = schemePath.isEmpty() ? Theme::builtin(mode) : Scheme::apply(schemePath, mode);
             applyUserColours(theme, [&colours](const QString &key) { return colours.value(key); });

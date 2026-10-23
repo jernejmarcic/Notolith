@@ -38,7 +38,22 @@ struct ParseOptions {
     /// `[?]` - with that character as its state (ListItemSpan::state, Task).
     /// Off, only `[ ]`, `[x]` and `[X]` are tasks, as in CommonMark.
     bool taskStates = false;
+
+    /// Code Styler's syntax (the advanced-code-blocks core plugin): its
+    /// parameters on a fence's opening line, `{lang} code` inline code and
+    /// ```` ```reference ```` blocks. Off, none of it is looked for and a
+    /// note parses exactly as it did before the plugin existed.
+    bool codeStyler = false;
+    /// The names `info:2 warn:4-6` may use after a fence's language: the
+    /// alternative highlights the settings define. Only read with codeStyler.
+    QStringList highlightKinds;
 };
+
+/// The alternative highlights a setting spells as `info=blue, warn=#E5A100`:
+/// each name (lower case, a word that is not one of Code Styler's own
+/// parameters) with the colour as written - a theme colour's name or a hex
+/// code, which the editor resolves. In order, first of a repeated name wins.
+QList<std::pair<QString, QString>> parseHighlightKinds(const QString &spec);
 
 /// Empty when `open`/`close` can delimit meta notes, else a sentence saying
 /// why not: each is 1-3 characters, no spaces or backslash, and none of

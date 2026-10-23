@@ -58,6 +58,11 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     editor.setMode(Mode::Reading);
     ParseOptions parse = editor.parseOptions(); // the editor's own defaults, but for the states
     parse.taskStates = options.taskStates;
+    parse.codeStyler = options.codeStyler;
+    if (options.codeStyler) {
+        for (const auto &kind : parseHighlightKinds(options.codeHighlights))
+            parse.highlightKinds.append(kind.first);
+    }
     editor.setParseOptions(parse);
     // A diagram fence (mermaid, plantuml, tikz, dot) is the diagram the editor already made (never the
     // tool: an export waits for nothing); one it never made stays its listing.

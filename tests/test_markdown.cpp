@@ -1202,6 +1202,166 @@ TEST(CodeOptionTest, QuartoExecutionKeysAreParsed)
     EXPECT_TRUE(later.codeOptions.isEmpty());
 }
 
+// --- Code Styler: the fence line's own parameters ----------------------------
+
+namespace {
+
+ParseOptions codeStylerOn()
+{
+    ParseOptions options;
+    options.codeStyler = true;
+    options.highlightKinds = {QStringLiteral("info"), QStringLiteral("warn"), QStringLiteral("error")};
+    return options;
+}
+
+CodeOptions fenceOptionsOf(const QString &info, const QString &listing = QStringLiteral("a\nb\nc\nd\ne\nf\n"))
+{
+    const Decorations decorations =
+        decorationsOf(QStringLiteral("```") + info + QStringLiteral("\n") + listing + QStringLiteral("```\n"),
+                      codeStylerOn());
+    return decorations.codeOptions.isEmpty() ? CodeOptions() : decorations.codeOptions.first();
+}
+
+} // namespace
+
+TEST(CodeStylerTest, TitleAndItsQuoting)
+{
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp title:test.cpp")).title, QStringLiteral("test.cpp"));
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp title:\"long filename.cpp\"")).title,
+              QStringLiteral("long filename.cpp"));
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp title='single quoted'")).title, QStringLiteral("single quoted"));
+    // `:` and `=` are the same, and the order of the parameters is free.
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp fold title=example_title")).title, QStringLiteral("example_title"));
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("cpp fold title=example_title")).fold);
+}
+
+TEST(CodeStylerTest, LineNumbers)
+{
+    CodeOptions options = fenceOptionsOf(QStringLiteral("cpp ln:true"));
+    EXPECT_TRUE(options.lineNumbers);
+    EXPECT_EQ(options.firstLine, 1);
+    options = fenceOptionsOf(QStringLiteral("cpp ln:27"));
+    EXPECT_TRUE(options.lineNumbers);
+    EXPECT_EQ(options.firstLine, 27);
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("cpp ln:false title:x")).lineNumbers);
+}
+
+TEST(CodeStylerTest, HighlightEveryFormTheReadmeDocuments)
+{
+    // The README's own example, spaces inside the quotes and all.
+    const QString info = QStringLiteral(R"(cpp hl:1,3-4,foo,'bar baz',"bar and baz",/#\w{6}/)");
+    const QString listing = QStringLiteral("one\n"       // 1: number
+                                           "foo here\n"  // 2: word
+                                           "three\n"     // 3: range
+                                           "four\n"      // 4: range
+                                           "bar baz\n"   // 5: single-quoted text
+                                           "bar and baz\n" // 6: double-quoted text
+                                           "color #a1b2c3\n" // 7: regex
+                                           "none of it\n");  // 8
+    const CodeOptions options = fenceOptionsOf(info, listing);
+    EXPECT_EQ(options.highlight, QList<int>({1, 2, 3, 4, 5, 6, 7}));
+
+    // The `{1,3-4}` spelling other tools use, which cannot match text.
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp {1,3-4,6}")).highlight, QList<int>({1, 3, 4, 6}));
+    // An invalid regular expression highlights nothing and breaks nothing.
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("cpp hl:/(unclosed/")).highlight.isEmpty());
+}
+
+TEST(CodeStylerTest, FoldWithAndWithoutAPlaceholder)
+{
+    CodeOptions options = fenceOptionsOf(QStringLiteral("cpp fold"));
+    EXPECT_TRUE(options.fold);
+    EXPECT_TRUE(options.foldLabel.isEmpty());
+    options = fenceOptionsOf(QStringLiteral("cpp fold:\"This is collapsed\""));
+    EXPECT_TRUE(options.fold);
+    EXPECT_EQ(options.foldLabel, QStringLiteral("This is collapsed"));
+    options = fenceOptionsOf(QStringLiteral("cpp fold:Folded"));
+    EXPECT_EQ(options.foldLabel, QStringLiteral("Folded"));
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("cpp fold:false title:x")).fold);
+}
+
+TEST(CodeStylerTest, UnwrapAndItsAliases)
+{
+    // Lines scroll by default here (`#| wrap: false`), so wrapping is the opt-in.
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("python unwrap")).wrap);
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("python unwrap:true")).wrap);
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("python unwrap:inactive")).wrap);
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("python unwrap:false")).wrap);
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("python wrap")).wrap);
+}
+
+TEST(CodeStylerTest, IgnoreLeavesTheBlockAlone)
+{
+    const Decorations decorations = decorationsOf(
+        QStringLiteral("```cpp ignore title:x ln:3\nint a;\n```\n"), codeStylerOn());
+    EXPECT_TRUE(decorations.codeOptions.isEmpty());
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    EXPECT_TRUE(decorations.codeFences.first().ignored);
+    EXPECT_EQ(decorations.codeFences.first().language, QStringLiteral("cpp"));
+}
+
+TEST(CodeStylerTest, NoLanguageNeedsTheSpaceAfterTheFence)
+{
+    const Decorations decorations = decorationsOf(
+        QStringLiteral("``` fold title:example_title\nplain\n```\n"), codeStylerOn());
+    ASSERT_EQ(decorations.codeOptions.size(), 1);
+    EXPECT_TRUE(decorations.codeOptions.first().fold);
+    EXPECT_EQ(decorations.codeOptions.first().title, QStringLiteral("example_title"));
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    EXPECT_TRUE(decorations.codeFences.first().language.isEmpty());
+    // Without the space it is the language, as CommonMark reads it.
+    const Decorations tight = decorationsOf(QStringLiteral("```fold title:x\nplain\n```\n"), codeStylerOn());
+    ASSERT_EQ(tight.codeFences.size(), 1);
+    EXPECT_EQ(tight.codeFences.first().language, QStringLiteral("fold"));
+}
+
+TEST(CodeStylerTest, HashOptionLinesWinOverTheFenceLine)
+{
+    const CodeOptions options = fenceOptionsOf(
+        QStringLiteral("cpp title:fence ln:5"), QStringLiteral("//| title: block\nint a;\n"));
+    EXPECT_EQ(options.title, QStringLiteral("block"));
+    EXPECT_TRUE(options.lineNumbers); // nothing in the block said otherwise
+    EXPECT_EQ(options.firstLine, 5);
+    EXPECT_TRUE(options.range.isValid());
+}
+
+TEST(CodeStylerTest, ParametersOnTheFenceLineAreHiddenAndKeepTheListing)
+{
+    const QString text = QStringLiteral("```cpp title:x ln:2\nint a;\n```\n");
+    const Decorations decorations = decorationsOf(text, codeStylerOn());
+    const Range attributes = decorations.codeFences.first().attributesRange;
+    ASSERT_TRUE(attributes.isValid());
+    EXPECT_TRUE(std::any_of(decorations.syntax.cbegin(), decorations.syntax.cend(),
+                            [&](const Range &range) { return range.contains(attributes.start) && range.contains(attributes.end - 1); }));
+    // A title with a space in it is not tokens of its own: `tab` inside one is not a tab.
+    const Decorations tabby = decorationsOf(QStringLiteral("```cpp title:\"my tab\"\nx\n```\n```cpp title:\"another tab\"\ny\n```\n"),
+                                            codeStylerOn());
+    ASSERT_EQ(tabby.codeFences.size(), 2);
+    EXPECT_EQ(tabby.codeFences.at(0).tabGroup, -1);
+    EXPECT_EQ(tabby.codeFences.at(1).tabGroup, -1);
+}
+
+TEST(CodeStylerTest, ThePropertyTurnsTheNoteOff)
+{
+    QString note = QStringLiteral("---\ncode-styler-ignore: true\n---\n```cpp title:x\nint a;\n```\n");
+    EXPECT_TRUE(decorationsOf(note, codeStylerOn()).codeOptions.isEmpty());
+    note.replace(QStringLiteral("true"), QStringLiteral("false"));
+    EXPECT_EQ(decorationsOf(note, codeStylerOn()).codeOptions.size(), 1);
+}
+
+TEST(CodeStylerTest, OffMeansTheNoteParsesAsBefore)
+{
+    const QString text = QStringLiteral("```cpp title:x ln:3 hl:1 fold\nint a;\n```\n");
+    const Decorations off = decorationsOf(text);
+    EXPECT_TRUE(off.codeOptions.isEmpty());
+    ASSERT_EQ(off.codeFences.size(), 1);
+    EXPECT_FALSE(off.codeFences.first().ignored);
+    // The Quarto lines still work with it off, and `highlight:` stays numbers only.
+    const Decorations quarto = decorationsOf(QStringLiteral("```cpp\n#| highlight: foo\nint foo;\n```\n").replace(QStringLiteral("#|"), QStringLiteral("//|")));
+    ASSERT_EQ(quarto.codeOptions.size(), 1);
+    EXPECT_TRUE(quarto.codeOptions.first().highlight.isEmpty());
+}
+
 TEST(ParagraphTest, SoftBreaksAreMarked)
 {
     const QString text = QStringLiteral("one\ntwo\n\nthree\n");

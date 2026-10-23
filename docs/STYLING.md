@@ -283,6 +283,48 @@ fence publishes as an ordinary block.
 With the caret inside the group every fence shows as written, so you can edit
 any of them. Obsidian shows the same note as separate blocks.
 
+### Code Styler syntax
+
+Obsidian's [Code Styler](https://github.com/mayurankv/Obsidian-Code-Styler)
+plugin puts its parameters on the opening fence line; a note written for it
+renders the same here. The core plugin **Advanced code blocks** (Settings >
+Core plugins, on by default) reads them. Off, they are the plain text they are
+in Obsidian without the plugin, and the parse never looks for them.
+
+```markdown
+    ```cpp title:"long filename.cpp" ln:27 hl:2,4-6 fold
+    ```python unwrap:false
+    ``` fold:"Collapsed listing"
+```
+
+| parameter | does |
+|---|---|
+| `title:x`, `title:"a b"`, `title:'a b'` | the header strip's name (`:` and `=` are the same; any order) |
+| `ln:true`, `ln:false`, `ln:27` | line numbers, from 27 for a number |
+| `hl:...` | highlights lines: `hl:1,3-4,foo,'bar baz',"bar and baz",/#\w{6}/` - numbers, ranges, a word, quoted text, a regular expression (PCRE, not JavaScript's flavour), comma-separated with no spaces. `{1,3-4}` after the language is the same with numbers only |
+| `fold`, `fold:Folded`, `fold:"Collapsed"` | folded when the note opens; the text names the block while it is folded and has no title |
+| `unwrap`, `unwrap:true`, `unwrap:false`, `wrap` | long lines scroll sideways (the default here) or wrap |
+| `ignore` | the block keeps its panel and colours and loses the header strip |
+| `ref:[[Note]]`, `reference:[[Note\|alias]]` | with no `title:`, the link's text is the title |
+
+With no language, leave a space after the fence (``` ` ``` fold title:x ```):
+the first word is then a parameter. Without the space it is the language, as
+CommonMark reads it. The parameters are hidden outside the caret's block, like
+the language tag.
+
+**Together with `#|` lines.** Both spellings fill the same options. When a key
+is given both ways the `#|` line wins, being inside the block and the form
+noteAppC wrote first; `#| highlight:` also reads text and `/regex/` items while
+the plugin is on.
+
+**Differences from the plugin.** `unwrap:inactive` unwraps and does not wrap
+while the mouse is held down. `ref:` shows the link's text but the title is not
+clickable. `{r title, hl=5}` (R Markdown) is not read: its first word is
+`{r`, which CommonMark takes as the language. The plugin's settings
+(themes, icons, language borders, excluded languages) are not read; the theme
+and `codeblocks.ini` do that job. `code-styler-ignore: true` in a note's
+properties turns the plugin off for that note.
+
 ## Themes
 
 Pick a colour scheme on the settings page's Appearance tab. A theme file goes

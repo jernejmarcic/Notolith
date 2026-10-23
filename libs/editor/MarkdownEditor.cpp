@@ -896,7 +896,8 @@ void MarkdownEditor::setParseOptions(const ParseOptions &options)
                && (!l.metaNotes || (l.open == r.open && l.close == r.close))
                && l.excludeBetween == r.excludeBetween
                && (!l.excludeBetween || (l.excludeOpen == r.excludeOpen && l.excludeClose == r.excludeClose))
-               && l.ignoreFormatting == r.ignoreFormatting && l.taskStates == r.taskStates;
+               && l.ignoreFormatting == r.ignoreFormatting && l.taskStates == r.taskStates
+               && l.codeStyler == r.codeStyler && (!l.codeStyler || l.highlightKinds == r.highlightKinds);
     };
     if (same(options, d->m_parseOptions))
         return; // every settings pass asks

@@ -1365,7 +1365,8 @@ bool MarkdownEditor::hasCodeHeader(const BlockView &view) const
     // Code kind: the paragraph above a fence holds its opening line, and
     // codeFenceOf finds that fence from there too.
     const CodeFenceSpan *fence = view.span.kind == BlockSpan::Kind::Code ? codeFenceOf(view) : nullptr;
-    return fence && !fence->language.trimmed().isEmpty();
+    // `ignore` (Code Styler) asks for the plain panel it would have without a plugin.
+    return fence && !fence->ignored && !fence->language.trimmed().isEmpty();
 }
 
 QString MarkdownEditor::codeTitleOf(const BlockView &view) const
@@ -1374,8 +1375,13 @@ QString MarkdownEditor::codeTitleOf(const BlockView &view) const
         return {}; // the tabs are the titles
     // Read from the source, not view.options, which is null while the caret
     // is in the block and would rename it under the cursor.
-    if (const CodeOptions *options = codeOptionsFor(view); options && !options->title.isEmpty())
-        return options->title;
+    if (const CodeOptions *options = codeOptionsFor(view)) {
+        if (!options->title.isEmpty())
+            return options->title;
+        // `fold:"Collapsed"` names the block only while it is folded away.
+        if (!options->foldLabel.isEmpty() && view.folded)
+            return options->foldLabel;
+    }
     const CodeFenceSpan *fence = codeFenceOf(view);
     return fence && !fence->language.trimmed().isEmpty() ? styleOfFence(*fence).name : QString();
 }

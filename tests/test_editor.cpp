@@ -3723,6 +3723,72 @@ TEST(CodeOptionsTest, LineNumbersIndentTheListingAndLeaveTheBytesAlone)
     EXPECT_EQ(editor->displayText().trimmed(), QStringLiteral("x = 1\ny = 2"));
 }
 
+// --- Code Styler: the fence line's parameters, drawn ---------------------------
+
+namespace {
+
+/// An editor with the advanced-code-blocks plugin on (or off), and the
+/// highlight names the settings default to.
+std::unique_ptr<MarkdownEditor> stylerEditorWith(const QString &text, bool on = true)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    ParseOptions options;
+    options.codeStyler = on;
+    options.highlightKinds = {QStringLiteral("info"), QStringLiteral("warn"), QStringLiteral("error")};
+    editor->setParseOptions(options);
+    editor->setNoteText(text);
+    return editor;
+}
+
+} // namespace
+
+TEST(CodeStylerEditorTest, ATitleOnTheFenceLineNamesTheBlockAndIsHidden)
+{
+    const QString note = QStringLiteral("```cpp title:\"main file.cpp\" ln:5\nint a;\n```\n");
+    auto editor = stylerEditorWith(note);
+    const qsizetype inside = note.indexOf(QStringLiteral("int a;"));
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("main file.cpp"));
+    EXPECT_EQ(editor->noteText(), note);
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("title")));
+}
+
+TEST(CodeStylerEditorTest, FoldStartsClosedAndNamesItselfWhileFolded)
+{
+    const QString note = QStringLiteral("```cpp fold:\"Collapsed listing\"\nint a;\nint b;\n```\n");
+    auto editor = stylerEditorWith(note);
+    const qsizetype inside = note.indexOf(QStringLiteral("int a;"));
+    ASSERT_TRUE(editor->isFoldedAt(inside));
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("Collapsed listing"));
+    const qreal folded = editor->documentHeight();
+    editor->toggleFoldAt(inside);
+    EXPECT_FALSE(editor->isFoldedAt(inside));
+    EXPECT_GT(editor->documentHeight(), folded);
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("cpp")) << "open, it is the language's name again";
+}
+
+TEST(CodeStylerEditorTest, IgnoreDropsTheHeaderStrip)
+{
+    auto plain = stylerEditorWith(QStringLiteral("```cpp\nint a;\n```\n"));
+    auto ignored = stylerEditorWith(QStringLiteral("```cpp ignore title:x\nint a;\n```\n"));
+    EXPECT_GT(plain->documentHeight() - ignored->documentHeight(), 10);
+}
+
+TEST(CodeStylerEditorTest, OffTheFenceLineIsOnlyALanguageAndAttributes)
+{
+    const QString note = QStringLiteral("```cpp title:x fold\nint a;\n```\n");
+    auto editor = stylerEditorWith(note, false);
+    const qsizetype inside = note.indexOf(QStringLiteral("int a;"));
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("cpp"));
+    EXPECT_FALSE(editor->isFoldedAt(inside));
+    // Turning it on later (the core plugin's switch) re-reads the note.
+    ParseOptions on = editor->parseOptions();
+    on.codeStyler = true;
+    editor->setParseOptions(on);
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("x"));
+    EXPECT_TRUE(editor->isFoldedAt(inside));
+}
+
 // Stage 13: setNotebookRunner is a fake here, the same way setQueryRunner and
 // setBaseRunner are faked elsewhere in this file - libs/editor must not link
 // libs/ext/notebook, so a real kernel is only ever exercised by

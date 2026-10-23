@@ -8,6 +8,7 @@
 #include <QHash>
 
 #include <algorithm>
+#include <optional>
 
 #include <md4qt/doc.h>
 #include <md4qt/entities_map.h>
@@ -44,6 +45,9 @@ struct Walk {
     QStringList itemOutlines;
     /// ParseOptions::taskStates.
     bool anyTaskState = false;
+    /// ParseOptions::codeStyler and ::highlightKinds (lower case).
+    bool codeStyler = false;
+    QStringList highlightKinds;
 
     /// A reference-style link or embed - `[text][ref]`, the collapsed
     /// `[ref][]`, or the shortcut `[ref]` - whose label was recorded during
@@ -328,6 +332,28 @@ void nestQuotedLists(const QString &text, const SourceMap &map, QList<ListItemSp
 
 } // namespace
 
+QList<std::pair<QString, QString>> parseHighlightKinds(const QString &spec)
+{
+    static const QStringList reserved = {
+        QStringLiteral("title"), QStringLiteral("ln"),     QStringLiteral("hl"),   QStringLiteral("fold"),
+        QStringLiteral("unwrap"), QStringLiteral("wrap"),  QStringLiteral("ignore"), QStringLiteral("ref"),
+        QStringLiteral("reference"), QStringLiteral("tab"), QStringLiteral("name"), QStringLiteral("icon"),
+        QStringLiteral("color")};
+    QList<std::pair<QString, QString>> kinds;
+    for (const QString &entry : spec.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const qsizetype equals = entry.indexOf(QLatin1Char('='));
+        const QString name = (equals < 0 ? entry : entry.left(equals)).trimmed().toLower();
+        const QString colour = equals < 0 ? QString() : entry.mid(equals + 1).trimmed();
+        bool word = !name.isEmpty();
+        for (const QChar c : name)
+            word = word && (c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char('-'));
+        const bool taken = std::any_of(kinds.cbegin(), kinds.cend(), [&](const auto &kind) { return kind.first == name; });
+        if (word && !reserved.contains(name) && !taken)
+            kinds.append({name, colour});
+    }
+    return kinds;
+}
+
 QList<Range> tableRowCells(const QString &text, qsizetype lineStart, qsizetype lineEnd)
 {
     // A pipe after an odd run of backslashes is text, not a cell border.
@@ -431,18 +457,89 @@ QString commentPrefix(const QString &language)
     return prefixes.value(language.trimmed().toLower(), QStringLiteral("#"));
 }
 
+/// The items of a highlight list, `1,3-4,foo,'bar baz',/#\w{6}/`: split at the
+/// commas that are not inside quotes or a regular expression.
+QList<QStringView> highlightItems(QStringView value)
+{
+    QList<QStringView> items;
+    qsizetype from = 0;
+    qsizetype i = 0;
+    while (i <= value.size()) {
+        if (i == value.size() || value.at(i) == QLatin1Char(',')) {
+            const QStringView item = value.mid(from, i - from).trimmed();
+            if (!item.isEmpty())
+                items.append(item);
+            from = ++i;
+            continue;
+        }
+        const QChar c = value.at(i);
+        // A quote or slash opens a run only at the start of an item; inside a
+        // bare word it is just a character (`don't`, `a/b`).
+        if (value.mid(from, i - from).trimmed().isEmpty()
+            && (c == QLatin1Char('"') || c == QLatin1Char('\'') || c == QLatin1Char('/'))) {
+            qsizetype close = i + 1;
+            while (close < value.size() && value.at(close) != c)
+                close += value.at(close) == QLatin1Char('\\') && c == QLatin1Char('/') ? 2 : 1;
+            if (close < value.size()) {
+                i = close + 1;
+                continue;
+            }
+        }
+        ++i;
+    }
+    return items;
+}
+
 /// `highlight: 2,5-7`, expanded and clamped to the block so a typo cannot ask
-/// for a million lines.
-QList<int> parseHighlight(const QString &value, int lineCount)
+/// for a million lines. `listing` is the code the numbers count, for the text
+/// and `/regex/` items Code Styler adds (`extended`): a line holding the word,
+/// or matching the pattern (PCRE, not JavaScript's flavour).
+QList<int> parseHighlight(const QString &value, QStringView listing, int lineCount, bool extended)
 {
     QList<int> lines;
-    const auto parts = QStringView(value).split(QLatin1Char(','), Qt::SkipEmptyParts);
-    for (const QStringView part : parts) {
+    QList<QStringView> rows;
+    const auto rowsOf = [&] {
+        if (rows.isEmpty())
+            rows = listing.split(QLatin1Char('\n'));
+        return rows;
+    };
+    for (const QStringView part : highlightItems(value)) {
+        const bool quoted = part.size() >= 2
+                            && (part.front() == QLatin1Char('"') || part.front() == QLatin1Char('\''))
+                            && part.back() == part.front();
+        const bool regex = part.size() >= 2 && part.front() == QLatin1Char('/') && part.back() == QLatin1Char('/');
+        bool numeric = !quoted && !regex;
+        for (const QChar c : part)
+            numeric = numeric && (c.isDigit() || c == QLatin1Char('-') || c == QLatin1Char(' '));
+        if (extended && !numeric) {
+            std::optional<QRegularExpression> pattern;
+            QString word;
+            if (regex) {
+                pattern = QRegularExpression(part.mid(1, part.size() - 2).toString());
+                if (!pattern->isValid())
+                    continue;
+            } else {
+                word = (quoted ? part.mid(1, part.size() - 2) : part).toString();
+                if (word.isEmpty())
+                    continue;
+            }
+            const auto &all = rowsOf();
+            for (int line = 1; line <= lineCount && line <= all.size(); ++line) {
+                const QStringView row = all.at(line - 1);
+                if (pattern ? row.toString().contains(*pattern) : row.contains(word))
+                    lines.append(line);
+            }
+            continue;
+        }
         const qsizetype dash = part.indexOf(QLatin1Char('-'), 1);
         const int from = (dash < 0 ? part : part.left(dash)).trimmed().toInt();
         const int to = dash < 0 ? from : part.mid(dash + 1).trimmed().toInt();
         for (int line = qMax(1, from); line <= qMin(to, lineCount); ++line)
             lines.append(line);
+    }
+    if (extended) {
+        std::sort(lines.begin(), lines.end());
+        lines.erase(std::unique(lines.begin(), lines.end()), lines.end());
     }
     return lines;
 }
@@ -541,13 +638,90 @@ bool splitCodeOption(QStringView line, const QString &prefix, QStringView &key, 
     return true;
 }
 
-/// The `#|` lines at the head of a fenced block. `content` is the code between
-/// the fences, which is where md4qt puts a Code item's own range.
-CodeOptions parseCodeOptions(const QString &text, const Range &content, const QString &language)
+/// The text of a Code Styler `ref:`/`reference:` link as the header shows it:
+/// the alias, else the note's name, of a wikilink, or the text of a markdown link.
+QString referenceTitle(const QString &link)
+{
+    const QString trimmed = link.trimmed();
+    if (trimmed.startsWith(QLatin1String("[["))) {
+        QString inner = trimmed.mid(2);
+        inner.chop(inner.endsWith(QLatin1String("]]")) ? 2 : 0);
+        const qsizetype bar = inner.indexOf(QLatin1Char('|'));
+        if (bar >= 0)
+            return inner.mid(bar + 1).trimmed();
+        const qsizetype hash = inner.indexOf(QLatin1Char('#'));
+        return (hash > 0 ? inner.left(hash) : inner).trimmed();
+    }
+    if (trimmed.startsWith(QLatin1Char('[')) && trimmed.contains(QLatin1String("](")))
+        return trimmed.mid(1, trimmed.indexOf(QLatin1String("](")) - 1);
+    return trimmed;
+}
+
+/// The parameters Code Styler reads off the fence line, put where the `#|`
+/// lines put theirs. `rawHighlight` and `rawKinds` stay unresolved until the
+/// listing's length is known, as for `#| highlight:`.
+void applyFenceParameters(CodeOptions &options, const QMap<QString, QString> &parameters,
+                          const QStringList &kinds, QString &rawHighlight,
+                          QMap<QString, QString> &rawKinds)
+{
+    bool any = false;
+    for (auto it = parameters.cbegin(); it != parameters.cend(); ++it) {
+        const QString &key = it.key();
+        const QString &value = it.value();
+        if (key == QLatin1String("title")) {
+            options.title = value;
+        } else if (key == QLatin1String("ln")) {
+            bool ok = false;
+            const int from = value.toInt(&ok);
+            if (ok) {
+                options.lineNumbers = true;
+                options.firstLine = qMax(0, from);
+            } else {
+                options.lineNumbers = value.isEmpty() || !isFalse(value);
+            }
+        } else if (key == QLatin1String("hl")) {
+            rawHighlight = value;
+        } else if (key == QLatin1String("fold")) {
+            options.fold = !isFalse(value);
+            if (!value.isEmpty() && !isTrue(value) && !isFalse(value))
+                options.foldLabel = value;
+        } else if (key == QLatin1String("unwrap")) {
+            // Code Styler's `unwrap` is a scroll, which is already the default
+            // here; `unwrap:inactive` would wrap while the mouse is held down.
+            options.wrap = isFalse(value);
+        } else if (key == QLatin1String("wrap")) {
+            options.wrap = value.isEmpty() || !isFalse(value);
+        } else if (kinds.contains(key)) {
+            rawKinds.insert(key, value);
+        } else {
+            continue; // `ignore`, `tab`, `name`, ...: not options
+        }
+        any = true;
+    }
+    if (options.title.isEmpty() && !parameters.contains(QStringLiteral("title"))) {
+        const QString link = parameters.value(QStringLiteral("ref"), parameters.value(QStringLiteral("reference")));
+        if (!link.isEmpty()) {
+            options.title = referenceTitle(link);
+            any = any || !options.title.isEmpty();
+        }
+    }
+    options.fromFence = any;
+}
+
+/// The `#|` lines at the head of a fenced block, over whatever Code Styler
+/// parameters the fence line carried (`fence`, null when that is not looked
+/// for). `content` is the code between the fences, which is where md4qt puts a
+/// Code item's own range.
+CodeOptions parseCodeOptions(const QString &text, const Range &content, const QString &language,
+                             const QMap<QString, QString> *fence = nullptr,
+                             const QStringList &kinds = {})
 {
     CodeOptions options;
     options.block = content;
     QString rawHighlight;
+    QMap<QString, QString> rawKinds;
+    if (fence)
+        applyFenceParameters(options, *fence, kinds, rawHighlight, rawKinds);
 
     const QString prefix = commentPrefix(language);
 
@@ -567,12 +741,15 @@ CodeOptions parseCodeOptions(const QString &text, const Range &content, const QS
 
     // `highlight` counts the lines the reader sees, so it is clamped against
     // the listing with the option lines already taken off the front.
-    if (!rawHighlight.isEmpty()) {
+    if (!rawHighlight.isEmpty() || !rawKinds.isEmpty()) {
         const QStringView listing = QStringView(text).mid(cursor, content.end - cursor);
         const int visibleLines = listing.isEmpty()
             ? 0
             : 1 + int(listing.count(QLatin1Char('\n'))) - (listing.endsWith(QLatin1Char('\n')) ? 1 : 0);
-        options.highlight = parseHighlight(rawHighlight, visibleLines);
+        const QStringView rows = listing.endsWith(QLatin1Char('\n')) ? listing.chopped(1) : listing;
+        options.highlight = parseHighlight(rawHighlight, rows, visibleLines, fence != nullptr);
+        for (auto it = rawKinds.cbegin(); it != rawKinds.cend(); ++it)
+            options.highlights.insert(it.key(), parseHighlight(it.value(), rows, visibleLines, true));
     }
     return options;
 }
@@ -681,6 +858,116 @@ QMap<QString, QString> parseFenceAttributes(const QString &spec)
     for (const FenceToken &token : tokeniseFenceSpec(spec))
         attributes.insert(token.name.toLower(), token.hasValue ? token.value : QString());
     return attributes;
+}
+
+/// Everything on a fence's info string after the language, read the way Code
+/// Styler reads it (the advanced-code-blocks plugin): `key`, `key:value` and
+/// `key=value` in any order, values with spaces in quotes, and for the
+/// highlight keys (`hl` and the configured names) a comma list whose items
+/// may be quoted text or a `/regex/` - `hl:1,3-4,foo,'bar baz',/#\w{6}/`. A
+/// tail that is only line numbers in braces, `{1,3-4}`, is `hl`. Values of the
+/// highlight keys stay as written (quotes decide what an item is); every
+/// other value loses its quotes. The superset of what the `=`-only tokeniser
+/// above accepts, so `name="Setup script" icon=U+E73C` reads the same.
+QMap<QString, QString> parseCodeParameters(const QString &spec, const QStringList &kinds)
+{
+    QMap<QString, QString> out;
+    QStringView s = QStringView(spec).trimmed();
+    if (s.startsWith(QLatin1Char('{')) && s.endsWith(QLatin1Char('}'))) {
+        s = s.mid(1, s.size() - 2).trimmed();
+        bool numbers = !s.isEmpty();
+        for (const QChar c : s)
+            numbers = numbers && (c.isDigit() || c == QLatin1Char(',') || c == QLatin1Char('-') || c == QLatin1Char(' '));
+        if (numbers) {
+            out.insert(QStringLiteral("hl"), s.toString());
+            return out;
+        }
+    }
+
+    const qsizetype n = s.size();
+    const auto word = [](QChar c) { return c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char('-'); };
+    qsizetype i = 0;
+    while (i < n) {
+        const QChar c = s.at(i);
+        if (c.isSpace() || c == QLatin1Char(',')) {
+            ++i;
+            continue;
+        }
+        const qsizetype keyStart = i;
+        if (c == QLatin1Char('.') || c == QLatin1Char('#'))
+            ++i;
+        const qsizetype wordStart = i;
+        while (i < n && word(s.at(i)))
+            ++i;
+        if (i == wordStart) {
+            ++i; // a stray quote or brace
+            continue;
+        }
+        // `syntax.keyword=...`: a dotted name only when a value follows it.
+        qsizetype dotted = i;
+        while (dotted + 1 < n && s.at(dotted) == QLatin1Char('.') && word(s.at(dotted + 1))) {
+            ++dotted;
+            while (dotted < n && word(s.at(dotted)))
+                ++dotted;
+        }
+        qsizetype after = dotted;
+        while (after < n && (s.at(after) == QLatin1Char(' ') || s.at(after) == QLatin1Char('\t')))
+            ++after;
+        const bool equals = after < n && s.at(after) == QLatin1Char('=');
+        const bool colon = dotted < n && s.at(dotted) == QLatin1Char(':');
+        if (dotted > i && (equals || colon))
+            i = dotted;
+        const QString key = s.mid(keyStart, i - keyStart).toString().toLower();
+
+        QString value;
+        const bool hasValue = (equals && dotted == i) || colon;
+        if (hasValue) {
+            qsizetype at = equals && dotted == i ? after + 1 : i + 1;
+            if (equals && dotted == i) {
+                while (at < n && (s.at(at) == QLatin1Char(' ') || s.at(at) == QLatin1Char('\t')))
+                    ++at;
+            }
+            const bool list = key == QLatin1String("hl") || kinds.contains(key);
+            const auto item = [&](qsizetype from) {
+                if (from < n && (s.at(from) == QLatin1Char('"') || s.at(from) == QLatin1Char('\''))) {
+                    const qsizetype close = s.indexOf(s.at(from), from + 1);
+                    if (close >= 0)
+                        return close + 1;
+                } else if (list && from < n && s.at(from) == QLatin1Char('/')) {
+                    qsizetype close = from + 1;
+                    while (close < n && s.at(close) != QLatin1Char('/'))
+                        close += s.at(close) == QLatin1Char('\\') ? 2 : 1;
+                    if (close < n)
+                        return close + 1;
+                }
+                while (from < n && !s.at(from).isSpace() && !(list && s.at(from) == QLatin1Char(',')))
+                    ++from;
+                return from;
+            };
+            qsizetype end = item(at);
+            while (list && end + 1 < n && s.at(end) == QLatin1Char(',') && !s.at(end + 1).isSpace())
+                end = item(end + 1);
+            value = s.mid(at, end - at).toString();
+            if (!list)
+                value = unquote(value);
+            i = end;
+        }
+        out.insert(key, value);
+    }
+    return out;
+}
+
+/// Whether a fence's first word is one of Code Styler's parameters rather
+/// than a language: `fold`, `title:x`, `ln=3`, `hl:2`, `wrap`, `ignore`, or a
+/// configured highlight name with a value.
+bool looksLikeFenceParameter(const QString &word, const QStringList &kinds)
+{
+    const qsizetype separator = word.indexOf(QRegularExpression(QStringLiteral("[:=]")));
+    const QString key = (separator < 0 ? word : word.left(separator)).toLower();
+    static const QStringList own = {QStringLiteral("title"), QStringLiteral("ln"), QStringLiteral("hl"),
+                                    QStringLiteral("fold"), QStringLiteral("unwrap"), QStringLiteral("wrap"),
+                                    QStringLiteral("ignore"), QStringLiteral("ref"), QStringLiteral("reference")};
+    return own.contains(key) || (separator > 0 && kinds.contains(key));
 }
 
 /// Where a fence's attributes sit on its opening line. md4qt positions only
@@ -1492,8 +1779,34 @@ void walkItem(MD::Item *item, Walk &walk)
         if (item->type() == MD::ItemType::Code || item->type() == MD::ItemType::Math) {
             auto *code = static_cast<MD::Code *>(item);
             const bool block = !code->isInline();
+            // Code Styler's parameters, if they are being looked for: read
+            // before anything below uses the language, because ``` fold
+            // title:x has none (a space after the fence says so) and the
+            // first word is then a parameter, not CommonMark's language.
+            QString language = code->syntax();
+            Range attributesRange;
+            QMap<QString, QString> parameters;
+            bool styled = false;
+            const bool fenced = item->type() == MD::ItemType::Code && code->isFensedCode() && block && walk.text;
+            if (fenced) {
+                const Range languageRange = rangeOf(code->syntaxPos(), map);
+                attributesRange = fenceAttributesRange(languageRange, map);
+                if (walk.codeStyler) {
+                    const Range startDelim = rangeOf(code->startDelim(), map);
+                    if (languageRange.isValid() && startDelim.isValid() && languageRange.start > startDelim.end
+                        && looksLikeFenceParameter(language, walk.highlightKinds)) {
+                        language.clear();
+                        attributesRange = {languageRange.start, map.lineEnd(map.lineAt(languageRange.start))};
+                    }
+                    if (attributesRange.isValid()) {
+                        parameters = parseCodeParameters(
+                            walk.text->mid(attributesRange.start, attributesRange.length()), walk.highlightKinds);
+                        styled = !parameters.contains(QStringLiteral("ignore"));
+                    }
+                }
+            }
             walk.decorations.styles.append(
-                {block ? StyleSpan::Kind::CodeBlock : kind, range, 0, code->syntax(), {}, {}});
+                {block ? StyleSpan::Kind::CodeBlock : kind, range, 0, language, {}, {}});
             if (item->type() == MD::ItemType::Math && code->isInline()) {
                 // Inline maths hides everything from just after the opening
                 // "$" through the closing one, so live preview keeps that one
@@ -1522,13 +1835,19 @@ void walkItem(MD::Item *item, Walk &walk)
                 walk.decorations.blocks.append({BlockSpan::Kind::Code, range, 0});
             if (block && walk.text) {
                 // `#|` options belong to the file but not to the listing.
-                const CodeOptions options = parseCodeOptions(*walk.text, range, code->syntax());
-                if (options.range.isValid()) {
-                    walk.decorations.syntax.append(options.range);
+                static const QMap<QString, QString> none;
+                const CodeOptions options = parseCodeOptions(*walk.text, range, language,
+                                                             walk.codeStyler && fenced && styled ? &parameters
+                                                             : walk.codeStyler && fenced        ? &none
+                                                                                                : nullptr,
+                                                             walk.highlightKinds);
+                if (options.range.isValid() || options.fromFence) {
+                    if (options.range.isValid())
+                        walk.decorations.syntax.append(options.range);
                     walk.decorations.codeOptions.append(options);
                 }
             }
-            if (item->type() == MD::ItemType::Code && code->isFensedCode() && block && walk.text) {
+            if (fenced) {
                 // Tab groups are resolved once every fence in the file is
                 // known, so only the per-fence half of the work happens here;
                 // see groupCodeFenceTabs, called at the end of parseAll.
@@ -1541,12 +1860,18 @@ void walkItem(MD::Item *item, Walk &walk)
                 // delimiter to measure instead.
                 fence.block = {startDelim.isValid() ? startDelim.start : range.start,
                                endDelim.isValid() ? endDelim.end : range.end};
-                fence.language = code->syntax();
+                fence.language = language;
                 fence.depth = walk.depth;
-                fence.attributesRange = fenceAttributesRange(rangeOf(code->syntaxPos(), map), map);
+                fence.attributesRange = attributesRange;
                 if (fence.attributesRange.isValid()) {
-                    fence.attributes = parseFenceAttributes(
-                        walk.text->mid(fence.attributesRange.start, fence.attributesRange.length()));
+                    // With Code Styler on, the parameters are the attributes: the same
+                    // tokens as before for `key=value`, and `title:"a b"` no longer
+                    // leaves a stray `tab` behind to start a tab group.
+                    fence.attributes = walk.codeStyler
+                                           ? parameters
+                                           : parseFenceAttributes(walk.text->mid(
+                                                 fence.attributesRange.start, fence.attributesRange.length()));
+                    fence.ignored = walk.codeStyler && !styled;
                     walk.decorations.syntax.append(fence.attributesRange);
                 }
                 walk.decorations.codeFences.append(fence);
@@ -1888,6 +2213,15 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
     walk.map = &map;
     walk.text = &text;
     walk.anyTaskState = options.taskStates;
+    // `code-styler-ignore: true` in the frontmatter turns the plugin off for this note.
+    walk.codeStyler = options.codeStyler
+                      && std::none_of(metadata.properties.cbegin(), metadata.properties.cend(),
+                                      [](const Property &property) {
+                                          return property.key == QLatin1String("code-styler-ignore")
+                                                 && !property.values.isEmpty() && isTrue(property.values.first());
+                                      });
+    for (const QString &kind : options.highlightKinds)
+        walk.highlightKinds.append(kind.toLower());
     if (document) {
         for (const auto &item : document->items())
             walkItem(item.data(), walk);
