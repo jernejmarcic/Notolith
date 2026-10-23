@@ -21,6 +21,7 @@
 #include "MarkdownEditor_p.h"
 
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
@@ -211,6 +212,11 @@ Excerpt excerptOf(const QString &text, const QString &start, const QString &end)
 
 } // namespace
 
+void MarkdownEditor::setVaultRootProvider(std::function<QString()> provider)
+{
+    d->m_vaultRoot = std::move(provider);
+}
+
 void MarkdownEditor::setRemoteReferences(bool on)
 {
     if (d->m_remoteReferences == on)
@@ -280,6 +286,7 @@ bool MarkdownEditor::layoutReference(BlockView &view)
     QString target; // what a click on the header opens
     QString key;    // what the read is cached under
     QString name;
+    bool outside = false;
     if (remote) {
         target = reference->target;
         key = rawURL(target);
@@ -294,13 +301,22 @@ bool MarkdownEditor::layoutReference(BlockView &view)
         }
         if (written.startsWith(QLatin1String("@/")))
             written.remove(0, 2);
-        const QFileInfo direct(written);
-        // ponytail: a file that is not there when the note is laid out is not
-        // watched for - it shows when the block is next laid out (an edit, a
-        // reopen); the index watches notes, not attachments.
-        key = direct.isAbsolute() && direct.isFile() ? written : (m_resolver ? m_resolver(written) : QString());
-        target = key;
-        name = key.isEmpty() ? written : QFileInfo(key).fileName();
+        // Only the vault's own files, symlinks resolved: a note from elsewhere
+        // must not make `file: /etc/passwd` or `../../.ssh/id_ed25519` show up.
+        // The window's resolver finds a file wherever it is (beside the note,
+        // under the root, outside both); the check is here.
+        const QString found = m_resolver ? m_resolver(written) : QString();
+        const QString real = found.isEmpty() ? QString() : QFileInfo(found).canonicalFilePath();
+        const QString provided = d->m_vaultRoot ? d->m_vaultRoot() : QString();
+        const QString root = provided.isEmpty() ? QString() : QDir(provided).canonicalPath();
+        if (!real.isEmpty() && (root.isEmpty() || !real.startsWith(root + QLatin1Char('/')))) {
+            outside = true;
+            name = written; // not the file's own name: it is not the reader's to learn
+        } else {
+            key = real;
+            target = key;
+            name = real.isEmpty() ? written : QFileInfo(real).fileName();
+        }
     }
 
     // The panel every outcome but the listing itself uses: a header that opens
@@ -313,6 +329,8 @@ bool MarkdownEditor::layoutReference(BlockView &view)
         return true;
     };
 
+    if (outside)
+        return panel(name, tr("Outside the vault: %1").arg(reference->target), false);
     if (key.isEmpty() || (!remote && !QFileInfo(key).isFile()))
         return panel(name, tr("Could not find %1").arg(reference->target), false);
     if (remote && !d->m_remoteReferences)

@@ -375,9 +375,13 @@ title.
 ```
 
 The block's own lines are `key: value`. The target is `file`, `path`,
-`filePath` or `link`: a path beside the note (`./x.py`), from the vault's root
-(`@/x.py`) or absolute, a wikilink (`[[x.py]]`), a bare name the vault knows,
-or an `http(s)` URL. `language` (or `lang`) overrides the language the file's
+`filePath` or `link`: a path beside the note (`./x.py`) or from the vault's
+root (`@/x.py`), a wikilink (`[[x.py]]`), a bare name the vault knows, or an
+`http(s)` URL. **Only files inside the vault are shown, or opened by a click**:
+the path is resolved with symlinks followed, and anything that ends up outside
+(an absolute path, `../`, `@/../`, a symlink pointing out) is refused with
+"Outside the vault" in the block and is never read. Copy a file in to show it.
+`language` (or `lang`) overrides the language the file's
 suffix names. `start` and `end` are a line number, a word (the first line
 containing it) or a `/regex/` (the first line it matches, PCRE); `end` is
 searched from `start` on and may be `+10`, ten lines past `start` (so lines

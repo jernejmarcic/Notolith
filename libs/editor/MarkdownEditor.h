@@ -299,6 +299,7 @@ public:
         bool taskStates = false; ///< ParseOptions::taskStates: the note's own checkbox states
         bool codeStyler = false; ///< ParseOptions::codeStyler: Code Styler's syntax, drawn as on screen
         QString codeHighlights;  ///< the `editor.codeHighlights` setting: the names `info:2` may use
+        QString vaultRoot; ///< what a ```reference block may read from: empty shows no local file
         bool remoteReferences = false; ///< the `editor.remoteReferences` setting: a ```reference may fetch a URL
         /// Paper is white, so the light theme unless a caller passes its own
         /// (the person's formatting colours on top of it).
@@ -807,6 +808,10 @@ public:
     /// read, with the path; one that throws is what an out-of-memory looks
     /// like. Null clears it.
     static void setCSVreadHookForTests(void (*hook)(const QString &));
+    /// The vault's root, asked each time a ```reference block is laid out: a
+    /// reference may show and open only files inside it (symlinks resolved).
+    /// Without one, no local file is shown.
+    void setVaultRootProvider(std::function<QString()> provider);
     /// Whether a ```reference block may fetch an `http(s)` URL. Off by
     /// default: nothing touches the network unasked (ReferenceBlock.cpp).
     void setRemoteReferences(bool on);

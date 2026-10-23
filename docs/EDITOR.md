@@ -735,6 +735,10 @@ the same flag (`PdfOptions::codeStyler`, `Options::parse`). A note with
   (`Parser.cpp`, `parseReference`) and `ReferenceBlock.cpp`. `layoutReference`
   runs in `layoutBlock` after `layoutPluginCode` and makes a text panel
   (`layoutTextPanel`), marked `isPluginBlock` so no listing chrome is drawn;
+  A file is shown only if its canonical path is under the canonical vault
+  root (`setVaultRootProvider`; the window and the PDF export pass it), else
+  the block says "Outside the vault" and nothing is read; the window checks
+  again before it opens a header click's target.
   `BlockView::referenceTarget` is what a header click emits as
   `referenceActivated`, which the window opens. It follows CSVembed.cpp's
   pattern: one cache entry per resolved path or URL, a read on a worker

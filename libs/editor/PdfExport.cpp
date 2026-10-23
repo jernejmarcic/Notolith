@@ -57,6 +57,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     editor.setTheme(options.theme.value_or(Theme::builtin(Theme::Mode::Light)));
     editor.setReadableLineLength(false);
     editor.setLinkResolver(std::move(resolver));
+    editor.setVaultRootProvider([root = options.vaultRoot] { return root; });
     editor.setMode(Mode::Reading);
     ParseOptions parse = editor.parseOptions(); // the editor's own defaults, but for the states
     parse.taskStates = options.taskStates;

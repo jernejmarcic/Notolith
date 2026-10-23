@@ -12341,9 +12341,54 @@ std::unique_ptr<MarkdownEditor> referenceEditorWith(const QString &fenceLines, c
     const QString note = QStringLiteral("```reference\n%1```\n\nafter\n").arg(fenceLines);
     auto editor = stylerEditorWith(note, on);
     editor->setLinkResolver([path](const QString &) { return path; });
+    // the file's folder is the vault: confinement has its own tests below
+    const QString root = QFileInfo(path).absolutePath();
+    editor->setVaultRootProvider([root] { return root; });
     editor->setCursorOffset(note.size() - 2);
     return editor;
 }
+
+/// A vault in a temp folder next to a file outside it, and the resolver the
+/// window has (the note's folder, then the vault root: whatever exists).
+struct ReferenceVault {
+    QTemporaryDir outer;
+    QString vault;
+    QString secret;
+
+    ReferenceVault()
+    {
+        vault = outer.filePath(QStringLiteral("vault"));
+        EXPECT_TRUE(QDir().mkpath(vault));
+        secret = outer.filePath(QStringLiteral("secret.txt"));
+        QFile(secret).open(QIODevice::WriteOnly);
+        write(secret, "TOPSECRET\n");
+        write(vault + QStringLiteral("/inside.txt"), "visible\n");
+        EXPECT_TRUE(QFile::link(QStringLiteral("../secret.txt"), vault + QStringLiteral("/escape.txt")));
+        EXPECT_TRUE(QFile::link(QStringLiteral("inside.txt"), vault + QStringLiteral("/alias.txt")));
+    }
+    static void write(const QString &path, const QByteArray &bytes)
+    {
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+    }
+    std::unique_ptr<MarkdownEditor> editorOn(const QString &fenceLines) const
+    {
+        const QString note = QStringLiteral("```reference\n%1```\n\nafter\n").arg(fenceLines);
+        auto editor = stylerEditorWith(note, true);
+        const QString root = vault;
+        editor->setLinkResolver([root](const QString &target) -> QString {
+            const QString beside = root + QLatin1Char('/') + target;
+            if (QFileInfo::exists(beside))
+                return beside;
+            const QString fromRoot = QDir(root).absoluteFilePath(target);
+            return QFileInfo::exists(fromRoot) ? fromRoot : QString();
+        });
+        editor->setVaultRootProvider([root] { return root; });
+        editor->setCursorOffset(note.size() - 2);
+        return editor;
+    }
+};
 
 /// The panel's text with its line separators as the newlines they stand for.
 QString listingOf(MarkdownEditor &editor)
@@ -12599,4 +12644,50 @@ TEST(ReferenceBlockTest, ARemoteFailureIsShownAndNotRetriedPerLayout)
     (void)editor->grab();
     QTest::qWait(100);
     EXPECT_EQ(server.requests, 1);
+}
+
+// --- reference blocks stay inside the vault ------------------------------------------
+
+TEST(ReferenceBlockTest, AFileInsideTheVaultIsShownWhicheverWayItIsWritten)
+{
+    ReferenceVault vault;
+    for (const char *written : {"inside.txt", "./inside.txt", "@/inside.txt", "alias.txt"}) {
+        SCOPED_TRACE(written);
+        auto editor = vault.editorOn(QStringLiteral("file: %1\n").arg(QLatin1String(written)));
+        EXPECT_TRUE(waitForListing(*editor, QStringLiteral("visible")));
+    }
+}
+
+TEST(ReferenceBlockTest, AFileOutsideTheVaultIsRefusedWithANotice)
+{
+    ReferenceVault vault;
+    const QStringList written = {vault.secret,                    // absolute
+                                 QStringLiteral("../secret.txt"), // out by ..
+                                 QStringLiteral("@/../secret.txt"),
+                                 QStringLiteral("./../secret.txt"),
+                                 QStringLiteral("escape.txt"),   // a symlink in the vault pointing out
+                                 QStringLiteral("[[../secret.txt]]")};
+    for (const QString &target : written) {
+        SCOPED_TRACE(target.toStdString());
+        auto editor = vault.editorOn(QStringLiteral("file: %1\n").arg(target));
+        EXPECT_TRUE(waitForListing(*editor, QStringLiteral("Outside the vault")));
+        EXPECT_FALSE(listingOf(*editor).contains(QStringLiteral("TOPSECRET")));
+        EXPECT_EQ(editor->referenceCacheSize(), 0) << "never read";
+
+        // and the title opens nothing
+        (void)editor->grab();
+        QSignalSpy spy(editor.get(), &MarkdownEditor::referenceActivated);
+        const QRectF panel = editor->blockPanelAt(kInsideReference);
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                          QPoint(editor->textColumn() + 10, int(panel.top()) + 20));
+        EXPECT_EQ(spy.count(), 0);
+    }
+}
+
+TEST(ReferenceBlockTest, WithoutAVaultNoLocalFileIsShown)
+{
+    ReferenceVault vault;
+    auto editor = vault.editorOn(QStringLiteral("file: inside.txt\n"));
+    editor->setVaultRootProvider(nullptr);
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("Outside the vault")));
 }

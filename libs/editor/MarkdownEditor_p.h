@@ -951,6 +951,7 @@ struct MarkdownEditor::Private {
     QString m_referenceDelivering; ///< the key whose read has just landed: its failure is shown, not retried, by the relayout
     QNetworkAccessManager *m_referenceNet = nullptr; ///< made with the first fetch
     bool m_remoteReferences = false;
+    std::function<QString()> m_vaultRoot;
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()

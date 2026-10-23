@@ -1077,6 +1077,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             updateModeButton();
     });
     editor->setLinkResolver(m_resolveLink);
+    editor->setVaultRootProvider([this] { return m_vault.isValid() ? m_vault.root() : QString(); });
     connect(editor, &MarkdownEditor::linkActivated, this, &MainWindow::followLink);
     connect(editor, &MarkdownEditor::linkHovered, this,
             [this](const QString &target, const QPoint &globalPos) {
@@ -1337,6 +1338,9 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         if (target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
             || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
             QDesktopServices::openUrl(QUrl(target));
+        else if (!m_vault.isValid()
+                 || !QFileInfo(target).canonicalFilePath().startsWith(QDir(m_vault.root()).canonicalPath() + QLatin1Char('/')))
+            return; // the editor only offers vault files; this is the second lock
         else if (Vault::isNote(target))
             openNote(target);
         else
@@ -4541,6 +4545,7 @@ void MainWindow::exportPdf()
     pdf.codeStyler = featureOn("advanced-code-blocks");
     pdf.codeHighlights = m_settings.text(QStringLiteral("editor.codeHighlights"));
     pdf.remoteReferences = m_settings.boolean(QStringLiteral("editor.remoteReferences"));
+    pdf.vaultRoot = m_vault.isValid() ? m_vault.root() : QString();
     pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
     applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
