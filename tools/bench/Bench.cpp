@@ -1438,6 +1438,23 @@ Timing benchParseLanding(int kilobytes, int runs)
     return reduce(QStringLiteral("Parse landing to painted"), QStringLiteral("%1 kB note").arg(kilobytes), samples);
 }
 
+/// The first layout of a table in a process, on a note with nothing else:
+/// whatever the table path sets up once (static tables, plugin loading) is in
+/// this one sample, which is why it has a phase of its own.
+Timing benchFirstTable()
+{
+    const QString note = QStringLiteral("# Table\n\n| name | qty | note |\n| --- | --- | --- |\n"
+                                        "| apple | 3 | red |\n| pear | 5 | green |\n| plum | 7 | purple |\n");
+    MarkdownEditor editor;
+    editor.resize(900, 600);
+    QElapsedTimer clock;
+    clock.start();
+    editor.setNoteText(note);
+    (void)paintedFrame(&editor);
+    return reduce(QStringLiteral("First table layout, painted"), QStringLiteral("3x3 table, nothing else"),
+                  {double(clock.nsecsElapsed()) / 1e6});
+}
+
 /// Source mode, a pipe table in the middle of a long note: a character typed
 /// into a cell and Tab straight after it, inside the parse debounce, so the
 /// table is realigned before the reparse of the typing has run.
@@ -2518,7 +2535,8 @@ int main(int argc, char *argv[])
     // One phase alone, so `perf record` sees only it.
     QCommandLineOption phaseOption(QStringLiteral("phase"),
                                    QStringLiteral("Run one phase: memory, start, open, keystroke, save, "
-                                                  "relayout, scroll, pdfview, ink, inkmodules (ink rows 5 and 7 alone) or inkcarry (reported costs of the ink tools, never in a full run)."),
+                                                  "relayout, scroll, pdfview, ink, inkmodules (ink rows 5 and 7 alone), inkcarry (reported costs of the ink tools) or tablefirst "
+                                                  "(the first table layout of a process, so never in a full run)."),
                                    QStringLiteral("name"));
     parser.addOption(phaseOption);
     QCommandLineOption paddOption(QStringLiteral("padd"),
@@ -2542,7 +2560,7 @@ int main(int argc, char *argv[])
     // A mistyped phase used to run nothing and print an empty table that looked like success.
     static const QStringList knownPhases = {QStringLiteral("memory"),    QStringLiteral("start"),  QStringLiteral("open"),
                                             QStringLiteral("keystroke"), QStringLiteral("save"),   QStringLiteral("relayout"),
-                                            QStringLiteral("scroll"),    QStringLiteral("pdfview"),   QStringLiteral("ink"),      QStringLiteral("inkcarry"),
+                                            QStringLiteral("scroll"),    QStringLiteral("pdfview"),   QStringLiteral("ink"),      QStringLiteral("inkcarry"), QStringLiteral("tablefirst"),
                                             QStringLiteral("inkmodules")};
     if (!phase.isEmpty() && !knownPhases.contains(phase)) {
         std::fprintf(stderr, "unknown phase \"%s\"; the phases are: %s\n", qPrintable(phase),
@@ -2743,6 +2761,9 @@ int main(int argc, char *argv[])
         for (int kb : {200, 1024})
             timings << benchSave(workDir.path(), kb, 15);
     }
+
+    if (phase == QLatin1String("tablefirst"))
+        timings << benchFirstTable();
 
     // Relayouts that are not keystrokes: a resize, a fold, an embed's late
     // answer, and a source-mode table realigned inside the parse debounce.
