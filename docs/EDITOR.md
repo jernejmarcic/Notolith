@@ -1327,7 +1327,7 @@ comparison (and a clipboard read on Ctrl+V).
 Tests: `TableHandlesTest.*` (`tests/test_tables.cpp`), `HtmlTableHandlesTest.*`
 (`tests/test_html_edit.cpp`).
 
-## Diagrams: Mermaid, PlantUML, TikZ, Graphviz
+## Diagrams: Mermaid, PlantUML, TikZ, Graphviz (and Markmap)
 
 A ```` ```mermaid ```` fence is drawn as its diagram when the caret is outside
 it, and shown as source when the caret is inside, like any rendered block.
@@ -1462,6 +1462,83 @@ failure under `NOTEAPPC_REQUIRE_TOOLS=1`): a diagram per kind, the disk cache,
 the missing-tool hint, PlantUML's refused includes, TikZ's reads and shell,
 the colours, the sandbox itself, PDF export and the window's settings; publish
 is in `tests/test_publish.cpp`.
+
+### Markmap: mind maps without a web view
+
+A ```` ```markmap ```` fence is drawn as a mind map the way the Obsidian markmap
+plugin and markmap.js.org draw one: the root at the left, the fence's headings
+and list items as a tree to its right, a curved branch in its own colour for each
+subtree, a short underline under each node's text and, at its end, a circle
+that folds the branch. Core plugin `markmap` (Settings > Core plugins, "Mind
+maps", on by default); off, the fence is a plain code block and no code of it
+runs. There is no JavaScript and no tool: the tree, the layout and the SVG are
+`libs/render/Markmap.{h,cpp}`, drawn in-process, so reading view, publish and
+PDF export show the same map.
+
+- **Tree**: headings nest by level (a skipped level still hangs from the
+  nearest lower one) and a list under a heading hangs from it, nested by
+  indentation (tabs count 4); any other line of text is a child of the heading
+  above it and a continuation line joins its list item. One top-level node is
+  the root; several (or none) get an empty root, as in markmap.js. The node text's
+  inline Markdown comes from the application's own parser (`Parser::parseAll`
+  over the fence body, one flag per character): **bold**, *italic*, `code` (on a
+  tint), links and wikilinks (their text, in the accent colour, underlined),
+  ~~strikethrough~~; the markers are gone.
+- **Options**: the fence's frontmatter, under a `markmap:` key or at the top
+  level: `colorFreezeLevel` (nodes deeper than this share their ancestor's
+  colour; default 0, every node its own), `initialExpandLevel` (nodes at this
+  depth or deeper start folded, the root being 0; default -1, all open) and
+  `maxWidth` (pixels before a node's text wraps; default 0, never). `<!--
+  markmap: fold -->` after a node, or on a line of its own right after it,
+  folds it to begin with; `<!-- markmap: foldAll -->` folds it and everything
+  below it that has children.
+- **Folding by a click**: a press on a node's circle (live preview and reading
+  view) folds or unfolds the branch and draws the map again. It is view state
+  only: it is not written to the note, it is kept per text of the fence by the
+  window's renderer (so a split of the same note agrees) and it is gone when
+  the text changes. `MarkdownEditor::CodeBlockResult::hotspots` and `activate`
+  carry it: any code-block renderer can mark places on its picture that answer
+  a click, with the picture they lead to, instead of the caret; a click
+  anywhere else on a map puts the caret in the block, as for any diagram.
+- **Layout**: a tidy tree, text measured with `QFontMetricsF` in the theme's text
+  and monospace fonts: each node's subtree is as tall as its children stacked
+  (6 px apart) or the node itself, and a node is centred on its first and last
+  child. A map wider than the editor is scaled down to fit it (and its hotspots
+  with it); there is no zoom or pan.
+- **Colours** are the theme's tokens: branch colours `--color-blue`,
+  `--color-orange`, `--color-green`, `--color-red`, `--color-purple`,
+  `--color-cyan`, `--color-pink`, `--color-yellow` in that order (as first used
+  over the whole tree, so folding does not recolour), text `--text-normal`,
+  links and the root `--interactive-accent`, the card `--background-primary`.
+  The theme (with its fonts) is part of the cache key, so a dark and a light
+  theme each have their own SVG.
+- **Off the UI thread, and capped**: parse, layout and raster run on a pool
+  thread of their own (one thread; a thousand nodes parse and draw in about 40
+  ms here); the UI thread reads the theme and queues the job. At most 1000 nodes
+  are drawn (`kMarkmapMaxNodes`); a bigger outline is cut there and the map
+  says "Showing the first 1000 of N nodes" under itself.
+- **Cache, publish, PDF export**: the map as the source asks for it (not as a
+  click folded it) is kept as `$XDG_CACHE_HOME/noteAppC/markmap/<source hash>-<config
+  hash>.svg` (`DiagramKind::Markmap`, MermaidCache.h, pruned like the others);
+  publish and PDF export read that, as for the other diagram kinds: a map the
+  editor never drew stays a listing, and an off plugin makes none. An encrypted note
+  is not drawn (the cache is on disk).
+- **Show as mind map**: the command "Mind maps: Show as mind map" (`markmap:show-note`,
+  off with the plugin) opens the note's headings in a window of their own: the note's
+  name as the root and each heading under it by level (`markmapOutlineOf`), in a
+  reading-view editor, so the circles fold there too.
+
+Not covered, against markmap.js: zoom and pan, the toolbar, dragging nodes,
+clicking a link (the map is a picture), maths, images, tables and code blocks inside
+nodes, checkbox boxes (a task's `[x]` is text), the `<!-- markmap: ... -->`
+commands other than `fold` and `foldAll`, other frontmatter options (`color`,
+`duration`, `zoom`, ...), and the Obsidian plugin's per-note frontmatter
+(only the fence's own is read).
+
+Tests: `MarkmapTreeTest.*`, `MarkmapDrawTest.*`, `MarkmapBlockTest.*`,
+`MarkmapWindowTest.*` (`tests/test_markmap.cpp`) and
+`PublishTest.AMindMapTheEditorMadeIsPublishedAsAnImage`; the demo vault's
+`Diagrams/Markmap.md`.
 
 ## File cards
 
