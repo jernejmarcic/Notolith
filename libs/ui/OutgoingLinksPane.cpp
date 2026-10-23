@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QLabel>
+#include <QShowEvent>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -89,7 +90,7 @@ void OutgoingLinksPane::setIndex(Index *index)
 {
     m_index = index;
     if (m_index)
-        connect(m_index, &Index::changed, this, &OutgoingLinksPane::refresh);
+        connect(m_index, &Index::changed, this, &OutgoingLinksPane::onIndexChanged);
     refresh();
 }
 
@@ -108,8 +109,25 @@ void OutgoingLinksPane::setNote(const QString &path)
     refresh();
 }
 
+void OutgoingLinksPane::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    if (m_stale)
+        refresh();
+}
+
+void OutgoingLinksPane::onIndexChanged()
+{
+    // Every save lands here; a pane nobody can see waits until it is shown.
+    if (isVisible())
+        refresh();
+    else
+        m_stale = true;
+}
+
 void OutgoingLinksPane::refresh()
 {
+    m_stale = false;
     m_list->clear();
     if (!m_index || !m_index->isOpen() || m_path.isEmpty()) {
         m_header->setText(tr("Outgoing links"));

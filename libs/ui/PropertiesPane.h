@@ -4,6 +4,7 @@
 #include <QWidget>
 
 class QLabel;
+class QShowEvent;
 class QToolButton;
 class QTreeWidget;
 
@@ -28,8 +29,13 @@ public:
 signals:
     void propertyActivated(const QString &key);
 
+protected:
+    void showEvent(QShowEvent *event) override;
+
 private:
+    void onIndexChanged();
     Index *m_index = nullptr;
+    bool m_stale = false; ///< Index::changed arrived while hidden
     bool m_sortByName = false;
     QColor m_mutedColor;
     QColor m_iconColor;

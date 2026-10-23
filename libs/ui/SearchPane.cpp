@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QLabel>
+#include <QShowEvent>
 #include <QLineEdit>
 #include <QtConcurrent>
 #include <QTimer>
@@ -115,10 +116,21 @@ void SearchPane::setIndex(Index *index)
     m_index = index;
     if (m_index) {
         connect(m_index, &Index::changed, this, [this] {
-            if (!m_queryEdit->text().trimmed().isEmpty())
+            if (m_queryEdit->text().trimmed().isEmpty())
+                return;
+            if (isVisible())
                 runSearch(m_queryEdit->text());
+            else
+                m_stale = true; // a hidden pane re-runs it when shown, not on every save
         });
     }
+}
+
+void SearchPane::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    if (m_stale)
+        runSearch(m_queryEdit->text());
 }
 
 void SearchPane::setTheme(const Theme &theme)
@@ -177,6 +189,7 @@ void SearchPane::onDebounceElapsed()
 
 void SearchPane::runSearch(const QString &text)
 {
+    m_stale = false;
     if (!m_index || !m_index->isOpen()) {
         showResults({});
         return;

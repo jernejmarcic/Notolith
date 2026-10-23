@@ -4,6 +4,7 @@
 #include <QWidget>
 
 class QLabel;
+class QShowEvent;
 class QTreeWidget;
 
 namespace noteAppC {
@@ -29,8 +30,13 @@ public:
 signals:
     void noteActivated(const QString &relativePath);
 
+protected:
+    void showEvent(QShowEvent *event) override;
+
 private:
+    void onIndexChanged();
     Index *m_index = nullptr;
+    bool m_stale = false; ///< Index::changed arrived while hidden
     QString m_path;
     QColor m_faintColor;
     QLabel *m_header = nullptr;

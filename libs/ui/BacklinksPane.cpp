@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QHeaderView>
 #include <QLabel>
+#include <QShowEvent>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -90,7 +91,7 @@ void BacklinksPane::setIndex(Index *index)
 {
     m_index = index;
     if (m_index)
-        connect(m_index, &Index::changed, this, &BacklinksPane::refresh);
+        connect(m_index, &Index::changed, this, &BacklinksPane::onIndexChanged);
     refresh();
 }
 
@@ -109,8 +110,25 @@ void BacklinksPane::setNote(const QString &path)
     refresh();
 }
 
+void BacklinksPane::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    if (m_stale)
+        refresh();
+}
+
+void BacklinksPane::onIndexChanged()
+{
+    // Every save lands here; a pane nobody can see waits until it is shown.
+    if (isVisible())
+        refresh();
+    else
+        m_stale = true;
+}
+
 void BacklinksPane::refresh()
 {
+    m_stale = false;
     m_list->clear();
     if (!m_index || !m_index->isOpen() || m_path.isEmpty()) {
         m_header->setText(tr("Linked mentions"));

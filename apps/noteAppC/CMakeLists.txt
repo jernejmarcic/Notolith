@@ -6,6 +6,22 @@ target_link_libraries(noteAppC PRIVATE noteAppC_ui)
 # from this executable at load time, so they must be exported.
 if(NOT ANDROID)
     set_target_properties(noteAppC PROPERTIES ENABLE_EXPORTS ON)
+    # No RUNPATH at all. Qt's default install RPATH ($ORIGIN:$ORIGIN/../lib) is
+    # for a layout this binary does not ship in: it needs nothing from beside
+    # itself (the modules are dlopen'ed by path), yet CMake pads the build
+    # RUNPATH to its length with empty entries, and an empty entry means "the
+    # current directory" (a planted libz.so.1 would load), and the installed
+    # copy probes ../lib, a directory a user can write, before the system's.
+    # Every direct dependency cost a failed open per entry. AppImage packaging
+    # (linuxdeploy) writes its own RPATH.
+    set_target_properties(noteAppC PROPERTIES INSTALL_RPATH "" BUILD_WITH_INSTALL_RPATH ON)
+endif()
+# libzmq (the notebook's, behind gnutls and p11-kit) is loaded on first use:
+# zmq_lazy.cpp defines the functions the notebook calls and, ahead of libzmq on
+# the link line, leaves it out of NEEDED under --as-needed (root CMakeLists.txt).
+if(TARGET noteAppC_notebook AND TARGET PkgConfig::ZMQ AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(noteAppC PRIVATE zmq_lazy.cpp)
+    target_link_libraries(noteAppC PRIVATE PkgConfig::ZMQ)
 endif()
 # The product name; the target keeps the code name every build script uses.
 if(NOT ANDROID)
