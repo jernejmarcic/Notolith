@@ -50,6 +50,9 @@ constexpr int kCSVmaxColumns = 64;
 constexpr int kCSVmaxCellChars = 1000;
 constexpr qint64 kCSVmaxBytes = 32 * 1024 * 1024;
 
+// setCSVreadHookForTests', set before a read starts and cleared after it ends.
+std::function<void(const QString &)> gCSVreadHook;
+
 // A cell is drawn through a QTextLayout, where a line break inside one is
 // U+2028 rather than a newline.
 QString forDisplay(QString cell)
@@ -69,6 +72,8 @@ MarkdownEditor::CSVcacheEntry MarkdownEditor::readCSVfile(const QString &path, b
 {
     CSVcacheEntry out;
     out.pending = false;
+    if (gCSVreadHook)
+        gCSVreadHook(path);
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
         out.table.error = unreadable;
@@ -114,6 +119,12 @@ MarkdownEditor::CSVcacheEntry MarkdownEditor::readCSVfile(const QString &path, b
 
 bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
 {
+    // Even a file that is not there is watched for, and its block is found by
+    // path: it may be written later, or deleted and restored.
+    view.CSVpath = path;
+    d->m_CSVpaths.insert(path);
+    watchCSV(path);
+
     const QFileInfo info(path);
     if (!info.isFile())
         return false;
@@ -130,15 +141,20 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
         it->size = size;
         it->pending = true;
         it->generation = ++d->m_CSVgeneration;
-        watchCSV(path);
+        if (!it->latest)
+            it->latest = std::make_shared<std::atomic<quint64>>();
+        it->latest->store(it->generation);
         const quint64 generation = it->generation;
+        const auto latest = it->latest;
         const bool tsv = info.suffix().compare(QLatin1String("tsv"), Qt::CaseInsensitive) == 0;
         const QString unreadable = tr("Could not read %1").arg(info.fileName());
         const QString moreColumns = tr("+%1 columns");
         // Through m_lifeline, as every other embed's worker: the editor may
         // be gone by the time the file has been parsed.
-        (void)QtConcurrent::run([this, lifeline = d->m_lifeline, path, tsv, unreadable, moreColumns, generation,
-                                 mtime, size] {
+        (void)QtConcurrent::run([this, lifeline = d->m_lifeline, latest, path, tsv, unreadable, moreColumns,
+                                 generation, mtime, size] {
+            if (latest->load() != generation)
+                return; // a newer read of this file has been asked for: not worth the parse
             CSVcacheEntry result;
             try {
                 result = readCSVfile(path, tsv, unreadable, moreColumns);
@@ -164,7 +180,6 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     view.baseViewName.clear();
     view.baseYAML.clear();
     view.baseRequestedView.clear();
-    view.CSVpath = path;
     hideWholeBlockText(view);
 
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
@@ -194,7 +209,9 @@ void MarkdownEditor::deliverCSV(const QString &path, quint64 generation, CSVcach
     auto it = d->m_CSVcache.find(path);
     if (it == d->m_CSVcache.end() || it->generation != generation)
         return; // the file changed again, and a newer read is on its way
+    const auto latest = it->latest;
     *it = std::move(result);
+    it->latest = latest;
     relayCSVblocks(path);
 }
 
@@ -218,35 +235,63 @@ void MarkdownEditor::relayCSVblocks(const QString &path)
 
 void MarkdownEditor::watchCSV(const QString &path)
 {
+    // ponytail: one watcher per editor, a watch per path asked about and no
+    // eviction before the feature goes off - fine for a note's handful of
+    // tables, wasteful for an editor that walks hundreds of notes (hover
+    // previews). Upgrade: one watcher shared by every editor, and an LRU of
+    // 32 entries that unwatches what it drops.
     if (!d->m_CSVwatcher) {
         d->m_CSVwatcher = new QFileSystemWatcher(this);
         d->m_CSVrefresh = new QTimer(this);
         d->m_CSVrefresh->setSingleShot(true);
         d->m_CSVrefresh->setInterval(200); // a write in place can come in more than one go
-        connect(d->m_CSVwatcher, &QFileSystemWatcher::fileChanged, d->m_CSVrefresh, qOverload<>(&QTimer::start));
-        connect(d->m_CSVwatcher, &QFileSystemWatcher::directoryChanged, d->m_CSVrefresh,
-                qOverload<>(&QTimer::start));
+        connect(d->m_CSVwatcher, &QFileSystemWatcher::fileChanged, this, &MarkdownEditor::CSVfileEvent);
+        connect(d->m_CSVwatcher, &QFileSystemWatcher::directoryChanged, this, &MarkdownEditor::CSVfileEvent);
         connect(d->m_CSVrefresh, &QTimer::timeout, this, &MarkdownEditor::refreshCSVfiles);
     }
     // The file, and its folder: a program that saves by writing a new file
     // and renaming it over the old one makes inotify drop the file's watch.
-    const QString folder = QFileInfo(path).absolutePath();
-    if (!d->m_CSVwatcher->directories().contains(folder))
+    // A folder that is gone is watched through its nearest ancestor that is
+    // not, which sees it come back (and is replaced by the folder itself the
+    // next time this runs).
+    QString folder = QFileInfo(path).absolutePath();
+    while (!QFileInfo(folder).isDir()) {
+        const QString parent = QFileInfo(folder).absolutePath();
+        if (parent == folder)
+            break;
+        folder = parent;
+    }
+    if (QFileInfo(folder).isDir() && !d->m_CSVwatcher->directories().contains(folder))
         d->m_CSVwatcher->addPath(folder);
-    if (!d->m_CSVwatcher->files().contains(path))
+    if (QFileInfo::exists(path) && !d->m_CSVwatcher->files().contains(path))
         d->m_CSVwatcher->addPath(path);
+}
+
+void MarkdownEditor::CSVfileEvent()
+{
+    if (!d->m_CSVpendingSince.isValid())
+        d->m_CSVpendingSince.start();
+    // A debounce, but a file appended to every 100 ms must still show up:
+    // past a second of waiting the running timer is left to fire.
+    if (!d->m_CSVrefresh->isActive() || d->m_CSVpendingSince.elapsed() < 1000)
+        d->m_CSVrefresh->start();
 }
 
 void MarkdownEditor::refreshCSVfiles()
 {
-    for (auto it = d->m_CSVcache.begin(); it != d->m_CSVcache.end(); ++it) {
-        const QString &path = it.key();
-        if (QFileInfo::exists(path) && !d->m_CSVwatcher->files().contains(path))
-            d->m_CSVwatcher->addPath(path); // put back what a rename-over-save took away
+    d->m_CSVpendingSince.invalidate();
+    for (const QString &path : std::as_const(d->m_CSVpaths)) {
+        watchCSV(path); // put back what a rename-over-save, or a folder that went and came back, took away
         const QFileInfo info(path);
+        const auto cached = d->m_CSVcache.constFind(path);
         // A read already under way for this very mtime and size has its own
-        // relayout coming; only a file that has moved on from the entry needs one.
-        if (info.lastModified().toMSecsSinceEpoch() != it->mtime || info.size() != it->size)
+        // relayout coming; a file with no entry that is there now (or one
+        // that went) and one that has moved on from its entry need one.
+        const bool changed = cached == d->m_CSVcache.constEnd()
+                                 ? info.isFile()
+                                 : info.lastModified().toMSecsSinceEpoch() != cached->mtime
+                                       || info.size() != cached->size;
+        if (changed)
             relayCSVblocks(path);
     }
 }
@@ -254,10 +299,16 @@ void MarkdownEditor::refreshCSVfiles()
 void MarkdownEditor::dropCSVcache()
 {
     d->m_CSVcache.clear();
+    d->m_CSVpaths.clear();
     if (d->m_CSVwatcher) {
         d->m_CSVwatcher->removePaths(d->m_CSVwatcher->files());
         d->m_CSVwatcher->removePaths(d->m_CSVwatcher->directories());
     }
+}
+
+void MarkdownEditor::setCSVreadHookForTests(std::function<void(const QString &)> hook)
+{
+    gCSVreadHook = std::move(hook);
 }
 
 int MarkdownEditor::CSVcacheSize() const

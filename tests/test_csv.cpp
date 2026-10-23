@@ -306,3 +306,20 @@ TEST(CSVdecodeTest, ACentralEuropeanLocaleReadsWindows1250)
     EXPECT_EQ(decodeCSV("\xE8" "e\x9A" "e\x9E", QLocale::Slovenian),
               QString(QChar(0x010D)) + QLatin1Char('e') + QChar(0x0161) + QLatin1Char('e') + QChar(0x017E));
 }
+
+TEST(CSVparserTest, TheSnifferSkipsAnEscapedQuoteInsideAQuotedField)
+{
+    // the ';'s are inside the quoted field, past a "" escape; outside it there is one ','
+    EXPECT_EQ(CSVdelimiter(QStringLiteral("\"a\"\"b;c;d;e\",x\n")), QLatin1Char(','));
+}
+
+TEST(CSVdecodeTest, AUTF8FileWithAStrayBadByteStaysUTF8)
+{
+    const QString text = decodeCSV("\xC4\x8D" "aj;1\xFF\n", QLocale::Slovenian);
+    EXPECT_EQ(text, QString(QChar(0x010D)) + QStringLiteral("aj;1") + QChar(0xFFFD) + QLatin1Char('\n'));
+}
+
+TEST(CSVdecodeTest, ACodePageFileWithNoMultibyteSequenceIsStillACodePageFile)
+{
+    EXPECT_EQ(decodeCSV("Jo\xE9 \xE9;1\n", QLocale::English), QString::fromUtf8("Jo\xC3\xA9 \xC3\xA9;1\n"));
+}

@@ -8274,6 +8274,91 @@ TEST(CSVEmbedTest, ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds)
     }
 }
 
+TEST(CSVEmbedTest, AFileThatAppearsLaterIsPickedUp)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("later.csv"));
+    auto editor = CSVeditorWith(path, false);
+    QTest::qWait(50);
+    ASSERT_TRUE(editor->displayText().contains(QStringLiteral("later.csv"))) << "not there yet: the link";
+
+    writeTextFile(dir, QStringLiteral("later.csv"), "a,b\n1,2\n"); // a script writes it; nothing else happens
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+}
+
+TEST(CSVEmbedTest, ADeletedFileComesBackWhenItIsRestoredLater)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("gone.csv"), "a,b\n1,2\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+
+    ASSERT_TRUE(QFile::remove(path));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("gone.csv")); }, 5000))
+        << "deleted: the link again";
+    QTest::qWait(600); // well past the debounce: restored from the trash, say
+
+    writeTextFile(dir, QStringLiteral("gone.csv"), "a,b\n1,2\n3,4\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+}
+
+TEST(CSVEmbedTest, ADeletedAndRecreatedFolderComesBack)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("sub/deeper")));
+    const QString path = writeTextFile(dir, QStringLiteral("sub/deeper/x.csv"), "a,b\n1,2\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+
+    ASSERT_TRUE(QDir(dir.filePath(QStringLiteral("sub"))).removeRecursively());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("x.csv")); }, 5000));
+    QTest::qWait(600);
+
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("sub/deeper")));
+    QTest::qWait(300);
+    writeTextFile(dir, QStringLiteral("sub/deeper/x.csv"), "a,b\n5,6\n");
+    const QStringList wanted{QStringLiteral("5"), QStringLiteral("6")};
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] { return editor->tableCellTextsAt(0).size() == 2 && editor->tableCellTextsAt(0).at(1) == wanted; }, 5000));
+}
+
+TEST(CSVEmbedTest, AFileAppendedToContinuouslyStillRefreshes)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("log.csv"), "t,v\n0,0\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_EQ(editor->tableCellTextsAt(0).size(), 2);
+
+    // a write every 100 ms, never a 200 ms pause: a plain debounce would wait for the end
+    bool refreshedWhileWriting = false;
+    for (int i = 1; i <= 30 && !refreshedWhileWriting; ++i) {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::Append));
+        file.write(QByteArray::number(i) + "," + QByteArray::number(i) + "\n");
+        file.close();
+        QTest::qWait(100);
+        refreshedWhileWriting = editor->tableCellTextsAt(0).size() > 2;
+    }
+    EXPECT_TRUE(refreshedWhileWriting) << "within 3 s of constant writing";
+}
+
+TEST(CSVEmbedTest, AWorkerThatThrowsLeavesANoticeNotLoadingForever)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("boom.csv"), "a,b\n1,2\n");
+    MarkdownEditor::setCSVreadHookForTests([](const QString &) { throw std::bad_alloc(); });
+    auto editor = CSVeditorWith(path, false);
+    const bool noticed = QTest::qWaitFor(
+        [&] { return editor->panelTextAt(0).contains(QStringLiteral("Could not read boom.csv")); }, 5000);
+    MarkdownEditor::setCSVreadHookForTests(nullptr);
+    EXPECT_TRUE(noticed) << editor->panelTextAt(0).toStdString();
+}
+
 TEST(CSVEmbedTest, TurningTheFeatureOffForgetsTheFiles)
 {
     QTemporaryDir dir;

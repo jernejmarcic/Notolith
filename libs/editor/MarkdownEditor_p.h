@@ -21,9 +21,11 @@
 #include <QPair>
 #include <QPixmap>
 #include <QPointer>
+#include <QSet>
 #include <QSizeF>
 #include <QTextLayout>
 #include <QTimer>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <span>
@@ -716,6 +718,9 @@ struct MarkdownEditor::CSVcacheEntry {
     BaseTableData table; ///< `error` set when the file could not be read
     qsizetype hiddenRows = 0; ///< records past the cap, counted but not kept
     int hiddenColumns = 0;    ///< cells of the widest record past the column cap
+    /// The newest generation started for this path, readable from a worker:
+    /// one that finds itself superseded stops before reading the file.
+    std::shared_ptr<std::atomic<quint64>> latest;
     bool partial = false;     ///< the file was larger than was read
 };
 
@@ -891,6 +896,8 @@ struct MarkdownEditor::Private {
     quint64 m_CSVgeneration = 0;
     QFileSystemWatcher *m_CSVwatcher = nullptr; ///< made with the first CSV embed
     QTimer *m_CSVrefresh = nullptr;
+    QElapsedTimer m_CSVpendingSince; ///< the first unanswered change event, for the debounce's longest wait
+    QSet<QString> m_CSVpaths; ///< every path a block asked about, there or not: what refreshCSVfiles looks at
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()

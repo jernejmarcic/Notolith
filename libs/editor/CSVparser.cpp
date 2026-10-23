@@ -130,13 +130,39 @@ CSVtable parseCSV(QStringView text, QChar delimiter, qsizetype maxRows, int maxC
     return table;
 }
 
+namespace {
+
+// Whether the bytes hold at least one well-formed UTF-8 multibyte sequence:
+// a file that does was written as UTF-8, whatever else is wrong with it.
+bool hasUTF8multibyte(const QByteArray &bytes)
+{
+    const auto *data = reinterpret_cast<const uchar *>(bytes.constData());
+    for (qsizetype i = 0; i < bytes.size(); ++i) {
+        if (data[i] < 0xC2 || data[i] > 0xF4)
+            continue;
+        const int continuation = data[i] < 0xE0 ? 1 : data[i] < 0xF0 ? 2 : 3;
+        if (i + continuation >= bytes.size())
+            continue;
+        bool valid = true;
+        for (int k = 1; k <= continuation && valid; ++k)
+            valid = (data[i + k] & 0xC0) == 0x80;
+        if (valid)
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
 QString decodeCSV(const QByteArray &bytes, QLocale::Language language)
 {
     if (const auto encoding = QStringConverter::encodingForData(bytes))
         return QStringDecoder(*encoding).decode(bytes);
     QStringDecoder utf8(QStringConverter::Utf8);
     const QString text = utf8.decode(bytes);
-    if (!utf8.hasError())
+    // A stray bad byte in a UTF-8 file is one replacement character, not a
+    // reason to read the whole file as a code page.
+    if (!utf8.hasError() || hasUTF8multibyte(bytes))
         return text;
 
     static const QList<QLocale::Language> centralEuropean = {

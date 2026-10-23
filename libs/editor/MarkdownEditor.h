@@ -773,6 +773,10 @@ public:
     QList<QStringList> tableCellTextsAt(qsizetype offset) const;
     /// For the tests: how many CSV files this editor holds a read of.
     int CSVcacheSize() const;
+    /// For the tests: called on the worker thread at the top of every CSV
+    /// read, with the path; one that throws is what an out-of-memory looks
+    /// like. Null clears it.
+    static void setCSVreadHookForTests(std::function<void(const QString &)> hook);
     /// For the tests: that cell's caption - the file name of a card, the
     /// `alt` of an `<img>` whose file is missing. Empty for an image.
     QString embedCellLabelAt(qsizetype offset, int cell) const;
@@ -1819,6 +1823,9 @@ private:
     /// UI thread and must not touch the editor.
     static CSVcacheEntry readCSVfile(const QString &path, bool tsv, const QString &unreadable,
                                      const QString &moreColumns);
+    /// A change event from the watcher: starts the debounce (200 ms from the
+    /// last event, but never more than a second from the first).
+    void CSVfileEvent();
     /// Relays out the blocks showing `path`, so layoutCSVembed looks at it again.
     void relayCSVblocks(const QString &path);
     /// Watches `path` and its folder (made on the first call), so a change on
