@@ -31,6 +31,11 @@ add_test(NAME editor COMMAND test_editor)
 # under ctest -j4 when neighbours took the CPU: alone, they hold every time.
 set_tests_properties(editor PROPERTIES RUN_SERIAL TRUE)
 
+# The CSV/TSV parser behind `![[data.csv]]`: pure text in, rows out.
+add_executable(test_csv test_csv.cpp)
+target_link_libraries(test_csv PRIVATE noteAppC_editor GTest::gtest GTest::gtest_main)
+add_test(NAME csv COMMAND test_csv)
+
 # HTML edited where it is drawn (HtmlEdit.cpp); the minimal build runs it too.
 add_executable(test_html_edit test_html_edit.cpp)
 target_link_libraries(test_html_edit PRIVATE noteAppC_editor Qt6::Test GTest::gtest)

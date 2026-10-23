@@ -34,8 +34,8 @@ were skipped in favour of this one.
 
 ## Text embeds (not from this table)
 
-`demo/Embeds/assets/script.py`, `main.cpp`, `data.json`, `maths-only.tex`
-and `full-document.tex` are written for this vault - they are source text,
+`demo/Embeds/assets/script.py`, `main.cpp`, `data.json`, `maths-only.tex`,
+`full-document.tex`, `planets.csv`, `prices-eu.csv` and `moons.tsv` are written for this vault - they are source text,
 not an image/PDF/audio/video, so nothing was copied for them.
 
 ## Generated for this vault

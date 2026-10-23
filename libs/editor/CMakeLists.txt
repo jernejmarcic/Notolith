@@ -9,6 +9,9 @@ add_library(noteAppC_editor STATIC
     DisplayMap.h
     EditingCommands.cpp
     CodeBlockHook.cpp
+    CSVEmbed.cpp
+    CSVparser.cpp
+    CSVparser.h
     FileEmbedBlock.cpp
     GIFplayer.cpp
     FindBar.cpp

@@ -2998,6 +2998,8 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
 
     if (Vault::isNote(path))
         return layoutNoteEmbed(view, *embed, path);
+    if (d->m_features.CSVembeds && (suffix == QLatin1String("csv") || suffix == QLatin1String("tsv")))
+        return layoutCSVembed(view, path);
     // A .base is the ```base block's own table, fed the file: its rows open
     // their notes, as they do in Obsidian's embedded base.
     if (d->m_features.baseBlocks && suffix == QLatin1String("base")) {
@@ -3934,6 +3936,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.baseViewName.clear();
     view.baseYAML.clear();
     view.baseRows.clear();
+    view.csvPath.clear();
     view.embedCells.clear();
     view.isFileCard = false;
     view.isHtml = false;

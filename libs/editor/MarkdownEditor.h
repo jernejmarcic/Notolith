@@ -511,6 +511,7 @@ public:
         bool mediaEmbeds = true; ///< `![[x.mp3]]` / `![[x.mp4]]`
         bool maths = true;       ///< `$...$` and `$$...$$`
         bool fileEmbeds = true;  ///< notes, `.canvas`, and any other file's card
+        bool CSVembeds = true;   ///< `![[x.csv]]` / `![[x.tsv]]` as a table
         bool notebooks = true;   ///< running a code block through a Jupyter kernel
         bool operator==(const Features &) const = default;
     };
@@ -765,6 +766,11 @@ public:
     int GIFframeOf(const QString &path) const;
     /// For the tests: how many table cells the last paintTable drew.
     int tableCellsPainted() const;
+    /// For the tests: the text of every cell of the table laid out in the
+    /// block containing `offset`, row by row, header first - a Markdown
+    /// table, a base, a CSV embed. Empty when that block is not a table (or
+    /// is one still loading).
+    QList<QStringList> tableCellTextsAt(qsizetype offset) const;
     /// For the tests: that cell's caption - the file name of a card, the
     /// `alt` of an `<img>` whose file is missing. Empty for an image.
     QString embedCellLabelAt(qsizetype offset, int cell) const;
@@ -1135,6 +1141,7 @@ private:
     struct NotebookCacheEntry;
     struct QueryCacheEntry;
     struct BaseCacheEntry;
+struct CSVcacheEntry;
     struct InlineHTMLpair;
     struct HTMLtableEdit;
     struct CellRef;
@@ -1789,6 +1796,26 @@ private:
     /// `#fragment` names (Decorations' EmbedSpan::subpath, "#" stripped);
     /// empty for a fence, which has no fragment to name one.
     bool layoutBaseTable(BlockView &view, const QString &yamlText, const QString &viewName = QString());
+    /// A one-line message in place of a table: loading, empty, an error.
+    bool layoutPlainMessage(BlockView &view, const QString &text, const QColor &colour);
+    /// `data` as a grid laid out like a Markdown table: at most `maxRows` data
+    /// rows after the header; a non-empty `moreText` is the footer line under
+    /// a table cut short. A base's table and a CSV embed's both come here.
+    bool layoutDataTable(BlockView &view, const BaseTableData &data, int maxRows, const QString &moreText);
+    // --- CSV and TSV embeds, implemented in CSVEmbed.cpp ---------------------
+
+    /// `![[data.csv]]` / `![[data.tsv]]`: the file as a table, through
+    /// layoutDataTable. Read and parsed on a worker thread, "Loading..." until
+    /// deliverCSV lands; false for a file that is not there, which falls back
+    /// to what layoutSourceFile does for one (the link as text).
+    bool layoutCSVembed(BlockView &view, const QString &path);
+    /// Called back (marshalled onto this thread) when a read started by
+    /// layoutCSVembed finishes; ignored if `generation` is no longer the one
+    /// on record for `path` (the file changed again meanwhile).
+    void deliverCSV(const QString &path, quint64 generation, CSVcacheEntry result);
+    /// The worker's half: read `path` and parse it. Static - it runs off the
+    /// UI thread and must not touch the editor.
+    static CSVcacheEntry readCSVfile(const QString &path, bool tsv, const QString &unreadable);
     /// The view's name (if any) above the grid, then paintTable for the
     /// grid itself - the table painting is not duplicated, only framed.
     void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;

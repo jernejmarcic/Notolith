@@ -655,6 +655,33 @@ bare). Of links, `[[#^id]]` shows "^id" (only a leading `#` is hidden, as
 in Obsidian's live preview) and `[[Note#^id]]` shows as written; a heading
 link shows "Note > Heading".
 
+## CSV and TSV embeds
+
+`![[data.csv]]` and `![[data.tsv]]` draw the file as a table, laid out and
+painted by the same code as a base's table (`layoutDataTable` in
+`BaseBlock.cpp`: header row first, the theme's table colours, columns sized to
+their content, a wide table scrolling sideways) - `CSVEmbed.cpp`. The first
+line is the header. The parser (`CSVparser.cpp`) is RFC 4180: quoted fields,
+`""` for a quote, delimiters and line breaks inside quotes, LF, CRLF or CR
+between records, a UTF-8 byte order mark ignored; a short row is padded with
+empty cells and a blank line is not a row. A `.tsv` splits on tabs; a `.csv`
+takes the most frequent of `,`, `;` and tab on its first line, so a European
+Excel export (`;`) opens right.
+
+The file is read and parsed on a worker thread, never in layout: the block
+says "Loading..." until the table lands. It shows the header and the first 500
+rows, fewer for a wide file (8000 cells at most), with "and N more rows" under
+it; only the first 32 MB of a file is read. The result is cached by path and
+read again when the file's mtime or size changed, the next time the block is
+laid out. A file that is not there falls back to the plain link, as any
+embed; one that cannot be read says so in the error colour; an empty one says
+"Empty file".
+
+Core plugin `csv-embeds` (Settings > Core plugins, "CSV embeds") turns it off:
+the file is then the plain source listing it was before. Tests
+`CSVparserTest.*`, `CSVEmbedTest.*`, `FeaturesTest.CSVembedsToggle`; the demo
+vault's `Embeds/CSV Embeds.md` shows one of each kind.
+
 ## `[[` link completion
 
 Typing `[[` (or `![[`) opens a popup of note names; a name is matched anywhere

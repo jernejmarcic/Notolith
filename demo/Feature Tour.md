@@ -48,7 +48,8 @@ notes. For the older map see [[Welcome]] and [[Newer Features]].
 
 - [[Note Embeds]], [[Image Embeds]], [[PDF Embeds]] (`pdf-embeds`),
   [[Media Embeds]] (`media-embeds`), [[Source Embeds]], [[Tex Embeds]]
-  (`tex-embeds`), [[EPUB Embeds]] (`epub-reader`), [[Other Embeds]].
+  (`tex-embeds`), [[CSV Embeds]] (`csv-embeds`), [[EPUB Embeds]]
+  (`epub-reader`), [[Other Embeds]].
 - [[HTML Blocks]] (`html-blocks`), [[Base Blocks]] and [[Library]] (`bases`).
 - [[Mermaid]], [[PlantUML]], [[TikZ]], [[Graphviz]] - diagrams.
 
