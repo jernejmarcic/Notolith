@@ -9533,6 +9533,88 @@ TEST_F(InkWindowTest, AnOpenInkTabWhoseFileIsDeletedIsMarkedMissingAndRefusesToS
     EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "the file is not recreated";
 }
 
+// A look-alike is not the file: another document of the same name elsewhere in the vault is not followed to (its size
+// or modification time is not the one this tab's file had), so a save cannot write over it.
+class InkLookAlikeTest : public InkWindowTest {
+protected:
+    void expectNotAdopted(const QByteArray &otherBody, bool sameSizeLaterMtime)
+    {
+        ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("A")));
+        ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("B")));
+        write(QStringLiteral("A/Sketch.ink"), inkWithStrokes(1));
+        write(QStringLiteral("B/Sketch.ink"), otherBody);
+        if (sameSizeLaterMtime) {
+            ASSERT_EQ(QFileInfo(path(QStringLiteral("A/Sketch.ink"))).size(), QFileInfo(path(QStringLiteral("B/Sketch.ink"))).size());
+            QFile later(path(QStringLiteral("B/Sketch.ink")));
+            ASSERT_TRUE(later.open(QIODevice::ReadWrite));
+            ASSERT_TRUE(later.setFileTime(QDateTime::currentDateTime().addSecs(30), QFileDevice::FileModificationTime));
+        }
+        const QByteArray other = readAll(path(QStringLiteral("B/Sketch.ink")));
+        MainWindow window;
+        noteAppC::ModuleView *view = nullptr;
+        noteAppC::ink::InkCanvas *canvas = nullptr;
+        openInkNote(window, dir.path(), QStringLiteral("A/Sketch.ink"), view, canvas);
+        ASSERT_NE(canvas, nullptr);
+        ASSERT_TRUE(QFile::remove(path(QStringLiteral("A/Sketch.ink"))));
+        auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+        ASSERT_NE(tabs, nullptr);
+        WAIT_TRUE(tabs->tabText(tabs->currentIndex()).contains(QStringLiteral("missing")), 5000);
+        EXPECT_TRUE(window.windowTitle().contains(QStringLiteral("A/Sketch.ink"))) << "still the old path, not B's";
+        EXPECT_EQ(readAll(path(QStringLiteral("B/Sketch.ink"))), other);
+    }
+};
+
+TEST_F(InkLookAlikeTest, AnInkFileOfTheSameNameAndAnotherSizeIsNotAdoptedWhenTheOpenOneIsDeleted)
+{
+    expectNotAdopted(inkWithStrokes(3), false);
+}
+
+TEST_F(InkLookAlikeTest, AnInkFileOfTheSameNameAndSizeButAnotherModificationTimeIsNotAdopted)
+{
+    expectNotAdopted(inkWithStrokes(1), true);
+}
+
+// Quitting with a modified tab whose file is gone cannot offer Save (it is refused): Discard or Cancel, Cancel first.
+TEST_F(InkWindowTest, QuittingWithAModifiedMissingInkTabOffersOnlyDiscardAndCancel)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(view->isModified());
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Sketch.ink"))));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    WAIT_TRUE(tabs->tabText(tabs->currentIndex()).contains(QStringLiteral("missing")), 5000);
+
+    QMessageBox::StandardButton answer = QMessageBox::Cancel;
+    int questions = 0;
+    bool hadSave = true, cancelIsDefault = false;
+    QString text;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            ++questions;
+            hadSave = box->button(QMessageBox::Save) != nullptr;
+            cancelIsDefault = box->defaultButton() == box->button(QMessageBox::Cancel);
+            text = box->text();
+            closeBoxWith(box, answer);
+        }
+    });
+    watch.start(20);
+    EXPECT_FALSE(window.close()) << "Cancel keeps the window";
+    EXPECT_EQ(questions, 1);
+    EXPECT_FALSE(hadSave);
+    EXPECT_TRUE(cancelIsDefault);
+    EXPECT_TRUE(text.contains(QStringLiteral("gone from disk (deleted or moved outside the app), so its changes cannot be saved. Discard them?")))
+        << text.toStdString();
+    answer = QMessageBox::Discard;
+    EXPECT_TRUE(window.close()) << "Discard lets the quit through: it is not blocked for good";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "and nothing is written back";
+}
+
 // M5: a pen width in the settings is the width of the first stroke, not only the default that equals the canvas'.
 TEST_F(InkWindowTest, TheDefaultPenWidthSettingIsTheWidthOfTheFirstStroke)
 {
@@ -9683,10 +9765,11 @@ TEST_F(WindowTest, AnOpenImageFollowsItsFileOrFolderBeingRenamed)
     picture.fill(Qt::darkCyan);
     ASSERT_TRUE(picture.save(path(QStringLiteral("Notes/pic.png"))));
     Settings config = Settings::load();
+    const QVariant before = config.value(Settings::featureKey("image-annotation"));
     config.setValue(Settings::featureKey("image-annotation"), true); // off until asked for
     ASSERT_TRUE(config.save());
-    const auto switchOff = qScopeGuard([&config] { // the settings file is shared by every test of the process
-        config.setValue(Settings::featureKey("image-annotation"), false);
+    const auto restore = qScopeGuard([&config, before] { // the settings file is shared by every test of the process
+        config.setValue(Settings::featureKey("image-annotation"), before.isValid() ? before : QVariant(false));
         config.save();
     });
     MainWindow window;
@@ -9696,12 +9779,106 @@ TEST_F(WindowTest, AnOpenImageFollowsItsFileOrFolderBeingRenamed)
     auto *image = window.findChild<noteAppC::ImageView *>();
     ASSERT_NE(image, nullptr);
 
+    noteAppC::ImageAnnotation mark;
+    mark.kind = noteAppC::ImageAnnotation::Kind::Note;
+    mark.point = QPointF(5, 5);
+    mark.text = QStringLiteral("first");
+    image->canvas()->add(mark);
+    ASSERT_TRUE(QFile::exists(path(QStringLiteral("Notes/pic.png annotations.md")))) << "an edit is written to the sidecar";
+
     ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes/pic.png")), false, QStringLiteral("photo")));
     EXPECT_EQ(image->path(), path(QStringLiteral("Notes/photo.png")));
     EXPECT_EQ(image->sidecarPath(), path(QStringLiteral("Notes/photo.png annotations.md"))) << "its marks are saved under the new name";
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Notes/photo.png annotations.md")))) << "the sidecar went with the image";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Notes/pic.png annotations.md"))));
+    mark.text = QStringLiteral("second");
+    image->canvas()->add(mark); // a save lands on the new name; the old one is not recreated
+    EXPECT_EQ(noteAppC::ImageAnnotations::load(path(QStringLiteral("Notes/photo.png annotations.md"))).size(), 2);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Notes/pic.png annotations.md"))));
+
     ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes")), true, QStringLiteral("Archive")));
     EXPECT_EQ(image->path(), path(QStringLiteral("Archive/photo.png")));
     EXPECT_EQ(image->sidecarPath(), path(QStringLiteral("Archive/photo.png annotations.md")));
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Archive/photo.png annotations.md"))));
+}
+#endif
+
+namespace {
+/// The text of the current tab of the window's tab bar.
+QString currentTabText(MainWindow &window)
+{
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    return tabs ? tabs->tabText(tabs->currentIndex()) : QString();
+}
+} // namespace
+
+#ifdef NOTEAPPC_HAVE_CANVAS
+// A canvas tab is watched like a module's view: moved outside the app it follows, deleted it is marked missing and
+// never writes its old file back.
+TEST_F(WindowTest, AnOpenCanvasFollowsItsFileMovedOutsideTheApp)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    auto *canvas = window.findChild<noteAppC::CanvasView *>();
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_TRUE(QFile::rename(path(QStringLiteral("Board.canvas")), path(QStringLiteral("Dest/Board.canvas"))));
+    WAIT_TRUE(canvas->path() == path(QStringLiteral("Dest/Board.canvas")), 5000);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Dest/Board.canvas")))); // so a save is seen to write it
+    command(window, "editor:save-file")->trigger();
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Board.canvas")))) << "the old name is not recreated";
+}
+
+TEST_F(WindowTest, AnOpenCanvasWhoseFileIsDeletedIsMarkedMissingAndNeverRecreatesIt)
+{
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Board.canvas"))));
+    WAIT_TRUE(currentTabText(window).contains(QStringLiteral("missing")), 5000);
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(asked) << "the refusal is said out loud";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Board.canvas")))) << "a save does not recreate it";
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+TEST_F(WindowTest, AnOpenImageFollowsItsFileMovedOutsideTheAppOrIsMarkedMissing)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    QImage picture(40, 20, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+    Settings config = Settings::load();
+    const QVariant before = config.value(Settings::featureKey("image-annotation"));
+    config.setValue(Settings::featureKey("image-annotation"), true);
+    ASSERT_TRUE(config.save());
+    const auto restore = qScopeGuard([&config, before] {
+        config.setValue(Settings::featureKey("image-annotation"), before.isValid() ? before : QVariant(false));
+        config.save();
+    });
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("pic.png"))));
+    auto *image = window.findChild<noteAppC::ImageView *>();
+    ASSERT_NE(image, nullptr);
+    ASSERT_TRUE(QFile::rename(path(QStringLiteral("pic.png")), path(QStringLiteral("Dest/pic.png"))));
+    WAIT_TRUE(image->path() == path(QStringLiteral("Dest/pic.png")), 5000);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Dest/pic.png"))));
+    WAIT_TRUE(currentTabText(window).contains(QStringLiteral("missing")), 5000);
 }
 #endif
 
