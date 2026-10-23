@@ -536,6 +536,32 @@ TEST(ShareEngineTest, ABusyPortFallsBackToAnyPort)
     EXPECT_NE(peer.engine->port(), busy.serverPort());
 }
 
+// Two Notolith processes (one per vault) share this device's identity: its link may be online
+// once. The second says so and leaves the first alone - port, mDNS name and shares untouched.
+TEST(ShareEngineTest, ASecondEngineOnTheSameIdentityLeavesTheFirstAlone)
+{
+    Peer first(QStringLiteral("one-device"));
+    ASSERT_TRUE(first.engine->start()) << first.engine->error().toStdString();
+    const quint16 port = first.engine->port();
+    const QByteArray key = first.publicKey();
+
+    ShareEngine second(QStringLiteral("/another-vault"), first.config);
+    EXPECT_FALSE(second.start());
+    EXPECT_FALSE(second.isRunning());
+    EXPECT_FALSE(second.error().isEmpty());
+    EXPECT_TRUE(first.engine->isRunning());
+    EXPECT_EQ(first.engine->port(), port);
+    EXPECT_EQ(first.publicKey(), key);
+
+    // Another device identity is not in its way, and the link is free again once the first goes.
+    ShareEngine::Config otherDevice = first.config;
+    otherDevice.identityKey = QStringLiteral("another-device");
+    ShareEngine third(QStringLiteral("/another-vault"), otherDevice);
+    EXPECT_TRUE(third.start()) << third.error().toStdString();
+    first.engine.reset();
+    EXPECT_TRUE(second.start()) << second.error().toStdString();
+}
+
 TEST(ShareEngineTest, TheInviteCodeRoundTrips)
 {
     Peer owner(QStringLiteral("a"));

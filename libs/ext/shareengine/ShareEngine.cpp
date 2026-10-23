@@ -4,7 +4,9 @@
 #include <format>
 #include <utility>
 
+#include <QCryptographicHash>
 #include <QDateTime>
+#include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -241,11 +243,35 @@ bool ShareEngine::start()
     if (m_node)
         return true;
     m_error.clear();
-    m_me = ShareIdentity::load(m_config.identityKey);
-    if (!m_me) {
-        m_error = tr("The keyring would not keep this device's sharing keys.");
-        return false;
+    // A device is online once: a peer keeps one connection per identity, so a second Notolith
+    // process (one per vault) with the same keys would split its peers between two links, and
+    // both would publish one mDNS name. The first keeps the link; the others say so. The lock
+    // is per identity key and, with a store directory of its own (tests), lives in it.
+    if (!m_linkLock) {
+        const QString directory = m_config.storeDirectory.isEmpty()
+            ? QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share")
+            : m_config.storeDirectory;
+        QDir().mkpath(directory);
+        const QByteArray id =
+            QCryptographicHash::hash(m_config.identityKey.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+        auto lock = std::make_unique<QLockFile>(directory + QStringLiteral("/link-") + QString::fromLatin1(id)
+                                                + QStringLiteral(".lock"));
+        lock->setStaleLockTime(0); // only a dead owner frees it: a window can run for months
+        if (!lock->tryLock(0)) {
+            m_error = tr("Sharing is already running in another Notolith window: this device's link can be "
+                         "online once. Close that window, or turn sharing off in it, to share from here.");
+            return false;
+        }
+        m_linkLock = std::move(lock);
     }
+    const auto fail = [this](const QString &why) {
+        m_error = why;
+        m_linkLock.reset();
+        return false;
+    };
+    m_me = ShareIdentity::load(m_config.identityKey);
+    if (!m_me)
+        return fail(tr("The keyring would not keep this device's sharing keys."));
     hearth::setDebugLogPath(
         (QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share/link.log"))
             .toStdString());
@@ -285,8 +311,7 @@ bool ShareEngine::start()
                 throw;
             m_node = open(0);
         } catch (const std::exception &e) {
-            m_error = tr("Sharing could not start its network link: %1").arg(QString::fromUtf8(e.what()));
-            return false;
+            return fail(tr("Sharing could not start its network link: %1").arg(QString::fromUtf8(e.what())));
         }
     }
 

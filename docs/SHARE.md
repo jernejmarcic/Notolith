@@ -268,6 +268,16 @@ What the engine refuses (each case is a test in `tests/test_share.cpp`):
 | invite code | prefix, version, sizes, not expired, a backend this build has, private hosts | `join()` false with the reason |
 | strangers | never sent anything, frames from non-members dropped; the link itself is identity-authenticated, so ignoring them (not closing) is complete | counted |
 
+A device is online once per machine. Notolith runs one process per vault, and every
+process would carry the same device keys: a peer keeps one connection per identity, so a
+second link would split its peers between the two, and both would publish one mDNS name.
+`start()` therefore takes a lock per identity key (`link-<id>.lock`, in the share
+directory, or in `Config::storeDirectory` when a test gives one; a dead owner frees it) and
+a process that cannot get it fails with "Sharing is already running in another Notolith
+window", shown in the status bar. The first process keeps its port, name and shares; the
+other opens no link, and can share once that window's vault is closed or its sharing is
+off and the vault is reopened. The stores are per vault, so nothing else is shared.
+
 Tests: `ctest -R '^share$'` - loopback only, mDNS off, port 0, an in-memory secret
 store, temporary store directories.
 
