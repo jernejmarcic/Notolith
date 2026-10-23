@@ -1444,13 +1444,17 @@ qsizetype MarkdownEditor::topOffset() const
     // either way, and row 0 would then belong to the line above. A line with only those
     // few pixels left in view is as good as gone.
     const qsizetype offset = offsetAt(QPoint(contentLeft(), 2));
-    // The gap between two blocks answers with the end of the block above it, whose last
-    // line is already out of sight: the text at the top is the next block's.
+    // That line is as good as gone: the one under it shows. Inside a block it is the block's
+    // next line; the gap between two blocks answers with the end of the block above again, and
+    // then the text at the top is the next block's.
     qreal height = 0;
     const QPointF point = pointFor(offset, &height);
     const qsizetype index = blockAt(offset);
     if (point.y() + height > 3 || index < 0)
         return offset;
+    const qsizetype below = offsetAt(QPoint(contentLeft(), int(point.y() + height) + 1));
+    if (below > offset)
+        return below;
     for (size_t next = size_t(index) + 1; next < d->m_blocks.size(); ++next) {
         if (!d->m_blocks.at(next).foldHidden)
             return d->m_blocks.at(next).span.range.start;

@@ -1204,6 +1204,40 @@ TEST(PlaceholderTest, ARememberedTopOffsetIsPlacedExactlyInAChunkAndKeptByTheLan
     EXPECT_EQ(editor->verticalScrollBar()->value(), 0);
 }
 
+// A line with only a few pixels left at the top is as good as gone, and the one that shows is the
+// next line of the same block, not the next block's start: inside a chunk of short lines and
+// inside a long wrapped paragraph, swept over more than a line pitch.
+TEST(PlaceholderTest, ATopLineWithFewPixelsLeftNamesTheNextLineOfItsOwnBlock)
+{
+    QString dense;
+    for (int i = 0; i < 6000; ++i)
+        dense += QStringLiteral("Line %1 of the dense note\n").arg(i, 5, 10, QLatin1Char('0'));
+    QString paragraph;
+    while (paragraph.size() < 3000)
+        paragraph += QStringLiteral("lorem ipsum dolor sit amet ");
+    QString wrapped;
+    while (wrapped.size() < 200 * 1024)
+        wrapped += paragraph + QStringLiteral("\n\n");
+    for (const QString &note : {dense, wrapped}) {
+        auto editor = placeholderEditorWith(note);
+        editor->show();
+        const bool placeholder = note.size() == dense.size();
+        if (!placeholder)
+            ASSERT_TRUE(waitForParse(*editor));
+        else
+            ASSERT_LT(editor->wordCount(), 0);
+        qsizetype worst = 0;
+        for (int px = placeholder ? 40000 : 20000; px < (placeholder ? 41000 : 21000); ++px) {
+            editor->verticalScrollBar()->setValue(px);
+            const qsizetype top = editor->topOffset();
+            QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(editor->textColumn() + 4, 12));
+            worst = qMax(worst, qAbs(top - editor->cursorOffset()));
+        }
+        // One line is 26 characters in the chunks and about 90 wrapped; two lines at most.
+        EXPECT_LT(worst, placeholder ? 2 * 26 : 2 * 100) << (placeholder ? "chunks" : "wrapped paragraphs");
+    }
+}
+
 /// Waits until `fired` reaches `count`, 10 s at most.
 bool waitForFired(const int &fired, int count)
 {
