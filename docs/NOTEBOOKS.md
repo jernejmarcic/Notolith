@@ -56,10 +56,12 @@ control (`[*]` while it runs again). Commands (all under "Notebooks:"):
 | Run the code block at the cursor | Ctrl+Shift+Return |
 | Run every code block in this note | top to bottom |
 | Run every code block down to the cursor | "run all above" |
+| Run every code block from the cursor down | "run all below": the cursor's block and every one after it |
 | Interrupt the kernel | the cursor's language, this note only |
 | Restart the kernel | forgets that kernel's variables |
 | Restart the kernel and run every code block | |
 | Clear the output of every code block | also removes what the sidecar kept |
+| Create new notebook | see "Jupyter notebooks" below |
 
 A kernel that dies (the code called `exit()`) tells the running block so, and
 the next run starts a new one.
@@ -247,11 +249,45 @@ nbformat writes JSON (one-space indent, sorted keys, no ASCII escaping, final
 newline), so a notebook in git changes only where it was edited. nbformat 4 only;
 anything else is refused with the reason and never touched.
 
-Ceilings: a run's new output is not written back into the file (it lives in the
-cache like every block's; the notebook keeps the outputs it came with), because
-a block's cache key is its source and two cells with the same code would
-collide. `execution_count` is the file's own. Cell attachments are kept but not
-shown.
+A run is written back. A cell that finishes running (or is cleared) since the
+file was read makes the tab modified, and the next save writes that cell's
+`outputs` and `execution_count` from the cache: stream, `execute_result`
+(the value of the last expression), `display_data` (PNG or JPEG as base64,
+SVG, HTML with its plain-text twin, Markdown) and `error`; the count is the
+kernel's own `In [n]`, null for a run without a kernel behind it and for a
+cleared cell, whose `outputs` is `[]`. Every other cell keeps the file's own
+bytes, because what the editor holds of an output is not all the file said
+(colour codes, alternative representations): a notebook that was only opened,
+or only had other cells run, changes nowhere else. A run that never reached a
+kernel (no kernel for the language, it would not start) writes nothing, and a
+cell with `#| cache: false` keeps no output to write. Cleared outputs that were
+not there to begin with leave the tab as it was.
+
+Two cells with the same code are two results. The output cache's key has always
+been the language, the code and the sandbox tier, so a second copy of a cell
+shared the first one's output; each block now also counts how many blocks with
+the very same code come before it in the note (0 for the first, which leaves
+every existing key as it was) and that count is part of the key, not of what
+runs. The window, the reader of the file and the save all count the same way.
+The count follows the cell's place: a copy inserted above makes the one below
+look itself up under the next number, so its output stays on the cell that is
+now first until it is run again.
+
+"Create new notebook" makes the next free `Untitled.ipynb` where New note puts a
+note, in nbformat 4.5 with one empty code cell (with an `id`) and the kernelspec
+of the installed python kernel, or just `language_info.name = python` when there
+is none, and opens it.
+
+A markdown cell's `attachments` are shown: reading the notebook gives the editor
+a table of the pictures they hold, and `![x](attachment:name)` draws the one
+called `name`, as a block or inline in text. Nothing is written for them, and an
+edited cell keeps its attachments. The table is one per notebook, so two cells
+that attach different pictures under one name show the first cell's in both, and
+an attachment without a file extension in its name is not drawn.
+
+What is still not there: outputs that arrive while a cell runs are shown when it
+ends, not as they stream; widgets (`application/vnd.jupyter.widget-view+json`)
+show their plain-text twin; nbformat 3 and 2 are refused.
 
 The vault index reads a notebook as the text it opens as (every cell, code in
 its fences), while the notebooks feature is on: search finds its words with
@@ -287,6 +323,5 @@ extensions: py, js, sh, rb, pl, lua, c, cpp, hs, java, rs, go.
 - Rich Jupyter signatures: completion and documentation show only what the
   kernel returns as plain text, and the list is not filtered further as you
   type.
-- Writing a run's output back into an `.ipynb`.
 - A kernel for Haskell or the other languages the system's own tool covers:
   none installed here, so those stay one process per block.
