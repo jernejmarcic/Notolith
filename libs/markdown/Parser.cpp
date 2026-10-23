@@ -2021,10 +2021,20 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
         QList<Range> notText = withColonFenceLines(text, walk.masked);
         for (const Link &link : obsidian.links)
             notText.append(link.range);
+        // Every formula, the ones detectDisplayMath found after md4qt gave up
+        // on them (a blank line inside) included: its text is TeX.
+        for (const MathSpan &math : std::as_const(walk.decorations.maths))
+            notText.append(math.range);
         scanEntities(text, notText, walk.decorations);
         notText += obsidian.comments;
         if (frontmatter.isValid())
             notText.append(frontmatter);
+        // CommonMark: escapes do not work inside an autolink.
+        static const QRegularExpression autolink(QStringLiteral("<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\\s]*>"));
+        for (auto it = autolink.globalMatchView(text); it.hasNext();) {
+            const QRegularExpressionMatch match = it.next();
+            notText.append({match.capturedStart(), match.capturedEnd()});
+        }
         scanEscapes(text, notText, walk.decorations);
     }
     splitParagraphsAtDisplayMath(text, walk.decorations);

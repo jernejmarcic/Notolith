@@ -759,6 +759,9 @@ void MarkdownEditor::setNoteText(const QString &text)
         d->m_media->stop();
     d->m_text = text;
     ++d->m_textVersion;
+    // A drawing kept under another note's block at the same offset is not this note's.
+    d->m_previewStale = d->m_previewMathGood = QPixmap();
+    d->m_previewStaleBlock = d->m_previewMathGoodBlock = -1;
     d->m_cursor = d->m_anchor = 0;
     d->m_activeBlock = -1;
     d->m_tableEdited = false;

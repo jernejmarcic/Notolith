@@ -885,6 +885,8 @@ public:
     /// How many parses have run on this editor, on the calling thread or the
     /// pool. For the tests.
     int parseCountForTest() const;
+    /// How many diagrams the fence cache holds (drawn, pending or failed).
+    int codeBlockCacheSizeForTest() const;
     /// Pretends the last parse took this long, which is what decides whether
     /// the next newline is parsed on the spot (applyEdit). For the tests.
     void setLastParseTimeForTest(qint64 nanoseconds);
@@ -1643,6 +1645,11 @@ private:
     /// The cache entry for a fence's drawing, asked of its renderer on the
     /// first call (and never twice); null when no renderer has the language.
     /// `key` is what deliverCodeBlock finds its blocks by.
+    /// What a fence's drawing is cached under, and found again by.
+    QString codeBlockKeyFor(const QString &language, const QString &source, int width) const;
+    /// Drops what the editor no longer shows: the preview's earlier drawing
+    /// once a newer one is asked for, and, past a cap, anything no block points at.
+    void pruneCodeBlockCache(const QString &keep);
     const CodeBlockCacheEntry *requestCodeBlock(const QString &language, const QString &source,
                                                 int width, QString *key);
     /// PreviewBelow.cpp: the formula or diagram of the block the caret is in,

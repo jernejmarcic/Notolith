@@ -257,7 +257,11 @@ line with other text stays in its paragraph.
 MicroTeX draws it; a formula it refuses is retried as MathJax would read it
 (`align*` and the other starred environments unstarred, an `&` outside any
 environment inside an `array`). One that still fails shows its source with a
-dim "Math: <reason>" line under it, never an empty gap.
+dim "Math: <reason>" line under it, never an empty gap. While the caret is in
+the formula and what is typed does not parse yet (`\begin{array}{c} a \end{array} &`),
+the last drawing stays up and no reason shows, so nothing below moves. Display
+maths md4qt did not parse (a blank line inside) keeps its backslashes, as do
+autolinks.
 
 **With the caret in a formula** (or a diagram fence: mermaid, tikz, plantuml,
 dot) the source shows, both `$$` lines included, and what it draws stays
@@ -265,7 +269,8 @@ visible under it, following what is typed (`PreviewBelow.cpp`). A formula is
 drawn on the spot, one kept at a time. A diagram is made by its external tool,
 so it is asked for only once typing has paused for half a second, and the
 last drawing stays up meanwhile; the request is the fence renderer's own, so
-the drawing is already cached when the caret leaves. Source mode shows
+the drawing is already cached when the caret leaves. A drawing the next one
+replaces is dropped from the fence cache, which is also capped at 64 entries. Source mode shows
 neither. The diagram sits under the listing, above the closing fence line.
 Tests: `tests/test_math.cpp`.
 

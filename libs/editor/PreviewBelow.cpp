@@ -27,15 +27,13 @@ constexpr int kPauseMs = 500;  ///< typing this long in a diagram's source asks 
 
 void MarkdownEditor::appendPreview(BlockView &view)
 {
-    view.previewImage = QPixmap();
-    view.previewHint.clear();
-    view.previewRect = QRectF();
     if (d->m_mode == Mode::Source || view.editedAsSource)
         return;
 
     QPixmap image;
     QString hint;
     bool centred = false;
+    const qsizetype blockStart = firstPiece(view).span.range.start;
 
     if (const MathSpan *math = d->m_features.maths ? displayMathOf(view) : nullptr) {
         // Drawn without the caret in it, a formula is the block itself
@@ -44,19 +42,40 @@ void MarkdownEditor::appendPreview(BlockView &view)
         const QString latex = d->m_text.mid(source.start, source.length()).trimmed();
         const QColor colour = d->m_theme.color(QStringLiteral("--text-normal"));
         const qreal pointSize = d->m_theme.textFont().pixelSize() * 1.2;
-        const QString key = QStringLiteral("%1|%2|%3|%4|%5")
-                                .arg(latex).arg(pointSize).arg(colour.name(QColor::HexArgb)).arg(contentWidth())
-                                .arg(devicePixelRatioF());
-        if (d->m_previewMath.key != key) {
-            const QImage drawn = d->m_math.render(latex, pointSize, colour, contentWidth(), devicePixelRatioF());
-            d->m_previewMath = {key, drawn.isNull() ? QPixmap() : QPixmap::fromImage(drawn),
-                                drawn.isNull() ? d->m_math.lastError() : QString()};
+        // layoutMath's own key: a formula drawn while the caret was elsewhere is not drawn again.
+        const QString drawnKey = QStringLiteral("math|%1|%2|%3")
+                                     .arg(latex)
+                                     .arg(d->m_theme.value(QStringLiteral("--font-text-size")))
+                                     .arg(contentWidth());
+        const QString key = QStringLiteral("%1|%2|%3|%4").arg(drawnKey).arg(pointSize)
+                                .arg(colour.name(QColor::HexArgb)).arg(devicePixelRatioF());
+        QPixmap drawn = d->m_images.value(drawnKey);
+        if (drawn.isNull() && d->m_previewMath.key == key)
+            drawn = d->m_previewMath.image;
+        QString error = d->m_previewMathErrors.value(key);
+        if (drawn.isNull() && error.isEmpty() && !latex.isEmpty()) {
+            const QImage rendered = d->m_math.render(latex, pointSize, colour, contentWidth(), devicePixelRatioF());
+            if (!rendered.isNull()) {
+                drawn = QPixmap::fromImage(rendered);
+                d->m_previewMath = {key, drawn, QString()}; // one kept, not one per keystroke
+            } else {
+                error = d->m_math.lastError().isEmpty() ? tr("cannot be drawn") : d->m_math.lastError();
+                if (d->m_previewMathErrors.size() > 32)
+                    d->m_previewMathErrors.clear();
+                d->m_previewMathErrors.insert(key, error);
+            }
         }
-        if (view.active && !d->m_previewMath.image.isNull())
-            image = d->m_previewMath.image;
-        else if (d->m_previewMath.image.isNull() && !latex.isEmpty())
-            hint = tr("Math: %1").arg(d->m_previewMath.error.isEmpty() ? tr("cannot be drawn")
-                                                                         : d->m_previewMath.error);
+        if (view.active) {
+            if (!drawn.isNull()) {
+                d->m_previewMathGood = drawn;
+                d->m_previewMathGoodBlock = blockStart;
+            } else if (d->m_previewMathGoodBlock == blockStart) {
+                drawn = d->m_previewMathGood; // not parseable yet: what it drew a moment ago holds the room
+            }
+            image = drawn;
+        }
+        if (image.isNull() && drawn.isNull() && !latex.isEmpty())
+            hint = tr("Math: %1").arg(error.isEmpty() ? tr("cannot be drawn") : error);
         centred = true;
     } else if (view.active && d->m_mode == Mode::LivePreview && view.span.kind == BlockSpan::Kind::Code
                && view.piece == view.pieces - 1 && !d->m_codeBlockRenderers.isEmpty()) {
@@ -65,15 +84,22 @@ void MarkdownEditor::appendPreview(BlockView &view)
         if (!fence || !d->m_codeBlockRenderers.contains(language))
             return;
         const QString source = d->m_text.mid(fence->content.start, fence->content.length());
-        const qsizetype blockStart = firstPiece(view).span.range.start;
         const int width = contentWidth();
-        const QString key = language + QLatin1Char('|') + QString::number(width) + QLatin1Char('|')
-                            + embedThemeTag() + QLatin1Char('|') + source;
+        const QString key = codeBlockKeyFor(language, source, width);
         const bool known = d->m_codeBlockCache.contains(key);
-                if (known || key == d->m_previewAllowed) {
+        if (known || key == d->m_previewAllowed) {
+            // The drawing this replaces is no longer wanted, unless a block still shows it.
+            if (!d->m_previewRequested.isEmpty() && d->m_previewRequested != key) {
+                const bool shown = std::any_of(d->m_blocks.cbegin(), d->m_blocks.cend(), [this](const BlockView &block) {
+                    return block.codeBlockKey == d->m_previewRequested;
+                });
+                if (!shown)
+                    d->m_codeBlockCache.remove(d->m_previewRequested);
+            }
             QString requested;
             const CodeBlockCacheEntry *entry = requestCodeBlock(language, source, width, &requested);
-                    view.codeBlockKey = requested; // deliverCodeBlock lays this block out again when the drawing lands
+            d->m_previewRequested = requested;
+            view.codeBlockKey = requested; // deliverCodeBlock lays this block out again when the drawing lands
             if (entry && !entry->pending && !entry->image.isNull()) {
                 image = QPixmap::fromImage(entry->image);
                 d->m_previewStale = image;

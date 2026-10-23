@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTest>
 
@@ -180,7 +181,7 @@ TEST(PreviewTest, EveryDollarLineOpensWithTheCaretInTheMiddleOfTheFormula)
     EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("$$\nx^2\n$$"))) << editor->displayText().toStdString();
 }
 
-TEST(PreviewTest, SourceModeAndAnUnselectedBlockHaveNoPreview)
+TEST(PreviewTest, SourceModeHasNoPreview)
 {
     const QString note = QStringLiteral("$$\nx^2\n$$\n\nafter\n");
     auto editor = editorWith(note);
@@ -304,6 +305,100 @@ TEST(EscapeTest, TheCaretOnAnEscapeShowsItsBackslashAndOnlyThatOne)
     EXPECT_TRUE(shown.startsWith(QStringLiteral("\\(a) and *b*"))) << shown.toStdString();
     editor->enterBlockAt(note.indexOf(QStringLiteral("after")));
     EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("(a) and *b*")));
+}
+
+// --- review round: what is written stays what is shown ----------------------
+
+TEST(EscapeTest, AFormulaMdFourQtDidNotParseKeepsItsBackslashes)
+{
+    // A blank line inside `$$` ends md4qt's formula, so the parser finds it itself.
+    const QString note = QStringLiteral("intro\n$$\na \\{ b &amp; c\n\nc \\, d\n$$\n\nafter \\* end\n");
+    const auto parsed = Parser().parseAll(note);
+    ASSERT_EQ(parsed.decorations.substitutions.size(), 1) << "only the one in \"after\"";
+    EXPECT_GT(parsed.decorations.substitutions.first().range.start, note.indexOf(QStringLiteral("after")));
+
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QStringLiteral("a \\{")));
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("a \\{ b &amp; c\n\nc \\, d")))
+        << editor->displayText().toStdString();
+}
+
+TEST(EscapeTest, AnAutolinkKeepsItsBackslashes)
+{
+    const auto parsed = Parser().parseAll(QStringLiteral("see <https://x.org/\\(y\\)> and \\(z\\)\n"));
+    EXPECT_EQ(parsed.decorations.substitutions.size(), 2) << "only the text's own";
+}
+
+TEST(PreviewTest, AnUnfinishedFormulaKeepsTheLastDrawingAndTheLayout)
+{
+    ASSERT_TRUE(MathRenderer::isAvailable());
+    const QString note = QStringLiteral("$$\n\\begin{array}{c} a \\end{array}\n$$\n\nafter\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const qsizetype end = note.indexOf(QStringLiteral("end{array}")) + 10;
+    editor->enterBlockAt(end);
+    const QSize drawn = editor->previewSizeAt(end);
+    ASSERT_FALSE(drawn.isEmpty());
+    const qreal height = editor->documentHeight();
+
+    QTest::keyClicks(editor.get(), QStringLiteral(" &")); // an `&` outside any array: MicroTeX refuses it
+    ASSERT_TRUE(editor->noteText().contains(QStringLiteral("end{array} &")));
+    EXPECT_EQ(editor->previewSizeAt(end), drawn) << "the last good drawing stays";
+    EXPECT_TRUE(editor->previewHintAt(end).isEmpty()) << "and nothing says it is stale";
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), height) << "nothing below moves";
+
+    // With the caret gone there is no earlier drawing to keep: the source and the reason.
+    editor->enterBlockAt(note.size() - 2);
+    EXPECT_FALSE(editor->previewHintAt(end).isEmpty());
+}
+
+TEST(PreviewTest, TypingInALongFormulaStaysInsideTheKeystrokeBudget)
+{
+    ASSERT_TRUE(MathRenderer::isAvailable());
+    QString rows;
+    for (int i = 0; i < 12; ++i)
+        rows += QStringLiteral("x_{%1} &= \\frac{a_{%1}+b_{%1}}{c} + \\sum_{k=0}^{%1} k^2 \\\\\n").arg(i);
+    const QString note = QStringLiteral("$$\n\\begin{aligned}\n") + rows + QStringLiteral("\\end{aligned}\n$$\n\nafter\n");
+    auto editor = editorWith(note);
+    editor->show();
+    editor->enterBlockAt(note.indexOf(QStringLiteral("\\end{aligned}")) - 1);
+    QList<qint64> costs;
+    for (int i = 0; i < 15; ++i) {
+        QElapsedTimer timer;
+        timer.start();
+        QTest::keyClick(editor.get(), Qt::Key_A);
+        costs.append(timer.nsecsElapsed());
+    }
+    std::sort(costs.begin(), costs.end());
+    std::printf("[ PERF     ] keystroke in a 12-row aligned formula: median %.2f ms, max %.2f ms\n",
+                double(costs.at(costs.size() / 2)) / 1e6, double(costs.last()) / 1e6);
+    EXPECT_LT(double(costs.at(costs.size() / 2)) / 1e6, 10.0);
+}
+
+TEST(PreviewTest, ManyPausesInADiagramLeaveABoundedCache)
+{
+    const QString note = QStringLiteral("```mermaid\ngraph TD; A-->B\n```\n\nafter\n");
+    auto editor = editorWith(note);
+    editor->show();
+    int asked = 0;
+    editor->setCodeBlockRenderer(
+        {QStringLiteral("mermaid")},
+        [&asked](const QString &, const QString &source, int, const QString &,
+                 const std::function<void(MarkdownEditor::CodeBlockResult)> &done) {
+            ++asked;
+            MarkdownEditor::CodeBlockResult result;
+            result.isMarkdown = false;
+            result.image = QImage(100 + source.size(), 60, QImage::Format_ARGB32_Premultiplied);
+            result.image.fill(Qt::red);
+            done(std::move(result));
+        });
+    editor->enterBlockAt(note.indexOf(QStringLiteral("A-->B")));
+    for (int pause = 1; pause <= 6; ++pause) {
+        QTest::keyClick(editor.get(), Qt::Key_X);
+        ASSERT_TRUE(QTest::qWaitFor([&] { return asked == pause; }, 3000)) << "pause " << pause;
+        QTest::qWait(20);
+        EXPECT_LE(editor->codeBlockCacheSizeForTest(), 2) << "after " << pause << " pauses";
+    }
 }
 
 int main(int argc, char **argv)

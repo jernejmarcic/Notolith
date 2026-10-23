@@ -31,6 +31,32 @@ void MarkdownEditor::setCodeBlockRenderer(const QStringList &languages, CodeBloc
     viewport()->update();
 }
 
+QString MarkdownEditor::codeBlockKeyFor(const QString &language, const QString &source, int width) const
+{
+    return language + QLatin1Char('|') + QString::number(width) + QLatin1Char('|') + embedThemeTag() + QLatin1Char('|') + source;
+}
+
+int MarkdownEditor::codeBlockCacheSizeForTest() const
+{
+    return int(d->m_codeBlockCache.size());
+}
+
+void MarkdownEditor::pruneCodeBlockCache(const QString &keep)
+{
+    constexpr qsizetype kCap = 64;
+    if (d->m_codeBlockCache.size() <= kCap)
+        return;
+    QSet<QString> shown;
+    for (const BlockView &block : d->m_blocks)
+        shown.insert(block.codeBlockKey);
+    for (auto it = d->m_codeBlockCache.begin(); it != d->m_codeBlockCache.end();) {
+        if (it.key() != keep && !shown.contains(it.key()))
+            it = d->m_codeBlockCache.erase(it);
+        else
+            ++it;
+    }
+}
+
 const MarkdownEditor::CodeBlockCacheEntry *MarkdownEditor::requestCodeBlock(const QString &language,
                                                                              const QString &source, int width,
                                                                              QString *key)
@@ -38,12 +64,13 @@ const MarkdownEditor::CodeBlockCacheEntry *MarkdownEditor::requestCodeBlock(cons
     const auto rendererIt = d->m_codeBlockRenderers.constFind(language);
     if (rendererIt == d->m_codeBlockRenderers.cend())
         return nullptr;
-    *key = language + QLatin1Char('|') + QString::number(width) + QLatin1Char('|') + embedThemeTag() + QLatin1Char('|') + source;
+    *key = codeBlockKeyFor(language, source, width);
 
     auto it = d->m_codeBlockCache.find(*key);
     if (it == d->m_codeBlockCache.end()) {
         CodeBlockCacheEntry entry;
         entry.generation = ++d->m_codeBlockGeneration;
+        pruneCodeBlockCache(*key);
         it = d->m_codeBlockCache.insert(*key, entry);
         const quint64 generation = entry.generation;
         // Any thread, at most once: only deliverCodeBlock touches the cache

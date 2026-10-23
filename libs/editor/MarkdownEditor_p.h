@@ -910,6 +910,14 @@ struct MarkdownEditor::Private {
     /// pause in typing has let through.
     QPixmap m_previewStale;
     qsizetype m_previewStaleBlock = -1;
+    /// The formula last drawn for the block being edited, kept while what is
+    /// typed does not parse (an open `\\frac{`), so the layout holds still.
+    QPixmap m_previewMathGood;
+    qsizetype m_previewMathGoodBlock = -1;
+    /// Why a formula was refused, by key, for blocks that show only the reason.
+    QHash<QString, QString> m_previewMathErrors;
+    /// The cache key the preview last asked a fence's renderer for.
+    QString m_previewRequested;
     QString m_previewWanted;
     QString m_previewAllowed;
     QTimer m_previewTimer;
