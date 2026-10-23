@@ -7602,6 +7602,8 @@ void MainWindow::followLostNotes(bool final)
 
 void MainWindow::reloadChangedNotes()
 {
+    // ponytail: waits for a commit that outlasts the 100 ms debounce; skip the paths in m_saveJobs and re-arm
+    // m_noteChanges from finishSave() if a slow disk ever makes this block.
     flushSaves(); // an own save still being committed is not a change from outside
     watchOpenNotes(); // a file replaced by a rename dropped out of the watch
     followLostNotes(false);
