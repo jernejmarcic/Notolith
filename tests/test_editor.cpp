@@ -4197,6 +4197,43 @@ TEST(NotebookBlockTest, RunToTheCursorStopsThere)
     EXPECT_EQ(editor->runAllNotebookBlocks(), 3);
 }
 
+TEST(NotebookBlockTest, RunFromTheCursorStartsAtTheBlockHoldingIt)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n\n```python\nprint(2)\n```\n\n"
+                                        "```python\nprint(12)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    EXPECT_EQ(editor->runNotebookBlocksFrom(note.indexOf(QStringLiteral("print(2)"))), 2);
+    EXPECT_EQ(fake.runSources, (QStringList{QStringLiteral("print(2)"), QStringLiteral("print(12)")}));
+    fake.runSources.clear();
+    EXPECT_EQ(editor->runNotebookBlocksFrom(note.indexOf(QStringLiteral("print(12)"))), 1);
+    EXPECT_EQ(editor->runNotebookBlocksFrom(0), 3);
+    EXPECT_EQ(editor->runNotebookBlocksFrom(note.size()), 0);
+}
+
+TEST(NotebookBlockTest, BlocksThatReadTheSameAskWithTheirOwnOrdinalAndTheCodeUnchanged)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n\n```python\nprint(2)\n```\n\n"
+                                        "```python\nprint(1)\n```\n\n```Python\nprint(1)\n```\n\n"
+                                        "```bash\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    EXPECT_EQ(editor->runAllNotebookBlocks(), 5);
+    ASSERT_EQ(fake.runs.size(), 5);
+    QList<int> ordinals;
+    for (const auto &options : std::as_const(fake.runs))
+        ordinals << options.duplicateOrdinal;
+    EXPECT_EQ(ordinals, (QList<int>{0, 0, 1, 2, 0})) << "the language is part of what reads the same, its case is not";
+    EXPECT_EQ(fake.runSources, (QStringList{QStringLiteral("print(1)"), QStringLiteral("print(2)"), QStringLiteral("print(1)"),
+                                            QStringLiteral("print(1)"), QStringLiteral("print(1)")}));
+}
+
 TEST(NotebookBlockTest, ClickingARunningBlockAsksForAnInterrupt)
 {
     const QString note = QStringLiteral("```python\nwhile True: pass\n```\n");

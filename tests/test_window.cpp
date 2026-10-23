@@ -5585,6 +5585,47 @@ TEST_F(WindowTest, ARunOfOneNotebookCellIsSavedOnThatCellAlone)
     EXPECT_FALSE(editor->isModified());
 }
 
+// "Run every code block from the cursor down": the block holding the cursor and
+// every one after it, none before.
+TEST_F(WindowTest, RunBelowRunsTheCursorsBlockAndEveryOneAfterIt)
+{
+    if (!notebookCellsCanRun())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    write(QStringLiteral("Below.ipynb"), threeCellNotebook(marker));
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Below.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(200);
+    const qsizetype first = editor->noteText().indexOf(QStringLiteral("print('one')"));
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("print('two')"));
+    const qsizetype third = editor->noteText().indexOf(QStringLiteral("print('three')"));
+    ASSERT_TRUE(editor->notebookInfoAt(first).eligible);
+
+    editor->setCursorOffset(second + 3);
+    QAction *below = window.findChild<QAction *>(QStringLiteral("notebooks:run-below"));
+    ASSERT_NE(below, nullptr);
+    below->trigger();
+    EXPECT_FALSE(editor->notebookInfoAt(first).running);
+    EXPECT_TRUE(editor->notebookInfoAt(second).running);
+    EXPECT_TRUE(editor->notebookInfoAt(third).running);
+    WAIT_TRUE(editor->notebookInfoAt(second).hasRun && !editor->notebookInfoAt(second).running
+                  && editor->notebookInfoAt(third).hasRun && !editor->notebookInfoAt(third).running,
+              30000);
+    EXPECT_FALSE(editor->notebookInfoAt(first).hasRun);
+
+    // The counts it asks for: from the last block, one; from the first, all three.
+    EXPECT_EQ(editor->runNotebookBlocksFrom(third), 1);
+    WAIT_TRUE(!editor->notebookInfoAt(third).running, 30000);
+    EXPECT_EQ(editor->runNotebookBlocksFrom(0), 3);
+    WAIT_TRUE(!editor->notebookInfoAt(first).running && !editor->notebookInfoAt(second).running
+                  && !editor->notebookInfoAt(third).running,
+              30000);
+}
+
 // Two cells that read the same are two results: each block shows the output
 // its own cell had, not one that was cached under the shared text.
 TEST_F(WindowTest, IdenticalNotebookCellsShowTheirOwnOutputs)

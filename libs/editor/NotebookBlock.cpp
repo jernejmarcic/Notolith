@@ -616,6 +616,28 @@ int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
     return count;
 }
 
+int MarkdownEditor::runNotebookBlocksFrom(qsizetype offset)
+{
+    // Offsets first, for the reason runNotebookBlocksUpTo gives.
+    QList<qsizetype> starts;
+    for (const CodeFenceSpan &fence : std::as_const(d->m_decorations.codeFences)) {
+        if (fence.block.end > offset)
+            starts.append(fence.content.start);
+    }
+    for (const BlockView &view : d->m_blocks) {
+        if (view.embedPanel && view.notebookEligible && view.span.range.end > offset)
+            starts.append(view.span.range.start);
+    }
+    const quint64 version = d->m_textVersion;
+    int count = 0;
+    for (const qsizetype start : std::as_const(starts)) {
+        if (d->m_textVersion != version)
+            break;
+        count += runNotebookBlockAt(start) ? 1 : 0;
+    }
+    return count;
+}
+
 int MarkdownEditor::notebookDuplicateOrdinal(const CodeFenceSpan &fence) const
 {
     // The code as the block runs it: the lines between the fences, minus the blank ones that open them and the

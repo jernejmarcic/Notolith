@@ -859,6 +859,9 @@ public:
     /// Every runnable block from the top of the note to `offset`, the block
     /// holding it included (Jupyter's "run all above"); how many were asked for.
     int runNotebookBlocksUpTo(qsizetype offset);
+    /// Every runnable block from the one holding `offset` to the end of the
+    /// note (Jupyter's "run all below"); how many were asked for.
+    int runNotebookBlocksFrom(qsizetype offset);
     /// Forgets every block's output here and in the sidecar (Jupyter's
     /// "clear all outputs"); how many blocks had any.
     int clearNotebookOutputs();

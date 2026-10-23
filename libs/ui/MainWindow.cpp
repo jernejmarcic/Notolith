@@ -3372,6 +3372,11 @@ void MainWindow::buildActions()
             if (!m_active->view)
                 m_active->editor->runNotebookBlocksUpTo(m_active->editor->cursorOffset());
         });
+    add(QStringLiteral("notebooks:run-below"), tr("Notebooks: Run every code block from the cursor down"), QString(),
+        [this] {
+            if (!m_active->view)
+                m_active->editor->runNotebookBlocksFrom(m_active->editor->cursorOffset());
+        });
     // The kernel of the block at the cursor, in this note: a note has one
     // kernel per language, so what one block set the next one sees.
     add(QStringLiteral("notebooks:interrupt"), tr("Notebooks: Interrupt the kernel"), QString(), [this] {
