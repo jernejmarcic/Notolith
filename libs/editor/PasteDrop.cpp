@@ -59,6 +59,23 @@ QByteArray imageBytes(const QMimeData *mime)
     return bytes;
 }
 
+/// A browser's dropped link as Markdown. Firefox puts "URL\ntitle" pairs (UTF-16) in
+/// text/x-moz-url; Chrome a page title as text/plain beside the URL. Failing both, the host.
+QString browserLink(const QUrl &url, const QHash<QString, QString> &mozTitles, const QMimeData *mime, bool alone)
+{
+    QString title = mozTitles.value(url.toString());
+    const QString plain = mime->text().trimmed();
+    if (title.isEmpty() && alone && !plain.isEmpty() && !plain.contains(QLatin1Char('\n'))
+        && QUrl(plain) != url)
+        title = plain;
+    if (title.isEmpty())
+        title = url.host().isEmpty() ? url.toString() : url.host();
+    title.replace(QLatin1Char('['), QStringLiteral("\\[")).replace(QLatin1Char(']'), QStringLiteral("\\]"));
+    QString target = QString::fromLatin1(url.toEncoded());
+    target.replace(QLatin1Char('('), QStringLiteral("%28")).replace(QLatin1Char(')'), QStringLiteral("%29"));
+    return QLatin1Char('[') + title + QStringLiteral("](") + target + QLatin1Char(')');
+}
+
 } // namespace
 
 void MarkdownEditor::setAttachmentSaver(AttachmentSaver saver)
@@ -92,9 +109,19 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
 
     if (mime->hasUrls()) {
         QStringList parts;
+        QHash<QString, QString> mozTitles;
+        if (const QByteArray moz = mime->data(QStringLiteral("text/x-moz-url")); !moz.isEmpty()) {
+            const QString text = QString::fromUtf16(reinterpret_cast<const char16_t *>(moz.constData()), moz.size() / 2);
+            const QStringList lines = text.split(QLatin1Char('\n'));
+            for (qsizetype i = 0; i + 1 < lines.size(); i += 2)
+                mozTitles.insert(QUrl(lines.at(i).trimmed()).toString(), lines.at(i + 1).trimmed());
+        }
         for (const QUrl &url : mime->urls()) {
-            if (!url.isLocalFile())
+            if (!url.isLocalFile()) {
+                if (url.isValid() && !url.scheme().isEmpty())
+                    parts << browserLink(url, mozTitles, mime, mime->urls().size() == 1);
                 continue;
+            }
             const QString path = url.toLocalFile();
             if (d->m_fileImporter) {
                 const QString link = d->m_fileImporter(path);

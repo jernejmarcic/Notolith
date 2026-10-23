@@ -10231,6 +10231,55 @@ TEST(PasteDropTest, DropWithNoImporterInsertsThePathAsText)
     EXPECT_EQ(editor->noteText(), QStringLiteral("above\n/outside/photo.pngbelow\n"));
 }
 
+TEST(PasteDropTest, DropOfABrowserLinkInsertsAMarkdownLinkTitledByTheMozUrl)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    ASSERT_FALSE(point.isNull());
+
+    bool imported = false;
+    editor->setFileImporter([&](const QString &) {
+        imported = true;
+        return QString();
+    });
+    // Firefox: text/x-moz-url is "URL\ntitle" in UTF-16.
+    const QString pair = QStringLiteral("https://example.com/page\nExample [page]");
+    QByteArray moz(reinterpret_cast<const char *>(pair.utf16()), pair.size() * 2);
+    QMimeData mime;
+    mime.setUrls({QUrl(QStringLiteral("https://example.com/page"))});
+    mime.setData(QStringLiteral("text/x-moz-url"), moz);
+    mime.setText(QStringLiteral("https://example.com/page"));
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+
+    EXPECT_FALSE(imported);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[Example \\[page\\]](https://example.com/page)below\n"));
+}
+
+TEST(PasteDropTest, DropOfABrowserLinkFallsBackToPlainTextThenTheHost)
+{
+    {
+        auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+        editor->show();
+        const QPoint point = clickInto(*editor, {5, 7});
+        QMimeData mime; // Chrome: the page title as text, beside the URL
+        mime.setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+        mime.setText(QStringLiteral("A title"));
+        ASSERT_TRUE(dropOnto(*editor, point, mime));
+        EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[A title](https://example.com/a)below\n"));
+    }
+    {
+        auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+        editor->show();
+        const QPoint point = clickInto(*editor, {5, 7});
+        QMimeData mime; // the text is the URL itself: nothing better than the host
+        mime.setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+        mime.setText(QStringLiteral("https://example.com/a"));
+        ASSERT_TRUE(dropOnto(*editor, point, mime));
+        EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[example.com](https://example.com/a)below\n"));
+    }
+}
+
 TEST(PasteDropTest, DroppedTextIsInsertedAtThePoint)
 {
     const QString note = QStringLiteral("above\nbelow\n");
