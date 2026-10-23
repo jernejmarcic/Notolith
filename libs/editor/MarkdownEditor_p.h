@@ -1075,6 +1075,7 @@ struct MarkdownEditor::Private {
     quint64 m_textVersion = 0;
     quint64 m_parsedVersion = 0;
     bool m_parsePending = false; ///< a pool parse is out and not yet adopted
+    quint64 m_placeholderVersion = 0; ///< setNoteText's text version while a big note shows its chunks; 0: none (or its parse landed)
     bool m_cursorOn = true;
     QTimer m_blink;
 };

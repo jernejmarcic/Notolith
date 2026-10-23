@@ -1152,6 +1152,10 @@ void MarkdownEditor::scrollToOffset(qsizetype offset)
         // connection, which lays out the blocks near the viewport and nothing
         // else. Heights settle as it does, so the second pass is the exact one.
         bar->setValue(int(qMax<qreal>(0, top - viewport()->height() / 3.0)));
+        // A long block (a placeholder chunk, a listing, a list) starts well above its line:
+        // the line goes where the block's top would have.
+        if (const QPointF line = pointFor(offset); !line.isNull())
+            bar->setValue(bar->value() + int(line.y() - viewport()->height() / 3.0));
     }
     ensureCursorVisible();
 }

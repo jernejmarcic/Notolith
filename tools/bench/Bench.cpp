@@ -41,6 +41,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <thread>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <limits>
 #include <memory>
 #include <numbers>
@@ -249,7 +253,11 @@ struct Timing {
     double medianMs = 0;
     double p95Ms = 0;
     double worstMs = 0;
+    bool failed = false; ///< the measurement could not be made: the numbers mean nothing
 };
+
+/// Set when any measurement failed; main() then exits non-zero after printing.
+bool g_benchFailed = false;
 
 Timing reduce(const QString &metric, const QString &detail, std::vector<double> samplesMs)
 {
@@ -280,6 +288,22 @@ QImage paintedFrame(QWidget *widget)
     frame.setDevicePixelRatio(ratio);
     widget->render(&frame);
     return frame;
+}
+
+/// Waits for the parse of a big note in `editor` to land (wordCount() is -1 until then): on its
+/// signal, so no polling step is added to whatever is timed around it, and bounded by a timer.
+bool waitForParse(MarkdownEditor *editor, int timeoutMs = 15000)
+{
+    if (editor->wordCount() >= 0)
+        return true;
+    QEventLoop loop;
+    QObject::connect(editor, &MarkdownEditor::wordCountChanged, &loop, [&loop](int words) {
+        if (words >= 0)
+            loop.quit();
+    });
+    QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
+    loop.exec();
+    return editor->wordCount() >= 0;
 }
 
 // --- the five measurements ------------------------------------------------
@@ -1470,6 +1494,55 @@ Timing benchParseLanding(int kilobytes, int runs)
     return reduce(QStringLiteral("Parse landing to painted"), QStringLiteral("%1 kB note").arg(kilobytes), samples);
 }
 
+/// The first parse of a big note landing, from the landing's signal to the painted frame, with and without
+/// the application's trim (apps/noteAppC/main.cpp: malloc_trim on a worker thread, a quarter of a second
+/// after the landing). The two alternate in one process, so the difference is the trim's.
+QList<Timing> benchFirstLanding(int kilobytes, int runs)
+{
+    const QString note = buildNote(kilobytes);
+    std::vector<double> without;
+    std::vector<double> with;
+    bool failedRun = false;
+    for (int i = 0; i < 2 * runs; ++i) {
+        const bool trim = i % 2;
+#ifdef __GLIBC__
+        MarkdownEditor::setBigParseLandedHook(trim ? std::function<void()>([] {
+                                                  QTimer::singleShot(250, qApp, [] { std::thread([] { malloc_trim(0); }).detach(); });
+                                              })
+                                                   : std::function<void()>());
+#endif
+        MarkdownEditor editor;
+        editor.resize(900, 600);
+        QElapsedTimer clock;
+        bool landed = false;
+        QObject::connect(&editor, &MarkdownEditor::wordCountChanged, &editor, [&](int words) {
+            if (words >= 0 && !landed) {
+                clock.start();
+                landed = true;
+            }
+        });
+        editor.setNoteText(note);
+        (void)paintedFrame(&editor);
+        if (!waitForParse(&editor, 30000) || !landed) {
+            std::fprintf(stderr, "the parse of the first-landing note never landed: the rows are a failure\n");
+            g_benchFailed = true;
+            failedRun = true;
+            break;
+        }
+        (void)paintedFrame(&editor);
+        (trim ? with : without).push_back(double(clock.nsecsElapsed()) / 1e6);
+        QTest::qWait(300); // the trim has run before the next sample starts
+    }
+#ifdef __GLIBC__
+    MarkdownEditor::setBigParseLandedHook({});
+#endif
+    QList<Timing> rows{reduce(QStringLiteral("First parse landing to painted"), QStringLiteral("%1 kB note, no trim").arg(kilobytes), without),
+                       reduce(QStringLiteral("First parse landing to painted"), QStringLiteral("%1 kB note, trim hook").arg(kilobytes), with)};
+    for (Timing &row : rows)
+        row.failed = failedRun;
+    return rows;
+}
+
 /// The first layout of a table in a process, on a note with nothing else:
 /// whatever the table path sets up once (static tables, plugin loading) is in
 /// this one sample, which is why it has a phase of its own.
@@ -1574,6 +1647,17 @@ qint64 benchMemory(const QString &vaultPath, const QString &largeNotePath)
     window->openNote(largeNotePath);
     window->show();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    paintedFrame(window.get());
+    // A note over 128 kB is shown as a placeholder and parsed on the thread
+    // pool; its decorations, source map and block views are the biggest
+    // allocation of the open and land about half a second later (wordCount
+    // is -1 until then). Read before that, the row missed them (about 116 MB
+    // at 20 000 notes).
+    if (!waitForParse(window->editor())) {
+        std::fprintf(stderr, "the parse of the memory note never landed: the row is a failure\n");
+        g_benchFailed = true;
+        return -2;
+    }
     paintedFrame(window.get());
     return peakRSSKilobytes();
 }
@@ -2401,6 +2485,10 @@ void printTable(const QList<Timing> &timings, qint64 peakKB, const QString &memo
                .arg(QStringLiteral("p95 ms"), 9)
                .arg(QStringLiteral("worst ms"), 10);
     for (const Timing &t : timings) {
+        if (t.failed) {
+            out << QStringLiteral("%1  %2  FAILED: the measurement could not be made\n").arg(t.metric, -42).arg(t.detail, -28);
+            continue;
+        }
         out << QStringLiteral("%1  %2  %3  %4  %5  %6  %7\n")
                    .arg(t.metric, -42)
                    .arg(t.detail, -28)
@@ -2418,6 +2506,8 @@ void printTable(const QList<Timing> &timings, qint64 peakKB, const QString &memo
                               "(a high-water mark does not average)\n")
                    .arg(peakKB / 1024.0, 0, 'f', 1)
                    .arg(memoryDetail);
+    } else if (peakKB == -2) {
+        out << "Peak resident memory: FAILED, the note's parse never landed\n";
     } else {
         out << "Peak resident memory: could not read /proc/self/status\n";
     }
@@ -2436,6 +2526,8 @@ void printJson(const QList<Timing> &timings, qint64 peakKB, const QString &memor
         o[QStringLiteral("medianMs")] = t.medianMs;
         o[QStringLiteral("p95Ms")] = t.p95Ms;
         o[QStringLiteral("worstMs")] = t.worstMs;
+        if (t.failed)
+            o[QStringLiteral("failed")] = true;
         array.append(o);
     }
     QJsonObject root;
@@ -2812,6 +2904,8 @@ int main(int argc, char *argv[])
             timings << benchParseLanding(kb, 15);
         }
         timings << benchSourceTableTab(1024, 15);
+        for (const Timing &timing : benchFirstLanding(1024, 15))
+            timings << timing;
     }
 
     // 4: scroll frame time over a 5 000-line note.
@@ -2863,5 +2957,5 @@ int main(int argc, char *argv[])
     if (parser.isSet(jsonOption))
         printJson(timings, peakKB, memoryDetail, vaultPath, noteCount);
 
-    return 0;
+    return g_benchFailed ? 3 : 0;
 }

@@ -918,14 +918,19 @@ std::optional<Settings::NotePosition> Settings::notePosition(const QString &path
         if (fields.size() < 3 || fields.at(0) != path)
             continue;
         NotePosition position{fields.at(1).toLongLong(), fields.at(2).toInt(), {}};
-        for (qsizetype i = 3; i < fields.size(); ++i)
-            position.folds.append(QUrl::fromPercentEncoding(fields.at(i).toLatin1()));
+        for (qsizetype i = 3; i < fields.size(); ++i) {
+            // "@<offset>" is the top line; a fold entry starts with 0 or 1, so the two never meet.
+            if (fields.at(i).startsWith(QLatin1Char('@')))
+                position.top = fields.at(i).mid(1).toLongLong();
+            else
+                position.folds.append(QUrl::fromPercentEncoding(fields.at(i).toLatin1()));
+        }
         return position;
     }
     return std::nullopt;
 }
 
-void Settings::setNotePosition(const QString &path, qint64 cursor, int scroll, const QStringList &folds)
+void Settings::setNotePosition(const QString &path, qint64 cursor, int scroll, const QStringList &folds, qint64 top)
 {
     if (path.isEmpty())
         return;
@@ -936,6 +941,8 @@ void Settings::setNotePosition(const QString &path, qint64 cursor, int scroll, c
             positions.removeAt(i);
     }
     QString entry = prefix + QString::number(cursor) + kPositionField + QString::number(scroll);
+    if (top >= 0)
+        entry += kPositionField + QLatin1Char('@') + QString::number(top);
     // Fold lines are note text, so they may hold the tab and comma the entry
     // and the list are split on: each goes in percent-encoded.
     for (const QString &fold : folds.first(qMin<qsizetype>(folds.size(), 100)))

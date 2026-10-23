@@ -2040,7 +2040,7 @@ void MainWindow::closeLeaf(Leaf *leaf)
         return;
     if (!leaf->notePath.isEmpty()) {
         m_closedTabs.append({leaf->notePath, leaf->group, leaf->editor->cursorOffset(),
-                             leaf->editor->verticalScrollBar()->value()});
+                             leaf->editor->verticalScrollBar()->value(), leaf->editor->topOffset()});
         if (m_closedTabs.size() > 20)
             m_closedTabs.removeFirst();
     }
@@ -2081,7 +2081,7 @@ void MainWindow::undoCloseTab()
         }
         if (openNote(tab.path) && !m_active->view) {
             m_active->editor->setCursorOffset(qMin(tab.caret, qsizetype(m_active->editor->noteText().size())));
-            m_active->editor->verticalScrollBar()->setValue(tab.scroll);
+            m_active->editor->restoreScroll(tab.top, tab.scroll);
         }
         m_active->editor->setFocus();
         return;
@@ -2269,7 +2269,7 @@ void MainWindow::closePopout(PopoutWindow *window, bool *veto)
         rememberCurrentPosition();
         if (!leaf->notePath.isEmpty()) {
             m_closedTabs.append({leaf->notePath, leaf->group, leaf->editor->cursorOffset(),
-                                 leaf->editor->verticalScrollBar()->value()});
+                                 leaf->editor->verticalScrollBar()->value(), leaf->editor->topOffset()});
             if (m_closedTabs.size() > 20)
                 m_closedTabs.removeFirst();
         }
@@ -5688,7 +5688,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     else if (position)
         m_active->editor->setFoldState(position->folds);
     if (position)
-        m_active->editor->verticalScrollBar()->setValue(position->scroll);
+        m_active->editor->restoreScroll(position->top, position->scroll);
 #ifdef NOTEAPPC_HAVE_SHARE
     syncShareViews(); // a shared note takes its document's text here, caret and folds already in place
 #endif
@@ -6879,7 +6879,7 @@ void MainWindow::rememberCurrentPosition()
         return;
     m_settings.setNotePosition(m_active->notePath, m_active->editor->cursorOffset(),
                                m_active->editor->verticalScrollBar()->value(),
-                               m_active->editor->foldState());
+                               m_active->editor->foldState(), m_active->editor->topOffset());
     m_settings.save();
 }
 
@@ -8122,7 +8122,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         if (!leaf->notePath.isEmpty() && !leaf->view)
             m_settings.setNotePosition(leaf->notePath, leaf->editor->cursorOffset(),
                                        leaf->editor->verticalScrollBar()->value(),
-                                       leaf->editor->foldState());
+                                       leaf->editor->foldState(), leaf->editor->topOffset());
     }
     saveLayout();
     // Every pop-out goes with the main window; the layout above already has them.

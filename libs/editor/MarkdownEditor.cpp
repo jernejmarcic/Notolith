@@ -197,6 +197,10 @@ constexpr qreal kListIndent = 26;
 /// plain-text state would be a flicker and nothing else. 200 kB parses in
 /// about 26 ms, 50 kB in 7 ms; this sits between them.
 constexpr qsizetype kAsyncParseThreshold = 128 * 1024;
+/// A stand-in block of a big note whose parse is out ends after this many lines or this many
+/// characters, whichever comes first (plainParagraphs). A longer line is a chunk of its own.
+constexpr int kPlaceholderLines = 64;
+constexpr qsizetype kPlaceholderChars = 4096;
 constexpr int kTypingBurstMs = 500;
 /// How many undo (and redo) steps an edit from elsewhere is carried over. Each
 /// one costs a scan of the whole note, so the oldest go rather than a remote
@@ -728,6 +732,19 @@ void MarkdownEditor::setMode(Mode mode)
     emit modeChanged();
 }
 
+namespace {
+std::function<void()> &bigParseLandedHook()
+{
+    static std::function<void()> hook;
+    return hook;
+}
+} // namespace
+
+void MarkdownEditor::setBigParseLandedHook(std::function<void()> hook)
+{
+    bigParseLandedHook() = std::move(hook);
+}
+
 void MarkdownEditor::setNoteText(const QString &text)
 {
     finishPropertyEdit(false); // a different note: what was typed belongs to the old one
@@ -758,7 +775,8 @@ void MarkdownEditor::setNoteText(const QString &text)
     // and there is no reason to stare at nothing while it happens. A small
     // note parses faster than a frame, so it skips the intermediate state
     // rather than flickering through it.
-    if (text.size() > kAsyncParseThreshold) {
+    d->m_placeholderVersion = text.size() > kAsyncParseThreshold ? d->m_textVersion : 0;
+    if (d->m_placeholderVersion) {
         setWordCount(-1); // not counted until the parse comes back
         adoptDecorations({}, {}, {});
         startParse();
@@ -1344,8 +1362,8 @@ void MarkdownEditor::reparse()
     sortDecorations(result.decorations);
     d->m_parsedVersion = d->m_textVersion;
     setWordCount(result.metadata.wordCount);
-    adoptDecorations(std::move(result.decorations), std::move(result.metadata.properties),
-                     std::move(result.metadata.headings));
+    landDecorations(d->m_textVersion, std::move(result.decorations), std::move(result.metadata.properties),
+                    std::move(result.metadata.headings));
 }
 
 void MarkdownEditor::finishParse()
@@ -1364,7 +1382,7 @@ void MarkdownEditor::adoptParse()
     d->m_parsePending = false;
     ParseJob job = d->m_parseWatcher.result();
     setWordCount(job.words);
-    adoptDecorations(std::move(job.decorations), std::move(job.properties), std::move(job.headings));
+    landDecorations(job.version, std::move(job.decorations), std::move(job.properties), std::move(job.headings));
     d->m_parsedVersion = job.version;
     // The buffer moved on while we were parsing: go round again.
     if (d->m_parsedVersion != d->m_textVersion)
@@ -1396,6 +1414,81 @@ void MarkdownEditor::startParse()
         job.version = version;
         return job;
     }));
+}
+
+void MarkdownEditor::placeLineAt(qsizetype offset, qreal y)
+{
+    if (d->m_blocks.empty())
+        return;
+    QScrollBar *bar = verticalScrollBar();
+    // The block's top first: moving there lays out what is around it, and the layouts
+    // settle heights that were estimates, so the line's own place is known only then, and
+    // moves again as the blocks above it come into range. A few passes, each of them a step.
+    bar->setValue(int(d->m_blocks.at(size_t(blockAt(offset))).y));
+    for (int pass = 0; pass < 6; ++pass) {
+        const int step = int(std::lround(pointFor(offset).y() - y));
+        const int before = bar->value();
+        if (step == 0)
+            break;
+        bar->setValue(before + step);
+        if (bar->value() == before)
+            break;
+    }
+}
+
+qsizetype MarkdownEditor::topOffset() const
+{
+    if (verticalScrollBar()->value() <= 0)
+        return 0;
+    // Two pixels in: a line placed at the very top lands within a pixel of it, rounding
+    // either way, and row 0 would then belong to the line above. A line with only those
+    // few pixels left in view is as good as gone.
+    const qsizetype offset = offsetAt(QPoint(contentLeft(), 2));
+    // That line is as good as gone: the one under it shows. Inside a block it is the block's
+    // next line; the gap between two blocks answers with the end of the block above again, and
+    // then the text at the top is the next block's.
+    qreal height = 0;
+    const QPointF point = pointFor(offset, &height);
+    const qsizetype index = blockAt(offset);
+    if (point.y() + height > 3 || index < 0)
+        return offset;
+    const qsizetype below = offsetAt(QPoint(contentLeft(), int(point.y() + height) + 1));
+    if (below > offset)
+        return below;
+    for (size_t next = size_t(index) + 1; next < d->m_blocks.size(); ++next) {
+        if (!d->m_blocks.at(next).foldHidden)
+            return d->m_blocks.at(next).span.range.start;
+    }
+    return offset;
+}
+
+void MarkdownEditor::restoreScroll(qsizetype top, int pixel)
+{
+    if (top > 0 && d->m_placeholderVersion != 0)
+        placeLineAt(qMin(top, d->m_text.size()), 0);
+    else
+        verticalScrollBar()->setValue(pixel);
+}
+
+void MarkdownEditor::landDecorations(quint64 version, Decorations decorations, QList<Property> properties,
+                                     QList<Heading> headings)
+{
+    // A big note's chunks are estimated a line over each and the parse's blocks a line over
+    // each of theirs, which is more, so the pixel the reader was at would show other text
+    // once they are replaced: the text stays, whichever note's parse this is.
+    const bool placeholder = d->m_placeholderVersion != 0;
+    const qsizetype keep = placeholder && verticalScrollBar()->value() > 0 ? topOffset() : -1;
+    const qreal keepY = keep >= 0 ? pointFor(keep).y() : 0;
+    adoptDecorations(std::move(decorations), std::move(properties), std::move(headings));
+    if (keep >= 0)
+        placeLineAt(keep, keepY);
+    // The trim belongs to the note's own parse: one that left before it (the text was
+    // replaced while it ran) is adopted, and the next landing is the one.
+    if (placeholder && version >= d->m_placeholderVersion) {
+        d->m_placeholderVersion = 0;
+        if (bigParseLandedHook())
+            bigParseLandedHook()();
+    }
 }
 
 void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> properties,
@@ -1517,11 +1610,32 @@ qreal MarkdownEditor::estimatedHeight(const BlockView &view) const
 /// Paragraph blocks split on blank lines, for a note whose parse has not come
 /// back yet. Without this an unparsed note is one block a megabyte long, and
 /// laying that out as a single QTextLayout costs more than the parse did.
+/// A note over kAsyncParseThreshold is cut into chunks instead: its 1 MB is 40 000
+/// paragraphs and gaps, 1.8 kB of BlockView each, 75 MB for the half second until the
+/// parse lands. A chunk is laid out as one multi-line paragraph, the same lines at the
+/// same heights, and ends after kPlaceholderLines lines or kPlaceholderChars characters
+/// (a keystroke relays its whole chunk). It owns the newline that ends it, which
+/// estimatedHeight() counts as a line more.
 QList<BlockSpan> MarkdownEditor::plainParagraphs() const
 {
     QList<BlockSpan> spans;
     qsizetype start = 0;
     const qsizetype size = d->m_text.size();
+    if (size > kAsyncParseThreshold) {
+        while (start < size) {
+            qsizetype end = start;
+            for (int line = 0; line < kPlaceholderLines && end < size; ++line) {
+                const qsizetype newline = d->m_text.indexOf(QLatin1Char('\n'), end);
+                const qsizetype next = newline < 0 ? size : newline + 1;
+                if (end > start && next - start > kPlaceholderChars)
+                    break; // this line starts the next chunk; one over the cap alone is a chunk
+                end = next;
+            }
+            spans.append({BlockSpan::Kind::Paragraph, {start, end}, 0});
+            start = end;
+        }
+        return spans;
+    }
     for (qsizetype i = 0; i < size; ++i) {
         if (d->m_text.at(i) != QLatin1Char('\n'))
             continue;

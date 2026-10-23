@@ -169,6 +169,15 @@ int main(int argc, char *argv[])
     // the cold index 28% slower. A big vault that is still indexing at 8 s
     // keeps what it has; the ceiling is one pass, not a policy.
     QTimer::singleShot(8000, &app, [] { std::thread([] { malloc_trim(0); }).detach(); });
+    // The same for a big note opened later, which the timer above misses: the
+    // parse leaves 100 MB of its temporaries free but resident in a pool
+    // thread's arena, and the trim returns them once per such note (5 ms). A
+    // quarter of a second on: run beside the landing's own paint it cost that
+    // frame 0.7 ms (6.6 -> 7.3 ms), the contention of two threads and the
+    // page freeing.
+    noteAppC::MarkdownEditor::setBigParseLandedHook([] {
+        QTimer::singleShot(250, qApp, [] { std::thread([] { malloc_trim(0); }).detach(); });
+    });
 #endif
 
     return app.exec();
