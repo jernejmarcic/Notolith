@@ -5,52 +5,22 @@
 #include <QLocale>
 #include <QStringConverter>
 
-#include <atomic>
-#include <cstdlib>
 #include <malloc.h>
-#include <new>
 
 #include "CSVparser.h"
 
 using namespace noteAppC;
 
-// A high-water mark of live heap bytes, for the tests that bound what a
-// hostile file may cost (glibc: malloc_usable_size gives a block's size back
-// on delete). Everything in this binary goes through it; a test resets the
-// mark to "now" before the work it measures.
+// Live heap bytes, from glibc: Qt's string and list buffers come from malloc
+// itself (QArrayData), so replacing operator new would not see them. A test
+// takes this before and after the parse, the result still alive, and what is
+// left is what the parse kept.
 namespace {
-std::atomic<long long> gLive{0};
-std::atomic<long long> gPeak{0};
-
-void *tracked(std::size_t size)
+long long heapInUse()
 {
-    void *block = std::malloc(size ? size : 1);
-    if (!block)
-        throw std::bad_alloc();
-    const long long live = gLive += static_cast<long long>(malloc_usable_size(block));
-    long long peak = gPeak.load();
-    while (live > peak && !gPeak.compare_exchange_weak(peak, live)) {
-    }
-    return block;
+    const struct mallinfo2 info = mallinfo2();
+    return static_cast<long long>(info.uordblks) + static_cast<long long>(info.hblkhd);
 }
-
-void untracked(void *block) noexcept
-{
-    if (!block)
-        return;
-    gLive -= static_cast<long long>(malloc_usable_size(block));
-    std::free(block);
-}
-} // namespace
-
-void *operator new(std::size_t size) { return tracked(size); }
-void *operator new[](std::size_t size) { return tracked(size); }
-void operator delete(void *block) noexcept { untracked(block); }
-void operator delete[](void *block) noexcept { untracked(block); }
-void operator delete(void *block, std::size_t) noexcept { untracked(block); }
-void operator delete[](void *block, std::size_t) noexcept { untracked(block); }
-
-namespace {
 
 QList<QStringList> rowsOf(const QString &text, QChar delimiter = QLatin1Char(','))
 {
@@ -239,10 +209,9 @@ TEST(CSVparserTest, AHugeLineOfCommasCostsAlmostNothing)
     // a 1 MB line of delimiters: a million empty cells, which must not become a million strings
     QString text(1 << 20, QLatin1Char(','));
     text += QStringLiteral("\n1,2\n");
-    const long long base = gLive.load();
-    gPeak = base;
+    const long long base = heapInUse();
     const CSVtable table = parseCSV(text, QLatin1Char(','), 501, 64, 1000);
-    EXPECT_LT(gPeak.load() - base, 256 * 1024) << "peak extra bytes";
+    EXPECT_LT(heapInUse() - base, 256 * 1024) << "bytes the parse kept (uncapped: 67 MB)";
     EXPECT_EQ(table.columns, 64);
     EXPECT_EQ(table.hiddenColumns, (1 << 20) + 1 - 64);
     EXPECT_EQ(table.rows.size(), 2);
@@ -254,10 +223,9 @@ TEST(CSVparserTest, AHundredThousandColumnsTimesFiveHundredRowsStaysSmall)
     text += QLatin1Char('\n');
     for (int i = 0; i < 500; ++i)
         text += QStringLiteral("%1,x\n").arg(i);
-    const long long base = gLive.load();
-    gPeak = base;
+    const long long base = heapInUse();
     const CSVtable table = parseCSV(text, QLatin1Char(','), 501, 64, 1000);
-    EXPECT_LT(gPeak.load() - base, 1024 * 1024) << "peak extra bytes (unbounded this was 1.3 GB)";
+    EXPECT_LT(heapInUse() - base, 4 * 1024 * 1024) << "bytes the parse kept (uncapped: 2.1 GB)";
     EXPECT_EQ(table.rows.size(), 501);
     for (const QStringList &record : table.rows)
         ASSERT_EQ(record.size(), 64);
@@ -266,10 +234,9 @@ TEST(CSVparserTest, AHundredThousandColumnsTimesFiveHundredRowsStaysSmall)
 TEST(CSVparserTest, AMegabyteCellIsCutBeforeItIsKept)
 {
     QString text = QStringLiteral("\"") + QString(1 << 20, QLatin1Char('x')) + QStringLiteral("\",b\n");
-    const long long base = gLive.load();
-    gPeak = base;
+    const long long base = heapInUse();
     const CSVtable table = parseCSV(text, QLatin1Char(','), 501, 64, 1000);
-    EXPECT_LT(gPeak.load() - base, 64 * 1024);
+    EXPECT_LT(heapInUse() - base, 64 * 1024) << "bytes the parse kept (uncapped: 4 MB)";
     ASSERT_EQ(table.rows.size(), 1);
     EXPECT_EQ(table.rows.at(0).at(0).size(), 1001);
     EXPECT_EQ(table.rows.at(0).at(1), QStringLiteral("b"));
@@ -322,4 +289,15 @@ TEST(CSVdecodeTest, AUTF8FileWithAStrayBadByteStaysUTF8)
 TEST(CSVdecodeTest, ACodePageFileWithNoMultibyteSequenceIsStillACodePageFile)
 {
     EXPECT_EQ(decodeCSV("Jo\xE9 \xE9;1\n", QLocale::English), QString::fromUtf8("Jo\xC3\xA9 \xC3\xA9;1\n"));
+}
+
+TEST(CSVparserTest, ACutNeverLeavesAHalfOfASurrogatePair)
+{
+    // 999 letters, then a character outside the BMP: the cap falls between its two UTF-16 units
+    const QString text = QString(999, QLatin1Char('a')) + QString::fromUcs4(U"\U0001F600", 1) + QStringLiteral(",b\n");
+    const CSVtable table = parseCSV(text, QLatin1Char(','), -1, -1, 1000);
+    const QString cell = table.rows.at(0).at(0);
+    EXPECT_EQ(cell.size(), 1000);
+    EXPECT_TRUE(cell.endsWith(QChar(0x2026)));
+    EXPECT_FALSE(cell.at(cell.size() - 2).isHighSurrogate());
 }

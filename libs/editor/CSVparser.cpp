@@ -75,8 +75,12 @@ CSVtable parseCSV(QStringView text, QChar delimiter, qsizetype maxRows, int maxC
             field += c;
     };
     const auto endField = [&] {
-        if (keeping())
+        if (keeping()) {
+            // a cut can fall between the halves of a surrogate pair: the lone half goes
+            if (cut && !field.isEmpty() && field.back().isHighSurrogate())
+                field.chop(1);
             record << (cut ? field + QChar(0x2026) : field);
+        }
         ++cells;
         field.clear();
         fieldStarted = cut = false;

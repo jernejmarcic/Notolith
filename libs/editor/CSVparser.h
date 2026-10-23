@@ -40,9 +40,11 @@ CSVtable parseCSV(QStringView text, QChar delimiter, qsizetype maxRows = -1, int
                   int maxCellChars = -1);
 
 /// A file's bytes as text: by byte order mark when it has one (UTF-8, 16, 32),
-/// else UTF-8, and when that is not valid UTF-8 the legacy code page Excel
-/// wrote it in - Windows-1250 for a Central European `language`, otherwise
-/// Windows-1252 (Latin-1 where Qt has no such codec).
+/// else UTF-8, and when the bytes are not UTF-8 - invalid, and without one
+/// well-formed multibyte sequence, so a UTF-8 file with a stray bad byte stays
+/// UTF-8 - the legacy code page Excel wrote it in: Windows-1250 for a Central
+/// European `language`, otherwise Windows-1252 (Latin-1 where Qt has no such
+/// codec).
 QString decodeCSV(const QByteArray &bytes, QLocale::Language language = QLocale::system().language());
 
 } // namespace noteAppC
