@@ -268,6 +268,11 @@ QString PdfView::path() const
     return m_pages->path();
 }
 
+void PdfView::setFilePath(const QString &path)
+{
+    m_pages->setPath(path);
+}
+
 QUndoStack *PdfView::undoStack() const
 {
     return m_pages->undoStack();

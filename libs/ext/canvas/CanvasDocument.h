@@ -143,6 +143,8 @@ public:
     QByteArray serialize() const;
 
     QString path() const { return m_path; }
+    /// The file was renamed or moved: save() with no path writes there from now on.
+    void setPath(const QString &path) { m_path = path; }
 
     const QList<CanvasNode> &nodes() const { return m_nodes; }
     const QList<CanvasEdge> &edges() const { return m_edges; }

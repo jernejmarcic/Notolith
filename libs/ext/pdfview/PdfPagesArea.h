@@ -46,6 +46,7 @@ public:
     /// isViewFile()/openView()'s isModified() dispatch expects.
     bool isModified() const { return !m_undo.isClean(); }
     QString path() const { return m_document.path(); }
+    void setPath(const QString &path) { m_document.setPath(path); }
     PdfDocument *document() { return &m_document; }
 
     QUndoStack *undoStack() { return &m_undo; }

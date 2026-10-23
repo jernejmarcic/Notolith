@@ -96,6 +96,8 @@ public:
     bool load(const QString &path, QString *error = nullptr);
     bool isOpen() const { return m_doc != nullptr; }
     QString path() const { return m_path; }
+    /// The file was renamed or moved: save() writes to `path` from now on (the document is in memory).
+    void setPath(const QString &path) { m_path = path; }
 
     int pageCount() const;
     /// In PDF points (1/72"); null for an out-of-range page.

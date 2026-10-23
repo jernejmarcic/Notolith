@@ -7648,6 +7648,21 @@ QString MainWindow::findMovedNote(const QString &lost, const Note &known)
     return found;
 }
 
+/// A tab's view keeps the path it saves to: tell it the file moved. Module views (PDF, ink, ...), a canvas and an image.
+static void followViewPath(QWidget *view, const QString &path)
+{
+    if (auto *module = qobject_cast<ModuleView *>(view))
+        module->setFilePath(path);
+#ifdef NOTEAPPC_HAVE_CANVAS
+    else if (auto *canvas = qobject_cast<CanvasView *>(view))
+        canvas->setPath(path);
+#endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+    else if (auto *image = qobject_cast<ImageView *>(view))
+        image->setPath(path);
+#endif
+}
+
 void MainWindow::followLostNotes(bool final)
 {
     QStringList open;
@@ -8447,10 +8462,8 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
         } else if (isDir && leaf->notePath.startsWith(oldPath + QLatin1Char('/'))) {
             leaf->notePath.replace(0, oldPath.size(), newPath);
         }
-        if (leaf->notePath != before) { // a module's view keeps its own path: it must save to the new one
-            if (auto *module = qobject_cast<ModuleView *>(leaf->view))
-                module->setFilePath(leaf->notePath);
-        }
+        if (leaf->notePath != before) // a view keeps its own path: it must save to the new one
+            followViewPath(leaf->view, leaf->notePath);
     }
     for (const auto &group : m_groups)
         syncTabs(group.get());

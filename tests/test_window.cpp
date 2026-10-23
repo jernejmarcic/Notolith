@@ -9585,3 +9585,117 @@ TEST_F(WindowTest, WithInkOffTheInkTextIsStillIndexed)
     EXPECT_EQ(list->topLevelItemCount(), 1);
 }
 #endif
+
+// --- a tab's view follows its file when the app renames or moves it ---
+
+namespace {
+bool renameVault(MainWindow &window, const QString &from, bool isDir, const QString &to)
+{
+    bool renamed = false;
+    QString error;
+    EXPECT_TRUE(QMetaObject::invokeMethod(&window, "renameVaultPath", Q_RETURN_ARG(bool, renamed), Q_ARG(QString, from),
+                                          Q_ARG(bool, isDir), Q_ARG(QString, to), Q_ARG(QString *, &error)));
+    EXPECT_TRUE(renamed) << error.toStdString();
+    return renamed;
+}
+} // namespace
+
+#ifdef NOTEAPPC_HAVE_CANVAS
+TEST_F(WindowTest, AnOpenCanvasSavesToTheNewPathAfterItsFileOrFolderIsRenamed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Notes")));
+    write(QStringLiteral("Notes/Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Notes/Board.canvas"))));
+    auto *canvas = window.findChild<noteAppC::CanvasView *>();
+    ASSERT_NE(canvas, nullptr);
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes/Board.canvas")), false, QStringLiteral("Renamed")));
+    EXPECT_EQ(canvas->path(), path(QStringLiteral("Notes/Renamed.canvas")));
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Notes/Renamed.canvas")))); // so a save is seen to write it
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Notes/Renamed.canvas"))));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Notes/Board.canvas")))) << "the old name is not recreated";
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes")), true, QStringLiteral("Archive")));
+    EXPECT_EQ(canvas->path(), path(QStringLiteral("Archive/Renamed.canvas")));
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Archive/Renamed.canvas"))));
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Archive/Renamed.canvas"))));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Notes")))) << "the old folder is not recreated";
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+TEST_F(WindowTest, AnOpenImageFollowsItsFileOrFolderBeingRenamed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Notes")));
+    QImage picture(40, 20, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Notes/pic.png"))));
+    Settings config = Settings::load();
+    config.setValue(Settings::featureKey("image-annotation"), true); // off until asked for
+    ASSERT_TRUE(config.save());
+    const auto switchOff = qScopeGuard([&config] { // the settings file is shared by every test of the process
+        config.setValue(Settings::featureKey("image-annotation"), false);
+        config.save();
+    });
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Notes/pic.png"))));
+    auto *image = window.findChild<noteAppC::ImageView *>();
+    ASSERT_NE(image, nullptr);
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes/pic.png")), false, QStringLiteral("photo")));
+    EXPECT_EQ(image->path(), path(QStringLiteral("Notes/photo.png")));
+    EXPECT_EQ(image->sidecarPath(), path(QStringLiteral("Notes/photo.png annotations.md"))) << "its marks are saved under the new name";
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes")), true, QStringLiteral("Archive")));
+    EXPECT_EQ(image->path(), path(QStringLiteral("Archive/photo.png")));
+    EXPECT_EQ(image->sidecarPath(), path(QStringLiteral("Archive/photo.png annotations.md")));
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_PDFVIEW_MODULE
+TEST_F(WindowTest, AnOpenPdfSavesToTheNewPathAfterItsFileOrFolderIsRenamed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Notes")));
+    {
+        QPdfWriter pdf(path(QStringLiteral("Notes/doc.pdf")));
+        QPainter painter(&pdf);
+        painter.drawText(100, 100, QStringLiteral("page one"));
+    }
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Notes/doc.pdf"))));
+    auto *view = window.findChild<noteAppC::ModuleView *>();
+    ASSERT_NE(view, nullptr);
+    const auto viewPath = [view] {
+        QString result;
+        EXPECT_TRUE(QMetaObject::invokeMethod(view, "path", Q_RETURN_ARG(QString, result)));
+        return result;
+    };
+    ASSERT_EQ(viewPath(), path(QStringLiteral("Notes/doc.pdf")));
+
+    // A save that lands at the new path is seen as that file being rewritten.
+    const auto saveRewrites = [&](const QString &where) {
+        const QDateTime before = QFileInfo(where).lastModified();
+        QTest::qWait(30);
+        command(window, "editor:save-file")->trigger();
+        EXPECT_GT(QFileInfo(where).lastModified(), before) << where.toStdString();
+    };
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes/doc.pdf")), false, QStringLiteral("paper")));
+    EXPECT_EQ(viewPath(), path(QStringLiteral("Notes/paper.pdf")));
+    saveRewrites(path(QStringLiteral("Notes/paper.pdf")));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Notes/doc.pdf")))) << "the old name is not recreated";
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes")), true, QStringLiteral("Archive")));
+    EXPECT_EQ(viewPath(), path(QStringLiteral("Archive/paper.pdf")));
+    saveRewrites(path(QStringLiteral("Archive/paper.pdf")));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Notes")))) << "the old folder is not recreated";
+}
+#endif
