@@ -8123,6 +8123,23 @@ TEST(CSVEmbedTest, AChangedFileIsReadAgain)
     EXPECT_EQ(editor->tableCellTextsAt(0).at(2), (QStringList{QStringLiteral("3"), QStringLiteral("4")}));
 }
 
+TEST(CSVEmbedTest, ABaseRefreshDoesNotRelayOutACSVTable)
+{
+    // refreshBases() fires on every index change - every note save in the
+    // vault - and relays out each isBase block; a CSV table is not a base's.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("r.csv"), "a,b\n1,2\n"));
+    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+    const quint64 before = editor->layoutCount();
+    editor->refreshBases();
+    QTest::qWait(300); // past the 200 ms debounce
+    EXPECT_EQ(editor->layoutCount(), before);
+    editor->setBaseRunner([](const QString &, const QString &, const MarkdownEditor::BaseDeliver &) {});
+    EXPECT_EQ(editor->layoutCount(), before);
+    EXPECT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+}
+
 TEST(CSVEmbedTest, TwoEmbedsOfOneFileBothLand)
 {
     QTemporaryDir dir;

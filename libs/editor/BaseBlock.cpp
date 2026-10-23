@@ -75,7 +75,7 @@ void MarkdownEditor::setBaseRunner(
     d->m_baseCache.clear();
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isBase)
+        if (!block.isBase || !block.csvPath.isEmpty()) // a CSV embed is no base's
             continue;
         block.layout.reset();
         block.cells.clear();
@@ -99,7 +99,7 @@ void MarkdownEditor::refreshBases()
             d->m_baseCache.clear();
             bool touched = false;
             for (BlockView &block : d->m_blocks) {
-                if (!block.isBase)
+                if (!block.isBase || !block.csvPath.isEmpty()) // a CSV embed is no base's
                     continue;
                 block.layout.reset();
                 block.cells.clear();
