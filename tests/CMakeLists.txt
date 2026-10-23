@@ -160,6 +160,9 @@ if(TARGET notolith-ink)
     # the one the module loads (same soname, found in modules/), never a second copy of InkView.
     target_link_libraries(test_window PRIVATE notolith-inkcore)
     set_property(TARGET test_window APPEND PROPERTY BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+elseif(TARGET notolith-ink-static) # NOTEAPPC_STATIC_MODULES: the same tests, the module a static plugin of test_window
+    target_compile_definitions(test_window PRIVATE NOTEAPPC_HAVE_INK_MODULE NOTEAPPC_STATIC_INK)
+    target_link_libraries(test_window PRIVATE notolith-ink-static notolith-inkcore)
 endif()
 # The PDF viewer module sits in the same directory (libs/ext/pdfview): the window tests that open a PDF, and the
 # ones that check what is mapped before one is opened, need it built.
@@ -207,7 +210,10 @@ if(TARGET notolith-share)
     noteappc_lazy_test(lazy_share_prescan ShareAskedForBeforeAnyScan "${noteappc_lazy_modules}")
     noteappc_lazy_test(lazy_share_off ShareOffMapsNothing "${noteappc_lazy_modules}")
     noteappc_lazy_test(lazy_share_missing ShareWithoutTheModuleSaysWhatIsMissing)
-    list(APPEND noteappc_exe_forbidden "protobuf" "datachannel" "avahi" "absl")
+    list(APPEND noteappc_exe_forbidden "protobuf" "datachannel" "avahi")
+    if(NOT TARGET notolith-ink-static) # a static ink module links the stroke modeler, and so Abseil, into the executable
+        list(APPEND noteappc_exe_forbidden "absl")
+    endif()
     list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-share>)
     add_test(NAME needed_share COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-share>
         "libnoteAppC_")
@@ -243,6 +249,9 @@ if(TARGET noteAppC_hwfont)
     set_tests_properties(hwfont PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
     if(TARGET notolith-hwfont)
         add_dependencies(test_hwfont notolith-hwfont)
+    elseif(TARGET notolith-hwfont-static) # NOTEAPPC_STATIC_MODULES: the module is a static plugin of this executable
+        target_link_libraries(test_hwfont PRIVATE notolith-hwfont-static)
+        target_compile_definitions(test_hwfont PRIVATE NOTEAPPC_STATIC_HWFONT)
     endif()
 endif()
 target_compile_definitions(test_window PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")

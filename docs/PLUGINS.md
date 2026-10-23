@@ -76,7 +76,10 @@ libdatachannel or avahi); the manifest has no
 dependency list, so a module whose core library is missing fails to load with the loader's
 message, shown in Settings. A module must match the host's ABI tag
 (`version-token-qtversion`, the token random per build directory); a second module claiming
-a suffix an earlier one claims is refused. The mechanism is in `libs/modules/`; the first two
+a suffix an earlier one claims is refused. With `NOTEAPPC_STATIC_MODULES` (the Android build) the
+ink and hwfont modules are Qt static plugins linked into the executable instead, found through
+`QPluginLoader::staticPlugins()` with the same manifest and loaded on first use all the same
+([PLATFORMS.md](PLATFORMS.md), "Mobile"). The mechanism is in `libs/modules/`; the first two
 modules are documented in [INK.md](INK.md). Spec:
 `superpowers/specs/2026-10-21-ink-core-design.md` section 4.
 
