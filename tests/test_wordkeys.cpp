@@ -69,13 +69,19 @@ TEST(WordKeysTest, CtrlBackspaceDeletesToTheStartOfTheWord)
 
 TEST(WordKeysTest, CtrlBackspaceOverSpacesAndPunctuation)
 {
-    // trailing spaces go with the word before them
-    EXPECT_EQ(ctrlBackspace(QStringLiteral("one two   "), 10), QStringLiteral("one "));
+    // one space is skipped and the word behind it goes; two or more are a group of their own
+    EXPECT_EQ(ctrlBackspace(QStringLiteral("one two "), 8), QStringLiteral("one "));
+    EXPECT_EQ(ctrlBackspace(QStringLiteral("one two   "), 10), QStringLiteral("one two"));
+    EXPECT_EQ(ctrlDelete(QStringLiteral("one   two"), 3), QStringLiteral("onetwo"));
     // a run of punctuation is one step
     EXPECT_EQ(ctrlBackspace(QStringLiteral("wait..."), 7), QStringLiteral("wait"));
     EXPECT_EQ(ctrlBackspace(QStringLiteral("wait, "), 6), QStringLiteral("wait"));
-    // an apostrophe stays in its word
-    EXPECT_EQ(ctrlBackspace(QStringLiteral("say don't"), 9), QStringLiteral("say "));
+    // CodeMirror's groups: an apostrophe or a decimal point is punctuation, not part of the word
+    EXPECT_EQ(ctrlBackspace(QStringLiteral("say don't"), 9), QStringLiteral("say don'"));
+    EXPECT_EQ(ctrlBackspace(QStringLiteral("pi 3.14"), 7), QStringLiteral("pi 3."));
+    EXPECT_EQ(ctrlBackspace(QStringLiteral("see https://x.com"), 17), QStringLiteral("see https://x."));
+    // an underscore is a word character
+    EXPECT_EQ(ctrlBackspace(QStringLiteral("a foo_bar"), 9), QStringLiteral("a "));
     // indentation alone: back to the line start, not into the line above
     EXPECT_EQ(ctrlBackspace(QStringLiteral("a\n    "), 6), QStringLiteral("a\n"));
 }
@@ -96,10 +102,22 @@ TEST(WordKeysTest, AccentedAndNonLatinWords)
     // a combining mark never parts from its letter
     const QString combining = QStringLiteral("abc éte");
     EXPECT_EQ(ctrlBackspace(combining, combining.size()), QStringLiteral("abc "));
-    // katakana is one word, each kanji its own
+    // every CJK character is a word character: the run goes whole
     const QString cjk = QStringLiteral("日本語のテスト");
-    EXPECT_EQ(ctrlBackspace(cjk, cjk.size()), QStringLiteral("日本語の"));
-    EXPECT_EQ(ctrlBackspace(QStringLiteral("日本語"), 3), QStringLiteral("日本"));
+    EXPECT_EQ(ctrlBackspace(cjk, cjk.size()), QString());
+    EXPECT_EQ(ctrlBackspace(QStringLiteral("abc 日本語"), 7), QStringLiteral("abc "));
+}
+
+TEST(WordKeysTest, EmojiAreOneClusterAndPunctuation)
+{
+    const QString family = QString::fromUcs4(U"a\U0001F468\u200D\U0001F469\u200D\U0001F467", 6);
+    EXPECT_EQ(ctrlBackspace(family, family.size()), QStringLiteral("a"));
+    const QString thumb = QStringLiteral("hi ") + QString::fromUcs4(U"\U0001F44D\U0001F3FD", 2);
+    EXPECT_EQ(ctrlBackspace(thumb, thumb.size()), QStringLiteral("hi "));
+    const QString flag = QString::fromUcs4(U"\U0001F1F8\U0001F1EE", 2);
+    qsizetype landed = -1;
+    after(flag, flag.size(), Qt::Key_Left, &landed);
+    EXPECT_EQ(landed, 0) << "a flag is one step";
 }
 
 TEST(WordKeysTest, CtrlBackspaceWithASelectionDeletesJustTheSelection)
@@ -134,8 +152,9 @@ TEST(WordKeysTest, CtrlDeleteDeletesToTheEndOfTheWord)
     // at a word's end: the space and the next word
     EXPECT_EQ(ctrlDelete(QStringLiteral("one two three"), 3), QStringLiteral("one three"));
     EXPECT_EQ(ctrlDelete(QStringLiteral("wait... ok"), 4), QStringLiteral("wait ok"));
+    EXPECT_EQ(ctrlDelete(QStringLiteral("a...  b"), 1), QStringLiteral("a  b"));
     EXPECT_EQ(ctrlDelete(QStringLiteral("živjo čudoviti"), 5), QStringLiteral("živjo"));
-    // trailing spaces up to the line end go, the line break stays; at the end it is the break
+    // spaces up to the line end go, the line break stays; at the end it is the break
     EXPECT_EQ(ctrlDelete(QStringLiteral("a  \nb"), 1), QStringLiteral("a\nb"));
     EXPECT_EQ(ctrlDelete(QStringLiteral("a\nb"), 1), QStringLiteral("ab"));
     EXPECT_EQ(ctrlDelete(QStringLiteral("a"), 1), QStringLiteral("a"));
@@ -166,11 +185,15 @@ TEST(WordKeysTest, CtrlLeftAndRightMoveByWord)
     EXPECT_EQ(landed, 15);
     after(text, 15, Qt::Key_Right, &landed);
     EXPECT_EQ(landed, 15);
-    // across a line break: one step, as the plain arrows take
+    // a line break is space: the move goes on into the next line's word, as in CodeMirror
     after(QStringLiteral("ab\ncd"), 2, Qt::Key_Right, &landed);
-    EXPECT_EQ(landed, 3);
+    EXPECT_EQ(landed, 5);
     after(QStringLiteral("ab\ncd"), 3, Qt::Key_Left, &landed);
-    EXPECT_EQ(landed, 2);
+    EXPECT_EQ(landed, 0);
+    after(QStringLiteral("ab\n\n  cd"), 2, Qt::Key_Right, &landed);
+    EXPECT_EQ(landed, 8);
+    after(QStringLiteral("ab\n"), 3, Qt::Key_Left, &landed);
+    EXPECT_EQ(landed, 0);
 }
 
 TEST(WordKeysTest, CtrlShiftLeftAndRightExtendTheSelection)
@@ -187,6 +210,19 @@ TEST(WordKeysTest, CtrlShiftLeftAndRightExtendTheSelection)
     QTest::keyClick(editor.get(), Qt::Key_Left, kCtrlShift);
     EXPECT_EQ(editor->selectedText(), QStringLiteral("one "));
     EXPECT_EQ(editor->noteText(), QStringLiteral("one two three")) << "moving never edits";
+}
+
+TEST(WordKeysTest, CtrlArrowsWithASelectionAndNoShiftCollapseToItsEdge)
+{
+    auto editor = editorWith(QStringLiteral("one two three"), 13);
+    editor->selectRange({4, 7});
+    QTest::keyClick(editor.get(), Qt::Key_Left, kCtrl);
+    EXPECT_EQ(editor->cursorOffset(), 4);
+    EXPECT_EQ(editor->selectedText(), QString());
+    editor->selectRange({4, 7});
+    QTest::keyClick(editor.get(), Qt::Key_Right, kCtrl);
+    EXPECT_EQ(editor->cursorOffset(), 7);
+    EXPECT_EQ(editor->selectedText(), QString());
 }
 
 TEST(WordKeysTest, AnEntityDrawnAsOneCharacterGoesWholeOrNotAtAll)
@@ -228,7 +264,7 @@ TEST(WordKeysTest, ReadingModeEditsNothing)
     EXPECT_EQ(editor->noteText(), QStringLiteral("one two"));
 }
 
-TEST(WordKeysTest, LivePreviewStopsWhereTheCaretMayStandAndRevealsTheMarkup)
+TEST(WordKeysTest, LivePreviewStopsAtTheMarkersLikeAnyPunctuation)
 {
     // The markers are punctuation: a stop of their own, at offsets a plain
     // arrow reaches too (moveCursor reveals the syntax the caret touches).
@@ -241,6 +277,16 @@ TEST(WordKeysTest, LivePreviewStopsWhereTheCaretMayStandAndRevealsTheMarkup)
     }
     EXPECT_EQ(ctrlBackspace(text, 9), QStringLiteral("one **** three"));
     EXPECT_EQ(editor->noteText(), text);
+}
+
+// Raw CodeMirror 6 behaviour, kept on purpose: the markers are Other characters,
+// so a word step from outside the bold span takes the closing "**" and the
+// space with it (Ctrl+Delete from before it takes just the markers). One Ctrl+Z gives them back (after() checks).
+TEST(WordKeysTest, AWordStepMayTakeAMarkerThatIsHiddenAtTheCaret)
+{
+    const QString text = QStringLiteral("one **two** three");
+    EXPECT_EQ(ctrlBackspace(text, 12), QStringLiteral("one **twothree"));
+    EXPECT_EQ(ctrlDelete(text, 9), QStringLiteral("one **two three"));
 }
 
 TEST(WordKeysTest, SourceModeWorksToo)
@@ -257,6 +303,15 @@ TEST(WordKeysTest, VimInsertModeDeletesWordsAndNormalModeLeavesTheKeyAlone)
     editor->setVimMode(true);
     QTest::keyClick(editor.get(), Qt::Key_Left, kCtrl); // normal mode: the plain step, as before
     EXPECT_EQ(editor->cursorOffset(), 5);
+    // Not a vim binding: nothing is deleted, in normal or in visual mode
+    QTest::keyClick(editor.get(), Qt::Key_Backspace, kCtrl);
+    QTest::keyClick(editor.get(), Qt::Key_Delete, kCtrl);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("one two"));
+    QTest::keyClick(editor.get(), 'v');
+    QTest::keyClick(editor.get(), 'l');
+    QTest::keyClick(editor.get(), Qt::Key_Backspace, kCtrl);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("one two"));
+    QTest::keyClick(editor.get(), Qt::Key_Escape);
     QTest::keyClick(editor.get(), 'A'); // append at the line's end: insert mode
     QTest::keyClick(editor.get(), Qt::Key_Backspace, kCtrl);
     EXPECT_EQ(editor->noteText(), QStringLiteral("one "));

@@ -6323,7 +6323,12 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
             const int direction = previous ? -1 : 1;
             const bool extend = event->matches(QKeySequence::SelectPreviousWord)
                                 || event->matches(QKeySequence::SelectNextWord);
-            qsizetype target = wordTarget(d->m_cursor, direction);
+            const Range selected = selection();
+            if (!extend && selected.length() > 0) { // collapses to its edge, as in CodeMirror
+                moveCursor(direction < 0 ? selected.start : selected.end, false);
+                return;
+            }
+            qsizetype target = wordTarget(d->m_cursor, direction, false);
             if (target == d->m_cursor) // a cell's edge: out of it as the plain arrow goes
                 target = stepOverSubstitution(qBound<qsizetype>(0, d->m_cursor + direction, d->m_text.size()),
                                               direction);
