@@ -425,7 +425,7 @@ struct MarkdownEditor::BlockView {
     /// The file a CSV/TSV embed shows (CSVEmbed.cpp), empty for any other
     /// block: what deliverCSV matches a block back on. Such a block is also
     /// isBase, which only means "painted as a data table".
-    QString csvPath;
+    QString CSVpath;
 
     /// Set when this block is a raw HTML block (top-level `<div>`,
     /// `<table>`, `<details>`... - not inline HTML inside a paragraph)
@@ -715,6 +715,7 @@ struct MarkdownEditor::CSVcacheEntry {
     quint64 generation = 0;
     BaseTableData table; ///< `error` set when the file could not be read
     qsizetype hiddenRows = 0; ///< records past the cap, counted but not kept
+    int hiddenColumns = 0;    ///< cells of the widest record past the column cap
     bool partial = false;     ///< the file was larger than was read
 };
 
@@ -888,6 +889,8 @@ struct MarkdownEditor::Private {
     QHash<QString, QPair<qint64, QString>> m_baseFiles;
     QHash<QString, CSVcacheEntry> m_CSVcache; ///< path -> its last read
     quint64 m_CSVgeneration = 0;
+    QFileSystemWatcher *m_CSVwatcher = nullptr; ///< made with the first CSV embed
+    QTimer *m_CSVrefresh = nullptr;
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()

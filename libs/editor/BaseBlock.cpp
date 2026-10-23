@@ -75,7 +75,7 @@ void MarkdownEditor::setBaseRunner(
     d->m_baseCache.clear();
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isBase || !block.csvPath.isEmpty()) // a CSV embed is no base's
+        if (!block.isBase || !block.CSVpath.isEmpty()) // a CSV embed is no base's
             continue;
         block.layout.reset();
         block.cells.clear();
@@ -99,7 +99,7 @@ void MarkdownEditor::refreshBases()
             d->m_baseCache.clear();
             bool touched = false;
             for (BlockView &block : d->m_blocks) {
-                if (!block.isBase || !block.csvPath.isEmpty()) // a CSV embed is no base's
+                if (!block.isBase || !block.CSVpath.isEmpty()) // a CSV embed is no base's
                     continue;
                 block.layout.reset();
                 block.cells.clear();
@@ -304,28 +304,36 @@ bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data,
 
     QList<qreal> natural(columns, minimum);
     std::vector<Cell> cells;
+    cells.reserve(size_t(totalRows) * size_t(columns));
 
+    // Hoisted out of the per-cell work: a table is thousands of cells.
+    QFont headerFont = font;
+    headerFont.setWeight(QFont::DemiBold);
+    const QFontMetricsF metrics(font);
+    const QFontMetricsF headerMetrics(headerFont);
+    QTextOption wrap;
+    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+
+    // `countsForWidth` false is the "and N more" footer, which spans the
+    // whole table rather than deciding how wide its first column is.
     const auto addCell = [&](int row, int column, const QString &text, bool header,
-                             const QColor &colour) {
+                             const QColor &colour, bool countsForWidth = true) {
         Cell cell;
         cell.row = row;
         cell.column = column;
         cell.layout = std::make_unique<QTextLayout>(text);
         cell.layout->setCacheEnabled(true);
-        QTextOption wrap;
-        wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
         cell.layout->setTextOption(wrap);
-        QFont cellFont = font;
-        if (header)
-            cellFont.setWeight(QFont::DemiBold);
-        cell.layout->setFont(cellFont);
+        cell.layout->setFont(header ? headerFont : font);
         QTextLayout::FormatRange range;
         range.start = 0;
         range.length = int(text.size());
         range.format.setForeground(colour);
         cell.layout->setFormats({range});
-        natural[column] =
-            qMax(natural.at(column), QFontMetricsF(cellFont).horizontalAdvance(text) + 2 * padX);
+        if (countsForWidth) {
+            natural[column] = qMax(natural.at(column),
+                                   (header ? headerMetrics : metrics).horizontalAdvance(text) + 2 * padX);
+        }
         cells.push_back(std::move(cell));
     };
 
@@ -337,7 +345,7 @@ bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data,
             addCell(r + 1, c, row.cells.at(c), false, textColour);
     }
     if (truncated) {
-        addCell(summaryRow, 0, moreText, false, mutedColour);
+        addCell(summaryRow, 0, moreText, false, mutedColour, false);
     }
     for (int c = 0; footer && c < columns && c < data.summaries.size(); ++c)
         addCell(footerRow, c, data.summaries.at(c), false, mutedColour);
@@ -363,7 +371,7 @@ bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data,
 
     QList<qreal> rowHeights(totalRows, cellLineHeight + 2 * padY);
     for (Cell &cell : cells) {
-        const qreal width = widths.value(cell.column, minimum) - 2 * padX;
+        const qreal width = (cell.row == summaryRow ? x : widths.value(cell.column, minimum)) - 2 * padX;
         cell.layout->beginLayout();
         qreal height = 0;
         while (true) {
@@ -386,7 +394,7 @@ bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data,
     }
     for (Cell &cell : cells) {
         cell.rect = QRectF(offsets.value(cell.column), rowTops.value(cell.row),
-                           widths.value(cell.column), rowHeights.value(cell.row));
+                           cell.row == summaryRow ? x : widths.value(cell.column), rowHeights.value(cell.row));
     }
 
     // Only a data row's first cell opens its note - BaseTableModel::

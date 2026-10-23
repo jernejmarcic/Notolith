@@ -4734,6 +4734,22 @@ TEST_F(WindowTest, TheCorePluginsSwitchesReachTheEditor)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+TEST_F(WindowTest, ACSVEmbedFollowsItsFileWhenAnotherProgramRewritesIt)
+{
+    write(QStringLiteral("data.csv"), "a,b\n1,2\n");
+    write(QStringLiteral("Table.md"), "![[data.csv]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Table.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+    EXPECT_EQ(editor->tableCellTextsAt(0).at(1), (QStringList{QStringLiteral("1"), QStringLiteral("2")}));
+
+    write(QStringLiteral("data.csv"), "a,b\n7,8\n9,10\n"); // no edit, no reopen: just the file
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+    EXPECT_EQ(editor->tableCellTextsAt(0).at(1), (QStringList{QStringLiteral("7"), QStringLiteral("8")}));
+}
+
 TEST_F(WindowTest, CtrlETogglesReadingViewAndComesBackToTheModeItLeft)
 {
     QTemporaryDir config; // the switch below is the user's

@@ -771,6 +771,8 @@ public:
     /// table, a base, a CSV embed. Empty when that block is not a table (or
     /// is one still loading).
     QList<QStringList> tableCellTextsAt(qsizetype offset) const;
+    /// For the tests: how many CSV files this editor holds a read of.
+    int CSVcacheSize() const;
     /// For the tests: that cell's caption - the file name of a card, the
     /// `alt` of an `<img>` whose file is missing. Empty for an image.
     QString embedCellLabelAt(qsizetype offset, int cell) const;
@@ -1141,7 +1143,7 @@ private:
     struct NotebookCacheEntry;
     struct QueryCacheEntry;
     struct BaseCacheEntry;
-struct CSVcacheEntry;
+    struct CSVcacheEntry;
     struct InlineHTMLpair;
     struct HTMLtableEdit;
     struct CellRef;
@@ -1815,7 +1817,17 @@ struct CSVcacheEntry;
     void deliverCSV(const QString &path, quint64 generation, CSVcacheEntry result);
     /// The worker's half: read `path` and parse it. Static - it runs off the
     /// UI thread and must not touch the editor.
-    static CSVcacheEntry readCSVfile(const QString &path, bool tsv, const QString &unreadable);
+    static CSVcacheEntry readCSVfile(const QString &path, bool tsv, const QString &unreadable,
+                                     const QString &moreColumns);
+    /// Relays out the blocks showing `path`, so layoutCSVembed looks at it again.
+    void relayCSVblocks(const QString &path);
+    /// Watches `path` and its folder (made on the first call), so a change on
+    /// disk reaches refreshCSVfiles after a short debounce.
+    void watchCSV(const QString &path);
+    /// Stats every cached file, relaying out the blocks of those that changed.
+    void refreshCSVfiles();
+    /// Forgets every cached file and its watch: the feature went off.
+    void dropCSVcache();
     /// The view's name (if any) above the grid, then paintTable for the
     /// grid itself - the table painting is not duplicated, only framed.
     void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;

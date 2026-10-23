@@ -669,11 +669,28 @@ takes the most frequent of `,`, `;` and tab on its first line, so a European
 Excel export (`;`) opens right.
 
 The file is read and parsed on a worker thread, never in layout: the block
-says "Loading..." until the table lands. It shows the header and the first 500
-rows, fewer for a wide file (8000 cells at most), with "and N more rows" under
-it; only the first 32 MB of a file is read. The result is cached by path and
-read again when the file's mtime or size changed, the next time the block is
-laid out. A file that is not there falls back to the plain link, as any
+says "Loading..." until the table lands. What it shows is bounded so that no
+file can stall the editor or fill its memory: the header and up to 500 rows,
+but never more than 1500 cells (a 64-column file shows 23 rows), with "and N
+more rows" and "N more columns not shown" in a footer that spans the table;
+at most 64 columns, the rest a final "+N columns" header cell; cells cut at
+1000 characters with an ellipsis (both applied in the parser, before anything
+is stored - a 1 MB line of commas costs a few kilobytes); and the first 32 MB
+of the file. The 1500-cell budget is what a full relayout (every width change
+repeats one) fits in 10 ms: measured best-of-7, 3.5 ms for 2 columns, about 6
+ms for 8 and 64, on an idle-priority core of the dev machine
+(`CSVEmbedTest.ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds`
+prints them); the upgrade is laying out only the rows near the viewport.
+
+Bytes are decoded by byte order mark (UTF-8, UTF-16, UTF-32), else as UTF-8,
+and when that is not valid UTF-8 as Windows-1250 for a Central European locale
+(Excel's "CSV" in Slovenia) or Windows-1252 elsewhere.
+
+The result is cached by path. The editor watches the cached files and their
+folders (a `QFileSystemWatcher` made with the first CSV embed): a file
+rewritten by another program, in place or by rename, is read again after
+200 ms and only its blocks are relaid out, the old table staying up until the
+new one lands. A file that is not there falls back to the plain link, as any
 embed; one that cannot be read says so in the error colour; an empty one says
 "Empty file".
 

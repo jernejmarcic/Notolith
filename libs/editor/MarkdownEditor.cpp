@@ -312,6 +312,8 @@ void MarkdownEditor::setFeatures(const Features &features)
     d->clearPdfPages();
     d->m_texCache.clear();
     d->m_fileEmbedCache.clear();
+    if (!features.CSVembeds)
+        dropCSVcache();
     invalidateLayouts();
     updateLayout();
     viewport()->update();
@@ -3936,7 +3938,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.baseViewName.clear();
     view.baseYAML.clear();
     view.baseRows.clear();
-    view.csvPath.clear();
+    view.CSVpath.clear();
     view.embedCells.clear();
     view.isFileCard = false;
     view.isHtml = false;

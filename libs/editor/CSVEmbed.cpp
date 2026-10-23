@@ -11,14 +11,19 @@
 /// by the window - the editor reads the file on its own.
 ///
 /// One cache entry per path, replaced when the file's mtime or size differs
-/// from what the entry was read at, so an edited file is read again the next
-/// time its block is laid out (the same moment a `.base` embed notices) and
-/// the cache never holds two versions of one file. The generation counter
-/// drops a read that a newer one has superseded.
+/// from what the entry was read at; the old table stays on screen until the
+/// new one lands. A QFileSystemWatcher, made on the first CSV embed and not
+/// before, holds the cached paths and their folders: a change (debounced)
+/// stats them and relays out only the blocks whose file moved, so a file
+/// rewritten by another program shows with nothing else happening. The
+/// generation counter drops a read that a newer one has superseded.
 ///
-/// Capped twice, so a large file can neither stall layout nor fill memory:
-/// at most kCSVmaxRows data rows are kept and laid out (the rest are counted
-/// for the footer), and at most kCSVmaxBytes of the file are read at all.
+/// Bounded three ways, so a hostile or merely large file can neither stall
+/// layout nor fill memory: rows and cells shown (kCSVmaxRows, kCSVmaxCells -
+/// laid out on the UI thread on every width change, so the cell budget is
+/// what a 10 ms relayout allows), columns and cell length (kCSVmaxColumns,
+/// kCSVmaxCellChars - applied in the parser, before anything is stored), and
+/// bytes read (kCSVmaxBytes).
 
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
@@ -27,6 +32,8 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
+#include <QTimer>
 #include <QtConcurrent>
 
 namespace noteAppC {
@@ -34,9 +41,13 @@ namespace noteAppC {
 namespace {
 
 constexpr int kCSVmaxRows = 500;
-// A wide file would otherwise lay out 500 x its columns cells (82 ms for 30
-// columns on an idle-priority core): the rows shown shrink with the width.
-constexpr int kCSVmaxCells = 8000;
+// ponytail: every shown cell is a QTextLayout built on the UI thread on each
+// relayout (a width change repeats it per frame). This budget keeps a
+// worst-case relayout under 10 ms on the dev machine (numbers in
+// docs/EDITOR.md); the upgrade is laying out only the rows near the viewport.
+constexpr int kCSVmaxCells = 1500;
+constexpr int kCSVmaxColumns = 64;
+constexpr int kCSVmaxCellChars = 1000;
 constexpr qint64 kCSVmaxBytes = 32 * 1024 * 1024;
 
 // A cell is drawn through a QTextLayout, where a line break inside one is
@@ -53,7 +64,8 @@ QString forDisplay(QString cell)
 
 // Runs on a worker thread: touches nothing but its arguments.
 MarkdownEditor::CSVcacheEntry MarkdownEditor::readCSVfile(const QString &path, bool tsv,
-                                                          const QString &unreadable)
+                                                          const QString &unreadable,
+                                                          const QString &moreColumns)
 {
     CSVcacheEntry out;
     out.pending = false;
@@ -68,21 +80,33 @@ MarkdownEditor::CSVcacheEntry MarkdownEditor::readCSVfile(const QString &path, b
         return out;
     }
     out.partial = !file.atEnd();
-    if (out.partial)
-        bytes.truncate(bytes.lastIndexOf('\n') + 1); // whole records only
-    const QString text = QString::fromUtf8(bytes);
+    if (out.partial) {
+        // whole records only - unless there is no line break to cut at, when
+        // the one long line is all there will be
+        const qsizetype lastBreak = bytes.lastIndexOf('\n');
+        if (lastBreak >= 0)
+            bytes.truncate(lastBreak + 1);
+    }
+    const QString text = decodeCSV(bytes);
+    bytes.clear();
 
-    CSVtable parsed = parseCSV(text, tsv ? QLatin1Char('\t') : CSVdelimiter(text), kCSVmaxRows + 1);
+    CSVtable parsed = parseCSV(text, tsv ? QLatin1Char('\t') : CSVdelimiter(text), kCSVmaxRows + 1,
+                               kCSVmaxColumns, kCSVmaxCellChars);
     if (parsed.rows.isEmpty())
         return out;
+    out.hiddenColumns = parsed.hiddenColumns;
     for (const QString &cell : parsed.rows.takeFirst())
         out.table.headers << forDisplay(cell);
+    if (parsed.hiddenColumns > 0)
+        out.table.headers << moreColumns.arg(parsed.hiddenColumns);
     out.hiddenRows = parsed.totalRows - 1 - parsed.rows.size();
     out.table.rows.reserve(parsed.rows.size());
     for (const QStringList &record : std::as_const(parsed.rows)) {
         BaseTableRow row;
         for (const QString &cell : record)
             row.cells << forDisplay(cell);
+        if (parsed.hiddenColumns > 0)
+            row.cells << QString();
         out.table.rows << std::move(row);
     }
     return out;
@@ -98,18 +122,31 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     const qint64 size = info.size();
     auto it = d->m_CSVcache.find(path);
     if (it == d->m_CSVcache.end() || it->mtime != mtime || it->size != size) {
-        CSVcacheEntry entry;
-        entry.mtime = mtime;
-        entry.size = size;
-        entry.generation = ++d->m_CSVgeneration;
-        it = d->m_CSVcache.insert(path, entry);
-        const quint64 generation = entry.generation;
+        // A re-read keeps the entry's old table: it stays on screen until
+        // the new one lands (a fresh entry has none, and shows "Loading...").
+        if (it == d->m_CSVcache.end())
+            it = d->m_CSVcache.insert(path, CSVcacheEntry());
+        it->mtime = mtime;
+        it->size = size;
+        it->pending = true;
+        it->generation = ++d->m_CSVgeneration;
+        watchCSV(path);
+        const quint64 generation = it->generation;
         const bool tsv = info.suffix().compare(QLatin1String("tsv"), Qt::CaseInsensitive) == 0;
         const QString unreadable = tr("Could not read %1").arg(info.fileName());
+        const QString moreColumns = tr("+%1 columns");
         // Through m_lifeline, as every other embed's worker: the editor may
         // be gone by the time the file has been parsed.
-        (void)QtConcurrent::run([this, lifeline = d->m_lifeline, path, tsv, unreadable, generation, mtime, size] {
-            CSVcacheEntry result = readCSVfile(path, tsv, unreadable);
+        (void)QtConcurrent::run([this, lifeline = d->m_lifeline, path, tsv, unreadable, moreColumns, generation,
+                                 mtime, size] {
+            CSVcacheEntry result;
+            try {
+                result = readCSVfile(path, tsv, unreadable, moreColumns);
+            } catch (...) { // out of memory, say: an error to show, never "Loading..." for good
+                result.pending = false;
+                result.table = {};
+                result.table.error = unreadable;
+            }
             result.mtime = mtime;
             result.size = size;
             result.generation = generation;
@@ -127,26 +164,29 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     view.baseViewName.clear();
     view.baseYAML.clear();
     view.baseRequestedView.clear();
-    view.csvPath = path;
+    view.CSVpath = path;
     hideWholeBlockText(view);
 
-    if (it->pending)
-        return layoutPlainMessage(view, tr("Loading…"), d->m_theme.color(QStringLiteral("--text-muted")));
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
+    if (it->pending && it->table.headers.isEmpty())
+        return layoutPlainMessage(view, tr("Loading…"), muted);
     if (!it->table.error.isEmpty())
         return layoutPlainMessage(view, it->table.error, d->m_theme.color(QStringLiteral("--text-error")));
     if (it->table.headers.isEmpty())
-        return layoutPlainMessage(view, tr("Empty file"), d->m_theme.color(QStringLiteral("--text-muted")));
+        return layoutPlainMessage(view, tr("Empty file"), muted);
 
     const int shown = qBound(1, kCSVmaxCells / int(it->table.headers.size()), kCSVmaxRows);
     const qsizetype hidden = it->hiddenRows + qMax<qsizetype>(0, it->table.rows.size() - shown);
-    QString more;
+    QStringList more;
     if (it->partial)
-        more = tr("and more rows (the file is over %1 MB)").arg(kCSVmaxBytes >> 20);
+        more << tr("and more rows (the file is over %1 MB)").arg(kCSVmaxBytes >> 20);
     else if (hidden == 1)
-        more = tr("and 1 more row");
+        more << tr("and 1 more row");
     else if (hidden > 1)
-        more = tr("and %1 more rows").arg(hidden);
-    return layoutDataTable(view, it->table, shown, more);
+        more << tr("and %1 more rows").arg(hidden);
+    if (it->hiddenColumns > 0)
+        more << tr("%1 more columns not shown").arg(it->hiddenColumns);
+    return layoutDataTable(view, it->table, shown, more.join(QStringLiteral(", ")));
 }
 
 void MarkdownEditor::deliverCSV(const QString &path, quint64 generation, CSVcacheEntry result)
@@ -155,10 +195,14 @@ void MarkdownEditor::deliverCSV(const QString &path, quint64 generation, CSVcach
     if (it == d->m_CSVcache.end() || it->generation != generation)
         return; // the file changed again, and a newer read is on its way
     *it = std::move(result);
+    relayCSVblocks(path);
+}
 
+void MarkdownEditor::relayCSVblocks(const QString &path)
+{
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (block.csvPath != path)
+        if (block.CSVpath != path)
             continue;
         block.layout.reset();
         block.cells.clear();
@@ -170,6 +214,55 @@ void MarkdownEditor::deliverCSV(const QString &path, quint64 generation, CSVcach
         updateLayout();
         viewport()->update();
     }
+}
+
+void MarkdownEditor::watchCSV(const QString &path)
+{
+    if (!d->m_CSVwatcher) {
+        d->m_CSVwatcher = new QFileSystemWatcher(this);
+        d->m_CSVrefresh = new QTimer(this);
+        d->m_CSVrefresh->setSingleShot(true);
+        d->m_CSVrefresh->setInterval(200); // a write in place can come in more than one go
+        connect(d->m_CSVwatcher, &QFileSystemWatcher::fileChanged, d->m_CSVrefresh, qOverload<>(&QTimer::start));
+        connect(d->m_CSVwatcher, &QFileSystemWatcher::directoryChanged, d->m_CSVrefresh,
+                qOverload<>(&QTimer::start));
+        connect(d->m_CSVrefresh, &QTimer::timeout, this, &MarkdownEditor::refreshCSVfiles);
+    }
+    // The file, and its folder: a program that saves by writing a new file
+    // and renaming it over the old one makes inotify drop the file's watch.
+    const QString folder = QFileInfo(path).absolutePath();
+    if (!d->m_CSVwatcher->directories().contains(folder))
+        d->m_CSVwatcher->addPath(folder);
+    if (!d->m_CSVwatcher->files().contains(path))
+        d->m_CSVwatcher->addPath(path);
+}
+
+void MarkdownEditor::refreshCSVfiles()
+{
+    for (auto it = d->m_CSVcache.begin(); it != d->m_CSVcache.end(); ++it) {
+        const QString &path = it.key();
+        if (QFileInfo::exists(path) && !d->m_CSVwatcher->files().contains(path))
+            d->m_CSVwatcher->addPath(path); // put back what a rename-over-save took away
+        const QFileInfo info(path);
+        // A read already under way for this very mtime and size has its own
+        // relayout coming; only a file that has moved on from the entry needs one.
+        if (info.lastModified().toMSecsSinceEpoch() != it->mtime || info.size() != it->size)
+            relayCSVblocks(path);
+    }
+}
+
+void MarkdownEditor::dropCSVcache()
+{
+    d->m_CSVcache.clear();
+    if (d->m_CSVwatcher) {
+        d->m_CSVwatcher->removePaths(d->m_CSVwatcher->files());
+        d->m_CSVwatcher->removePaths(d->m_CSVwatcher->directories());
+    }
+}
+
+int MarkdownEditor::CSVcacheSize() const
+{
+    return int(d->m_CSVcache.size());
 }
 
 QList<QStringList> MarkdownEditor::tableCellTextsAt(qsizetype offset) const

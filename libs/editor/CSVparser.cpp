@@ -1,5 +1,7 @@
 #include "CSVparser.h"
 
+#include <QStringConverter>
+
 #include <algorithm>
 
 namespace noteAppC {
@@ -18,19 +20,29 @@ QChar CSVdelimiter(QStringView text)
     text = withoutBOM(text);
     int commas = 0, semicolons = 0, tabs = 0;
     bool quoted = false;
-    for (const QChar c : text) {
-        if (c == QLatin1Char('"'))
-            quoted = !quoted;
-        else if (quoted)
+    bool fieldStart = true; // as the parser: only a quote that opens a field is one
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        const QChar c = text.at(i);
+        if (quoted) {
+            if (c != QLatin1Char('"'))
+                continue;
+            if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('"'))
+                ++i; // "" is a quote inside the field
+            else
+                quoted = false;
             continue;
-        else if (c == QLatin1Char('\n') || c == QLatin1Char('\r'))
+        }
+        if (c == QLatin1Char('\n') || c == QLatin1Char('\r'))
             break;
+        if (c == QLatin1Char('"') && fieldStart)
+            quoted = true;
         else if (c == QLatin1Char(','))
             ++commas;
         else if (c == QLatin1Char(';'))
             ++semicolons;
         else if (c == QLatin1Char('\t'))
             ++tabs;
+        fieldStart = c == QLatin1Char(',') || c == QLatin1Char(';') || c == QLatin1Char('\t');
     }
     if (semicolons > commas && semicolons >= tabs)
         return QLatin1Char(';');
@@ -39,20 +51,35 @@ QChar CSVdelimiter(QStringView text)
     return QLatin1Char(',');
 }
 
-CSVtable parseCSV(QStringView text, QChar delimiter, qsizetype maxRows)
+CSVtable parseCSV(QStringView text, QChar delimiter, qsizetype maxRows, int maxColumns, int maxCellChars)
 {
     text = withoutBOM(text);
     CSVtable table;
     QStringList record;
     QString field;
-    bool quoted = false;     // inside a quoted field
-    bool fieldQuoted = false; // the field being read opened with a quote
-    bool pending = false;    // the record has any content at all, so a blank line is not one
+    int widest = 0;         // the most cells any kept record had, kept or not
+    int cells = 0;          // cells ended so far in this record
+    bool quoted = false;    // inside a quoted field
+    bool fieldStarted = false; // the field being read has had a character, a quote included
+    bool cut = false;       // ... and was cut at maxCellChars
+    bool pending = false;   // the record has any content at all, so a blank line is not one
 
+    const auto keeping = [&] { return maxColumns < 0 || cells < maxColumns; };
+    const auto add = [&](QChar c) {
+        fieldStarted = pending = true;
+        if (!keeping())
+            return; // a column past the cap: parsed for its structure, never stored
+        if (maxCellChars >= 0 && field.size() >= maxCellChars)
+            cut = true;
+        else
+            field += c;
+    };
     const auto endField = [&] {
-        record << field;
+        if (keeping())
+            record << (cut ? field + QChar(0x2026) : field);
+        ++cells;
         field.clear();
-        fieldQuoted = false;
+        fieldStarted = cut = false;
     };
     const auto endRecord = [&] {
         if (pending) {
@@ -60,27 +87,28 @@ CSVtable parseCSV(QStringView text, QChar delimiter, qsizetype maxRows)
             ++table.totalRows;
             if (maxRows < 0 || table.rows.size() < maxRows) {
                 table.columns = std::max(table.columns, int(record.size()));
+                widest = std::max(widest, cells);
                 table.rows << record;
             }
         }
         record.clear();
         field.clear();
-        fieldQuoted = false;
-        pending = false;
+        cells = 0;
+        fieldStarted = cut = pending = false;
     };
 
     for (qsizetype i = 0; i < text.size(); ++i) {
         const QChar c = text.at(i);
         if (quoted) {
             if (c != QLatin1Char('"'))
-                field += c;
+                add(c);
             else if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('"')) {
-                field += c;
+                add(c);
                 ++i;
             } else
                 quoted = false;
-        } else if (c == QLatin1Char('"') && field.isEmpty() && !fieldQuoted) {
-            quoted = fieldQuoted = pending = true;
+        } else if (c == QLatin1Char('"') && !fieldStarted) {
+            quoted = fieldStarted = pending = true;
         } else if (c == delimiter) {
             endField();
             pending = true;
@@ -89,17 +117,35 @@ CSVtable parseCSV(QStringView text, QChar delimiter, qsizetype maxRows)
                 ++i;
             endRecord();
         } else {
-            field += c;
-            pending = true;
+            add(c);
         }
     }
     endRecord();
 
+    table.hiddenColumns = widest - table.columns;
     for (QStringList &padded : table.rows) {
         while (padded.size() < table.columns)
             padded << QString();
     }
     return table;
+}
+
+QString decodeCSV(const QByteArray &bytes, QLocale::Language language)
+{
+    if (const auto encoding = QStringConverter::encodingForData(bytes))
+        return QStringDecoder(*encoding).decode(bytes);
+    QStringDecoder utf8(QStringConverter::Utf8);
+    const QString text = utf8.decode(bytes);
+    if (!utf8.hasError())
+        return text;
+
+    static const QList<QLocale::Language> centralEuropean = {
+        QLocale::Slovenian, QLocale::Croatian, QLocale::Czech,    QLocale::Slovak, QLocale::Polish,
+        QLocale::Hungarian, QLocale::Romanian, QLocale::Albanian, QLocale::Bosnian};
+    QStringDecoder legacy(centralEuropean.contains(language) ? "windows-1250" : "windows-1252");
+    if (!legacy.isValid())
+        legacy = QStringDecoder(QStringConverter::Latin1);
+    return legacy.decode(bytes);
 }
 
 } // namespace noteAppC

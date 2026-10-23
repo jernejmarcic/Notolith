@@ -2,9 +2,53 @@
 
 #include <gtest/gtest.h>
 
+#include <QLocale>
+#include <QStringConverter>
+
+#include <atomic>
+#include <cstdlib>
+#include <malloc.h>
+#include <new>
+
 #include "CSVparser.h"
 
 using namespace noteAppC;
+
+// A high-water mark of live heap bytes, for the tests that bound what a
+// hostile file may cost (glibc: malloc_usable_size gives a block's size back
+// on delete). Everything in this binary goes through it; a test resets the
+// mark to "now" before the work it measures.
+namespace {
+std::atomic<long long> gLive{0};
+std::atomic<long long> gPeak{0};
+
+void *tracked(std::size_t size)
+{
+    void *block = std::malloc(size ? size : 1);
+    if (!block)
+        throw std::bad_alloc();
+    const long long live = gLive += static_cast<long long>(malloc_usable_size(block));
+    long long peak = gPeak.load();
+    while (live > peak && !gPeak.compare_exchange_weak(peak, live)) {
+    }
+    return block;
+}
+
+void untracked(void *block) noexcept
+{
+    if (!block)
+        return;
+    gLive -= static_cast<long long>(malloc_usable_size(block));
+    std::free(block);
+}
+} // namespace
+
+void *operator new(std::size_t size) { return tracked(size); }
+void *operator new[](std::size_t size) { return tracked(size); }
+void operator delete(void *block) noexcept { untracked(block); }
+void operator delete[](void *block) noexcept { untracked(block); }
+void operator delete(void *block, std::size_t) noexcept { untracked(block); }
+void operator delete[](void *block, std::size_t) noexcept { untracked(block); }
 
 namespace {
 
@@ -136,4 +180,129 @@ TEST(CSVparserTest, MaxRowsKeepsTheHeadAndCountsTheRest)
     EXPECT_EQ(table.rows.size(), 4);
     EXPECT_EQ(table.totalRows, 11);
     EXPECT_EQ(table.rows.at(3).at(0), QStringLiteral("2"));
+}
+
+TEST(CSVparserTest, ALineOfOnlyAnEmptyQuotedFieldIsARecord)
+{
+    const auto rows = rowsOf(QStringLiteral("a\n\"\"\nb\n"));
+    ASSERT_EQ(rows.size(), 3);
+    EXPECT_EQ(rows.at(1), row({""}));
+}
+
+TEST(CSVparserTest, QuotesAfterAClosedQuoteAreLiteral)
+{
+    const auto rows = rowsOf(QStringLiteral("\"a\"b\"c,d\n"));
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.at(0), row({"ab\"c", "d"}));
+}
+
+TEST(CSVparserTest, AByteOrderMarkBeforeAQuotedFirstField)
+{
+    const auto rows = rowsOf(QString(QChar(0xFEFF)) + QStringLiteral("\"a,b\",c\n"));
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.at(0), row({"a,b", "c"}));
+}
+
+TEST(CSVparserTest, TheSnifferReadsQuotesTheWayTheParserDoes)
+{
+    // an inch mark in the middle of a header is not a quote, so the ';' count stands
+    EXPECT_EQ(CSVdelimiter(QStringLiteral("Size 5\";Price;Qty\n1;2;3\n")), QLatin1Char(';'));
+    EXPECT_EQ(CSVdelimiter(QStringLiteral("\"a;b\",c,d\n")), QLatin1Char(','));
+}
+
+TEST(CSVparserTest, MaxColumnsKeepsTheLeftAndCountsTheRest)
+{
+    const CSVtable table = parseCSV(QStringLiteral("a,b,c,d,e\n1,2\n1,2,3,4,5,6\n"), QLatin1Char(','), -1, 3);
+    EXPECT_EQ(table.columns, 3);
+    EXPECT_EQ(table.hiddenColumns, 3) << "the widest record had 6";
+    ASSERT_EQ(table.rows.size(), 3);
+    EXPECT_EQ(table.rows.at(0), row({"a", "b", "c"}));
+    EXPECT_EQ(table.rows.at(1), row({"1", "2", ""}));
+}
+
+TEST(CSVparserTest, AQuoteInADroppedColumnStillGroupsTheRecord)
+{
+    const CSVtable table = parseCSV(QStringLiteral("a,b,\"x\ny, z\",\"q\"\"\"\n1,2,3,4\n"), QLatin1Char(','), -1, 2);
+    ASSERT_EQ(table.rows.size(), 2) << "the newline inside the dropped quoted cell is not a record break";
+    EXPECT_EQ(table.rows.at(1), row({"1", "2"}));
+}
+
+TEST(CSVparserTest, MaxCellCharsCutsALongCellWithAnEllipsis)
+{
+    const CSVtable table = parseCSV(QStringLiteral("abcdefghij,xy\n"), QLatin1Char(','), -1, -1, 4);
+    ASSERT_EQ(table.rows.size(), 1);
+    EXPECT_EQ(table.rows.at(0), (QStringList{QStringLiteral("abcd") + QChar(0x2026), QStringLiteral("xy")}));
+}
+
+TEST(CSVparserTest, AHugeLineOfCommasCostsAlmostNothing)
+{
+    // a 1 MB line of delimiters: a million empty cells, which must not become a million strings
+    QString text(1 << 20, QLatin1Char(','));
+    text += QStringLiteral("\n1,2\n");
+    const long long base = gLive.load();
+    gPeak = base;
+    const CSVtable table = parseCSV(text, QLatin1Char(','), 501, 64, 1000);
+    EXPECT_LT(gPeak.load() - base, 256 * 1024) << "peak extra bytes";
+    EXPECT_EQ(table.columns, 64);
+    EXPECT_EQ(table.hiddenColumns, (1 << 20) + 1 - 64);
+    EXPECT_EQ(table.rows.size(), 2);
+}
+
+TEST(CSVparserTest, AHundredThousandColumnsTimesFiveHundredRowsStaysSmall)
+{
+    QString text(100000, QLatin1Char(','));
+    text += QLatin1Char('\n');
+    for (int i = 0; i < 500; ++i)
+        text += QStringLiteral("%1,x\n").arg(i);
+    const long long base = gLive.load();
+    gPeak = base;
+    const CSVtable table = parseCSV(text, QLatin1Char(','), 501, 64, 1000);
+    EXPECT_LT(gPeak.load() - base, 1024 * 1024) << "peak extra bytes (unbounded this was 1.3 GB)";
+    EXPECT_EQ(table.rows.size(), 501);
+    for (const QStringList &record : table.rows)
+        ASSERT_EQ(record.size(), 64);
+}
+
+TEST(CSVparserTest, AMegabyteCellIsCutBeforeItIsKept)
+{
+    QString text = QStringLiteral("\"") + QString(1 << 20, QLatin1Char('x')) + QStringLiteral("\",b\n");
+    const long long base = gLive.load();
+    gPeak = base;
+    const CSVtable table = parseCSV(text, QLatin1Char(','), 501, 64, 1000);
+    EXPECT_LT(gPeak.load() - base, 64 * 1024);
+    ASSERT_EQ(table.rows.size(), 1);
+    EXPECT_EQ(table.rows.at(0).at(0).size(), 1001);
+    EXPECT_EQ(table.rows.at(0).at(1), QStringLiteral("b"));
+}
+
+TEST(CSVdecodeTest, UTF8WithAndWithoutABOM)
+{
+    EXPECT_EQ(decodeCSV("a;\xC4\x8D\n", QLocale::English), QString::fromUtf8("a;\xC4\x8D\n"));
+    EXPECT_EQ(decodeCSV("\xEF\xBB\xBF" "id\n", QLocale::English).remove(QChar(0xFEFF)), QStringLiteral("id\n"));
+}
+
+TEST(CSVdecodeTest, UTF16ByByteOrderMark)
+{
+    const QByteArray little("\xFF\xFE" "a\0\t\0" "\x0D\x01\n\0", 10); // "a<TAB>" U+010D "\n"
+    EXPECT_EQ(decodeCSV(little, QLocale::English).remove(QChar(0xFEFF)),
+              QStringLiteral("a\t") + QChar(0x010D) + QStringLiteral("\n"));
+    const QByteArray big("\xFE\xFF" "\0a\0\t\x01\x0D\0\n", 10);
+    EXPECT_EQ(decodeCSV(big, QLocale::English).remove(QChar(0xFEFF)),
+              QStringLiteral("a\t") + QChar(0x010D) + QStringLiteral("\n"));
+}
+
+TEST(CSVdecodeTest, InvalidUTF8FallsBackToAWindowsCodePage)
+{
+    // 0xE9 is "e acute" in Latin-1, Windows-1252 and Windows-1250 alike
+    EXPECT_EQ(decodeCSV("Jo\xE9;1\n", QLocale::English), QString::fromUtf8("Jo\xC3\xA9;1\n"));
+    EXPECT_EQ(decodeCSV("Jo\xE9;1\n", QLocale::Slovenian), QString::fromUtf8("Jo\xC3\xA9;1\n"));
+}
+
+TEST(CSVdecodeTest, ACentralEuropeanLocaleReadsWindows1250)
+{
+    if (!QStringDecoder("windows-1250").isValid())
+        GTEST_SKIP() << "this Qt has no windows-1250 codec";
+    // 0xE8 0x9A 0x9E: c-caron, s-caron, z-caron in 1250 (Latin-1 would give e grave and controls)
+    EXPECT_EQ(decodeCSV("\xE8" "e\x9A" "e\x9E", QLocale::Slovenian),
+              QString(QChar(0x010D)) + QLatin1Char('e') + QChar(0x0161) + QLatin1Char('e') + QChar(0x017E));
 }

@@ -7958,7 +7958,7 @@ QString writeTextFile(const QTemporaryDir &dir, const QString &name, const QByte
 
 /// An editor showing `![[name]]`, resolved to `path`, and waited until the
 /// table the off-thread read and parse produces has landed.
-std::unique_ptr<MarkdownEditor> csvEditorWith(const QString &path, bool waitForTable = true)
+std::unique_ptr<MarkdownEditor> CSVeditorWith(const QString &path, bool waitForTable = true)
 {
     auto editor = editorWith(QStringLiteral("![[%1]]\n").arg(QFileInfo(path).fileName()));
     editor->setLinkResolver([path](const QString &) { return path; });
@@ -7987,7 +7987,7 @@ TEST(CSVEmbedTest, LaysOutAsATableWithItsHeaderAndCellTexts)
     ASSERT_TRUE(dir.isValid());
     const QString path = writeTextFile(dir, QStringLiteral("data.csv"),
                                        "name,qty\nApple,3\n\"Smith, J\",\"say \"\"hi\"\"\"\n");
-    auto editor = csvEditorWith(path, false);
+    auto editor = CSVeditorWith(path, false);
     EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty()) << "nothing is read on the layout path: loading first";
     EXPECT_NE(editor->panelTextAt(0).indexOf(QStringLiteral("Loading")), -1);
 
@@ -8003,7 +8003,7 @@ TEST(CSVEmbedTest, ATableCellKeepsALineBreakAsALineSeparator)
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
     const QString path = writeTextFile(dir, QStringLiteral("data.csv"), "a,b\r\n\"one\r\ntwo\",x\r\n");
-    auto editor = csvEditorWith(path);
+    auto editor = CSVeditorWith(path);
     ASSERT_EQ(editor->tableCellTextsAt(0).size(), 2);
     EXPECT_EQ(editor->tableCellTextsAt(0).at(1).at(0), QStringLiteral("one") + QChar(QChar::LineSeparator) + QStringLiteral("two"));
 }
@@ -8013,12 +8013,12 @@ TEST(CSVEmbedTest, SemicolonCSVAndTSVAndBOM)
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
     {
-        auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("eu.csv"), "\xEF\xBB\xBFname;price\nTea;1,50\n"));
+        auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("eu.csv"), "\xEF\xBB\xBFname;price\nTea;1,50\n"));
         EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"name", "price"}, {"Tea", "1,50"}}));
     }
     {
         // .tsv is always tab, even where commas would win the sniff
-        auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("t.tsv"), "a,b\tc\n1\t2,3\n"));
+        auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("t.tsv"), "a,b\tc\n1\t2,3\n"));
         EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a,b", "c"}, {"1", "2,3"}}));
     }
 }
@@ -8027,7 +8027,7 @@ TEST(CSVEmbedTest, RaggedRowsArePaddedToTheWidestRow)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("r.csv"), "a,b,c\n1\n1,2,3,4\n"));
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("r.csv"), "a,b,c\n1\n1,2,3,4\n"));
     EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b", "c", ""}, {"1", "", "", ""}, {"1", "2", "3", "4"}}));
 }
 
@@ -8038,7 +8038,7 @@ TEST(CSVEmbedTest, ALongFileShowsTheFirstRowsAndAFooter)
     QByteArray bytes = "id,v\n";
     for (int i = 1; i <= 700; ++i)
         bytes += QByteArray::number(i) + ",x\n";
-    auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("big.csv"), bytes));
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("big.csv"), bytes));
     const QList<QStringList> rows = editor->tableCellTextsAt(0);
     ASSERT_EQ(rows.size(), 1 + 500 + 1) << "header, 500 rows, a footer";
     EXPECT_EQ(rows.at(500).at(0), QStringLiteral("500"));
@@ -8053,18 +8053,18 @@ TEST(CSVEmbedTest, AWideFileShowsFewerRowsSoLayoutStaysCheap)
     for (int row = 0; row <= 600; ++row)
         for (int column = 0; column < 40; ++column)
             bytes += QByteArray::number(row) + (column < 39 ? "," : "\n");
-    auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("wide.csv"), bytes));
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("wide.csv"), bytes));
     const QList<QStringList> rows = editor->tableCellTextsAt(0);
-    ASSERT_EQ(rows.size(), 1 + 200 + 1) << "header, 8000 cells' worth of rows, a footer";
-    EXPECT_EQ(rows.at(200).at(0), QStringLiteral("200"));
-    EXPECT_EQ(rows.last().at(0), QStringLiteral("and 400 more rows"));
+    ASSERT_EQ(rows.size(), 1 + 37 + 1) << "header, 1500 cells' worth of rows, a footer";
+    EXPECT_EQ(rows.at(37).at(0), QStringLiteral("37"));
+    EXPECT_EQ(rows.last().at(0), QStringLiteral("and 563 more rows"));
 }
 
 TEST(CSVEmbedTest, AHeaderOnlyFileIsATableOfOneRow)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("h.csv"), "a,b\n"));
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("h.csv"), "a,b\n"));
     EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}}));
 }
 
@@ -8072,7 +8072,7 @@ TEST(CSVEmbedTest, AnEmptyFileSaysSo)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("e.csv"), ""), false);
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("e.csv"), ""), false);
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("empty"), Qt::CaseInsensitive); }, 5000))
         << editor->panelTextAt(0).toStdString();
     EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty());
@@ -8082,7 +8082,7 @@ TEST(CSVEmbedTest, AMissingFileFallsBackToTheLinkLikeAnyOtherBrokenEmbed)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    auto editor = csvEditorWith(dir.filePath(QStringLiteral("gone.csv")), false);
+    auto editor = CSVeditorWith(dir.filePath(QStringLiteral("gone.csv")), false);
     QTest::qWait(50);
     EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty());
     EXPECT_TRUE(editor->displayText().contains(QStringLiteral("gone.csv")));
@@ -8096,7 +8096,7 @@ TEST(CSVEmbedTest, AnUnreadableFileShowsAnError)
     QFile::setPermissions(path, QFileDevice::Permissions());
     if (QFile(path).open(QIODevice::ReadOnly))
         GTEST_SKIP() << "this user can read a mode 000 file";
-    auto editor = csvEditorWith(path, false);
+    auto editor = CSVeditorWith(path, false);
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked.csv")); }, 5000))
         << editor->panelTextAt(0).toStdString();
     EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty());
@@ -8108,7 +8108,7 @@ TEST(CSVEmbedTest, AChangedFileIsReadAgain)
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
     const QString path = writeTextFile(dir, QStringLiteral("live.csv"), "a,b\n1,2\n");
-    auto editor = csvEditorWith(path);
+    auto editor = CSVeditorWith(path);
     ASSERT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}, {"1", "2"}}));
 
     writeTextFile(dir, QStringLiteral("live.csv"), "a,b\n1,2\n3,4\n");
@@ -8129,7 +8129,7 @@ TEST(CSVEmbedTest, ABaseRefreshDoesNotRelayOutACSVTable)
     // vault - and relays out each isBase block; a CSV table is not a base's.
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    auto editor = csvEditorWith(writeTextFile(dir, QStringLiteral("r.csv"), "a,b\n1,2\n"));
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("r.csv"), "a,b\n1,2\n"));
     ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
     const quint64 before = editor->layoutCount();
     editor->refreshBases();
@@ -8138,6 +8138,152 @@ TEST(CSVEmbedTest, ABaseRefreshDoesNotRelayOutACSVTable)
     editor->setBaseRunner([](const QString &, const QString &, const MarkdownEditor::BaseDeliver &) {});
     EXPECT_EQ(editor->layoutCount(), before);
     EXPECT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+}
+
+TEST(CSVEmbedTest, AFileRewrittenWhileTheNoteIsOpenIsReadAgainWithNothingElseHappening)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("live.csv"), "a,b\n1,2\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}, {"1", "2"}}));
+
+    // another program saves it: a new file renamed over the old, as most editors do
+    const QString replacement = writeTextFile(dir, QStringLiteral("live.csv.tmp"), "a,b\n1,2\n3,4\n");
+    QFile temporary(replacement);
+    ASSERT_TRUE(temporary.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(temporary.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
+    temporary.close();
+    ASSERT_TRUE(QFile::remove(path));
+    ASSERT_TRUE(QFile::rename(replacement, path));
+
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+    EXPECT_EQ(editor->tableCellTextsAt(0).at(2), (QStringList{QStringLiteral("3"), QStringLiteral("4")}));
+
+    // and a second time, in place: the watch survived the rename
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write("a,b\n1,2\n3,4\n5,6\n");
+    }
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 4; }, 5000));
+}
+
+TEST(CSVEmbedTest, TheOldTableStaysUpUntilTheNewOneLands)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("flicker.csv"), "a,b\n1,2\n");
+    const QString note = QStringLiteral("![[flicker.csv]]\n");
+    auto editor = CSVeditorWith(path);
+    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+
+    writeTextFile(dir, QStringLiteral("flicker.csv"), "a,b\n1,2\n3,4\n");
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(file.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
+    file.close();
+    editor->setNoteText(note + QStringLiteral("\nafter\n")); // a layout, with the read still to come
+    EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}, {"1", "2"}})) << "not \"Loading...\" meanwhile";
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+}
+
+TEST(CSVEmbedTest, ThousandsOfColumnsAreCutAndSaidSo)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QByteArray bytes(100000, ',');
+    bytes += "\n";
+    for (int i = 0; i < 500; ++i)
+        bytes += QByteArray::number(i) + ",x\n";
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("wide.csv"), bytes));
+    const QList<QStringList> rows = editor->tableCellTextsAt(0);
+    ASSERT_GE(rows.size(), 3);
+    EXPECT_EQ(rows.at(0).size(), 65) << "64 columns and a \"+N columns\" cell";
+    EXPECT_EQ(rows.at(0).last(), QStringLiteral("+%1 columns").arg(100001 - 64));
+    EXPECT_EQ(rows.at(1).size(), 65);
+    EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("more rows")), -1) << rows.last().at(0).toStdString();
+    EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("more columns")), -1);
+}
+
+TEST(CSVEmbedTest, AHugeCellIsCutAtAThousandCharacters)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QByteArray bytes = "h,i\n\"" + QByteArray(2 << 20, 'x') + "\",y\n";
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("cell.csv"), bytes));
+    const QList<QStringList> rows = editor->tableCellTextsAt(0);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(1).at(0).size(), 1001);
+    EXPECT_TRUE(rows.at(1).at(0).endsWith(QChar(0x2026)));
+    EXPECT_EQ(rows.at(1).at(1), QStringLiteral("y"));
+}
+
+TEST(CSVEmbedTest, AFileOverTheReadLimitSaysSoInsteadOfBeingEmpty)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // one 33 MB line: nothing to cut it at, so what was read is shown (cut) and the footer says why
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("long.csv"), QByteArray(33 << 20, 'x')));
+    const QList<QStringList> rows = editor->tableCellTextsAt(0);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("32 MB")), -1) << rows.last().at(0).toStdString();
+}
+
+TEST(CSVEmbedTest, OtherTextEncodingsAreReadAsText)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    {
+        auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("utf16.tsv"),
+                                                  QByteArray("\xFF\xFE" "a\0\t\0" "\x0D\x01\n\0", 10)));
+        EXPECT_EQ(editor->tableCellTextsAt(0).first(), (QStringList{QStringLiteral("a"), QString(QChar(0x010D))}));
+    }
+    {
+        // Excel's "CSV" on Windows: a code page, not UTF-8
+        auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("legacy.csv"), "name;city\nJo\xE9;Z\xFCrich\n"));
+        EXPECT_EQ(editor->tableCellTextsAt(0).at(1),
+                  (QStringList{QString::fromUtf8("Jo\xC3\xA9"), QString::fromUtf8("Z\xC3\xBC" "rich")}));
+    }
+}
+
+TEST(CSVEmbedTest, ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds)
+{
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // the cell budget is what bounds it, whatever the shape: a narrow file's 500 rows, a wide one's 64 columns
+    for (const int columns : {2, 8, 64, 200}) {
+        QByteArray bytes;
+        for (int row = 0; row <= 600; ++row)
+            for (int column = 0; column < columns; ++column)
+                bytes += "cell " + QByteArray::number(row * column) + (column + 1 < columns ? "," : "\n");
+        const QString name = QStringLiteral("budget%1.csv").arg(columns);
+        auto editor = CSVeditorWith(writeTextFile(dir, name, bytes));
+        ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+        const double best = perf::bestOf(
+            [&] {
+                QElapsedTimer timer;
+                timer.start();
+                editor->setNoteText(QStringLiteral("![[%1]]\n").arg(name)); // every block laid out afresh, the read cached
+                return timer.nsecsElapsed() / 1e6;
+            },
+            7, 10.0);
+        fprintf(stderr, "CSV relayout %d columns: %.2f ms\n", columns, best);
+        EXPECT_LT(best, 10.0) << columns << " columns";
+    }
+}
+
+TEST(CSVEmbedTest, TurningTheFeatureOffForgetsTheFiles)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    auto editor = CSVeditorWith(writeTextFile(dir, QStringLiteral("t.csv"), "a,b\n1,2\n"));
+    EXPECT_EQ(editor->CSVcacheSize(), 1);
+    MarkdownEditor::Features off;
+    off.CSVembeds = false;
+    editor->setFeatures(off);
+    EXPECT_EQ(editor->CSVcacheSize(), 0);
 }
 
 TEST(CSVEmbedTest, TwoEmbedsOfOneFileBothLand)
@@ -8157,7 +8303,7 @@ TEST(FeaturesTest, CSVembedsToggle)
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
     const QString path = writeTextFile(dir, QStringLiteral("t.csv"), "name,qty\nApple,3\n");
-    auto editor = csvEditorWith(path);
+    auto editor = CSVeditorWith(path);
     ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
 
     MarkdownEditor::Features off;
