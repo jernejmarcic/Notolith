@@ -1438,3 +1438,35 @@ rows go through `MainWindow::parseOptions()` (feature on).
 No row moves outside what two runs of the same binary differ by. The same test
 failed about one run in six on the new build while the machine was loaded and
 passed ten of ten, alongside the old build, once the load fell.
+
+## 2026-10-23 the October performance pass
+
+Seven lanes (A window and start, B index, C editor and bench, D build and process, E panes, F poppler and the share stack as
+modules, G big-note memory) against main `6404d9d`, measured on the merged tree `686c7db` with interleaved A/B runs
+(order reversed per round, load under 4 and CPU pressure under 0.3 where the box allowed, offscreen, own XDG; medians
+of the runs' medians). `ctest` 73 of 73. Full table with spreads and the real-process rows: the session's `perf/CLOSING.md`.
+
+| what | before | after | why |
+|---|---|---|---|
+| `notolith --version`, instructions | 785 M | 127 M | help, version and the hand-over answer before `QApplication`; `--as-needed`; libzmq on first use; poppler and the share stack are modules (362 to 172 mapped objects after paint) |
+| warm start of a 20 000-note vault, instructions / CPU | 5.67 G / 603 ms | 2.11 G / 262 ms | the file tree stopped asking for every file's MIME type, graph data waits for the pane, the warm check is one query, image plugins load by suffix list |
+| steady RSS, 20 000-note vault (12 s) | 254 MB | 173 MB | fewer libraries mapped, no graph read, one `malloc_trim` at 8 s |
+| move a tab to a new window / pop-out, 20 000 notes | 11.6 / 19.7 ms | 3.6 / 11.6 ms | same file-tree fix |
+| note open, 1 MB / 200 kB | 7.7 / 2.0 ms | 2.6 / 1.5 ms | the placeholder before the parse lands is 64-line chunks, not a view per paragraph (40 893 to 1 350 views) |
+| peak RSS with a 1 MB note, real process (given as argument / handed over later) | 505 / 526 MB | 419 / 374 MB | the chunked placeholder and one trim after the first big parse |
+| fold / media arrival / resize width kept, 1 MB | 0.71 / 0.74 / 0.57 ms | 0.47 / 0.49 / 0.42 ms | `blockGap` read the note's text and two cache lines of every view per relayout; it reads two fields beside `y` now |
+| parse landing to painted, 1 MB | 13-15 ms | 3.9 ms | a view nothing laid out is reset, not rebuilt |
+| autosave, UI thread blocked, 200 kB / 1 MB | the whole save, 5.7 / 6.7 ms | 0.20 / 1.3 ms | the commit and the recovery copies run on a thread of their own; durable time unchanged |
+| index every note stale (`noteAppC-index`, 20 000 notes) | 255-272 s | 2 s | the eight child tables had no index on `file`: each delete scanned them (lane B, not re-run for the closing table) |
+| cold index, 20 000 notes | 1 038 ms | 990 ms | the child indexes are made at the end of an empty build, not up front |
+
+What got slower, and why. The bench rows "keystroke through the whole window, 200 kB" (0.23 to 0.32 ms) and "scroll
+frame, 1180x760" (0.58 to 0.64 ms) type and scroll before the parse of a note over 128 kB has landed; the chunked
+placeholder costs more per relayout than one view per paragraph. The 1 MB window keystroke on the settled note went
+0.58 to 0.34 ms. "PDF view open, 500 pages" went 2.9 to 3.5 ms with poppler behind the module's C face (the first real
+open also pays the `dlopen`). The Settings pass on a 1 MB note went 0.83 to 0.87 ms.
+
+Tried and not kept: SQLite pragmas (cold index -4 % from `cache_size` alone, under the -5 % line), LTO (instructions -0.3
+to -3.6 %), `-ffunction-sections` with `--gc-sections` (text -0.16 %), `MALLOC_ARENA_MAX=2` (cold index +28 %), cached
+stroke outline paths for ink tiles (the 28 ms tile latency stays at 32 ms: the cost is Qt flattening each Bezier on every
+draw). Still over budget: peak RSS with a 1 MB note on the bench, 282 MB against 250 MB (the 57 354 `BlockView`s, 105 MB).
