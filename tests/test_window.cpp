@@ -9485,6 +9485,54 @@ TEST_F(InkWindowTest, AnOpenInkTabSavesToTheNewPathAfterItsFileIsMovedToAnotherF
     expectAnInkTabSavesAt(window, view, canvas, dir.path(), path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink")));
 }
 
+// A file moved outside the app (a sync client, a file manager) is followed by the tab that holds it, like a note: the view
+// then saves to the new path.
+TEST_F(InkWindowTest, AnOpenInkTabFollowsItsFileMovedOutsideTheApp)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_TRUE(QFile::rename(path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink"))));
+    WAIT_TRUE(window.windowTitle().contains(QStringLiteral("Dest/Sketch.ink")), 5000);
+    expectAnInkTabSavesAt(window, view, canvas, dir.path(), path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink")));
+}
+
+// Deleted outside the app and nowhere else in the vault: the tab says so and a save is refused, so the file is not recreated.
+TEST_F(InkWindowTest, AnOpenInkTabWhoseFileIsDeletedIsMarkedMissingAndRefusesToSave)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Sketch.ink"))));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    WAIT_TRUE(tabs->tabText(tabs->currentIndex()).contains(QStringLiteral("missing")), 5000);
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("gone from disk")));
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(view->isModified());
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(asked) << "the refusal is said out loud";
+    EXPECT_TRUE(view->isModified()) << "nothing was written";
+    QTest::qWait(3500); // past the autosave
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "the file is not recreated";
+}
+
 // M5: a pen width in the settings is the width of the first stroke, not only the default that equals the canvas'.
 TEST_F(InkWindowTest, TheDefaultPenWidthSettingIsTheWidthOfTheFirstStroke)
 {

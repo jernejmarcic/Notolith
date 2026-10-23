@@ -717,6 +717,8 @@ private:
     /// Where the vault now holds `known` (what `lost` held), or nothing when
     /// that is not exactly one file.
     QString findMovedNote(const QString &lost, const Note &known);
+    /// The same for a module's view: the one other file of that name in the vault.
+    QString findMovedFile(const QString &lost);
     /// An open note changed on disk - sync, a plugin, a link update, another
     /// editor: its tabs show the change, so no autosave writes over it.
     void reloadChangedNotes();
