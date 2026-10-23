@@ -33,10 +33,9 @@ endif()
 set(NOTEAPPC_ABI_TAG "${PROJECT_VERSION}-${NOTEAPPC_ABI_TOKEN}-${Qt6_VERSION}")
 
 # Neither dependency is in the Android Qt kit, so both can be turned off for a
-# mobile/cross build; NOTEAPPC_WITH_PDF also covers dropping poppler-qt6 when
-# it is installed but built against a Qt too new to link with that kit.
+# mobile/cross build; NOTEAPPC_WITH_PDFVIEW (below) covers dropping poppler-qt6
+# when it is installed but built against a Qt too new to link with that kit.
 option(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING "Colour fenced code blocks with KF6 SyntaxHighlighting" ON)
-option(NOTEAPPC_WITH_PDF "Embed PDFs with poppler-qt6" ON)
 option(NOTEAPPC_WITH_MEDIA "Play audio and video embeds with Qt Multimedia" ON)
 # Raw HTML blocks (<div>, <table>, <details>...), rendered with litehtml.
 # Optional the same way: without it, or without the package, a note's HTML
@@ -92,11 +91,11 @@ option(NOTEAPPC_WITH_PUBLISH "Export a vault as a static website (libs/ext/publi
 # Another Tier 1 module: opens a vault's PDFs in a tab instead of handing
 # them to the system viewer - continuous scroll, zoom, find, outline, links,
 # and annotation (highlight/underline/strike-out/ink/note/box) saved into the
-# PDF itself. Needs poppler-qt6 for more than PDF embeds do (annotations,
-# text extraction, outline, links), so libs/ext/pdfview is only added once
-# libs/render has looked for it (see NOTEAPPC_WITH_PDF above) and found the
-# PkgConfig::POPPLER_QT6 target - this option on top lets it be switched off
-# on its own even when embeds stay on.
+# PDF itself - and the poppler half of PDF embeds in a note (libnotolith-pdfpage.so).
+# Both are loadable (libs/ext/pdfview): the executable links no poppler, and a
+# session that never meets a PDF never maps it. Needs poppler-qt6 (GPL); this
+# option is the one switch for the viewer and the embeds, e.g. for a kit that
+# has a poppler built against another Qt.
 option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 # Image annotation (libs/ext/imageview): an image opens in a tab to highlight,
 # draw on and note, the marks kept in a sidecar note beside it. Qt Widgets
@@ -345,8 +344,7 @@ endif()
 if(NOTEAPPC_WITH_PUBLISH)
     add_subdirectory(libs/ext/publish)
 endif()
-get_property(noteappc_have_poppler GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER)
-if(NOTEAPPC_WITH_PDFVIEW AND noteappc_have_poppler)
+if(NOTEAPPC_WITH_PDFVIEW AND NOT ANDROID)
     add_subdirectory(libs/ext/pdfview)
 endif()
 if(NOTEAPPC_WITH_IMAGEVIEW)
@@ -386,7 +384,7 @@ if(NOTEAPPC_HAVE_LINK)
     add_subdirectory(libs/ext/link)
 endif()
 if(TARGET noteAppC_share_crdt AND TARGET noteAppC_link AND TARGET noteAppC_sync)
-    add_subdirectory(libs/ext/shareengine)
+    add_subdirectory(libs/ext/shareengine) # the notolith-share module: not linked into the executable
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

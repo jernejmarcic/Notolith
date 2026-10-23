@@ -18,15 +18,20 @@ add_test(NAME search COMMAND test_search)
 
 add_executable(test_editor test_editor.cpp)
 target_link_libraries(test_editor PRIVATE noteAppC_editor noteAppC_render Qt6::Concurrent Qt6::Test GTest::gtest)
-get_property(noteappc_have_poppler GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER)
-if(noteappc_have_poppler)
+# PdfPage resolves libnotolith-pdfpage.so from the module directories (libs/render/PdfPage.cpp): this test
+# points at the build's, and needs it built. No host symbols in that library, so a bare test binary loads it.
+if(TARGET notolith-pdfpage)
     target_compile_definitions(test_editor PRIVATE NOTEAPPC_EXPECT_PDF)
+    add_dependencies(test_editor notolith-pdfpage)
 endif()
 get_property(noteappc_have_litehtml GLOBAL PROPERTY NOTEAPPC_HAVE_LITEHTML)
 if(noteappc_have_litehtml)
     target_compile_definitions(test_editor PRIVATE NOTEAPPC_EXPECT_HTML)
 endif()
 add_test(NAME editor COMMAND test_editor)
+if(TARGET notolith-pdfpage)
+    set_tests_properties(editor PROPERTIES ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
+endif()
 # Its ratio budgets (a 1 MB open against a 200 kB one, min of 7) failed once
 # under ctest -j4 when neighbours took the CPU: alone, they hold every time.
 set_tests_properties(editor PROPERTIES RUN_SERIAL TRUE)
@@ -51,11 +56,13 @@ add_test(NAME vim COMMAND test_vim)
 # Its own executable, deliberately: see test_pdfpage_race.cpp's header
 # comment on why this needs to be the first thing in its process to touch
 # PdfPage::render.
-if(noteappc_have_poppler)
+if(TARGET notolith-pdfpage)
     add_executable(test_pdfpage_race test_pdfpage_race.cpp)
     target_link_libraries(test_pdfpage_race PRIVATE noteAppC_render Qt6::Widgets GTest::gtest)
+    add_dependencies(test_pdfpage_race notolith-pdfpage)
     add_test(NAME pdfpage_race COMMAND test_pdfpage_race)
-    set_tests_properties(pdfpage_race PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(pdfpage_race PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
 endif()
 
 # The loadable-module tier (libs/modules): fake modules built from one or two
@@ -132,6 +139,74 @@ if(TARGET notolith-ink)
     target_link_libraries(test_window PRIVATE notolith-inkcore)
     set_property(TARGET test_window APPEND PROPERTY BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
 endif()
+# The PDF viewer module sits in the same directory (libs/ext/pdfview): the window tests that open a PDF, and the
+# ones that check what is mapped before one is opened, need it built.
+if(TARGET notolith-pdfview)
+    add_dependencies(test_window notolith-pdfview)
+    target_compile_definitions(test_window PRIVATE NOTEAPPC_HAVE_PDFVIEW_MODULE)
+endif()
+# What a start maps (lane F): poppler and the share stack are modules, so the executable lists none of their
+# libraries and a session that never uses them maps none. One process per test: see test_lazymodules.cpp.
+add_executable(test_lazymodules test_lazymodules.cpp)
+target_link_libraries(test_lazymodules PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+if(TARGET noteAppC_sync) # the in-memory secret store: the share module's identity never reaches the real keyring
+    target_link_libraries(test_lazymodules PRIVATE noteAppC_sync)
+endif()
+set_target_properties(test_lazymodules PROPERTIES ENABLE_EXPORTS ON)
+function(noteappc_lazy_test name filter)
+    add_test(NAME ${name} COMMAND test_lazymodules --gtest_filter=LazyModules.${filter})
+    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${ARGN}")
+endfunction()
+if(TARGET notolith-pdfview)
+    add_dependencies(test_lazymodules notolith-pdfview)
+    set(noteappc_lazy_modules "NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
+    noteappc_lazy_test(lazy_pdf_start PdfNothingMappedUntilAPdfIsOpened "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_pdf_embed PdfEmbedResolvesWithoutThePluginFace "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_pdf_prescan PdfOpensBeforeAnyScan "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_pdf_restore PdfTabRestoredFromTheWorkspaceOpens "${noteappc_lazy_modules}")
+    # No NOTEAPPC_MODULE_DIRS here: the loop at the end of this file gives it a directory that does not exist.
+    noteappc_lazy_test(lazy_pdf_missing PdfWithoutTheModuleIsNotAViewFile)
+    noteappc_lazy_test(lazy_pdf_restore_missing PdfTabIsKeptInTheWorkspaceWithoutTheModule)
+    noteappc_lazy_test(lazy_pdf_kept_focus KeptPdfTabIgnoresFocusAndEndsWhenANoteOpensInIt)
+    list(APPEND noteappc_exe_forbidden "poppler")
+    list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-pdfview> $<TARGET_FILE:notolith-pdfpage>)
+    # A module takes the host's symbols from the executable: it must not carry a copy of a host library.
+    add_test(NAME needed_pdfview COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-pdfview>
+        "libnoteAppC_" "libnotolith-ink")
+    add_test(NAME needed_pdfpage COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-pdfpage>
+        "libnoteAppC_")
+endif()
+if(TARGET notolith-share)
+    add_dependencies(test_lazymodules notolith-share)
+    set(noteappc_lazy_modules "NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
+    noteappc_lazy_test(lazy_share_idle ShareNothingMappedWhileTheVaultHoldsNoShare "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_stored ShareLoadsWhenTheVaultHoldsAShare "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_asked ShareLoadsWhenAskedFor "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_prescan ShareAskedForBeforeAnyScan "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_off ShareOffMapsNothing "${noteappc_lazy_modules}")
+    noteappc_lazy_test(lazy_share_missing ShareWithoutTheModuleSaysWhatIsMissing)
+    list(APPEND noteappc_exe_forbidden "protobuf" "datachannel" "avahi" "absl")
+    list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-share>)
+    add_test(NAME needed_share COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-share>
+        "libnoteAppC_")
+endif()
+# The link-time side of the same fact, with no process started: the executable names none of the libraries
+# a module brings.
+# What NEEDED cannot see: a host static library linked into a module defines the same noteAppC symbols as the
+# executable (a second Settings, CrdtDoc, SyncCrypto). The self-test hands the script the executable twice, which
+# overlaps everywhere, and must fail: a check that cannot fail proves nothing.
+if(noteappc_symbol_modules)
+    add_test(NAME symbols_modules COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_symbols.sh $<TARGET_FILE:noteAppC>
+        ${noteappc_symbol_modules})
+    add_test(NAME symbols_selftest COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_symbols.sh $<TARGET_FILE:noteAppC>
+        $<TARGET_FILE:noteAppC>)
+    set_tests_properties(symbols_selftest PROPERTIES WILL_FAIL TRUE)
+endif()
+if(noteappc_exe_forbidden)
+    add_test(NAME needed_exe COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:noteAppC>
+        ${noteappc_exe_forbidden})
+endif()
+
 # Track S1b's glyph studio (libs/ext/hwfont): S1b creates the directory and
 # tests/test_hwfont.cpp; until noteAppC_hwfont exists this block does nothing.
 # test_hwfont drives the studio view and the module through the registry, so it
@@ -194,6 +269,13 @@ foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteA
 endforeach()
 add_test(NAME demo COMMAND test_demo)
 set_tests_properties(demo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# The demo vault's PDF opens in the PDF viewer module and its embeds render through libnotolith-pdfpage.so.
+if(TARGET notolith-pdfview)
+    target_compile_definitions(test_demo PRIVATE NOTEAPPC_HAVE_PDFVIEW)
+    set_target_properties(test_demo PROPERTIES ENABLE_EXPORTS ON)
+    add_dependencies(test_demo notolith-pdfview)
+    set_property(TEST demo APPEND PROPERTY ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
+endif()
 set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The DICT client talks to a QTcpServer on loopback, never to a real server.
@@ -320,7 +402,9 @@ endif()
 # of the real home.
 if(TARGET noteAppC_shareengine)
     add_executable(test_share test_share.cpp)
-    target_link_libraries(test_share PRIVATE noteAppC_shareengine Qt6::Test GTest::gtest)
+    # The engine takes the host's CrdtDoc, store and crypto as headers only (the ink rule); here they are linked in.
+    target_link_libraries(test_share PRIVATE noteAppC_shareengine noteAppC_sharebase noteAppC_share_crdt noteAppC_sync
+        Qt6::Test GTest::gtest)
     add_test(NAME share COMMAND test_share)
     set_tests_properties(share PROPERTIES TIMEOUT 300
         ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-data;XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-state")
@@ -328,11 +412,16 @@ endif()
 
 # Sharing through the window: two MainWindows on two temporary vaults, loopback only
 # (docs/SHARE.md "In the window"). The XDG directories are temporary ones, see main().
-if(TARGET noteAppC_shareengine AND TARGET noteAppC_ui)
+# The engine is the notolith-share module, loaded into the test's process from ${CMAKE_BINARY_DIR}/modules: the
+# test links the window and the static ShareEngineBase, never the engine (a second copy beside the module's).
+if(TARGET notolith-share AND TARGET noteAppC_ui)
     add_executable(test_share_window test_share_window.cpp)
-    target_link_libraries(test_share_window PRIVATE noteAppC_ui noteAppC_shareengine Qt6::Test GTest::gtest)
+    target_link_libraries(test_share_window PRIVATE noteAppC_ui noteAppC_sync Qt6::Test GTest::gtest)
+    set_target_properties(test_share_window PROPERTIES ENABLE_EXPORTS ON)
+    add_dependencies(test_share_window notolith-share)
     add_test(NAME share_window COMMAND test_share_window)
-    set_tests_properties(share_window PROPERTIES TIMEOUT 600 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    set_tests_properties(share_window PROPERTIES TIMEOUT 600
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
 endif()
 
 if(TARGET noteAppC_crypt)
@@ -387,7 +476,9 @@ endif()
 
 if(TARGET noteAppC_pdfview)
     add_executable(test_pdfview test_pdfview.cpp)
-    target_link_libraries(test_pdfview PRIVATE noteAppC_pdfview Qt6::Test GTest::gtest)
+    # The library takes the host's as headers only (libs/ext/pdfview/CMakeLists.txt): named here.
+    target_link_libraries(test_pdfview PRIVATE noteAppC_pdfview noteAppC_render noteAppC_editor noteAppC_theme
+        noteAppC_vault noteAppC_modules Qt6::Test GTest::gtest)
     add_test(NAME pdfview COMMAND test_pdfview)
     set_tests_properties(pdfview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

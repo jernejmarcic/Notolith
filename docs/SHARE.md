@@ -206,7 +206,8 @@ Hearth's link layer, vendored. No Qt.
 
 ## The engine (libs/ext/shareengine)
 
-`ShareEngine` is everything about sharing except an editor and a window: it
+`ShareEngine` (the `notolith-share` loadable module; `ShareEngineBase` and `ShareStore`
+are in libs/ext/share and linked into the application) is everything about sharing except an editor and a window: it
 keeps this device's keys, invites and admits members, and moves CRDT updates
 between devices. Built when the CRDT, the link and sync are (`noteAppC_shareengine`),
 so sharing needs libsodium and Qt6Keychain, which sync needs for the same two jobs:
@@ -272,12 +273,19 @@ store, temporary store directories.
 
 ## In the window (libs/ui/ShareSession, MainWindow)
 
-Settings, Core plugins, "Share a note" (`share`, **off by default**). With it off
-nothing exists: no engine, no keys read, no socket, no mDNS, and the `share:*`
-commands are disabled. With it on (and a vault open, after the first paint)
-the window owns a `ShareEngine` that is built but **not running**; it starts
-(keyring, socket) when a note is shared or joined, or at once when the store
-already holds shares of this vault.
+Settings, Core plugins, "Share a note" (`share`; like every core plugin it is on
+until switched off). With it off nothing exists: no engine, no keys read, no
+socket, no mDNS, and the `share:*` commands are disabled. The engine is the
+`notolith-share` module (`ShareEngine`; the window sees `ShareEngineBase`,
+libs/ext/share), so none of protobuf, Abseil, libdatachannel or avahi is mapped
+by a start that never shares: with the feature on (and a vault open, after the
+first paint and the module scan) the module is loaded when the store already
+holds shares of this vault, and otherwise the first time a note is shared or
+joined (`MainWindow::ensureShare`). The window then owns a `ShareEngine` that is
+built but **not running**; it starts (keyring, socket) when a note is shared or
+joined, or at once when the store already holds shares. Without the package,
+sharing says "Sharing needs the notolith-share package" and the settings row is
+not shown.
 
 - **Commands:** `share:share-note` (saves the note, makes the share and opens
   the share dialog with the invitation code; on a note shared already it just

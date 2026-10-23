@@ -14,26 +14,13 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
+#include "LoadedObjects.h"
 #include "ModuleHost.h"
 #include "ModuleRegistry.h"
 
 using namespace noteAppC;
 
 namespace {
-
-/// Every shared object mapped into this process, by absolute path.
-QStringList loadedObjects()
-{
-    QStringList out;
-    dl_iterate_phdr(
-        [](dl_phdr_info *info, size_t, void *data) {
-            if (info->dlpi_name && *info->dlpi_name)
-                static_cast<QStringList *>(data)->append(QFileInfo(QString::fromLocal8Bit(info->dlpi_name)).canonicalFilePath());
-            return 0;
-        },
-        &out);
-    return out;
-}
 
 QString fakeDir() { return QStringLiteral(NOTEAPPC_FAKE_MODULES_DIR); }
 

@@ -26,20 +26,22 @@ thing about `.ink` files: how to read their text boxes for the index (see "Notes
 
 ## Installing and building
 
-On Arch the build produces three packages from one `packaging/arch/PKGBUILD`:
+On Arch the build produces five packages from one `packaging/arch/PKGBUILD`:
 
 | package | holds | depends on |
 |---|---|---|
 | `notolith` | the application, no handwriting | the usual Qt and library set |
 | `notolith-ink` | `libnotolith-inkcore.so` (the ink core library) and `notolith-ink.so` (the handwritten-note module) | `notolith`, `abseil-cpp` |
 | `notolith-hwfont` | `notolith-hwfont.so` (the glyph studio, see the last section) | `notolith-ink` |
+| `notolith-pdfview` | `notolith-pdfview.so` (the PDF viewer tab) and `libnotolith-pdfpage.so` (poppler's page count, size and render, which PDF embeds in a note use on their own) | `notolith`, `poppler-qt6` |
+| `notolith-share` | `notolith-share.so` (the note sharing engine: protobuf, Abseil, libdatachannel, avahi) | `notolith`, `libdatachannel`, `avahi`, `protobuf`, `libsodium` |
 
-There are exactly these two module packages. `notolith-ink` is one install unit: later work (`.rnote` files, markup,
+There are exactly these four module packages (`notolith-pdfview` and `notolith-share` have no handwriting in them; they are listed because they install the same way). `notolith-ink` is one install unit: later work (`.rnote` files, markup,
 recognition) adds its hooks to this module, not to new packages. Handwriting recognition model weights, when they
 arrive, are an optional data download and not a module. Pacman enforces the dependency of `notolith-hwfont` on
 `notolith-ink`: a module manifest has no `dependencies` key.
 
-Install the three packages of one `makepkg` run together (`pacman -U` with all three files). The module packages
+Install the packages of one `makepkg` run together (`pacman -U` with every file). The module packages
 depend on exactly the same version of their parent (`notolith=<pkgver>-<pkgrel>`, `notolith-ink=<pkgver>-<pkgrel>`),
 so pacman refuses a mismatched set; a rebuild with an unchanged `pkgrel` is not caught, which is why one run
 matters: see "The ABI tag message" below.

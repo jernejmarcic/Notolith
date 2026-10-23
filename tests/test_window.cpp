@@ -6315,6 +6315,10 @@ TEST_F(WindowTest, EveryKindOfBlockAndEmbedRendersInline)
         {QStringLiteral("query"), QStringLiteral("```query\ntag:#project\n```"), QStringLiteral("tag:"),
          [](MarkdownEditor *e, qsizetype at) { return !e->queryRowsAt(at).isEmpty(); }},
     };
+#ifdef NOTEAPPC_HAVE_PDFVIEW_MODULE
+    // The module is built for this test: not finding it is a failure, not a row that quietly goes missing.
+    EXPECT_TRUE(noteAppC::PdfPage::isAvailable()) << "libnotolith-pdfpage.so not found: NOTEAPPC_MODULE_DIRS lost the modules directory?";
+#endif
     if (noteAppC::PdfPage::isAvailable()) {
         kinds.append({QStringLiteral("pdf"), QStringLiteral("![[doc.pdf]]"), QStringLiteral("!"),
                       [](MarkdownEditor *e, qsizetype at) {

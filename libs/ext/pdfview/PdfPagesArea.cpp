@@ -2,7 +2,7 @@
 
 #include "Lifeline.h"
 #include "PdfAnnotationCommands.h"
-#include "PdfPage.h"
+#include "PdfPageImpl.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -307,7 +307,7 @@ QPixmap PdfPagesArea::ensureRasterAsync(int page, int widthPixels)
     const int devicePixels = qRound(widthPixels * dpr);
 
     (void)QtConcurrent::run([this, lifeline = m_lifeline, key, generation, path, page, devicePixels, dpr] {
-        QImage image = PdfPage::render(path, page, devicePixels, /*hideAnnotations=*/true);
+        QImage image = PdfPageImpl::render(path, page, devicePixels, /*hideAnnotations=*/true);
         lifeline->post(this, [this, key, generation, image = std::move(image), dpr]() mutable {
             QPixmap pixmap = image.isNull() ? QPixmap() : QPixmap::fromImage(image);
             if (!pixmap.isNull())

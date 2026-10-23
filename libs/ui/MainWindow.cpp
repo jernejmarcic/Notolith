@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <QCryptographicHash>
+#include <QScopeGuard>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QClipboard>
@@ -126,10 +127,7 @@
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
 #include "ImageView.h"
 #endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
 #include "PdfRecovery.h"
-#include "PdfView.h"
-#endif
 #ifdef NOTEAPPC_HAVE_CANVAS
 #include "CanvasView.h"
 #endif
@@ -198,8 +196,8 @@ QString mediaKindOf(const QString &path, bool askPlugins = true)
 }
 /// A suffix the app opens itself: a module may not claim it (the registry gives
 /// such a module a problem notice and never loads it). Per kind, under the same
-/// compile-time option as isViewFile, so a build without EPUB or PDF does not
-/// forbid a module those suffixes.
+/// compile-time option as isViewFile, so a build without EPUB does not
+/// forbid a module that suffix. A PDF is a module's (notolith-pdfview).
 bool isBuiltInSuffix(const QString &suffix)
 {
     if (suffix == QLatin1String("md") || suffix == QLatin1String("mdlock"))
@@ -214,10 +212,6 @@ bool isBuiltInSuffix(const QString &suffix)
 #endif
 #ifdef NOTEAPPC_HAVE_BASES
     if (suffix == QLatin1String("base"))
-        return true;
-#endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (suffix == QLatin1String("pdf"))
         return true;
 #endif
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
@@ -405,6 +399,13 @@ MainWindow::MainWindow(QWidget *parent)
     m_moduleHost.showTab = [this](ModuleView *view, const QString &title) { showModuleTab(view, title); };
     m_moduleHost.showStatus = [this](const QString &text, int timeoutMs) { statusBar()->showMessage(text, timeoutMs); };
     m_moduleHost.openFile = [this](const QString &absolutePath) { return openNote(absolutePath); };
+    m_moduleHost.currentView = [this]() -> ModuleView * {
+        return m_active ? qobject_cast<ModuleView *>(m_active->view) : nullptr;
+    };
+    m_moduleHost.flushSaves = [this] { flushSaves(); };
+#ifdef NOTEAPPC_HAVE_SHARE
+    m_moduleHost.registerShareEngine = [this](ModuleHost::ShareEngineFactory factory) { m_makeShare = std::move(factory); };
+#endif
     m_moduleHost.currentFolder = [this]() -> QString {
         if (!m_vault.isValid())
             return QString();
@@ -985,7 +986,10 @@ MainWindow::TabGroup *MainWindow::newGroup()
     connect(group->tabs, &QTabBar::currentChanged, this, [this, group](int index) {
         if (m_syncingTabs || index < 0 || index >= group->leaves.size())
             return;
-        activateLeaf(group->leaves.at(index));
+        Leaf *picked = group->leaves.at(index);
+        if (picked->notePath.isEmpty() && !picked->view && !picked->keptPath.isEmpty())
+            picked->pendingPath = std::exchange(picked->keptPath, QString()); // the user picked it: one more try
+        activateLeaf(picked);
         m_active->editor->setFocus();
     });
     connect(group->tabs, &QTabBar::tabMoved, this,
@@ -1775,8 +1779,15 @@ void MainWindow::activateLeaf(Leaf *leaf)
     // before there is one.
     if (!m_rightPanes)
         return;
-    if (!leaf->pendingPath.isEmpty() && openNote(std::exchange(leaf->pendingPath, QString())))
-        return; // opening it filled the panes
+    if (!leaf->pendingPath.isEmpty()) {
+        const QString pending = std::exchange(leaf->pendingPath, QString());
+        if (openNote(pending))
+            return; // opening it filled the panes
+        // A file only a module opens, and none is installed (or it will not load): the tab stays in the saved
+        // workspace for the day it does, rather than being dropped from it.
+        if (leaf->notePath.isEmpty() && !leaf->view && !Vault::isNote(pending) && !isViewFile(pending))
+            leaf->keptPath = pending; // shows nothing meanwhile; focus never retries it
+    }
     const QString &path = leaf->notePath;
     showNoteInPanes(path);
     if (!path.isEmpty()) {
@@ -1793,6 +1804,8 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
 {
     if (leaf->notePath.isEmpty() && !leaf->pendingPath.isEmpty())
         return QFileInfo(leaf->pendingPath).completeBaseName();
+    if (leaf->notePath.isEmpty() && !leaf->view && !leaf->keptPath.isEmpty())
+        return QFileInfo(leaf->keptPath).completeBaseName();
     if (leaf->notePath.isEmpty() && !leaf->viewTitle.isEmpty())
         return isModified(leaf) ? leaf->viewTitle + QLatin1String(" *") : leaf->viewTitle;
     if (leaf->notePath.isEmpty())
@@ -1819,7 +1832,7 @@ void MainWindow::updateShareStatus()
     if (!session)
         return;
     m_shareStatus->setText(tr("Shared - %1 here").arg(m_share->membersHere(session->shareID())));
-    const ShareEngine::Counters counters = m_share->counters(session->shareID());
+    const ShareEngineBase::Counters counters = m_share->counters(session->shareID());
     m_shareStatus->setToolTip(counters.dropped ? tr("%1 messages refused, the last: %2").arg(counters.dropped).arg(counters.lastReason)
                                                : tr("Everyone connected sees your edits as you type"));
 #endif
@@ -1897,7 +1910,8 @@ void MainWindow::syncTabs(TabGroup *group)
 {
     const bool soleEmpty = m_leaves.size() == 1 && group->leaves.size() == 1
                         && group->leaves.constFirst()->notePath.isEmpty()
-                        && group->leaves.constFirst()->pendingPath.isEmpty();
+                        && group->leaves.constFirst()->pendingPath.isEmpty()
+                        && group->leaves.constFirst()->keptPath.isEmpty();
     const int wanted = soleEmpty ? 0 : int(group->leaves.size());
     m_layoutSave.start();
     m_syncingTabs = true;
@@ -3418,22 +3432,6 @@ void MainWindow::buildActions()
                 showRightPane(m_localGraph);
         });
 #endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    add(QStringLiteral("pdf-viewer:extract-annotations"), tr("PDF: Extract annotations to a note"), QString(),
-        [this] {
-            auto *pdf = qobject_cast<PdfView *>(m_active->view);
-            if (!pdf) {
-                statusBar()->showMessage(tr("Open a PDF first"), 3000);
-                return;
-            }
-            flushSaves(); // the note it extracts into may be open, with a commit in flight
-            QString error;
-            if (!pdf->extractAnnotations(QString(), &error))
-                QMessageBox::warning(this, tr("Extract annotations"), error);
-            else
-                statusBar()->showMessage(tr("Annotations extracted"), 3000);
-        });
-#endif
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
     add(QStringLiteral("image-annotation:extract-annotations"), tr("Image: Extract annotations to a note"), QString(),
         [this] {
@@ -3488,7 +3486,12 @@ void MainWindow::buildActions()
             statusBar()->showMessage(tr("This note is not shared"), 5000);
     });
     add(QStringLiteral("share:join"), tr("Share: Join a shared note"), QString(), [this] {
-        auto *dialog = new JoinShareDialog([this](const QString &code, QString *error) { return joinShare(code, error); },
+        QString error;
+        if (!ensureShare(&error)) { // the dialog checks the code with the engine's own parser
+            statusBar()->showMessage(error, 8000);
+            return;
+        }
+        auto *dialog = new JoinShareDialog(m_share.get(), [this](const QString &code, QString *error) { return joinShare(code, error); },
                                            this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->open();
@@ -5039,10 +5042,6 @@ void MainWindow::applyTheme()
 #endif
         if (auto *module = qobject_cast<ModuleView *>(leaf->view))
             module->setTheme(m_theme);
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-        if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
-            pdf->setTheme(m_theme);
-#endif
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
         if (auto *image = qobject_cast<ImageView *>(leaf->view))
             image->setTheme(m_theme);
@@ -5341,13 +5340,23 @@ void MainWindow::openSingleFile(const QString &path)
 
 void MainWindow::openTarget(const LaunchTarget &target)
 {
+    // A file that is no note (a PDF, an .ink page) is a module's to open: the scan that tells which module
+    // runs after the first paint, so the open that paint queued - a path on the command line, the last
+    // session's note - would find no owner for it. One directory listing, and only for such a file.
+    const auto scanFor = [this](const QString &path) {
+        if (!m_modulesScanned && !path.isEmpty() && !Vault::isNote(path))
+            scanModulesNow();
+    };
     switch (target.mode) {
     case OpenMode::Vault:
         openVault(target.vaultRoot);
-        if (!target.filePath.isEmpty())
+        if (!target.filePath.isEmpty()) {
+            scanFor(target.filePath);
             openNote(target.filePath);
+        }
         break;
     case OpenMode::SingleFile:
+        scanFor(target.filePath);
         openSingleFile(target.filePath);
         break;
     case OpenMode::Empty: {
@@ -5361,6 +5370,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
             // lives under this vault's root.
             for (const QString &candidate : m_settings.rememberedNotes()) {
                 if (m_vault.contains(candidate) && QFileInfo(candidate).exists()) {
+                    scanFor(candidate);
                     openNote(candidate);
                     break;
                 }
@@ -5376,9 +5386,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
         // Old snapshots go once a session, with the window already up.
         const qint64 keep = qint64(m_settings.integer(QStringLiteral("fileRecovery.keepDays"))) * 24 * 3600 * 1000;
         Snapshots::prune(keep);
-#ifdef NOTEAPPC_HAVE_PDFVIEW
         PdfRecovery::prune(keep);
-#endif
     }
     m_painted = true;
     startModuleScan(); // PERFORMANCE.md rule 5: a directory listing, off the UI thread, after the first frame
@@ -5418,8 +5426,15 @@ void MainWindow::scanModulesNow()
 void MainWindow::onModulesScanned()
 {
     m_modulesScanned = true;
+    // A vault that holds shares waits for this: the share module is found by this scan.
+    const auto shareNow = qScopeGuard([this] { updateShare(); });
     if (m_modules->modules().isEmpty())
         return; // nothing installed: no feature row, no command, no rebuild - the base app pays nothing
+    // The module set is known now: a tab that kept a file for want of its module tries it once more.
+    if (m_active && m_active->notePath.isEmpty() && !m_active->view && !m_active->keptPath.isEmpty()) {
+        m_active->pendingPath = std::exchange(m_active->keptPath, QString());
+        activateLeaf(m_active);
+    }
     bool featureRegistered = false;
     bool commandAdded = false;
     for (const ModuleInfo &module : m_modules->modules()) {
@@ -5437,7 +5452,7 @@ void MainWindow::onModulesScanned()
         }
     }
     m_settings.adoptStored(); // a saved feature switch for a key registered just now (load() ran before the scan)
-    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems());
+    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems(), moduleFeatures());
     if (commandAdded)
         rebuildHotkeyCommands();
     if (featureRegistered)
@@ -5451,7 +5466,7 @@ bool MainWindow::loadModule(const ModuleInfo &module, QString *error)
     const bool ok = m_modules->ensureLoaded(module, m_moduleHost, error);
     if (ok)
         m_settings.adoptStored(); // the module's keys exist now; load() ran before them (once, not per row)
-    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems()); // its rows, or its load failure
+    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems(), moduleFeatures()); // its rows, or its load failure
     return ok;
 }
 
@@ -5489,6 +5504,17 @@ QList<QPair<QString, QString>> MainWindow::moduleProblems() const
             problems.append({module.id, notice});
     }
     return problems;
+}
+
+/// The feature ids of the installed modules that can load: what the Core plugins page offers a switch for when the
+/// feature is a module's alone (the PDF viewer).
+QStringList MainWindow::moduleFeatures() const
+{
+    QStringList features;
+    for (const ModuleInfo &module : m_modules->modules())
+        if (module.problem.isEmpty())
+            features << module.featureID;
+    return features;
 }
 
 QAction *MainWindow::command(const QString &id) const
@@ -5564,6 +5590,15 @@ void MainWindow::onTreeClicked(const QModelIndex &index)
 
 bool MainWindow::openNote(const QString &rawPath, NavSource source, const QString &fragment)
 {
+    // A tab that kept a file nothing could open keeps it only while it shows nothing: any open into it ends that.
+    Leaf *const target = m_active;
+    const QString kept = target ? std::exchange(target->keptPath, QString()) : QString();
+    const auto keepIfStillEmpty = qScopeGuard([&] {
+        if (!kept.isEmpty()
+            && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [target](const auto &open) { return open.get() == target; })
+            && target->notePath.isEmpty() && !target->view)
+            target->keptPath = kept;
+    });
     // Any navigation - the tree, the switcher, a link, history - leaves the
     // settings page if it was open, even below, where a same-path or
     // not-a-note early return means nothing else here runs: a click behind an
@@ -5592,7 +5627,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
         if (openNote(path, source, fragment))
             return true;
         // Not opened (a cancelled password, an unreadable file): no blank tab left behind.
-        if (fresh->notePath.isEmpty() && fresh->pendingPath.isEmpty()
+        if (fresh->notePath.isEmpty() && fresh->pendingPath.isEmpty() && fresh->keptPath.isEmpty()
             && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [fresh](const auto &open) { return open.get() == fresh; })) {
             dropLeaf(fresh);
             activateLeaf(pinned);
@@ -5606,8 +5641,10 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     }
     if (!Vault::isNote(path) && !Vault::isEncryptedNote(path) && !isNotebookFile(path)) {
         if (source != NavSource::History) {
-            statusBar()->showMessage(tr("%1 is not a note - editors for other file types come later")
-                                         .arg(QFileInfo(path).fileName()),
+            statusBar()->showMessage(path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)
+                                         ? pdfViewerProblem()
+                                         : tr("%1 is not a note - editors for other file types come later")
+                                               .arg(QFileInfo(path).fileName()),
                                      4000);
         }
         return false;
@@ -5718,7 +5755,9 @@ QJsonObject MainWindow::layoutJSON() const
         int currentTab = 0;
         for (int i = 0; i < group->leaves.size(); ++i) {
             const Leaf *leaf = group->leaves.at(i);
-            const QString path = leaf->notePath.isEmpty() ? leaf->pendingPath : leaf->notePath;
+            const QString path = !leaf->notePath.isEmpty() ? leaf->notePath
+                                : !leaf->pendingPath.isEmpty() ? leaf->pendingPath
+                                : leaf->view ? QString() : leaf->keptPath;
             QJsonObject view{{QStringLiteral("type"), QStringLiteral("empty")},
                              {QStringLiteral("state"), QJsonObject()}};
             if (!path.isEmpty() && m_vault.isValid()) {
@@ -5932,6 +5971,13 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
         popout->show();
     }
 
+    // A tab whose file only a module can open (a PDF, an .ink page): the scan that finds the module runs after the
+    // first paint, later than this, so the open below would find no owner. One directory listing, and only then.
+    if (!m_modulesScanned && std::ranges::any_of(m_leaves, [](const auto &leaf) {
+            const QString &path = leaf->pendingPath;
+            return !path.isEmpty() && !Vault::isNote(path) && !isBuiltInSuffix(QFileInfo(path).suffix().toLower());
+        }))
+        scanModulesNow();
     // Each split's own tab first, the focused one last so it ends up active.
     for (const auto &[group, index] : std::as_const(shown)) {
         if (!group->leaves.isEmpty())
@@ -6147,7 +6193,7 @@ void MainWindow::syncSignIn()
 }
 
 #ifdef NOTEAPPC_HAVE_SHARE
-void MainWindow::setShareConfigForTests(ShareEngine::Config config)
+void MainWindow::setShareConfigForTests(ShareEngineBase::Config config)
 {
     m_shareConfig = std::move(config);
 }
@@ -6200,22 +6246,58 @@ bool MainWindow::allowSharedRun(const MarkdownEditor *editor, const QString &lan
 }
 #endif
 
+QList<ShareRecord> MainWindow::storedShares() const
+{
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (!m_vault.isValid())
+        return {};
+    return ShareStore(m_shareConfig.storeDirectory.isEmpty() ? ShareStore::directoryFor(m_vault.root())
+                                                             : m_shareConfig.storeDirectory)
+        .all();
+#else
+    return {};
+#endif
+}
+
 void MainWindow::updateShare()
 {
 #ifdef NOTEAPPC_HAVE_SHARE
     const bool wanted = m_painted && m_openMode == OpenMode::Vault && m_vault.isValid() && featureOn("share");
     const QString root = wanted ? m_vault.root() : QString();
-    if (root == m_shareFor && (m_share != nullptr) == wanted)
-        return;
+    if (!wanted)
+        m_shareDemanded = false;
+    if (root == m_shareFor && (m_share != nullptr || !m_shareDemanded))
+        return; // settled for this vault: an engine, or nothing to build one for
     qDeleteAll(m_sessions);
     m_sessions.clear();
     m_share.reset(); // nothing built, nothing listening, with the feature off
-    m_shareFor = root;
+    m_shareFor.clear();
     updateShareStatus();
     if (!wanted)
         return;
-    m_share = std::make_unique<ShareEngine>(root, m_shareConfig);
-    connect(m_share.get(), &ShareEngine::joinRequested, this,
+    // The engine is the notolith-share module, which maps protobuf, Abseil and libdatachannel: it is loaded
+    // for a vault that holds shares to resume, or when a command asks (ensureShare), never for a vault that
+    // merely has the feature on.
+    if (!m_shareDemanded && storedShares().isEmpty()) {
+        m_shareFor = root;
+        return;
+    }
+    if (!m_modulesScanned)
+        return; // onModulesScanned() runs this again; m_shareFor stays empty so that call is not taken for settled
+    m_shareFor = root;
+    m_shareDemanded = false;
+    m_shareProblem.clear();
+    const std::optional<ModuleInfo> module = m_modules->moduleForFeature(QStringLiteral("share"));
+    if (!module)
+        m_shareProblem = tr("Sharing needs the notolith-share package");
+    else if (loadModule(*module, &m_shareProblem) && !m_makeShare)
+        m_shareProblem = tr("The notolith-share module did not offer a sharing engine");
+    if (!m_shareProblem.isEmpty()) {
+        statusBar()->showMessage(m_shareProblem, 8000);
+        return;
+    }
+    m_share.reset(m_makeShare(root, m_shareConfig, this));
+    connect(m_share.get(), &ShareEngineBase::joinRequested, this,
             [this](const QByteArray &shareID, const QByteArray &joiner, const QString &name, const QString &safetyNumber) {
                 bool approved = false;
                 if (m_shareApproval) {
@@ -6239,14 +6321,38 @@ void MainWindow::updateShare()
                 else
                     m_share->refuse(shareID, joiner);
             });
-    connect(m_share.get(), &ShareEngine::joined, this, &MainWindow::placeJoinedNote);
-    connect(m_share.get(), &ShareEngine::peersChanged, this, &MainWindow::updateShareStatus);
-    connect(m_share.get(), &ShareEngine::membersChanged, this, &MainWindow::updateShareStatus);
-    connect(m_share.get(), &ShareEngine::presenceChanged, this, &MainWindow::updateShareStatus); // here through the owner
-    connect(m_share.get(), &ShareEngine::failed, this,
+    connect(m_share.get(), &ShareEngineBase::joined, this, &MainWindow::placeJoinedNote);
+    connect(m_share.get(), &ShareEngineBase::peersChanged, this, &MainWindow::updateShareStatus);
+    connect(m_share.get(), &ShareEngineBase::membersChanged, this, &MainWindow::updateShareStatus);
+    connect(m_share.get(), &ShareEngineBase::presenceChanged, this, &MainWindow::updateShareStatus); // here through the owner
+    connect(m_share.get(), &ShareEngineBase::failed, this,
             [this](const QByteArray &, const QString &message) { statusBar()->showMessage(message, 8000); });
     if (m_share->hasStoredShares())
         startShare();
+#endif
+}
+
+bool MainWindow::ensureShare(QString *error)
+{
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (m_share)
+        return true;
+    const auto fail = [error](const QString &message) {
+        if (error)
+            *error = message;
+        return false;
+    };
+    if (!m_painted || m_openMode != OpenMode::Vault || !m_vault.isValid() || !featureOn("share"))
+        return fail(tr("Turn on \"Share a note\" in Settings, Core plugins"));
+    m_shareDemanded = true;
+    if (!m_modulesScanned)
+        scanModulesNow(); // a command asked: the one directory listing now, not after the next paint
+    updateShare();
+    m_shareDemanded = false;
+    return m_share ? true : fail(m_shareProblem);
+#else
+    Q_UNUSED(error);
+    return false;
 #endif
 }
 
@@ -6330,8 +6436,9 @@ QString MainWindow::shareNote(QString *error)
             *error = message;
         return QString();
     };
-    if (!m_share)
-        return fail(tr("Turn on \"Share a note\" in Settings, Core plugins"));
+    QString engineError;
+    if (!ensureShare(&engineError))
+        return fail(engineError);
     Leaf *leaf = m_active;
     if (leaf && Vault::isEncryptedNote(leaf->notePath))
         return fail(tr("An encrypted note cannot be shared"));
@@ -6354,11 +6461,8 @@ QString MainWindow::shareNote(QString *error)
 
 bool MainWindow::joinShare(const QString &code, QString *error)
 {
-    if (!m_share) {
-        if (error)
-            *error = tr("Turn on \"Share a note\" in Settings, Core plugins");
+    if (!ensureShare(error))
         return false;
-    }
     if (!m_share->join(code, QString(), error))
         return false;
     startShare();
@@ -6515,6 +6619,20 @@ QList<MainWindow::Leaf *> MainWindow::viewsOfSameNote(const Leaf *leaf) const
     return views;
 }
 
+QString MainWindow::pdfViewerProblem() const
+{
+    for (const ModuleInfo &module : m_modules->modules()) {
+        if (module.featureID != QLatin1String("pdf-viewer"))
+            continue;
+        if (!module.problem.isEmpty())
+            return module.problem; // built for another Notolith, say
+        if (!featureOn("pdf-viewer"))
+            return tr("The PDF viewer is switched off in Settings, Core plugins");
+        return tr("The PDF viewer could not be loaded");
+    }
+    return tr("PDF support is not installed (the notolith-pdfview package)");
+}
+
 bool MainWindow::isViewFile(const QString &path) const
 {
 #ifdef NOTEAPPC_HAVE_EPUB
@@ -6529,17 +6647,13 @@ bool MainWindow::isViewFile(const QString &path) const
     if (path.endsWith(QLatin1String(".base"), Qt::CaseInsensitive))
         return featureOn("bases");
 #endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive))
-        return featureOn("pdf-viewer");
-#endif
     const QString media = mediaKindOf(path);
     if (media == QLatin1String("image") || (!media.isEmpty() && featureOn("media-embeds")))
         return true;
     return m_modules && m_modules->moduleForSuffix(path).has_value(); // after every built-in kind, never before
 }
 
-bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **view)
+bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **view, const QString &fragment)
 {
     const std::optional<ModuleInfo> module = m_modules ? m_modules->moduleForSuffix(path) : std::nullopt;
     if (!module)
@@ -6573,6 +6687,8 @@ bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **v
         delete moduleView;
         return false;
     }
+    if (!fragment.isEmpty())
+        moduleView->openFragment(fragment);
     *view = moduleView;
     return true;
 }
@@ -6620,29 +6736,6 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
             connect(epub, &EpubView::statusMessage, this,
                     [this](const QString &text, int timeout) { statusBar()->showMessage(text, timeout); });
             view = epub;
-        }
-    }
-#endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) {
-        auto *pdf = new PdfView(m_active->area);
-        pdf->setTheme(m_theme);
-        if (!pdf->load(path, &error)) {
-            delete pdf;
-        } else {
-            if (!fragment.isEmpty())
-                pdf->openFragment(fragment);
-            Leaf *leaf = m_active;
-            connect(pdf, &PdfView::modificationChanged, this, [this, leaf](bool modified) {
-                if (leaf == m_active)
-                    updateTitle();
-                else
-                    syncTabs(leaf->group);
-                if (modified && m_settings.boolean(QStringLiteral("files.autosave")))
-                    armAutosave(); // annotations are kept like a note's text
-            });
-            connect(pdf, &PdfView::noteActivated, this, &MainWindow::openRelative);
-            view = pdf;
         }
     }
 #endif
@@ -6718,7 +6811,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
     }
 #endif
     if (!view)
-        openModuleView(path, &error, &view);
+        openModuleView(path, &error, &view, fragment);
     if (!view) {
         if (source != NavSource::History)
             QMessageBox::warning(this, tr("Open"), tr("Could not open %1:\n%2").arg(path, error));
@@ -6776,10 +6869,6 @@ bool MainWindow::isModified(const Leaf *leaf) const
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
         return canvas->isModified();
-#endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
-        return pdf->isModified();
 #endif
     return leaf->editor->isModified();
 }
@@ -7006,9 +7095,7 @@ bool MainWindow::isSharedNote(const MarkdownEditor *editor) const
     // text came from a share. Stopping the share here removes the record, and
     // the note is an ordinary one again.
     const QString relative = m_vault.relative(path);
-    const ShareStore store(m_shareConfig.storeDirectory.isEmpty() ? ShareStore::directoryFor(m_vault.root())
-                                                                   : m_shareConfig.storeDirectory);
-    const QList<ShareRecord> records = store.all();
+    const QList<ShareRecord> records = storedShares();
     return std::ranges::any_of(records, [&](const ShareRecord &record) { return record.relativePath == relative; });
 #else
     Q_UNUSED(editor);
@@ -7258,18 +7345,6 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
     if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;
         if (!canvas->save(QString(), &error)) {
-            reportSaveError(target->notePath, error, quiet);
-            return false;
-        }
-        if (!quiet)
-            statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(target->notePath).fileName()), 2000);
-        return true;
-    }
-#endif
-#ifdef NOTEAPPC_HAVE_PDFVIEW
-    if (auto *pdf = qobject_cast<PdfView *>(target->view)) {
-        QString error;
-        if (!pdf->save(&error)) {
             reportSaveError(target->notePath, error, quiet);
             return false;
         }

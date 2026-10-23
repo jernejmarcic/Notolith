@@ -162,7 +162,7 @@ ShareEngine::ShareEngine(const QString &vaultRoot, QObject *parent)
 }
 
 ShareEngine::ShareEngine(const QString &vaultRoot, Config config, QObject *parent)
-    : QObject(parent)
+    : ShareEngineBase(parent)
     , m_vaultRoot(vaultRoot)
     , m_config(std::move(config))
     , m_store(m_config.storeDirectory.isEmpty() ? ShareStore::directoryFor(vaultRoot) : m_config.storeDirectory)

@@ -146,10 +146,10 @@ optional; syntax highlighting is `REQUIRED` and would need the same treatment.
 
 **Checked 2026-09-23: both are now optional, and the tree was built against
 6.7.3.** `NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING` (default `ON`) and
-`NOTEAPPC_WITH_PDF` (default `ON`, so poppler can be turned off even when it
+`NOTEAPPC_WITH_PDFVIEW` (default `ON`, so poppler can be turned off even when it
 is installed - the system poppler-qt6 here is built against Qt 6.11 and
 cannot be linked against the 6.7.3 kit) now guard the `find_package` calls in
-`libs/render/CMakeLists.txt`. With either off or the package missing,
+`libs/render/CMakeLists.txt` and `libs/ext/pdfview/CMakeLists.txt`. With either off or the package missing,
 `CodeHighlighter`/`PdfPage` compile without it: `CodeHighlighter::isAvailable()`
 and `PdfPage::isAvailable()` report `false`, `highlight()` returns no token
 formats, and code blocks still render, monospaced and uncoloured. The two
@@ -214,7 +214,7 @@ To repeat the check:
 ```sh
 env -u CFLAGS -u CXXFLAGS cmake -B /tmp/noteAppC-qt673 -G Ninja \
     -DCMAKE_PREFIX_PATH=$HOME/Documents/AI/.toolchains/Qt/6.7.3/gcc_64 \
-    -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDF=OFF
+    -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDFVIEW=OFF
 cmake --build /tmp/noteAppC-qt673
 QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/noteAppC-qt673
 ```
@@ -242,7 +242,7 @@ one fetched dependency's own policy floor.
 
 **What is off, and why.** Four of the five options `docs/PLUGINS.md` lists as
 Tier 1 have a system dependency with no arm64 build in this toolchain -
-`NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING` (KF6), `NOTEAPPC_WITH_PDF` (poppler-qt6),
+`NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING` (KF6), `NOTEAPPC_WITH_PDFVIEW` (poppler-qt6),
 `NOTEAPPC_WITH_SPELLCHECK` (hunspell) and `NOTEAPPC_WITH_HTML` (litehtml) are
 all passed `OFF` explicitly at configure time, rather than left to
 auto-detect and fail to find anything. That is deliberate, not just tidy:
@@ -296,7 +296,7 @@ $HOME/Documents/AI/.toolchains/Qt/6.7.3/android_arm64_v8a/bin/qt-cmake \
     -DANDROID_NDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk/ndk/26.1.10909125 \
     -DQT_HOST_PATH=$HOME/Documents/AI/.toolchains/Qt/6.7.3/gcc_64 \
     -DBUILD_TESTING=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDF=OFF \
+    -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDFVIEW=OFF \
     -DNOTEAPPC_WITH_SPELLCHECK=OFF -DNOTEAPPC_WITH_HTML=OFF -DNOTEAPPC_WITH_MEDIA=OFF
 
 JAVA_HOME=$HOME/Documents/AI/.toolchains/jdk/jdk-17.0.20+8 \

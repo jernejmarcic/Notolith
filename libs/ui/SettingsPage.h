@@ -54,7 +54,10 @@ public:
     /// Rows the loadable modules registered (ModuleHost::registerSetting),
     /// and the modules that could not be loaded, each with its notice. Shown
     /// on the Core plugins page after the feature rows; rebuilds the page.
-    void setModules(const QList<ModuleHost::SettingRow> &rows, const QList<QPair<QString, QString>> &problems);
+    /// `features` are the ids of the installed modules: a feature that only a module carries (the PDF viewer) has
+    /// a switch only when its module is there.
+    void setModules(const QList<ModuleHost::SettingRow> &rows, const QList<QPair<QString, QString>> &problems,
+                    const QStringList &features = {});
 
 signals:
     /// A row wrote to `settings`; MainWindow re-applies live and will save()
@@ -93,6 +96,7 @@ private:
     PluginRegistry *m_pluginRegistry = nullptr;
     QList<ModuleHost::SettingRow> m_moduleRows;
     QList<QPair<QString, QString>> m_moduleProblems;
+    QStringList m_moduleFeatures;
     /// The keys `id` has now: noteAppC's own file, else the vault's
     /// Obsidian file, else the built-in ones.
     QList<QKeySequence> effectiveKeys(const HotkeyCommand &command) const;

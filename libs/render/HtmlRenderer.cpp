@@ -60,7 +60,7 @@ struct FontHandle {
 /// carries `SPDX-License-Identifier: LicenseRef-Qt-Commercial OR
 /// GPL-3.0-only WITH Qt-GPL-exception-1.0` - copyleft, and specifically the
 /// kind of dependency this project already keeps at arm's length (poppler
-/// is GPL too, which is exactly why NOTEAPPC_WITH_PDF exists and why it
+/// is GPL too, which is exactly why NOTEAPPC_WITH_PDFVIEW exists and why it
 /// links dynamically rather than compiling any of poppler's own code in).
 /// litehtml's own document_container.h, which this class implements, is
 /// part of the litehtml project and BSD-3-Clause like the rest of it.

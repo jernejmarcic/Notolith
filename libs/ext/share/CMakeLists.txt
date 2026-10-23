@@ -9,6 +9,23 @@ add_library(noteAppC_share_crdt STATIC
 target_include_directories(noteAppC_share_crdt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_share_crdt PUBLIC Qt6::Core)
 
+# The surface of the sharing engine the window sees (ShareEngineBase.h) and the per-vault store of
+# shares (ShareStore.h, Qt only). The engine itself is libs/ext/shareengine, a loadable module; two
+# targets, as libs/modules has: the module links the INTERFACE one for the headers and resolves the
+# moc and the store from the executable, which links the STATIC one - so there is exactly one copy.
+add_library(noteAppC_sharebase_headers INTERFACE)
+target_include_directories(noteAppC_sharebase_headers INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(noteAppC_sharebase_headers INTERFACE Qt6::Core)
+add_library(noteAppC_sharebase STATIC
+    ShareEngineBase.h
+    ShareStore.h
+    ShareStore.cpp)
+set_target_properties(noteAppC_sharebase PROPERTIES AUTOMOC ON)
+# Whole archive: the share module resolves CrdtDoc (create, available) from the executable, which itself
+# calls only the virtuals, so a plain archive link would leave the factory and both backends out of it.
+target_link_libraries(noteAppC_sharebase PUBLIC noteAppC_sharebase_headers
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,noteAppC_share_crdt>")
+
 if(NOTEAPPC_WITH_SHARE_YRS AND NOTEAPPC_CARGO)
 # yrs-ffi is a tiny Rust crate over the yrs library (Cargo.lock pins every
 # crate); cargo builds it into the build directory, as a static library this

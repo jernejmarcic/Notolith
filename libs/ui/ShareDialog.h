@@ -6,7 +6,7 @@
 #include <QDialog>
 #include <QPointer>
 
-#include "ShareEngine.h"
+#include "ShareEngineBase.h"
 
 class QLabel;
 class QLineEdit;
@@ -29,7 +29,7 @@ public:
 
     /// `inviteCode` is shown when there is one to show (just created); the
     /// owner can always mint a new one.
-    ShareDialog(ShareEngine *engine, QByteArray shareID, const QString &inviteCode, QWidget *parent = nullptr);
+    ShareDialog(ShareEngineBase *engine, QByteArray shareID, const QString &inviteCode, QWidget *parent = nullptr);
 
     /// Who answers "remove this device?", in place of the question; for the tests.
     void setConfirmForTests(std::function<bool(const QString &name)> confirm);
@@ -39,7 +39,7 @@ private:
     void refresh();
     void revokeSelected();
 
-    QPointer<ShareEngine> m_engine; ///< the dialog closes when the engine goes (sharing switched off)
+    QPointer<ShareEngineBase> m_engine; ///< the dialog closes when the engine goes (sharing switched off)
     QByteArray m_id;
     bool m_owner = false;
     QPlainTextEdit *m_code = nullptr;
@@ -56,12 +56,14 @@ class JoinShareDialog : public QDialog {
     Q_OBJECT
 
 public:
-    explicit JoinShareDialog(std::function<bool(const QString &code, QString *error)> join, QWidget *parent = nullptr);
+    JoinShareDialog(ShareEngineBase *engine, std::function<bool(const QString &code, QString *error)> join,
+                    QWidget *parent = nullptr);
     QString error() const;
 
 private:
     void check();
 
+    QPointer<ShareEngineBase> m_engine; ///< checks the code as it is typed
     std::function<bool(const QString &, QString *)> m_join;
     QLineEdit *m_code = nullptr;
     QLabel *m_error = nullptr;

@@ -11,7 +11,7 @@
 namespace noteAppC {
 
 class MarkdownEditor;
-class ShareEngine;
+class ShareEngineBase;
 
 /// One shared note in the window: keeps the editors showing it and the
 /// engine's document (docs/SHARE.md) in step, in both directions. Alive for
@@ -21,12 +21,12 @@ class ShareEngine;
 /// An editor's own edits arrive through its edited() signal and go out as
 /// updates; the other editors showing the same note get them from
 /// MainWindow's existing fan-out (connected first), not from here. Edits from
-/// other people arrive as ShareEngine::remoteEdits and are made in every
+/// other people arrive as ShareEngineBase::remoteEdits and are made in every
 /// editor with applyExternalEdit(), which emits no edited(): nothing loops.
 class ShareSession : public QObject {
     Q_OBJECT
 public:
-    ShareSession(ShareEngine *engine, QByteArray shareID, QObject *parent = nullptr);
+    ShareSession(ShareEngineBase *engine, QByteArray shareID, QObject *parent = nullptr);
 
     const QByteArray &shareID() const { return m_id; }
     QString text() const;
@@ -77,7 +77,7 @@ private:
     void showCarets();
     void sendCaret(MarkdownEditor *view);
 
-    ShareEngine *m_engine;
+    ShareEngineBase *m_engine;
     QByteArray m_id;
     QList<QPointer<MarkdownEditor>> m_views;
 };

@@ -5,7 +5,7 @@
 #include <QColor>
 
 #include "MarkdownEditor.h"
-#include "ShareEngine.h"
+#include "ShareEngineBase.h"
 
 namespace noteAppC {
 
@@ -13,13 +13,13 @@ namespace {
 constexpr qsizetype kMaxFileNameChars = 100;
 }
 
-ShareSession::ShareSession(ShareEngine *engine, QByteArray shareID, QObject *parent)
+ShareSession::ShareSession(ShareEngineBase *engine, QByteArray shareID, QObject *parent)
     : QObject(parent)
     , m_engine(engine)
     , m_id(std::move(shareID))
 {
-    connect(engine, &ShareEngine::remoteEdits, this, &ShareSession::onRemoteEdits);
-    connect(engine, &ShareEngine::presenceChanged, this, [this](const QByteArray &id) {
+    connect(engine, &ShareEngineBase::remoteEdits, this, &ShareSession::onRemoteEdits);
+    connect(engine, &ShareEngineBase::presenceChanged, this, [this](const QByteArray &id) {
         if (id == m_id)
             showCarets();
     });
@@ -34,7 +34,7 @@ void ShareSession::sendCaret(MarkdownEditor *view)
 void ShareSession::showCarets()
 {
     QList<MarkdownEditor::RemoteCaret> carets;
-    for (const ShareEngine::Caret &caret : m_engine->carets(m_id)) {
+    for (const ShareEngineBase::Caret &caret : m_engine->carets(m_id)) {
         // One colour per device, the same on every screen that shows it.
         const int hue = caret.device.isEmpty() ? 0 : quint8(caret.device.at(0)) * 360 / 256;
         carets.append({caret.name, QColor::fromHsv(hue, 170, 230), caret.anchor, caret.head});

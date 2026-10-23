@@ -202,6 +202,9 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
 
     MainWindow window;
     window.openVault(vaultPath());
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    window.scanModulesNow(); // the PDF viewer is a module: found before the demo's PDF is opened
+#endif
     // Every note indexed, however warm the cache was: a warm one says
     // Index::changed only inside openVault, before a spy could wait for it.
     const QStringList all = demoFiles();

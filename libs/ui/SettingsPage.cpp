@@ -37,7 +37,6 @@
 #include "Parser.h"
 #include "Hotkeys.h"
 #include "MediaPlayback.h"
-#include "PdfPage.h"
 #include "Scheme.h"
 #include "Settings.h"
 #include "Theme.h"
@@ -111,10 +110,12 @@ void SettingsPage::setPluginRegistry(PluginRegistry *registry)
         rebuild();
 }
 
-void SettingsPage::setModules(const QList<ModuleHost::SettingRow> &rows, const QList<QPair<QString, QString>> &problems)
+void SettingsPage::setModules(const QList<ModuleHost::SettingRow> &rows, const QList<QPair<QString, QString>> &problems,
+                              const QStringList &features)
 {
     m_moduleRows = rows;
     m_moduleProblems = problems;
+    m_moduleFeatures = features;
     m_needsRebuild = true;
     if (isVisible())
         rebuild();
@@ -941,9 +942,6 @@ QWidget *SettingsPage::buildCorePluginsPage()
 #ifndef NOTEAPPC_HAVE_EPUB
         "epub-reader",
 #endif
-#ifndef NOTEAPPC_HAVE_PDFVIEW
-        "pdf-viewer",
-#endif
 #ifndef NOTEAPPC_HAVE_IMAGEVIEW
         "image-annotation",
 #endif
@@ -954,16 +952,35 @@ QWidget *SettingsPage::buildCorePluginsPage()
         "sync",
 #endif
     };
-    if (!PdfPage::isAvailable())
-        missing << "pdf-embeds";
+    // Features whose code is a loadable module that is not installed: the row stays, switched off and saying
+    // what to install, rather than vanishing. Asking PdfPage::isAvailable() instead would map poppler just to draw this page.
+    QHash<QByteArray, QString> needsPackage;
+    if (!m_moduleFeatures.contains(QLatin1String("pdf-viewer"))) {
+        const QString reason = tr("Not available: needs the notolith-pdfview package.");
+        needsPackage.insert("pdf-viewer", reason);
+        needsPackage.insert("pdf-embeds", reason);
+    }
+    if (!m_moduleFeatures.contains(QLatin1String("share")))
+        needsPackage.insert("share", tr("Not available: needs the notolith-share package."));
     if (!MediaPlayback::isAvailable())
         missing << "media-embeds";
     if (!HtmlRenderer::isAvailable())
         missing << "html-blocks";
     for (const Settings::Feature &feature : Settings::features()) {
-        if (!missing.contains(feature.id))
-            addToggleRow(layout, Settings::featureKey(feature.id), QCoreApplication::translate("Settings", feature.name),
-                        QCoreApplication::translate("Settings", feature.description));
+        if (missing.contains(feature.id))
+            continue;
+        const QString key = Settings::featureKey(feature.id);
+        const QString reason = needsPackage.value(feature.id);
+        QString description = QCoreApplication::translate("Settings", feature.description);
+        if (!reason.isEmpty())
+            description += QLatin1Char(' ') + reason;
+        addToggleRow(layout, key, QCoreApplication::translate("Settings", feature.name), description);
+        if (!reason.isEmpty())
+            if (auto *toggle = page->findChild<ToggleSwitch *>(QStringLiteral("settingsToggle_") + key)) {
+                const QSignalBlocker quiet(toggle); // shows off without writing "off" to the config
+                toggle->setChecked(false);
+                toggle->setEnabled(false);
+            }
     }
     // What the installed modules asked for, and the ones that could not load.
     for (const ModuleHost::SettingRow &row : std::as_const(m_moduleRows)) {

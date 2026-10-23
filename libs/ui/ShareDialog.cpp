@@ -13,11 +13,11 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
-#include "ShareEngine.h"
+#include "ShareEngineBase.h"
 
 namespace noteAppC {
 
-ShareDialog::ShareDialog(ShareEngine *engine, QByteArray shareID, const QString &inviteCode, QWidget *parent)
+ShareDialog::ShareDialog(ShareEngineBase *engine, QByteArray shareID, const QString &inviteCode, QWidget *parent)
     : QDialog(parent)
     , m_engine(engine)
     , m_id(std::move(shareID))
@@ -90,15 +90,15 @@ ShareDialog::ShareDialog(ShareEngine *engine, QByteArray shareID, const QString 
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     layout->addWidget(buttons);
 
-    connect(engine, &ShareEngine::membersChanged, this, [this](const QByteArray &id) {
+    connect(engine, &ShareEngineBase::membersChanged, this, [this](const QByteArray &id) {
         if (id == m_id)
             refresh();
     });
-    connect(engine, &ShareEngine::peersChanged, this, [this](const QByteArray &id) {
+    connect(engine, &ShareEngineBase::peersChanged, this, [this](const QByteArray &id) {
         if (id == m_id)
             refresh();
     });
-    connect(engine, &ShareEngine::presenceChanged, this, [this](const QByteArray &id) {
+    connect(engine, &ShareEngineBase::presenceChanged, this, [this](const QByteArray &id) {
         if (id == m_id)
             refresh();
     });
@@ -136,7 +136,7 @@ void ShareDialog::refresh()
                                                        : tr("away");
         if (key == owner)
             status += tr(", owner");
-        auto *item = new QTreeWidgetItem(m_members, {name, ShareEngine::fingerprintOf(key),
+        auto *item = new QTreeWidgetItem(m_members, {name, m_engine->deviceFingerprint(key),
                                                      me ? QString() : m_engine->safetyNumberWith(key), status});
         item->setData(0, Qt::UserRole, key);
         if (key == selected)
@@ -172,8 +172,10 @@ void ShareDialog::revokeSelected()
     ask->open();
 }
 
-JoinShareDialog::JoinShareDialog(std::function<bool(const QString &, QString *)> join, QWidget *parent)
+JoinShareDialog::JoinShareDialog(ShareEngineBase *engine, std::function<bool(const QString &, QString *)> join,
+                                 QWidget *parent)
     : QDialog(parent)
+    , m_engine(engine)
     , m_join(std::move(join))
 {
     setObjectName(QStringLiteral("joinShareDialog"));
@@ -208,6 +210,8 @@ JoinShareDialog::JoinShareDialog(std::function<bool(const QString &, QString *)>
         m_error->setText(why);
         m_error->show();
     });
+    if (engine)
+        connect(engine, &QObject::destroyed, this, &QDialog::reject); // sharing was switched off, or the vault changed
     connect(m_code, &QLineEdit::textChanged, this, &JoinShareDialog::check);
     layout->addWidget(buttons);
     resize(520, sizeHint().height());
@@ -222,7 +226,7 @@ void JoinShareDialog::check()
 {
     const QString code = m_code->text().trimmed();
     QString why;
-    const bool ok = !code.isEmpty() && ShareEngine::parseInvite(code, &why).has_value();
+    const bool ok = !code.isEmpty() && m_engine && m_engine->parseInviteCode(code, &why).has_value();
     m_ok->setEnabled(ok);
     m_error->setText(code.isEmpty() ? QString() : why);
     m_error->setVisible(!ok && !code.isEmpty());
