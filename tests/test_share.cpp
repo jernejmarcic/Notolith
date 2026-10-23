@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <atomic>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 
 #include <gtest/gtest.h>
@@ -816,6 +818,126 @@ TEST(ShareEngineTest, ARevokedPeerCannotReadAfterRotation)
     QTest::qWait(200);
     EXPECT_EQ(owner.text(id), QStringLiteral("O:start A"));
     EXPECT_EQ(a.text(id), QStringLiteral("O:start A"));
+}
+
+namespace {
+
+/// Every peer says one thing, so each holds the others' keys (a caret goes only to a member that has
+/// been heard from); returns what the note ends with afterwards.
+QString everyoneSpeaks(const QByteArray &id, std::initializer_list<Peer *> peers)
+{
+    int n = 0;
+    for (Peer *peer : peers)
+        peer->type(id, peer->text(id).size(), 0, QString(QChar(u'1' + n++)));
+    const QString all = (*peers.begin())->text(id);
+    EXPECT_TRUE(waitFor([&] {
+        return std::all_of(peers.begin(), peers.end(), [&](const Peer *p) { return p->text(id).size() == all.size() + int(peers.size()) - 1; })
+            && std::all_of(peers.begin(), peers.end(), [&](const Peer *p) { return p->text(id) == (*peers.begin())->text(id); });
+    }));
+    return (*peers.begin())->text(id).mid(QStringLiteral("hello world\n").size());
+}
+
+/// The one caret `peer`'s engine holds from someone else (anchor, head), or {-1, -1}.
+std::pair<qsizetype, qsizetype> heldCaret(const Peer &peer, const QByteArray &id)
+{
+    const auto carets = peer.engine->carets(id);
+    return carets.size() == 1 ? std::pair(carets[0].anchor, carets[0].head) : std::pair<qsizetype, qsizetype>(-1, -1);
+}
+
+} // namespace
+
+TEST(ShareEngineTest, ACaretStaysOnItsCharactersWhenAThirdMemberEdits)
+{
+    Peer owner(QStringLiteral("a")), a(QStringLiteral("b")), b(QStringLiteral("c"));
+    const QByteArray id = shareWith(owner, a, QStringLiteral("hello world\n"));
+    ASSERT_FALSE(id.isEmpty());
+    addJoiner(owner, b, id);
+    ASSERT_TRUE(waitFor([&] { return owner.engine->peersHere(id) == 2; }));
+    const QString tail = everyoneSpeaks(id, {&owner, &a, &b});
+
+    a.engine->setCaret(id, 6, 8); // "hello |wo|rld": a selects two characters
+    using Held = std::pair<qsizetype, qsizetype>;
+    ASSERT_TRUE(waitFor([&] { return heldCaret(owner, id) == Held(6, 8) && heldCaret(b, id) == Held(6, 8); }));
+
+    // b and a are not connected: b's edit reaches the owner, which holds a's caret, and a
+    b.type(id, 0, 0, QStringLiteral(">> "));
+    ASSERT_TRUE(waitFor([&] { return owner.text(id) == QStringLiteral(">> hello world\n") + tail && a.text(id) == owner.text(id); }));
+    // a never said so again, yet the others hold the caret on the same characters
+    EXPECT_EQ(heldCaret(owner, id), Held(9, 11));
+    EXPECT_EQ(heldCaret(b, id), Held(9, 11));
+
+    b.type(id, 3, 6, QString()); // ">> world\n": a's anchor character is gone, its head is two on
+    ASSERT_TRUE(waitFor([&] { return owner.text(id) == QStringLiteral(">> world\n") + tail && a.text(id) == owner.text(id); }));
+    EXPECT_EQ(heldCaret(owner, id), Held(3, 5));
+    EXPECT_EQ(heldCaret(b, id), Held(3, 5));
+
+    EXPECT_EQ(owner.engine->counters(id).dropped, 0);
+}
+
+TEST(ShareEngineTest, ACaretIsPlacedOnItsCharacterWhileItsEditIsStillOnTheWay)
+{
+    std::atomic<bool> hold{false};
+    ShareEngine::Config held;
+    held.holdFramesForTests = [&hold](const QByteArray &) { return hold.load(); };
+    Peer owner(QStringLiteral("a")), b(QStringLiteral("b"), held);
+    const QByteArray id = shareWith(owner, b, QStringLiteral("hello world\n"));
+    ASSERT_FALSE(id.isEmpty());
+    ASSERT_TRUE(waitFor([&] { return owner.engine->peersHere(id) == 1 && b.engine->peersHere(id) == 1; }));
+    const QString tail = everyoneSpeaks(id, {&owner, &b});
+
+    hold = true; // what b types does not leave it, while its caret (counted in its own text) does
+    b.type(id, 0, 0, QStringLiteral(">> "));
+    b.engine->setCaret(id, 9, 9); // ">> hello |world": offset 9 for b, offset 6 in the owner's text
+    using Held = std::pair<qsizetype, qsizetype>;
+    ASSERT_TRUE(waitFor([&] { return heldCaret(owner, id) == Held(6, 6); })) << "counted by offset the caret would be drawn at 9, among 'world'";
+    EXPECT_EQ(owner.text(id), QStringLiteral("hello world\n") + tail);
+
+    hold = false;
+    b.engine->releaseHeldFramesForTests();
+    ASSERT_TRUE(waitFor([&] { return owner.text(id) == QStringLiteral(">> hello world\n") + tail; }));
+    EXPECT_EQ(heldCaret(owner, id), Held(9, 9)) << "and it stays before 'world' once the edit lands";
+}
+
+TEST(ShareEngineTest, ACaretFromAnOldBuildStillPlacesOne)
+{
+    Peer owner(QStringLiteral("a")), a(QStringLiteral("b"));
+    const QByteArray id = shareWith(owner, a, QStringLiteral("hello world\n"));
+    ASSERT_FALSE(id.isEmpty());
+    ASSERT_TRUE(waitFor([&] { return owner.engine->peersHere(id) == 1 && a.engine->peersHere(id) == 1; }));
+    const QString tail = everyoneSpeaks(id, {&owner, &a});
+    // sendPresenceForTests writes the fields an old build knows (offsets) and nothing more
+    owner.engine->sendPresenceForTests(id, owner.publicKey(), QDateTime::currentMSecsSinceEpoch() * 2, 4);
+    ASSERT_TRUE(waitFor([&] { return heldCaret(a, id) == std::pair<qsizetype, qsizetype>(4, 4); }));
+
+    owner.type(id, 0, 0, QStringLiteral(">> "));
+    ASSERT_TRUE(waitFor([&] { return a.text(id) == QStringLiteral(">> hello world\n") + tail; }));
+    EXPECT_EQ(heldCaret(a, id), (std::pair<qsizetype, qsizetype>(4, 4))) << "offsets only: it stays where it was sent";
+}
+
+TEST(ShareFrameTest, ThePresenceFieldsAreAppendedNeverRenumbered)
+{
+    // An old build knows fields 1-4; it ignores 5 and 6, and these four must keep their numbers.
+    EXPECT_EQ(int(Presence::kAuthorFieldNumber), 1);
+    EXPECT_EQ(int(Presence::kCounterFieldNumber), 2);
+    EXPECT_EQ(int(Presence::kAnchorFieldNumber), 3);
+    EXPECT_EQ(int(Presence::kHeadFieldNumber), 4);
+    EXPECT_EQ(int(Presence::kAnchorPosFieldNumber), 5);
+    EXPECT_EQ(int(Presence::kHeadPosFieldNumber), 6);
+    Presence both;
+    both.set_author("x");
+    both.set_counter(7);
+    both.set_anchor(3);
+    both.set_head(4);
+    both.set_anchor_pos("PA");
+    both.set_head_pos("PB");
+    Presence parsed;
+    ASSERT_TRUE(parsed.ParseFromString(both.SerializeAsString()));
+    EXPECT_EQ(parsed.anchor_pos(), "PA");
+    // what an old build writes (fields 1-4, hand-encoded) still reads, with no positions
+    Presence onlyOffsets;
+    ASSERT_TRUE(onlyOffsets.ParseFromString("\x0a\x01x\x10\x07\x18\x03\x20\x04"));
+    EXPECT_TRUE(onlyOffsets.anchor_pos().empty());
+    EXPECT_EQ(onlyOffsets.head(), 4u);
 }
 
 TEST(ShareEngineTest, OfflineEditsOnBothSidesMergeOnReconnect)

@@ -224,6 +224,7 @@ void ShareSession::onRemoteEdits(const QByteArray &shareID, const QList<CrdtEdit
         return;
     for (const CrdtEdit &edit : edits)
         applyToViews(edit.at, edit.removed, edit.inserted);
+    showCarets(); // held by their characters: they stand where those characters went
     emit remoteApplied();
 }
 

@@ -136,9 +136,12 @@ public:
     virtual QString deviceFingerprint(const QByteArray &device) const = 0;
     virtual bool isConnected(const QByteArray &device) const = 0;
 
-    /// Where this device's caret is in the share's text (UTF-16 offsets).
-    /// Sent to the others at most ten times a second, and again with every
-    /// resync so it does not expire; nothing of it is stored.
+    /// Where this device's caret is in the share's text (UTF-16 offsets, as
+    /// the document has the text now). Sent to the others at most ten times a
+    /// second, and again with every resync so it does not expire; it goes out
+    /// both as offsets (an old build reads those) and as positions on the
+    /// characters (CrdtDoc::encodePosition), which stay right when other
+    /// members' edits are still arriving.
     virtual void setCaret(const QByteArray &shareID, qsizetype anchor, qsizetype head) = 0;
     /// This device no longer shows the note: the others stop drawing its caret.
     virtual void clearCaret(const QByteArray &shareID) = 0;
@@ -151,7 +154,9 @@ public:
         QString name;
         qsizetype anchor = 0, head = 0;
     };
-    /// The other members' carets, as they last sent them.
+    /// The other members' carets, as they last sent them: on the characters
+    /// they named when this replica has them (so an edit that arrived since
+    /// has moved them), else at the offsets they sent.
     virtual QList<Caret> carets(const QByteArray &shareID) const = 0;
 
     struct Counters {
