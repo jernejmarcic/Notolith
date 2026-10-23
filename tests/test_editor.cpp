@@ -813,6 +813,32 @@ TEST(MarkdownEditorTest, KeystrokeStaysInsideTheBudget)
     EXPECT_LT(perKeystroke, 8.0);
 }
 
+// Enter parses at once (a newline changes what the blocks are), so it is the one
+// key that pays for a parse: on the largest note that does it must stay inside
+// the 10 ms a key may cost.
+TEST(MarkdownEditorTest, EnterOnTheLargestSynchronousNoteStaysInsideTheBudget)
+{
+    QString note = generateNote(31);
+    auto editor = parsedEditorWith(note);
+    ASSERT_TRUE(editor) << "the parse never came back";
+    ASSERT_LE(note.size(), 32 * 1024) << "past the size it is parsed on the spot at";
+    editor->setCursorOffset(note.size() / 2);
+    editor->enterBlockAt(note.size() / 2);
+
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    constexpr int kEnters = 10;
+    const double perEnter = perf::bestOf([&] {
+        QElapsedTimer clock;
+        clock.start();
+        for (int i = 0; i < kEnters; ++i)
+            QTest::keyClick(editor.get(), Qt::Key_Return);
+        return double(clock.nsecsElapsed()) / kEnters / 1e6;
+    }, 3, 10.0);
+
+    std::printf("[ PERF     ] %.2f kB note, %.2f ms per Enter\n", note.size() / 1024.0, perEnter);
+    EXPECT_LT(perEnter, 10.0);
+}
+
 TEST(MarkdownEditorTest, OpeningALargeNoteIsFast)
 {
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
@@ -949,6 +975,190 @@ TEST(SoftBreakTest, StrictLineBreaksJoinTheLinesOfAParagraph)
         return editor->caretRectNow().y();
     };
     EXPECT_LT(threeAt(true), threeAt(false)) << "strict: the two lines above are one, so the next paragraph sits higher";
+}
+
+// Pressing Enter must not make the text jump. What is on screen straight after
+// the key is the edit, and nothing the parse, the timers or the scroll do later
+// may move a line of it: a line that sits at a different y a frame later,
+// though the note did not change, is the jitter.
+namespace {
+
+/// The top y of every band of ink in the viewport - one per drawn line of text.
+/// The caret's own column is blanked, so only text is compared.
+QList<int> inkBands(MarkdownEditor &editor)
+{
+    QImage frame = editor.viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    const QRgb background = frame.pixel(frame.width() - 4, 4);
+    const QRectF caret = editor.caretRectNow();
+    QList<int> bands;
+    bool inBand = false;
+    for (int y = 0; y < frame.height(); ++y) {
+        bool ink = false;
+        for (int x = 0; x < frame.width() - 4 && !ink; ++x) {
+            if (x >= caret.left() - 2 && x <= caret.right() + 2)
+                continue;
+            ink = frame.pixel(x, y) != background;
+        }
+        if (ink && !inBand)
+            bands.append(y);
+        inBand = ink;
+    }
+    return bands;
+}
+
+/// The viewport as drawn, with the caret's own box blanked: it blinks.
+QImage withoutCaret(MarkdownEditor &editor)
+{
+    QImage frame = editor.viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    QPainter painter(&frame);
+    painter.fillRect(editor.caretRectNow().adjusted(-3, -2, 3, 2), Qt::black);
+    return frame;
+}
+
+/// Which rows differ between two frames, "" when they are the same picture.
+QString diffRows(const QImage &now, const QImage &before)
+{
+    if (now.size() != before.size())
+        return QStringLiteral("size");
+    QStringList rows;
+    int first = -1;
+    for (int y = 0; y <= now.height(); ++y) {
+        const bool differs = y < now.height() && std::memcmp(now.constScanLine(y), before.constScanLine(y), size_t(now.bytesPerLine())) != 0;
+        if (differs && first < 0)
+            first = y;
+        if (!differs && first >= 0) {
+            rows << QStringLiteral("%1-%2").arg(first).arg(y - 1);
+            first = -1;
+        }
+    }
+    return rows.join(QLatin1Char(' '));
+}
+
+QString bandsText(const QList<int> &bands)
+{
+    QStringList parts;
+    for (int y : bands)
+        parts << QString::number(y);
+    return parts.join(QLatin1Char(' '));
+}
+
+} // namespace
+
+TEST(EnterJitterTest, NoLineOfTextMovesAfterEnterOnceTheEditIsDrawn)
+{
+    struct Case {
+        const char *name;
+        QString text;
+        QString endOf; // the caret goes to the end of the line holding this; "" is the end of the note
+        int back = 0;  // ... and this many characters back from there
+        int lift = 0;  // the view is scrolled up this far, the caret mid-screen
+    };
+    QString long60;
+    for (int i = 0; i < 60; ++i)
+        long60 += QStringLiteral("paragraph number %1\n\n").arg(i);
+    QList<Case> cases = {
+        {"paragraph", QStringLiteral("first paragraph\n\nsecond paragraph here\n\nthird paragraph\n\nfourth\n"),
+         QStringLiteral("second paragraph here")},
+        {"insideParagraph", QStringLiteral("aa\nbb\ncc\n\ndd\n\nee\n"), QStringLiteral("bb")},
+        {"listItem", QStringLiteral("intro\n\n- one\n- two\n- three\n\nafter\n\nmore\n"), QStringLiteral("- two")},
+        {"lastListItem", QStringLiteral("intro\n\n- one\n- two\n\nafter\n\nmore\n"), QStringLiteral("- two")},
+        {"orderedItem", QStringLiteral("intro\n\n1. one\n2. two\n3. three\n\nafter\n"), QStringLiteral("2. two")},
+        {"heading", QStringLiteral("# Title\n\npara\n\nanother\n\nlast\n"), QStringLiteral("# Title")},
+        {"subheading", QStringLiteral("intro\n\n## Sub heading\nbody under it\n\nlast\n"), QStringLiteral("## Sub heading")},
+        {"blockquote", QStringLiteral("intro\n\n> quote line\n\nafter\n\nmore\n"), QStringLiteral("> quote line")},
+        {"endOfNote", QStringLiteral("alpha\n\nbeta\n\ngamma"), QString()},
+        {"endOfNoteNewline", QStringLiteral("alpha\n\nbeta\n\ngamma\n"), QString()},
+        {"endOfLongNote", long60, QString()},
+        {"middleOfLongNote", long60, QStringLiteral("paragraph number 30")},
+        {"midScreenOfLongNote", long60, QStringLiteral("paragraph number 40"), 0, 300},
+        {"midScreenListOfLongNote", long60 + QStringLiteral("- a\n- b\n- c\n\n") + long60, QStringLiteral("- b"), 0, 300},
+        {"midHeading", QStringLiteral("# Title here\n\npara\n\nanother\n\nlast\n"), QStringLiteral("# Title here"), 5},
+        {"midListItem", QStringLiteral("intro\n\n- one\n- two words\n- three\n\nafter\n\nmore\n"),
+         QStringLiteral("- two words"), 5},
+        {"midBlockquote", QStringLiteral("intro\n\n> quote line here\n\nafter\n\nmore\n"),
+         QStringLiteral("> quote line here"), 5},
+        {"headingEndOfNote", QStringLiteral("para\n\n## Last heading"), QString()},
+    };
+    // Past the size a newline is parsed on the spot at, the stale blocks are drawn
+    // until the pool parse lands, and a heading must look like what it becomes.
+    const QString filler = generateNote(40);
+    for (const char *name : {"paragraph", "heading", "subheading", "midHeading"}) {
+        const Case &small = *std::find_if(cases.cbegin(), cases.cend(),
+                                          [name](const Case &c) { return std::strcmp(c.name, name) == 0; });
+        cases.append({"bigNote", small.text + QStringLiteral("\n") + filler, small.endOf, small.back, small.lift});
+    }
+
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.name);
+        auto editor = editorWith(c.text);
+        editor->show();
+        qsizetype at = c.text.size();
+        if (!c.endOf.isEmpty()) {
+            const qsizetype hit = c.text.indexOf(c.endOf);
+            ASSERT_GE(hit, 0);
+            at = hit + c.endOf.size() - c.back;
+        }
+        editor->setCursorOffset(at);
+        QTest::qWait(300); // the open settles: parse, scroll to the caret
+        QTest::keyClicks(editor.get(), QStringLiteral("x")); // the caret's block is raw, as in a real session
+        QTest::qWait(300);
+        editor->setCursorOffset(at + 1);
+        QTest::qWait(100);
+
+        if (c.lift > 0) {
+            editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->value() - c.lift);
+            QTest::qWait(100);
+        }
+        const QImage beforeEnter = withoutCaret(*editor);
+        const qreal caretBefore = editor->caretRectNow().y();
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        struct Frame {
+            const char *when;
+            QList<int> bands;
+            int scroll;
+            qreal caretY;
+            QImage image;
+            qreal caretH;
+        };
+        QList<Frame> frames;
+        const auto snap = [&](const char *when) {
+            frames.append({when, inkBands(*editor), editor->verticalScrollBar()->value(),
+                           editor->caretRectNow().y(), withoutCaret(*editor), editor->caretRectNow().height()});
+        };
+        snap("immediately");
+        QCoreApplication::processEvents();
+        snap("afterEvents");
+        QTest::qWait(10);
+        snap("10ms");
+        QTest::qWait(30);
+        snap("40ms(parseLanded)");
+        QTest::qWait(100);
+        snap("140ms");
+        QTest::qWait(500);
+        snap("640ms");
+
+        // The edit itself: the caret is on screen, and when the view stayed put
+        // what sat above the caret's line is the same picture as before.
+        EXPECT_GE(frames.last().caretY, 0) << "the caret left the view";
+        EXPECT_LT(frames.last().caretY, editor->viewport()->height()) << "the caret left the view";
+        if (frames[0].caretY > caretBefore + 1) { // the view stayed put: what is above is what was
+            const int rows = qMax(0, int(caretBefore) - 48);
+            EXPECT_EQ(diffRows(frames.last().image.copy(0, 0, beforeEnter.width(), rows),
+                               beforeEnter.copy(0, 0, beforeEnter.width(), rows))
+                          .toStdString(),
+                      "")
+                << "text above the caret moved";
+        }
+        for (qsizetype i = 1; i < frames.size(); ++i) {
+            EXPECT_EQ(frames[i].scroll, frames[0].scroll) << frames[i].when << " scrolled";
+            EXPECT_NEAR(frames[i].caretY, frames[0].caretY, 0.5) << frames[i].when << " caret moved";
+            EXPECT_EQ(frames[i].caretH, frames[0].caretH) << frames[i].when << " caret changed size";
+            EXPECT_EQ(bandsText(frames[i].bands).toStdString(), bandsText(frames[0].bands).toStdString())
+                << frames[i].when << " moved text that had already been drawn";
+            EXPECT_EQ(diffRows(frames[i].image, frames[0].image).toStdString(), "")
+                << frames[i].when << " drew something other than the edit's own frame";
+        }
+    }
 }
 
 TEST(CodeHighlighterTest, KnowsKateDefinitionsAndObsidianAliases)

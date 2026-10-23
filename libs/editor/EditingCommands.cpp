@@ -444,8 +444,13 @@ bool MarkdownEditor::decoratedFenceAt(qsizetype offset) const
         --it;
         if (it->block.contains(offset))
             return true;
-        if (it->block.end < offset && it->depth == 0)
-            break;
+        if (it->block.end <= offset && it->depth == 0) {
+            // A fence nothing closes runs to the end of the note, so what is
+            // typed after the last line the parse saw is still inside it.
+            const qsizetype lastLine = lineStartOf(d->m_text, qMax(it->block.start, it->block.end - 1));
+            return lastLine == it->block.start
+                   || !isFenceLine(QStringView(d->m_text).mid(lastLine, lineEndOf(d->m_text, lastLine) - lastLine));
+        }
     }
     return false;
 }

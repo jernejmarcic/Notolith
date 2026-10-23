@@ -179,6 +179,11 @@ constexpr qreal kListIndent = 26;
 /// plain-text state would be a flicker and nothing else. 200 kB parses in
 /// about 26 ms, 50 kB in 7 ms; this sits between them.
 constexpr qsizetype kAsyncParseThreshold = 128 * 1024;
+/// Up to this many characters a newline is parsed on the spot (see applyEdit):
+/// about 4 ms at the top, well inside what one key may cost. Between this
+/// and kAsyncParseThreshold the parse is quicker than a frame, but not quicker
+/// than a keystroke is allowed to be.
+constexpr qsizetype kEnterParseLimit = 32 * 1024;
 constexpr int kTypingBurstMs = 500;
 /// How many undo (and redo) steps an edit from elsewhere is carried over. Each
 /// one costs a scan of the whole note, so the oldest go rather than a remote
@@ -1378,6 +1383,23 @@ void MarkdownEditor::startParse()
 void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> properties,
                                       QList<Heading> headings)
 {
+    // Every block comes back as an estimate, and only the ones near the view are
+    // then laid out for real, so everything below a block far above the view
+    // can move by the difference between the two (an estimate counts a
+    // paragraph's own newline as a second line): the text on screen would jump
+    // by hundreds of pixels each time a parse lands. The block at the top of
+    // the view, and how far into it the view starts, is what stays put.
+    QScrollBar *bar = verticalScrollBar();
+    qsizetype anchorStart = -1;
+    qreal anchorInset = 0;
+    if (const auto top = std::partition_point(d->m_blocks.cbegin(), d->m_blocks.cend(),
+                                              [scroll = qreal(bar->value())](const BlockView &view) {
+                                                  return view.bottomY() <= scroll;
+                                              });
+        top != d->m_blocks.cend() && !top->foldHidden) {
+        anchorStart = top->span.range.start;
+        anchorInset = bar->value() - top->y;
+    }
     d->m_decorations = std::move(decorations);
     d->m_properties = std::move(properties);
     d->m_headings = std::move(headings);
@@ -1387,6 +1409,16 @@ void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> p
     indexDecorations();
     invalidateLayouts();
     updateLayout();
+    // Laying out around the new position gives the blocks above it their real
+    // heights, which moves the anchor again: a few passes settle it.
+    for (int pass = 0; pass < 4 && anchorStart >= 0; ++pass) {
+        const BlockView &anchor = d->m_blocks.at(size_t(blockAt(anchorStart)));
+        const int wanted = int(anchor.y + anchorInset);
+        if (anchor.foldHidden || wanted == bar->value())
+            break;
+        bar->setValue(wanted);
+        updateLayout();
+    }
     viewport()->update();
     emit headingsChanged();
     emit footnotesChanged();
@@ -4145,11 +4177,25 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // its next line a few columns early. The same length, so offsets hold.
     if (view.span.kind == BlockSpan::Kind::Table)
         shown.replace(QLatin1Char(' '), QChar(QChar::Nbsp));
+    // An ATX heading is one line, so a newline inside its block is an Enter
+    // typed since the last parse: what follows it is the paragraph the parse is
+    // about to make of it. Drawn that way now - the layout's own font, and so an
+    // empty last line's height and the caret's, is the body's, and the heading
+    // font goes on its first line alone - the text below and the caret do not
+    // change by the difference between the two when the parse lands.
+    qsizetype strayAt = -1;
+    if (view.span.kind == BlockSpan::Kind::Heading && !view.callout
+        && d->m_text.at(view.span.range.start) == QLatin1Char('#'))
+        strayAt = shown.indexOf(QChar::LineSeparator) + 1; // 0: none
+    if (strayAt == 0)
+        strayAt = -1;
     view.layout = std::make_unique<QTextLayout>(shown);
     view.layout->setCacheEnabled(true);
     // A callout may name its own body font, size and effects; everything else
     // takes the font its kind implies.
-    view.layout->setFont(view.callout ? view.calloutStyle.bodyFont(d->m_theme) : fontFor(view.span));
+    view.layout->setFont(view.callout ? view.calloutStyle.bodyFont(d->m_theme)
+                                      : fontFor(strayAt >= 0 ? BlockSpan{BlockSpan::Kind::Paragraph, {0, 0}, 0}
+                                                             : view.span));
 
     QTextOption option;
     // A fence never reflows: its longest line scrolls sideways inside the panel
@@ -4167,6 +4213,11 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                                                    : QTextOption::WrapAtWordBoundaryOrAnywhere);
     view.layout->setTextOption(option);
     QList<QTextLayout::FormatRange> formats = formatsFor(view);
+    if (strayAt >= 0) {
+        QTextCharFormat heading;
+        heading.setFont(fontFor(view.span));
+        formats.prepend({0, int(strayAt - 1), heading}); // under every style span, which refine it
+    }
     for (const BlockView::InlineMath &formula : view.inlineMaths) {
         // The "$" DisplayMap left visible carries the image: invisible ink,
         // and letter spacing wide enough that the line reserves exactly the
@@ -4220,6 +4271,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     const qreal lineHeight = view.callout && view.calloutStyle.size > 0
                                  ? view.calloutStyle.size * 1.5
                                  : lineHeightFor(view.span);
+    const qreal bodyLineHeight = lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0});
     view.layout->beginLayout();
     qreal height = 0;
     qreal widest = 0;
@@ -4241,7 +4293,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                ? 0
                                : qMax<qreal>(0, textEmbedHeightOn(view, line) - lineHeight);
         line.setPosition(QPointF(indent, height + grow));
-        height += lineHeight + grow;
+        height += (strayAt >= 0 && line.textStart() >= strayAt ? bodyLineHeight : lineHeight) + grow;
         if (sideways)
             widest = qMax(widest, indent + line.naturalTextWidth());
     }
@@ -5444,6 +5496,8 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
 
 void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &inserted)
 {
+    const bool breaksLines = inserted.contains(QLatin1Char('\n'))
+                             || QStringView(d->m_text).mid(at, removed).contains(QLatin1Char('\n'));
     d->m_text.remove(at, removed);
     d->m_text.insert(at, inserted);
     for (RemoteCaret &caret : d->m_remoteCarets) { // they follow their text, as vim's marks do
@@ -5494,12 +5548,29 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     }
 
     setModified(true);
-    updateLayout();
+    // A newline changes what the blocks around it are (a heading ends, a list
+    // item begins), which no shifted offset can say: until the parse lands the
+    // stale blocks are drawn a little differently, and the text visibly jumps
+    // when it does. So a note the parse is cheap enough for is parsed now,
+    // before anything is drawn.
+    // ponytail: a bigger note keeps the debounced pool parse and the jump -
+    // softened for headings in layoutBlock; a parse of the edited block alone
+    // would remove it.
+    const bool parsedNow = breaksLines && d->m_text.size() <= kEnterParseLimit;
+    if (parsedNow) {
+        if (d->m_parseWatcher.isRunning())
+            d->m_parseWatcher.waitForFinished(); // its text is gone; let it end unadopted
+        d->m_parsePending = false;
+        reparse();
+    } else {
+        updateLayout();
+    }
     if (!d->m_applyingExternal) {
         ensureCursorVisible();
         emit edited(at, removed, inserted);
     }
-    d->m_parseTimer.start(); // the real parse catches up when typing pauses
+    if (!parsedNow)
+        d->m_parseTimer.start(); // the real parse catches up when typing pauses
     // Only while the find bar is actually searching: a keystroke with no
     // query must not pay for a document scan.
     if (!d->m_find.pattern.isEmpty())
