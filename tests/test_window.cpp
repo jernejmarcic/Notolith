@@ -17,6 +17,9 @@
 #include <map>
 
 #include <sys/wait.h>
+#ifdef NOTEAPPC_HAVE_HISTORY
+#include "NoteHistory.h"
+#endif
 #include <QDialogButtonBox>
 #include <QAbstractButton>
 #include <QApplication>
@@ -150,6 +153,9 @@ Q_IMPORT_PLUGIN(InkModule) // NOTEAPPC_STATIC_MODULES: the ink module is linked 
 using noteAppC::Index;
 using noteAppC::LaunchTarget;
 using noteAppC::MainWindow;
+#ifdef NOTEAPPC_HAVE_HISTORY
+using noteAppC::NoteHistory;
+#endif
 using noteAppC::SingleInstance;
 using noteAppC::MarkdownEditor;
 using noteAppC::Settings;
@@ -5084,6 +5090,26 @@ TEST_F(WindowTest, NoteHistoryCreatesItsRepositoryOnTheFirstSaveNotWhenTheVaultO
         QTest::keyClicks(window.editor(), QStringLiteral("x"));
         ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
         WAIT_TRUE(histories.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1, 5000);
+    }
+    qputenv("XDG_DATA_HOME", previous);
+}
+
+TEST_F(WindowTest, NoteHistoryNeverSetsUpLibgit2OnTheWindowsThread)
+{
+    // libgit2's set-up loads OpenSSL (+6 MB, 3-4 ms): never at start, never on the UI thread.
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    const int before = NoteHistory::mainThreadSetupsForTests();
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        QTest::keyClicks(window.editor(), QStringLiteral("x"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        const QDir histories(data.path() + QStringLiteral("/noteAppC/history"));
+        WAIT_TRUE(histories.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1, 5000);
+        EXPECT_EQ(NoteHistory::mainThreadSetupsForTests(), before);
     }
     qputenv("XDG_DATA_HOME", previous);
 }

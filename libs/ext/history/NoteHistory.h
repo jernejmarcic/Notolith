@@ -19,8 +19,10 @@ namespace noteAppC {
 /// one blob, a tree per folder level, one commit and moves one ref, however
 /// big the vault is. A save whose text equals the last one records nothing.
 ///
-/// The repository is created by the first record(), not when the history is
-/// constructed: a vault that is only opened leaves nothing on disk.
+/// Nothing is done when the history is constructed: libgit2 is set up and the
+/// repository opened by the first call that needs them, on the worker, and
+/// the repository is created by the first record(), so a vault that is only
+/// opened leaves nothing on disk and costs nothing.
 ///
 /// Not thread-safe: the window runs every call on one worker thread.
 class NoteHistory {
@@ -35,14 +37,15 @@ public:
     NoteHistory(const NoteHistory &) = delete;
     NoteHistory &operator=(const NoteHistory &) = delete;
 
-    /// Initialises libgit2 (loading the system's certificates, ~5 ms) so a
-    /// history constructed later does not. Safe from any thread.
-    static void warmUp();
+    /// How many times libgit2's set-up was asked for on the application's
+    /// main thread (it loads OpenSSL: 3-4 ms, +6 MB). For the tests.
+    static int mainThreadSetupsForTests();
 
     /// Where the repository for `vaultRoot` lives.
     static QString repositoryPathFor(const QString &vaultRoot);
 
-    /// False only when an existing repository could not be opened.
+    /// False only when an existing repository could not be opened. Opens it
+    /// (and sets libgit2 up) if nothing has yet: call it on the worker.
     bool isOpen() const;
     QString error() const { return m_error; }
 
@@ -63,6 +66,9 @@ public:
 
 private:
     bool create();
+    /// libgit2 and the repository, on the first call that needs them: a
+    /// history constructed and never used costs nothing.
+    void open() const;
 
     struct Repository;
     std::unique_ptr<Repository> m_repo;

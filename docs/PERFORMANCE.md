@@ -1047,11 +1047,17 @@ the rows saved). Same results; the bases, publish and index suites pass.
 15 ms, show and paint 6 ms; later windows total 19 ms. A sampled profile of the
 first window put 5 ms of `openVault` in `NoteHistory`'s constructor, which
 runs `git_libgit2_init()` once per process, and that loads the system's CA
-bundle through OpenSSL. `NoteHistory::warmUp()` runs the same function-local
-static on the history pool from the window's constructor (when the feature is
-on), so it overlaps the 19 ms of widget construction; whoever needs libgit2
-first waits on the static. Nothing was shut down or reordered, so the crash
-the comment above it records (shutdown racing init) is not reintroduced.
+bundle through OpenSSL. A `NoteHistory::warmUp()` on the history pool first
+overlapped it with widget construction; the debloat measurement (2026-10-24)
+then showed the init itself is the cost: +6.2 MB RSS and 3-4 ms, of which the
+certificates are only 1.4 MB (OpenSSL's own set-up is the rest, and libgit2
+1.9 has no switch for it). So nothing sets libgit2 up any more until history is
+used: `NoteHistory`'s constructor only stores the path, and the first call that
+needs the repository opens it - the first save, on the history pool. Opening a
+vault costs nothing for history; a vault only read never loads OpenSSL. The
+history dialog, opened by hand, may pay the 3-4 ms on the UI thread once.
+Nothing is shut down, so the crash the comment in NoteHistory.cpp records
+(shutdown racing init) is not reintroduced.
 
 Also profiled and left: font database population and the first font load are
 about 5 ms but start at the first widget, with no earlier work to overlap

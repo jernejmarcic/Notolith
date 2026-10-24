@@ -136,6 +136,9 @@ add_test(NAME autosave COMMAND test_autosave)
 
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+if(TARGET noteAppC_history)
+    target_link_libraries(test_window PRIVATE noteAppC_history) # NoteHistory test hooks
+endif()
 # AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads is its own entry: it needs fake.width
 # unregistered when the window is made, and an earlier test in the same process registers it,
 # after which the stored value is read without adoptStored(). The test skips itself unless this
