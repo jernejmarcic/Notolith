@@ -730,6 +730,9 @@ private:
     /// Where the vault now holds `known` (what `lost` held), or nothing when
     /// that is not exactly one file.
     QString findMovedNote(const QString &lost, const Note &known);
+    /// The same for a module's view: the one other file of that name in the vault.
+    QString findMovedFile(const QString &lost);
+    void rememberViewStamp(const QString &path);
     /// An open note changed on disk - sync, a plugin, a link update, another
     /// editor: its tabs show the change, so no autosave writes over it.
     void reloadChangedNotes();
@@ -1037,6 +1040,9 @@ QLabel *m_vimStatus = nullptr;
     QTimer m_noteChanges;
     QTimer m_vaultFiles; ///< debounces Indexer::vaultFilesChanged
     QHash<QString, bool> m_lostNotes; ///< open notes whose file is gone -> reported
+    /// A file view's file as the tab last saw it (size and modification time): a move keeps both, so a file that has
+    /// them is the one that went. Filled by watchOpenNotes(), after each save of the view.
+    QHash<QString, QString> m_viewStamps;
     QTimer m_lostRetry;               ///< one more look before reporting
 
     QWidget *m_headerBar = nullptr;

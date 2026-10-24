@@ -33,7 +33,9 @@ public:
     bool load(const QString &path, QString *error = nullptr) override;
     bool save(QString *error = nullptr) override;
     bool isModified() const override;
-    QString path() const;
+    Q_INVOKABLE QString path() const; ///< invokable: the window's tests read it without linking the module
+    /// A rename or move: save() and the annotation extraction go to `path` from now on.
+    void setFilePath(const QString &path) override;
     QUndoStack *undoStack() const;
 
     void setTheme(const Theme &theme) override;

@@ -53,6 +53,8 @@ public:
     /// not-yet-saved canvas is written.
     bool save(const QString &path = QString(), QString *error = nullptr);
     QString path() const { return m_document.path(); }
+    /// A rename or move: save() goes to `path` from now on.
+    void setPath(const QString &path) { m_document.setPath(path); }
     bool isModified() const { return !m_undoStack.isClean(); }
 
     /// Turns a file node's `file` (a vault-relative path, the way a link is)

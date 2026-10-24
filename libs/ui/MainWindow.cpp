@@ -267,6 +267,45 @@ QString rgbaString(const QColor &color, double alpha)
         .arg(color.blue())
         .arg(alpha, 0, 'f', 3);
 }
+
+/// A tab's view that is one file it saves to: a module's view (PDF, ink, ...), a canvas, an image. The window watches
+/// that file, follows it when it moves outside the app and refuses to save it once it is gone.
+bool isFileView(const QWidget *view)
+{
+    if (!view)
+        return false;
+    if (qobject_cast<const ModuleView *>(view))
+        return true;
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (qobject_cast<const CanvasView *>(view))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+    if (qobject_cast<const ImageView *>(view))
+        return true;
+#endif
+    return false;
+}
+
+/// The view keeps the path it saves to: tell it the file moved.
+void followViewPath(QWidget *view, const QString &path)
+{
+    if (auto *module = qobject_cast<ModuleView *>(view))
+        module->setFilePath(path);
+#ifdef NOTEAPPC_HAVE_CANVAS
+    else if (auto *canvas = qobject_cast<CanvasView *>(view))
+        canvas->setPath(path);
+#endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+    else if (auto *image = qobject_cast<ImageView *>(view))
+        image->setPath(path);
+#endif
+}
+
+QString stampOf(const QFileInfo &info)
+{
+    return QStringLiteral("%1|%2").arg(info.size()).arg(info.lastModified().toMSecsSinceEpoch());
+}
 } // namespace
 
 MainWindow::~MainWindow()
@@ -1870,6 +1909,8 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
     if (leaf->notePath.isEmpty())
         return tr("New tab");
     QString name = QFileInfo(leaf->notePath).completeBaseName();
+    if (leaf->view && m_lostNotes.value(leaf->notePath, false))
+        name += tr(" (missing)"); // a view's file is gone: its save is refused
 #ifdef NOTEAPPC_HAVE_SHARE
     if (sessionFor(leaf->notePath))
         name += QStringLiteral(" \u21C4"); // shared: others may be editing it
@@ -7455,6 +7496,12 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
 {
     if (!background)
         flushSaves(); // the file and the tab's baseline are the last save's before this one reads them
+    if (isFileView(target->view) && m_lostNotes.value(target->notePath, false)) {
+        // gone from disk, not found: a save would recreate it
+        reportSaveError(QFileInfo(target->notePath).fileName(),
+                        tr("the file is gone from disk (deleted or moved outside the app)"), quiet);
+        return false;
+    }
     if (auto *module = qobject_cast<ModuleView *>(target->view)) { // a file-less view too: R6
         const QString shown = target->notePath.isEmpty() ? target->viewTitle : QFileInfo(target->notePath).fileName();
         QString error;
@@ -7462,6 +7509,8 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
             reportSaveError(shown, error, quiet);
             return false;
         }
+        if (!target->notePath.isEmpty())
+            rememberViewStamp(target->notePath);
         if (!quiet)
             statusBar()->showMessage(tr("Saved %1").arg(shown), 2000);
         return true;
@@ -7475,6 +7524,7 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
             reportSaveError(target->notePath, error, quiet);
             return false;
         }
+        rememberViewStamp(target->notePath);
         if (!quiet)
             statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(target->notePath).fileName()), 2000);
         return true;
@@ -7705,15 +7755,20 @@ void MainWindow::watchOpenNotes()
     QStringList wanted;
     QStringList wantedFolders;
     for (const auto &leaf : m_leaves) {
-        // A module's view follows its file like a note does (ModuleView::reloadFromDisk); the other views do not.
-        if ((leaf->view && !qobject_cast<ModuleView *>(leaf->view)) || leaf->notePath.isEmpty()
+        // A module's view follows its file like a note does (ModuleView::reloadFromDisk), and a canvas or an image
+        // is told where it went (followLostNotes); the other views do not.
+        if ((leaf->view && !isFileView(leaf->view)) || leaf->notePath.isEmpty()
             || wanted.contains(leaf->notePath))
             continue;
         wanted << leaf->notePath;
+        if (isFileView(leaf->view))
+            rememberViewStamp(leaf->notePath); // not once it is gone: the stamp is what a moved file is known by
         const QString folder = QFileInfo(leaf->notePath).absolutePath();
         if (!wantedFolders.contains(folder))
             wantedFolders << folder;
     }
+    for (auto it = m_viewStamps.begin(); it != m_viewStamps.end();)
+        it = wanted.contains(it.key()) ? std::next(it) : m_viewStamps.erase(it);
     const QStringList watched = m_noteWatcher->files();
     const QStringList watchedFolders = m_noteWatcher->directories();
     QStringList gone;
@@ -7774,11 +7829,48 @@ QString MainWindow::findMovedNote(const QString &lost, const Note &known)
     return found;
 }
 
+QString MainWindow::findMovedFile(const QString &lost)
+{
+    // ponytail: the same walk as findMovedNote; a view's file has no text to compare, so the candidate must have
+    // the name and the size and modification time the tab last saw (a move keeps all three; a copy-then-delete
+    // sync does not, and the tab is then marked missing). One such file not open in a tab, or none: two are a guess.
+    const QString stamp = m_viewStamps.value(lost);
+    if (stamp.isEmpty() || !m_vault.isValid() || !m_vault.contains(lost))
+        return {};
+    const QString name = QFileInfo(lost).fileName();
+    QStringList open;
+    for (const auto &leaf : m_leaves)
+        open << leaf->notePath;
+    QString found;
+    QDirIterator files(m_vault.root(), QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QString candidate = files.next();
+        if (files.fileName() != name || candidate == lost || open.contains(candidate)
+            || stampOf(files.fileInfo()) != stamp)
+            continue;
+        if (!found.isEmpty())
+            return {};
+        found = candidate;
+    }
+    return found;
+}
+
+void MainWindow::rememberViewStamp(const QString &path)
+{
+    const QFileInfo info(path);
+    if (info.exists())
+        m_viewStamps.insert(path, stampOf(info));
+}
+
 void MainWindow::followLostNotes(bool final)
 {
+    // A note's editor, or a view of one file (the watcher follows exactly those): a file a tab saves to.
+    const auto followed = [](const auto &leaf) {
+        return !leaf->notePath.isEmpty() && (!leaf->view || isFileView(leaf->view));
+    };
     QStringList open;
     for (const auto &leaf : m_leaves) {
-        if (!leaf->view && !leaf->notePath.isEmpty() && !open.contains(leaf->notePath))
+        if (followed(leaf) && !open.contains(leaf->notePath))
             open << leaf->notePath;
     }
     for (auto it = m_lostNotes.begin(); it != m_lostNotes.end();) // closed since
@@ -7789,6 +7881,9 @@ void MainWindow::followLostNotes(bool final)
             if (m_lostNotes.remove(path)) {
                 m_changedNotes.insert(path);
                 m_noteChanges.start();
+                for (const auto &group : m_groups) // a view's tab says "missing" while it is, in every split
+                    syncTabs(group.get());
+                updateTitle();
             }
             continue;
         }
@@ -7797,6 +7892,8 @@ void MainWindow::followLostNotes(bool final)
         if (!final) {
             // A sync client deletes before it writes, and a move is found by
             // looking through the vault: not before the grace is over.
+            // ponytail: one look after the grace (1 s). A file that turns up later (a slow sync client, a copy-then-delete
+            // across devices) stays missing, and the destination folders are not watched; look again on a longer timer.
             m_lostNotes.insert(path, false);
             if (!m_lostRetry.isActive())
                 m_lostRetry.start();
@@ -7805,7 +7902,7 @@ void MainWindow::followLostNotes(bool final)
         const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
             return !leaf->view && leaf->notePath == path;
         });
-        const QString moved = findMovedNote(path, (*first)->note);
+        const QString moved = first != m_leaves.cend() ? findMovedNote(path, (*first)->note) : findMovedFile(path);
         if (!moved.isEmpty()) {
             m_lostNotes.remove(path);
             if (m_vault.contains(path) && m_vault.contains(moved)
@@ -7813,10 +7910,11 @@ void MainWindow::followLostNotes(bool final)
                 m_fileIcons.save();
             // The caret, the scroll and what is typed stay: only the name changes.
             for (const auto &leaf : m_leaves) {
-                if (!leaf->view && leaf->notePath == path) {
+                if (followed(leaf) && leaf->notePath == path) {
                     leaf->notePath = moved;
                     leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
                     leaf->inlineTitle->setText(QFileInfo(moved).completeBaseName());
+                    followViewPath(leaf->view, moved);
                 }
             }
 #ifdef NOTEAPPC_HAVE_HISTORY
@@ -7837,11 +7935,17 @@ void MainWindow::followLostNotes(bool final)
             notifyPlugins("note-renamed", moved);
         } else {
             m_lostNotes[path] = true; // autosave leaves it alone from here
-            statusBar()->showMessage(
-                tr("%1 is gone from disk (deleted or moved outside the app): it is not saved again until you "
-                   "save it yourself")
-                    .arg(QFileInfo(path).fileName()),
-                10000);
+            for (const auto &group : m_groups)
+                syncTabs(group.get());
+            updateTitle(); // a view's tab says "missing"
+            statusBar()->showMessage(first != m_leaves.cend()
+                                         ? tr("%1 is gone from disk (deleted or moved outside the app): it is not saved "
+                                              "again until you save it yourself")
+                                               .arg(QFileInfo(path).fileName())
+                                         : tr("%1 is gone from disk (deleted or moved outside the app): its tab is not "
+                                              "saved, so the file is not recreated")
+                                               .arg(QFileInfo(path).fileName()),
+                                     10000);
         }
     }
 }
@@ -7993,8 +8097,8 @@ QStringList MainWindow::autosave(bool background)
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || saved.contains(leaf->notePath))
             continue;
-        if (m_lostNotes.value(leaf->notePath, false))
-            continue; // gone from disk and not found: writing it back is for the person to decide
+        if (isFileView(leaf->view) ? m_lostNotes.contains(leaf->notePath) : m_lostNotes.value(leaf->notePath, false))
+            continue; // gone from disk and not found: writing it back is for the person to decide (a view's: never)
         if (std::any_of(m_saveJobs.cbegin(), m_saveJobs.cend(),
                         [&](const SaveJob &job) { return job.path == leaf->notePath; }))
             continue; // its last save is still being committed; finishSave() arms the next one if it is behind
@@ -8031,6 +8135,16 @@ bool MainWindow::maybeSave()
     // Obsidian's way: what is typed is kept, never asked about - unless the
     // file is gone and was not found, where saving would bring it back.
     const bool lost = m_lostNotes.value(m_active->notePath, false);
+    if (lost && isFileView(m_active->view)) {
+        // saveLeaf refuses a view whose file is gone (a save would recreate it): only discarding, or keeping the tab, is left
+        const QString name = m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();
+        const auto answer = QMessageBox::question(
+            this, tr("Unsaved changes"),
+            tr("%1 is gone from disk (deleted or moved outside the app), so its changes cannot be saved. Discard them?")
+                .arg(name),
+            QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
+        return answer == QMessageBox::Discard;
+    }
     // A save that fails (disk full, read-only folder) falls through to the
     // box below, so leaving is never refused without a word.
     m_lastSaveError.clear();
@@ -8574,10 +8688,9 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
         } else if (isDir && leaf->notePath.startsWith(oldPath + QLatin1Char('/'))) {
             leaf->notePath.replace(0, oldPath.size(), newPath);
         }
-        if (leaf->notePath != before) { // a module's view keeps its own path: it must save to the new one
+        if (leaf->notePath != before) { // a view keeps its own path: it must save to the new one
             leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
-            if (auto *module = qobject_cast<ModuleView *>(leaf->view))
-                module->setFilePath(leaf->notePath);
+            followViewPath(leaf->view, leaf->notePath);
         }
     }
     for (const auto &group : m_groups)

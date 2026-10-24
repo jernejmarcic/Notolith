@@ -122,6 +122,8 @@ public:
 
     bool load(const QString &path, QString *error = nullptr);
     QString path() const { return m_path; }
+    /// A rename or move: the annotations' sidecar follows the new name from the next save.
+    void setPath(const QString &path) { m_path = path; }
     QString sidecarPath() const;
     const QList<ImageAnnotation> &annotations() const { return m_canvas->annotations(); }
     ImageCanvas *canvas() const { return m_canvas; }
