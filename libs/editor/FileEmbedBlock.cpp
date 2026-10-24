@@ -621,7 +621,7 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     EmbedCell cell;
     cell.source = embed.range;
 
-    QString path = attachmentPathOf(embed.target);
+    QString path = attachmentPathOf(embed);
     const bool attached = !path.isEmpty();
     if (!attached && m_resolver)
         path = m_resolver(embed.target);

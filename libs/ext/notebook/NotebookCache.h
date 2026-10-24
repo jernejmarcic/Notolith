@@ -41,6 +41,8 @@ struct NotebookOutput {
     /// expression), not as a stream or a `display_data`: kept so a notebook
     /// written back says the same.
     bool isResult = false;
+    /// The kernel said it as a `display_data` (so a text one is not a stream): the same reason.
+    bool isDisplay = false;
 };
 
 struct NotebookRunResult {

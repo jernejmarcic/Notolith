@@ -972,6 +972,8 @@ struct MarkdownEditor::Private {
     mutable QHash<QString, QPixmap> m_images;
     /// setInlineImages: name -> encoded bytes, for `attachment:name` embeds.
     QHash<QString, QByteArray> m_inlineImages;
+/// setInlineImages' scopeAt: what goes before an `attachment:` name at an offset.
+std::function<QString(qsizetype)> m_inlineScope;
     /// What is known of a GIF file, valid while its mtime is (GIFplayer.cpp).
     struct GIFinfo {
         bool known = false;

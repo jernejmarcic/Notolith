@@ -1899,6 +1899,15 @@ NotebookRunResult printed(const QString &text, int count)
     return result;
 }
 
+/// What the window holds once these keys' cells ran: whatever the cache holds under each.
+IpynbRuns runsOf(std::initializer_list<QString> keys)
+{
+    IpynbRuns runs;
+    for (const QString &key : keys)
+        runs.results.insert(key, readNotebookCache(key));
+    return runs;
+}
+
 QJsonObject cellAt(const QByteArray &file, int index)
 {
     return cellsIn(file).at(index).toObject();
@@ -1961,7 +1970,7 @@ TEST(IpynbWriteBackTest, ARunOfCellTwoOfThreeIsSavedOnCellTwoAlone)
     ASSERT_TRUE(readIpynb(file, &text));
 
     writeNotebookCache(pyKey(QStringLiteral("print(2)")), printed(QStringLiteral("2\n"), 7));
-    const QByteArray merged = mergeIpynb(file, text, {pyKey(QStringLiteral("print(2)"))});
+    const QByteArray merged = mergeIpynb(file, text, runsOf({pyKey(QStringLiteral("print(2)"))}));
     ASSERT_FALSE(merged.isEmpty());
     EXPECT_EQ(dumped(cellAt(merged, 0)), dumped(cellAt(file, 0))) << "an untouched cell keeps its bytes";
     EXPECT_EQ(dumped(cellAt(merged, 2)), dumped(cellAt(file, 2)));
@@ -1992,7 +2001,7 @@ TEST(IpynbWriteBackTest, ARunOfTheSecondOfTwoIdenticalCellsLeavesTheFirstAlone)
     QString text;
     ASSERT_TRUE(readIpynb(file, &text));
     writeNotebookCache(pyKey(QStringLiteral("print('x')"), 1), printed(QStringLiteral("new\n"), 9));
-    const QByteArray merged = mergeIpynb(file, text, {pyKey(QStringLiteral("print('x')"), 1)});
+    const QByteArray merged = mergeIpynb(file, text, runsOf({pyKey(QStringLiteral("print('x')"), 1)}));
     EXPECT_EQ(dumped(cellAt(merged, 0)), dumped(cellAt(file, 0)));
     EXPECT_EQ(cellAt(merged, 1).value(QStringLiteral("execution_count")).toInt(), 9);
     EXPECT_TRUE(QString::fromUtf8(dumped(cellAt(merged, 1))).contains(QStringLiteral("new")));
@@ -2010,7 +2019,7 @@ TEST(IpynbWriteBackTest, ClearingEveryOutputWritesEmptyOutputsAndANullCount)
     const QString two = pyKey(QStringLiteral("print(2)"));
     removeNotebookCache(one);
     removeNotebookCache(two);
-    const QByteArray merged = mergeIpynb(file, text, {one, two});
+    const QByteArray merged = mergeIpynb(file, text, runsOf({one, two}));
     for (int i = 0; i < 2; ++i) {
         const QJsonObject cell = cellAt(merged, i);
         EXPECT_TRUE(cell.value(QStringLiteral("outputs")).toArray().isEmpty());
@@ -2029,10 +2038,10 @@ TEST(IpynbWriteBackTest, WithoutADirtyKeyTheFilesOwnBytesComeBack)
     ASSERT_TRUE(parseIpynb(file, &document));
     QString text;
     ASSERT_TRUE(readIpynb(file, &text));
-    EXPECT_EQ(mergeIpynb(file, text, QSet<QString>()), file);
+    EXPECT_EQ(mergeIpynb(file, text, IpynbRuns()), file);
     EXPECT_EQ(mergeIpynb(file, text), file);
     // A key no cell has changes nothing either.
-    EXPECT_EQ(mergeIpynb(file, text, {QStringLiteral("not a key")}), file);
+    EXPECT_EQ(mergeIpynb(file, text, runsOf({QStringLiteral("not a key")})), file);
 }
 
 TEST(IpynbWriteBackTest, ADirtyCellInAnUneditedTextIsStillWritten)
@@ -2044,7 +2053,7 @@ TEST(IpynbWriteBackTest, ADirtyCellInAnUneditedTextIsStillWritten)
     ASSERT_TRUE(readIpynb(file, &text));
     ASSERT_EQ(text, textOf(file));
     writeNotebookCache(pyKey(QStringLiteral("print(1)")), printed(QStringLiteral("changed\n"), 4));
-    const QByteArray merged = mergeIpynb(file, text, {pyKey(QStringLiteral("print(1)"))});
+    const QByteArray merged = mergeIpynb(file, text, runsOf({pyKey(QStringLiteral("print(1)"))}));
     EXPECT_NE(merged, file);
     EXPECT_EQ(cellAt(merged, 0).value(QStringLiteral("execution_count")).toInt(), 4);
 }
@@ -2084,7 +2093,7 @@ TEST(IpynbWriteBackTest, EveryKindOfOutputRoundTripsThroughTheFile)
     const QString key = pyKey(QStringLiteral("work()"));
     writeNotebookCache(key, result);
 
-    const QByteArray merged = mergeIpynb(file, text, {key});
+    const QByteArray merged = mergeIpynb(file, text, runsOf({key}));
     expectNbformatValid(merged);
     const QJsonArray stored = cellAt(merged, 0).value(QStringLiteral("outputs")).toArray();
     ASSERT_EQ(stored.size(), 8);
@@ -2127,7 +2136,7 @@ TEST(IpynbWriteBackTest, ARunThatNeverReachedACellsKernelIsNotWrittenOver)
     NotebookRunResult failed;
     failed.kernelError = QStringLiteral("no kernel");
     writeNotebookCache(pyKey(QStringLiteral("print(1)")), failed);
-    EXPECT_EQ(mergeIpynb(file, text, {pyKey(QStringLiteral("print(1)"))}), file);
+    EXPECT_EQ(mergeIpynb(file, text, runsOf({pyKey(QStringLiteral("print(1)"))})), file);
 }
 
 TEST(IpynbWriteBackTest, AFortyPlotNotebookIsStillOpenedWithoutDecodingAnyOutput)
@@ -2197,7 +2206,7 @@ TEST(IpynbNewTest, ANewNotebookIsOneEmptyCodeCellAndTheKernelsOwnSpec)
     }
 }
 
-TEST(IpynbAttachmentsTest, AMarkdownCellsAttachmentsComeBackAsImageBytesByName)
+TEST(IpynbAttachmentsTest, AMarkdownCellsAttachmentsComeBackAsImageBytesByCellAndName)
 {
     const QByteArray png = QByteArray::fromBase64(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
@@ -2213,14 +2222,14 @@ TEST(IpynbAttachmentsTest, AMarkdownCellsAttachmentsComeBackAsImageBytesByName)
     const QByteArray file = notebookOf({markdown, codeCell(QStringLiteral("c"), QStringLiteral("1"), 0, QString())});
 
     QString text;
-    QHash<QString, QByteArray> images;
-    ASSERT_TRUE(readIpynb(file, &text, nullptr, &images));
+    IpynbPictures pictures;
+    ASSERT_TRUE(readIpynb(file, &text, nullptr, &pictures));
     EXPECT_TRUE(text.startsWith(QStringLiteral("![x](attachment:image.png)\n")));
-    ASSERT_EQ(images.size(), 1) << "only pictures";
-    EXPECT_EQ(images.value(QStringLiteral("image.png")), png);
+    ASSERT_EQ(pictures.images().size(), 1) << "only pictures";
+    EXPECT_EQ(pictures.images().value(QStringLiteral("0/image.png")), png) << "by the cell it is in, then its name";
 
     // A notebook with none costs an empty table, and reading it without asking is unchanged.
-    QHash<QString, QByteArray> none;
+    IpynbPictures none;
     ASSERT_TRUE(readIpynb(sampleNotebook(), &text, nullptr, &none));
     EXPECT_TRUE(none.isEmpty());
     ASSERT_TRUE(readIpynb(file, &text));
@@ -2228,6 +2237,109 @@ TEST(IpynbAttachmentsTest, AMarkdownCellsAttachmentsComeBackAsImageBytesByName)
     // Saving an edit of that cell keeps what it attached.
     const QByteArray merged = mergeIpynb(file, QStringLiteral("![x](attachment:image.png)\n\nmore\n\n```python\n1\n```\n"));
     EXPECT_EQ(cellAt(merged, 0).value(QStringLiteral("attachments")), markdown.value(QStringLiteral("attachments")));
+}
+
+// Two cells that attach different pictures under one name each get their own; which cell a place in an edited
+// text is follows the pairing a save makes (a cell inserted above does not hand its neighbour's picture on).
+TEST(IpynbAttachmentsTest, EachCellsPictureIsToldApartAndFollowsItsCellThroughEdits)
+{
+    const auto cell = [](const QString &id, const QString &name, const QByteArray &bytes) {
+        return QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("![](attachment:%1)\n\nof %2").arg(name, id)}},
+                           {QStringLiteral("attachments"),
+                            QJsonObject{{name, QJsonObject{{QStringLiteral("image/png"), QString::fromLatin1(bytes.toBase64())}}}}}};
+    };
+    const QByteArray file = notebookOf({cell(QStringLiteral("a"), QStringLiteral("image.png"), "first"),
+                                        codeCell(QStringLiteral("c"), QStringLiteral("1"), 0, QString()),
+                                        cell(QStringLiteral("b"), QStringLiteral("image.png"), "second")});
+    QString text;
+    IpynbPictures pictures;
+    ASSERT_TRUE(readIpynb(file, &text, nullptr, &pictures));
+    EXPECT_EQ(pictures.images().value(QStringLiteral("0/image.png")), QByteArray("first"));
+    EXPECT_EQ(pictures.images().value(QStringLiteral("2/image.png")), QByteArray("second"));
+    EXPECT_EQ(pictures.scopeAt(text, text.indexOf(QStringLiteral("attachment:"))), QStringLiteral("0/"));
+    EXPECT_EQ(pictures.scopeAt(text, text.lastIndexOf(QStringLiteral("attachment:"))), QStringLiteral("2/"));
+
+    // A cell written above the first and a line added in the middle one: the pictures stay with their cells.
+    QString edited = QStringLiteral("a new cell first\n\n```python\nprint(0)\n```\n\n") + text;
+    edited.replace(QStringLiteral("1\n```"), QStringLiteral("1\nprint(2)\n```"));
+    EXPECT_EQ(pictures.scopeAt(edited, edited.indexOf(QStringLiteral("attachment:"))), QStringLiteral("0/"));
+    EXPECT_EQ(pictures.scopeAt(edited, edited.lastIndexOf(QStringLiteral("attachment:"))), QStringLiteral("2/"));
+    EXPECT_EQ(pictures.scopeAt(edited, 0), QString()) << "the new cell has none";
+}
+
+// A code cell deleted and the markdown cell after it edited, with nothing unchanged between them: the gap
+// holds a code cell on the old side only, and the markdown cell still is that cell (its id, its pictures).
+TEST(IpynbWriteBackTest, DeletingACodeCellBesideAnEditedMarkdownCellKeepsTheMarkdownCellsAttachments)
+{
+    QJsonObject markdown{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                         {QStringLiteral("id"), QStringLiteral("m")},
+                         {QStringLiteral("metadata"), QJsonObject()},
+                         {QStringLiteral("source"), QJsonArray{QStringLiteral("a picture")}},
+                         {QStringLiteral("attachments"),
+                          QJsonObject{{QStringLiteral("a.png"), QJsonObject{{QStringLiteral("image/png"), QStringLiteral("AAAA")}}}}}};
+    const QByteArray file = notebookOf({codeCell(QStringLiteral("first"), QStringLiteral("print(0)"), 1, QString()),
+                                        codeCell(QStringLiteral("gone"), QStringLiteral("print(1)"), 3, QStringLiteral("1\n")),
+                                        markdown});
+    const QByteArray merged = mergeIpynb(file, QStringLiteral("```python\nprint(0)\n```\n\na picture, captioned\n"));
+    ASSERT_EQ(cellsIn(merged).size(), 2);
+    EXPECT_EQ(dumped(cellAt(merged, 0)), dumped(cellAt(file, 0)));
+    const QJsonObject kept = cellAt(merged, 1);
+    EXPECT_EQ(kept.value(QStringLiteral("id")).toString(), QStringLiteral("m"));
+    EXPECT_EQ(kept.value(QStringLiteral("attachments")), markdown.value(QStringLiteral("attachments")));
+}
+
+// What was not run is the file's own bytes, not a re-dump of what was parsed from them: the sample is written
+// the way Jupyter writes it, so a save after one cell ran differs from it inside that cell alone.
+TEST(IpynbWriteBackTest, ARunChangesTheFilesBytesInsideItsCellAlone)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    const QByteArray file = sampleNotebook();
+    QString text;
+    ASSERT_TRUE(readIpynb(file, &text));
+    removeNotebookCache(pyKey(QStringLiteral("1/0")));
+    const QByteArray merged = mergeIpynb(file, text, runsOf({pyKey(QStringLiteral("1/0"))}));
+    ASSERT_NE(merged, file);
+    const QByteArray open = "  {\n   \"cell_type\": \"code\",\n   \"execution_count\": 4,";
+    const qsizetype begin = file.indexOf(open);
+    ASSERT_GE(begin, 0);
+    const qsizetype end = file.indexOf("\n  }", begin) + 4;
+    EXPECT_TRUE(merged.startsWith(file.left(begin)));
+    EXPECT_TRUE(merged.endsWith(file.mid(end)));
+}
+
+// A display_data that carries only text is not a stream, and a picture keeps its text/plain twin: what a run
+// leaves in the file says what the kernel said.
+TEST(IpynbWriteBackTest, ADisplayOfTextAndAPicturesTextTwinAreWrittenAsTheKernelSaidThem)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    const QString png = QStringLiteral(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+    QJsonObject cell = codeCell(QStringLiteral("c"), QStringLiteral("show()"), 2, QString());
+    cell.insert(QStringLiteral("outputs"),
+                QJsonArray{QJsonObject{{QStringLiteral("output_type"), QStringLiteral("display_data")},
+                                       {QStringLiteral("metadata"), QJsonObject()},
+                                       {QStringLiteral("data"), QJsonObject{{QStringLiteral("text/plain"), QStringLiteral("<Figure>")}}}},
+                           QJsonObject{{QStringLiteral("output_type"), QStringLiteral("display_data")},
+                                       {QStringLiteral("metadata"), QJsonObject()},
+                                       {QStringLiteral("data"), QJsonObject{{QStringLiteral("image/png"), png},
+                                                                            {QStringLiteral("text/plain"), QStringLiteral("<Figure size 1x1>")}}}}});
+    const QByteArray file = notebookOf({cell});
+    QString text;
+    ASSERT_TRUE(readIpynb(file, &text));
+    const QByteArray merged = mergeIpynb(file, text, runsOf({pyKey(QStringLiteral("show()"))}));
+    const QJsonArray outputs = cellAt(merged, 0).value(QStringLiteral("outputs")).toArray();
+    ASSERT_EQ(outputs.size(), 2);
+    EXPECT_EQ(outputs.at(0).toObject().value(QStringLiteral("output_type")).toString(), QStringLiteral("display_data"));
+    EXPECT_TRUE(outputs.at(0).toObject().value(QStringLiteral("data")).toObject().contains(QStringLiteral("text/plain")));
+    const QJsonObject picture = outputs.at(1).toObject().value(QStringLiteral("data")).toObject();
+    EXPECT_TRUE(picture.contains(QStringLiteral("image/png")));
+    EXPECT_TRUE(picture.contains(QStringLiteral("text/plain"))) << "the picture's text twin is kept";
+    expectNbformatValid(merged);
 }
 
 TEST(IpynbWriteBackTest, EditingTheLastCellKeepsItsIDOutputsAndAttachments)

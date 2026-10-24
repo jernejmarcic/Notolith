@@ -314,9 +314,10 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     d->m_lastEdit.start();
 }
 
-void MarkdownEditor::setInlineImages(QHash<QString, QByteArray> images)
+void MarkdownEditor::setInlineImages(QHash<QString, QByteArray> images, std::function<QString(qsizetype)> scopeAt)
 {
-    if (images == d->m_inlineImages)
+    d->m_inlineScope = std::move(scopeAt);
+    if (images == d->m_inlineImages && !d->m_inlineScope)
         return;
     const bool had = !d->m_inlineImages.isEmpty();
     d->m_inlineImages = std::move(images);
@@ -329,11 +330,12 @@ void MarkdownEditor::setInlineImages(QHash<QString, QByteArray> images)
     viewport()->update();
 }
 
-QString MarkdownEditor::attachmentPathOf(const QString &target) const
+QString MarkdownEditor::attachmentPathOf(const EmbedSpan &embed) const
 {
-    if (d->m_inlineImages.isEmpty() || !target.startsWith(QLatin1String("attachment:")))
+    if (d->m_inlineImages.isEmpty() || !embed.target.startsWith(QLatin1String("attachment:")))
         return {};
-    return d->m_inlineImages.contains(target.mid(11)) ? target : QString();
+    const QString key = (d->m_inlineScope ? d->m_inlineScope(embed.range.start) : QString()) + embed.target.mid(11);
+    return d->m_inlineImages.contains(key) ? QStringLiteral("attachment:") + key : QString();
 }
 
 QPixmap MarkdownEditor::loadEmbedPixmap(const QString &path) const
@@ -3253,7 +3255,7 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     if (!embed)
         return false;
 
-    QString path = attachmentPathOf(embed->target);
+    QString path = attachmentPathOf(*embed);
     if (path.isEmpty() && m_resolver)
         path = m_resolver(embed->target);
     if (path.isEmpty())

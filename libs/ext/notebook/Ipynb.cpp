@@ -49,6 +49,7 @@ struct Cell {
     enum class Type { Markdown, Code, Raw };
     Type type = Type::Markdown;
     QString source;
+    qsizetype start = -1; ///< where it begins in the text (cellsFromMarkdown only): a code cell's opening fence
 };
 
 QString typeName(Cell::Type type)
@@ -121,17 +122,27 @@ QList<Cell> cellsFromMarkdown(const QString &markdown, const QString &language)
     if (!lines.isEmpty() && lines.last().isEmpty())
         lines.removeLast(); // the newline that ends the text
 
+    QList<qsizetype> lineStarts; // where each line begins
+    qsizetype offset = 0;
+    for (const QString &line : std::as_const(lines)) {
+        lineStarts.append(offset);
+        offset += line.size() + 1;
+    }
+
     QList<Cell> cells;
     QStringList buffer;
+    qsizetype bufferLine = 0; // the line of the buffer's first entry
     bool afterCell = false; // a cell or marker came before: its separating blank line leads the buffer
     const auto flush = [&] {
-        if (afterCell && !buffer.isEmpty() && buffer.first().isEmpty())
+        if (afterCell && !buffer.isEmpty() && buffer.first().isEmpty()) {
             buffer.removeFirst();
+            ++bufferLine;
+        }
         if (!buffer.isEmpty() && buffer.last().isEmpty())
             buffer.removeLast();
         const bool blank = std::all_of(buffer.cbegin(), buffer.cend(), [](const QString &line) { return line.isEmpty(); });
         if (!blank)
-            cells.append({Cell::Type::Markdown, buffer.join(QLatin1Char('\n'))});
+            cells.append({Cell::Type::Markdown, buffer.join(QLatin1Char('\n')), lineStarts.value(bufferLine)});
         buffer.clear();
     };
 
@@ -154,11 +165,14 @@ QList<Cell> cellsFromMarkdown(const QString &markdown, const QString &language)
             if (info == language || info == QLatin1String("raw")) {
                 flush();
                 cells.append({info == QLatin1String("raw") ? Cell::Type::Raw : Cell::Type::Code,
-                              QStringList(lines.mid(i + 1, close - i - 1)).join(QLatin1Char('\n'))});
+                              QStringList(lines.mid(i + 1, close - i - 1)).join(QLatin1Char('\n')), lineStarts.at(i)});
                 afterCell = true;
             } else {
-                for (qsizetype j = i; j <= close && j < lines.size(); ++j)
+                for (qsizetype j = i; j <= close && j < lines.size(); ++j) {
+                    if (buffer.isEmpty())
+                        bufferLine = j;
                     buffer << lines.at(j);
+                }
             }
             i = close;
             continue;
@@ -168,6 +182,8 @@ QList<Cell> cellsFromMarkdown(const QString &markdown, const QString &language)
             afterCell = true;
             continue;
         }
+        if (buffer.isEmpty())
+            bufferLine = i;
         buffer << lines.at(i);
     }
     flush();
@@ -223,7 +239,7 @@ NotebookRunResult resultOfCell(const QJsonObject &cell)
             const QString text = stripAnsi(joined(stored.value(QStringLiteral("text"))));
             if (!result.outputs.isEmpty() && result.outputs.last().kind == NotebookOutput::Kind::Text
                 && result.outputs.last().isStderr == isStderr && result.outputs.last().displayID.isEmpty()
-                && !result.outputs.last().isResult) {
+                && !result.outputs.last().isResult && !result.outputs.last().isDisplay) {
                 result.outputs.last().text = resolveCarriageReturns(result.outputs.last().text + text);
             } else {
                 NotebookOutput output;
@@ -244,6 +260,7 @@ NotebookRunResult resultOfCell(const QJsonObject &cell)
         } else if (type == QLatin1String("execute_result") || type == QLatin1String("display_data")) {
             NotebookOutput output = outputFromMimeBundle(flattened(stored.value(QStringLiteral("data")).toObject()));
             output.isResult = type == QLatin1String("execute_result");
+            output.isDisplay = type == QLatin1String("display_data");
             if (hasContent(output))
                 result.outputs.append(output);
         }
@@ -290,8 +307,14 @@ QJsonObject bundleOf(const NotebookOutput &output)
     case NotebookOutput::Kind::ImagePng:
         data.insert(output.imageBytes.startsWith("\xff\xd8") ? QStringLiteral("image/jpeg") : QStringLiteral("image/png"),
                     QString::fromLatin1(output.imageBytes.toBase64()));
+        if (!output.alt.isEmpty())
+            data.insert(QStringLiteral("text/plain"), textValue(output.alt));
         break;
-    case NotebookOutput::Kind::ImageSvg: data.insert(QStringLiteral("image/svg+xml"), textValue(output.text)); break;
+    case NotebookOutput::Kind::ImageSvg:
+        data.insert(QStringLiteral("image/svg+xml"), textValue(output.text));
+        if (!output.alt.isEmpty())
+            data.insert(QStringLiteral("text/plain"), textValue(output.alt));
+        break;
     case NotebookOutput::Kind::Html:
         data.insert(QStringLiteral("text/html"), textValue(output.text));
         if (!output.alt.isEmpty())
@@ -314,7 +337,7 @@ QJsonArray outputsOf(const NotebookRunResult &result)
             object.insert(QStringLiteral("ename"), output.ename);
             object.insert(QStringLiteral("evalue"), output.evalue.isEmpty() ? output.text : output.evalue);
             object.insert(QStringLiteral("traceback"), QJsonArray::fromStringList(output.traceback));
-        } else if (output.kind == NotebookOutput::Kind::Text && !output.isResult) {
+        } else if (output.kind == NotebookOutput::Kind::Text && !output.isResult && !output.isDisplay) {
             object.insert(QStringLiteral("output_type"), QStringLiteral("stream"));
             object.insert(QStringLiteral("name"), output.isStderr ? QStringLiteral("stderr") : QStringLiteral("stdout"));
             object.insert(QStringLiteral("text"), textValue(output.text));
@@ -492,47 +515,37 @@ void seedIpynbOutputs(const IpynbDocument &document)
     }
 }
 
-bool readIpynb(const QByteArray &bytes, QString *markdown, QString *error, QHash<QString, QByteArray> *attachments)
+bool readIpynb(const QByteArray &bytes, QString *markdown, QString *error, IpynbPictures *pictures)
 {
     IpynbDocument document;
     if (!parseIpynb(bytes, &document, error))
         return false;
     seedIpynbOutputs(document);
     *markdown = ipynbMarkdown(document);
-    if (attachments)
-        *attachments = ipynbAttachments(document);
+    if (pictures)
+        *pictures = IpynbPictures(document);
     return true;
 }
 
-QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, QString *error)
+namespace {
+
+/// Which of the cells the file had each of the cells now shown is: `file[i]` is the index into `original`, or -1
+/// for a cell with nothing of the file's behind it; `unchanged[i]` when that cell is the file's own, type and
+/// source both.
+struct CellPairing {
+    QList<qsizetype> file;
+    QList<bool> unchanged;
+};
+
+CellPairing pairCells(const QList<Cell> &original, const QList<Cell> &shown)
 {
-    return mergeIpynb(fileBytes, markdown, {}, error);
-}
-
-QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, const QSet<QString> &dirtyKeys,
-                      QString *error)
-{
-    IpynbDocument document;
-    if (!parseIpynb(fileBytes, &document, error))
-        return {};
-    if (dirtyKeys.isEmpty() && markdown == ipynbMarkdown(document))
-        return fileBytes; // not edited: the file's own bytes
-
-    // The cells the file has, as objects, in the order and with the text this view shows them.
-    QList<QJsonObject> originals;
-    for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
-        const QString type = value.toObject().value(QStringLiteral("cell_type")).toString();
-        if (type == QLatin1String("markdown") || type == QLatin1String("code") || type == QLatin1String("raw"))
-            originals.append(value.toObject());
-    }
-    const auto typeOf = [](const QJsonObject &cell) { return cell.value(QStringLiteral("cell_type")).toString(); };
-    const auto sourceOf = [](const QJsonObject &cell) { return joined(cell.value(QStringLiteral("source"))); };
-
-    const QList<Cell> shown = cellsFromMarkdown(markdown, document.language);
     const qsizetype n = shown.size();
-    const qsizetype m = originals.size();
+    const qsizetype m = original.size();
+    CellPairing pairing;
+    pairing.file.fill(-1, n);
+    pairing.unchanged.fill(false, n);
     const auto same = [&](qsizetype i, qsizetype k) {
-        return typeOf(originals.at(k)) == typeName(shown.at(i).type) && sourceOf(originals.at(k)) == shown.at(i).source;
+        return original.at(k).type == shown.at(i).type && original.at(k).source == shown.at(i).source;
     };
     // The cells that did not change, found as the longest run of them in order (a cell inserted or deleted
     // in the middle does not make every cell after it look edited). ponytail: a table n by m, so a notebook of
@@ -545,25 +558,22 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
                                                    : std::max(run[size_t(i) + 1][size_t(k)], run[size_t(i)][size_t(k) + 1]);
     }
     // Between two unchanged cells, what is left on each side pairs up in order where the types agree: an edited
-    // cell keeps its id, metadata and outputs. The rest is new (or gone).
-    QJsonArray rebuilt;
+    // cell keeps its id, metadata and outputs, and a cell of the other type in between was deleted. The rest is new.
     const auto pairGap = [&](qsizetype fromNew, qsizetype toNew, qsizetype fromOld, qsizetype toOld) {
         qsizetype k = fromOld;
         for (qsizetype i = fromNew; i < toNew; ++i) {
-            if (k < toOld && typeOf(originals.at(k)) == typeName(shown.at(i).type)) {
-                QJsonObject edited = originals.at(k++);
-                edited.insert(QStringLiteral("source"), linesOf(shown.at(i).source));
-                rebuilt.append(edited);
-            } else {
-                rebuilt.append(newCell(shown.at(i), document.nbformatMinor));
-            }
+            while (k < toOld && original.at(k).type != shown.at(i).type)
+                ++k;
+            if (k < toOld)
+                pairing.file[i] = k++;
         }
     };
     qsizetype i = 0;
     qsizetype k = 0;
     while (!tooBig && i < n && k < m) {
         if (same(i, k) && run[size_t(i)][size_t(k)] == run[size_t(i) + 1][size_t(k) + 1] + 1) {
-            rebuilt.append(originals.at(k));
+            pairing.file[i] = k;
+            pairing.unchanged[i] = true;
             ++i;
             ++k;
             continue;
@@ -590,11 +600,55 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
         k = gapOld;
     }
     pairGap(i, n, k, m);
+    return pairing;
+}
 
-    // The cells that ran (or were cleared) since the file was read take their outputs and count from the cache;
+} // namespace
+
+QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, QString *error)
+{
+    return mergeIpynb(fileBytes, markdown, IpynbRuns(), error);
+}
+
+QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, const IpynbRuns &runs, QString *error)
+{
+    IpynbDocument document;
+    if (!parseIpynb(fileBytes, &document, error))
+        return {};
+    if (runs.isEmpty() && markdown == ipynbMarkdown(document))
+        return fileBytes; // not edited: the file's own bytes
+
+    // The cells the file has, as objects, in the order and with the text this view shows them.
+    QList<QJsonObject> originals;
+    for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
+        const QString type = value.toObject().value(QStringLiteral("cell_type")).toString();
+        if (type == QLatin1String("markdown") || type == QLatin1String("code") || type == QLatin1String("raw"))
+            originals.append(value.toObject());
+    }
+    const QList<Cell> shown = cellsFromMarkdown(markdown, document.language);
+    const CellPairing pairing = pairCells(cellsOf(document.root), shown);
+    const qsizetype n = shown.size();
+
+    // The file's own cell where nothing changed; an edited one keeps its id, metadata, outputs and attachments;
+    // the rest is new.
+    QJsonArray rebuilt;
+    for (qsizetype i = 0; i < n; ++i) {
+        const qsizetype k = pairing.file.at(i);
+        if (k >= 0 && pairing.unchanged.at(i)) {
+            rebuilt.append(originals.at(k));
+        } else if (k >= 0) {
+            QJsonObject edited = originals.at(k);
+            edited.insert(QStringLiteral("source"), linesOf(shown.at(i).source));
+            rebuilt.append(edited);
+        } else {
+            rebuilt.append(newCell(shown.at(i), document.nbformatMinor));
+        }
+    }
+
+    // The cells that ran (or were cleared) since the file was read take their outputs and count from that run;
     // every other cell stays the file's own object, since what the editor holds of an output is not all the file
     // said (colour codes, alternative representations).
-    if (!dirtyKeys.isEmpty()) {
+    if (!runs.isEmpty()) {
         QStringList sources;
         QList<qsizetype> at;
         for (qsizetype c = 0; c < n; ++c) {
@@ -605,17 +659,15 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
         }
         const QList<int> ordinals = duplicateOrdinals(sources);
         for (qsizetype c = 0; c < at.size(); ++c) {
-            QString key;
+            auto found = runs.results.cend();
             for (const SandboxTier tier : tiersOf(sources.at(c))) {
-                const QString candidate = notebookCacheKey(document.language, sources.at(c), tier, {}, {}, ordinals.at(c));
-                if (dirtyKeys.contains(candidate)) {
-                    key = candidate;
+                found = runs.results.constFind(notebookCacheKey(document.language, sources.at(c), tier, {}, {}, ordinals.at(c)));
+                if (found != runs.results.cend())
                     break;
-                }
             }
-            if (key.isEmpty())
+            if (found == runs.results.cend())
                 continue;
-            const NotebookRunResult result = readNotebookCache(key);
+            const NotebookRunResult &result = *found;
             if (!result.kernelError.isEmpty())
                 continue; // it never reached a kernel: nothing ran, so nothing to say
             QJsonObject cell = rebuilt.at(at.at(c)).toObject();
@@ -650,26 +702,60 @@ QByteArray newIpynb(const KernelSpec *kernel)
                           {QStringLiteral("nbformat_minor"), 5}});
 }
 
-QHash<QString, QByteArray> ipynbAttachments(const IpynbDocument &document)
+IpynbPictures::IpynbPictures(const IpynbDocument &document)
 {
-    QHash<QString, QByteArray> images;
+    m_language = document.language;
+    int shown = 0; // the index among the cells the text shows (cellsOf)
     for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
         const QJsonObject cell = value.toObject();
-        if (cell.value(QStringLiteral("cell_type")).toString() != QLatin1String("markdown"))
+        const QString type = cell.value(QStringLiteral("cell_type")).toString();
+        if (type != QLatin1String("markdown") && type != QLatin1String("code") && type != QLatin1String("raw"))
+            continue;
+        m_types << type;
+        m_sources << joined(cell.value(QStringLiteral("source")));
+        const int index = shown++;
+        if (type != QLatin1String("markdown"))
             continue;
         const QJsonObject attachments = cell.value(QStringLiteral("attachments")).toObject();
         for (auto it = attachments.begin(); it != attachments.end(); ++it) {
             const QJsonObject bundle = it.value().toObject();
             for (auto mime = bundle.begin(); mime != bundle.end(); ++mime) {
-                if (!mime.key().startsWith(QLatin1String("image/")) || images.contains(it.key()))
-                    continue;
-                // ponytail: one table for the notebook, so two cells that attach different pictures under one
-                // name show the first's in both; key it by cell if that ever turns up.
-                images.insert(it.key(), QByteArray::fromBase64(joined(mime.value()).toLatin1()));
+                if (mime.key().startsWith(QLatin1String("image/")))
+                    m_images.insert(QStringLiteral("%1/%2").arg(index).arg(it.key()),
+                                    QByteArray::fromBase64(joined(mime.value()).toLatin1()));
             }
         }
     }
-    return images;
+    if (m_images.isEmpty()) { // nothing to tell apart: the cells need not be kept
+        m_types.clear();
+        m_sources.clear();
+    }
+}
+
+QString IpynbPictures::scopeAt(const QString &markdown, qsizetype offset) const
+{
+    if (m_images.isEmpty())
+        return {};
+    if (markdown != m_text) {
+        QList<Cell> original;
+        for (qsizetype i = 0; i < m_types.size(); ++i) {
+            original.append({m_types.at(i) == QLatin1String("code")  ? Cell::Type::Code
+                             : m_types.at(i) == QLatin1String("raw") ? Cell::Type::Raw
+                                                                     : Cell::Type::Markdown,
+                             m_sources.at(i)});
+        }
+        const QList<Cell> shown = cellsFromMarkdown(markdown, m_language);
+        m_paired = pairCells(original, shown).file;
+        m_starts.clear();
+        for (const Cell &cell : shown)
+            m_starts.append(cell.start);
+        m_text = markdown;
+    }
+    const auto after = std::upper_bound(m_starts.cbegin(), m_starts.cend(), offset);
+    if (after == m_starts.cbegin())
+        return {};
+    const qsizetype cell = qsizetype(std::distance(m_starts.cbegin(), after)) - 1;
+    return m_paired.at(cell) < 0 ? QString() : QString::number(m_paired.at(cell)) + QLatin1Char('/');
 }
 
 } // namespace noteAppC::notebook

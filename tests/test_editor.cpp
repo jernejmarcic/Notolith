@@ -4235,6 +4235,106 @@ TEST(NotebookBlockTest, BlocksThatReadTheSameAskWithTheirOwnOrdinalAndTheCodeUnc
                                             QStringLiteral("print(1)"), QStringLiteral("print(1)")}));
 }
 
+namespace {
+
+/// `count` fenced python blocks `x = N`, a blank line between them: far more than a screen.
+QString manyBlocks(int count)
+{
+    QString note;
+    for (int i = 0; i < count; ++i)
+        note += QStringLiteral("```python\nx = %1\n```\n\n").arg(i);
+    return note;
+}
+
+} // namespace
+
+// A notebook is longer than its window: what is laid out is the view and a screen either side, and "all"
+// means all, not the ones that happened to be laid out.
+TEST(NotebookBlockTest, RunningAndClearingActOnEveryBlockOfALongNoteLaidOutOrNot)
+{
+    const QString note = manyBlocks(200);
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(note.size()); // the end is on screen; the first blocks are far above it
+    editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    ASSERT_FALSE(editor->notebookInfoAt(note.indexOf(QStringLiteral("x = 0\n"))).eligible) << "not laid out: the premise";
+
+    EXPECT_EQ(editor->runAllNotebookBlocks(), 200);
+    EXPECT_EQ(fake.runs.size(), 200);
+    QTest::qWait(50); // the runs finish: a block still running is interrupted by a second ask
+    fake.runs.clear();
+    fake.runSources.clear();
+    EXPECT_EQ(editor->runNotebookBlocksFrom(note.indexOf(QStringLiteral("x = 100\n"))), 100);
+    ASSERT_EQ(fake.runSources.size(), 100);
+    EXPECT_EQ(fake.runSources.first(), QStringLiteral("x = 100"));
+    EXPECT_EQ(fake.runSources.last(), QStringLiteral("x = 199"));
+    QTest::qWait(50);
+    fake.runs.clear();
+    EXPECT_EQ(editor->runNotebookBlocksUpTo(note.indexOf(QStringLiteral("x = 49\n"))), 50);
+    EXPECT_EQ(fake.runs.size(), 50);
+
+    editor->clearNotebookOutputs();
+    QTest::qWait(50);
+    EXPECT_EQ(fake.clears.size(), 200);
+}
+
+// Laying the far blocks out must not move what is on screen.
+TEST(NotebookBlockTest, RunningEveryBlockOfALongNoteLeavesTheViewWhereItWas)
+{
+    const QString note = manyBlocks(200);
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(note.size());
+    editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    const qsizetype shown = note.indexOf(QStringLiteral("x = 199\n"));
+    ASSERT_TRUE(editor->notebookInfoAt(shown).eligible);
+    const qreal before = editor->notebookInfoAt(shown).runRect.top();
+    EXPECT_EQ(editor->runAllNotebookBlocks(), 200);
+    QTest::qWait(50);
+    EXPECT_EQ(editor->notebookInfoAt(shown).runRect.top(), before);
+}
+
+// A fenced example inside a markdown cell (here quoted) is not a cell of the notebook, so it is not one of
+// the blocks that read the same: the cell after it is the first.
+// An edit above can make a block read the same as an earlier one without this block being laid out again: it
+// still runs under the key its place in the note gives it now.
+TEST(NotebookBlockTest, ABlockRunsWithTheOrdinalItsPlaceGivesItAfterAnEditAbove)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n\n```python\nprint(2)\n```\n");
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(note.size());
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    editor->applyExternalEdit(note.indexOf(QStringLiteral("print(1)")) + 6, 1, QStringLiteral("2")); // print(2) twice now
+    const qsizetype second = editor->noteText().lastIndexOf(QStringLiteral("print(2)"));
+    ASSERT_TRUE(editor->runNotebookBlockAt(second));
+    ASSERT_EQ(fake.runs.size(), 1);
+    EXPECT_EQ(fake.runs.constFirst().duplicateOrdinal, 1);
+}
+
+TEST(NotebookBlockTest, AFenceNestedInAQuoteIsNotCountedAsABlockThatReadsTheSame)
+{
+    const QString note = QStringLiteral("> ```python\n> print(1)\n> ```\n\n```python\nprint(1)\n```\n");
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(note.size());
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    const qsizetype cell = note.lastIndexOf(QStringLiteral("print(1)"));
+    ASSERT_TRUE(editor->runNotebookBlockAt(cell));
+    ASSERT_EQ(fake.runs.size(), 1);
+    EXPECT_EQ(fake.runs.constFirst().duplicateOrdinal, 0);
+}
+
 TEST(NotebookBlockTest, ClickingARunningBlockAsksForAnInterrupt)
 {
     const QString note = QStringLiteral("```python\nwhile True: pass\n```\n");
@@ -5299,6 +5399,19 @@ TEST(InlineImageTest, AnAttachmentSourceDrawsThePictureTheTableHolds)
     EXPECT_TRUE(editor->displayText().trimmed().isEmpty()) << "its source is hidden: the picture is the block";
     editor->setInlineImages({});
     EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x"))) << "and gone with the table";
+}
+
+TEST(InlineImageTest, ASameNamedPictureIsLookedUpUnderTheScopeOfItsOffset)
+{
+    const QString note = QStringLiteral("![x](attachment:pic.png)\n\n![y](attachment:pic.png)\n");
+    auto editor = editorWith(note);
+    editor->setLinkResolver([](const QString &) { return QString(); });
+    const qsizetype second = note.lastIndexOf(QStringLiteral("!["));
+    // Only the second embed's scope finds a picture: the first stays text.
+    editor->setInlineImages({{QStringLiteral("1/pic.png"), redPNG()}},
+                            [second](qsizetype offset) { return offset >= second ? QStringLiteral("1/") : QString(); });
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x"))) << "no picture under the first one's scope";
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("y"))) << "the second shows its picture";
 }
 
 TEST(InlineImageTest, AnAttachmentNeitherInTheTableNorAFileStaysText)

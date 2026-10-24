@@ -149,6 +149,7 @@ NotebookRunResult readNotebookCache(const QString &key)
         output.evalue = object.value(QStringLiteral("evalue")).toString();
         output.isStderr = object.value(QStringLiteral("stderr")).toBool();
         output.isResult = object.value(QStringLiteral("result")).toBool();
+        output.isDisplay = object.value(QStringLiteral("display")).toBool();
         output.alt = object.value(QStringLiteral("alt")).toString();
         for (const QJsonValue &line : object.value(QStringLiteral("traceback")).toArray())
             output.traceback << line.toString();
@@ -189,6 +190,8 @@ void writeNotebookCache(const QString &key, NotebookRunResult result)
             object.insert(QStringLiteral("stderr"), true);
         if (output.isResult)
             object.insert(QStringLiteral("result"), true);
+        if (output.isDisplay)
+            object.insert(QStringLiteral("display"), true);
         if (!output.alt.isEmpty())
             object.insert(QStringLiteral("alt"), output.alt);
         if (!output.traceback.isEmpty())

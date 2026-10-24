@@ -58,6 +58,9 @@ class EncryptionSession;
 }
 namespace notebook {
 class NotebookController;
+class IpynbPictures;
+struct IpynbRuns;
+struct NotebookRunResult;
 }
 
 class BacklinksPane;
@@ -617,8 +620,13 @@ private:
     /// leaves the cache alone.
     bool readNote(const QString &path, Note &out, QString *error, bool seedOutputs = false);
     bool writeNote(const QString &path, const Note &note, QString *error);
-    /// A cell of the notebook at `path` ran or was cleared: its tab is modified and the next save writes it.
-    void notebookOutputsChanged(const QString &path, const QString &cacheKey);
+    /// A cell of the notebook at `path` ran (or, with a result that has not run, was cleared): its tab is modified
+    /// and the next save writes `result` into the cell that ran under `cacheKey`.
+    void notebookOutputsChanged(const QString &path, const QString &cacheKey, const notebook::NotebookRunResult &result);
+    /// What a notebook's state (the runs awaiting a save, its pictures) was kept under, kept under its new name.
+    void moveNotebookState(const QString &from, const QString &to);
+    /// `editor` shows the pictures of the notebook at `path`, each cell its own; none for any other note.
+    void showNotebookPictures(MarkdownEditor *editor, const QString &path);
     /// The bytes of an encrypted note of this vault, preferring `path`: what
     /// a typed password is checked against. Empty when there is none yet.
     QByteArray encryptionSample(const QString &path = QString()) const;
@@ -959,12 +967,13 @@ QLabel *m_vimStatus = nullptr;
     /// Whether anything can run a code block's language, asked once each
     /// (MarkdownEditor::setNotebookRunnable).
     QHash<QString, bool> m_runnableLanguages;
-    /// The output-cache keys of the cells of each open .ipynb that ran, or were
-    /// cleared, since it was read or saved: what the next save writes back.
-    QHash<QString, QSet<QString>> m_notebookDirty;
+    /// What the cells of each open .ipynb that ran, or were cleared, since it was read or saved, produced,
+    /// by the output-cache key they ran under: what the next save writes back. Kept here, as each run lands,
+    /// because the output cache is shared by every notebook with a cell that reads the same.
+    QHash<QString, std::shared_ptr<notebook::IpynbRuns>> m_notebookDirty;
     /// The pictures the markdown cells of each open .ipynb carry, as read when it was opened
     /// (MarkdownEditor::setInlineImages); a notebook with none has no entry.
-    QHash<QString, QHash<QString, QByteArray>> m_notebookImages;
+    QHash<QString, std::shared_ptr<notebook::IpynbPictures>> m_notebookImages;
     crypt::EncryptionSession *m_encryption = nullptr; ///< null in a build without encryption
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;

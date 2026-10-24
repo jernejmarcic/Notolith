@@ -293,7 +293,7 @@ void NotebookController::wireKernel(KernelSession *session)
                const bool isStderr = name == QLatin1String("stderr");
                QList<NotebookOutput> &outputs = it->result.outputs;
                if (!outputs.isEmpty() && outputs.last().kind == NotebookOutput::Kind::Text
-                   && outputs.last().displayID.isEmpty() && !outputs.last().isResult
+                   && outputs.last().displayID.isEmpty() && !outputs.last().isResult && !outputs.last().isDisplay
                    && outputs.last().isStderr == isStderr) {
                    outputs.last().text = resolveCarriageReturns(outputs.last().text + stripAnsi(text));
                    if (overCap(it->result)) {
@@ -328,6 +328,7 @@ void NotebookController::wireKernel(KernelSession *session)
                if (!hasContent(output))
                    return;
                output.displayID = displayID;
+               output.isDisplay = true;
                // update_display_data redraws an earlier output in place (a
                // progress bar); with nothing to replace it is just another.
                if (isUpdate && !displayID.isEmpty()) {

@@ -1225,7 +1225,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             const bool had = notebook::hasNotebookCache(cacheKey);
             notebook::removeNotebookCache(cacheKey);
             if (had)
-                notebookOutputsChanged(notePathOf(editor), cacheKey);
+                notebookOutputsChanged(notePathOf(editor), cacheKey, notebook::NotebookRunResult());
             deliver(MarkdownEditor::NotebookRunResult());
             return;
         }
@@ -1267,7 +1267,9 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             // A run of a notebook's cell changes what the file would say: the tab is modified, and the save
             // writes that cell's outputs back (a lookup, or a run that never reached a kernel, changes nothing).
             if (forceRun && keep && result.hasRun && result.kernelError.isEmpty()) {
-                QMetaObject::invokeMethod(this, [this, notePath, cacheKey] { notebookOutputsChanged(notePath, cacheKey); });
+                QMetaObject::invokeMethod(this, [this, notePath, cacheKey, result] {
+                    notebookOutputsChanged(notePath, cacheKey, result);
+                });
             }
             MarkdownEditor::NotebookRunResult shown;
             shown.hasRun = result.hasRun;
@@ -5710,7 +5712,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     m_active->note = note;
     m_active->notePath = path;
     m_active->editor->setEnabled(true);
-    m_active->editor->setInlineImages(m_notebookImages.value(path)); // a notebook's attachments, else none
+    showNotebookPictures(m_active->editor, path); // a notebook's attachments, else none
     // Open in another tab already: that document, unsaved edits and all,
     // not the older bytes on disk.
     const QList<Leaf *> others = viewsOfSameNote(m_active);
@@ -7003,12 +7005,16 @@ bool MainWindow::save()
 
 // --- encrypted notes (docs/ENCRYPTION.md) ------------------------------------
 
-void MainWindow::notebookOutputsChanged(const QString &path, const QString &cacheKey)
+void MainWindow::notebookOutputsChanged(const QString &path, const QString &cacheKey,
+                                        const notebook::NotebookRunResult &result)
 {
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
     if (!isNotebookFile(path))
         return; // only a .ipynb keeps its outputs in the file; any other note keeps them in the cache
-    m_notebookDirty[path].insert(cacheKey);
+    std::shared_ptr<notebook::IpynbRuns> &runs = m_notebookDirty[path];
+    if (!runs)
+        runs = std::make_shared<notebook::IpynbRuns>();
+    runs->results.insert(cacheKey, result);
     for (const auto &leaf : m_leaves) {
         if (!leaf->view && leaf->notePath == path)
             leaf->editor->setModified(true);
@@ -7018,7 +7024,37 @@ void MainWindow::notebookOutputsChanged(const QString &path, const QString &cach
 #else
     Q_UNUSED(path)
     Q_UNUSED(cacheKey)
+    Q_UNUSED(result)
 #endif
+}
+
+void MainWindow::moveNotebookState(const QString &from, const QString &to)
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (m_notebookDirty.contains(from))
+        m_notebookDirty.insert(to, m_notebookDirty.take(from));
+    if (m_notebookImages.contains(from))
+        m_notebookImages.insert(to, m_notebookImages.take(from));
+#else
+    Q_UNUSED(from)
+    Q_UNUSED(to)
+#endif
+}
+
+void MainWindow::showNotebookPictures(MarkdownEditor *editor, const QString &path)
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (const auto pictures = m_notebookImages.value(path)) {
+        // Each cell has its own `image.png`: the scope says whose, for the text as it is now.
+        editor->setInlineImages(pictures->images(), [pictures, editor](qsizetype offset) {
+            return pictures->scopeAt(editor->noteText(), offset);
+        });
+        return;
+    }
+#else
+    Q_UNUSED(path)
+#endif
+    editor->setInlineImages({});
 }
 
 bool MainWindow::isNotebookFile(const QString &path) const
@@ -7047,12 +7083,12 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error, bool s
         if (seedOutputs) {
             // The file is the truth from here: what ran before it was read (and was discarded) is not its to save.
             m_notebookDirty.remove(path);
-            QHash<QString, QByteArray> images;
-            const bool read = notebook::readIpynb(bytes, &out.text, error, &images);
-            if (images.isEmpty())
+            auto pictures = std::make_shared<notebook::IpynbPictures>();
+            const bool read = notebook::readIpynb(bytes, &out.text, error, pictures.get());
+            if (pictures->isEmpty())
                 m_notebookImages.remove(path);
             else
-                m_notebookImages.insert(path, std::move(images));
+                m_notebookImages.insert(path, std::move(pictures));
             return read;
         }
         // A look at what is on disk (the change watcher, a save comparing): never seeded, or the outputs of a
@@ -7102,7 +7138,9 @@ bool MainWindow::writeNote(const QString &path, const Note &note, QString *error
                 *error = file.errorString();
             return false;
         }
-        const QByteArray merged = notebook::mergeIpynb(file.readAll(), note.text, m_notebookDirty.value(path), error);
+        const auto runs = m_notebookDirty.value(path);
+        const QByteArray merged =
+            notebook::mergeIpynb(file.readAll(), note.text, runs ? *runs : notebook::IpynbRuns(), error);
         file.close();
         if (merged.isEmpty() || !Vault::writeBytes(path, merged, error))
             return false;
@@ -7635,7 +7673,7 @@ void MainWindow::showDiskNote(const QString &path, const Note &note)
             continue;
         leaf->note = note;
         MarkdownEditor *editor = leaf->editor;
-        editor->setInlineImages(m_notebookImages.value(path));
+        showNotebookPictures(editor, path);
         const QString &shown = editor->noteText();
         if (shown != note.text) {
             // Only the part that differs, so the caret and the scroll stay
@@ -7770,6 +7808,7 @@ void MainWindow::followLostNotes(bool final)
                     leaf->inlineTitle->setText(QFileInfo(moved).completeBaseName());
                 }
             }
+            moveNotebookState(path, moved);
 #ifdef NOTEAPPC_HAVE_HISTORY
             if (m_noteHistory && m_vault.contains(moved)) {
                 const std::shared_ptr<NoteHistory> history = m_noteHistory;
@@ -8528,6 +8567,7 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
         if (leaf->notePath != before) { // a module's view keeps its own path: it must save to the new one
             if (auto *module = qobject_cast<ModuleView *>(leaf->view))
                 module->setFilePath(leaf->notePath);
+            moveNotebookState(before, leaf->notePath);
         }
     }
     for (const auto &group : m_groups)

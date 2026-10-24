@@ -420,7 +420,10 @@ public:
     /// name -> encoded image bytes. `![x](attachment:name)` shows the one
     /// called `name`, as a notebook's markdown-cell attachments do. Read-only
     /// and never written anywhere; an empty table (the default) costs nothing.
-    void setInlineImages(QHash<QString, QByteArray> images);
+    /// `scopeAt`, when given, says for an offset of the text what is put before
+    /// the name to find its picture in the table (a notebook's cells each have
+    /// their own `image.png`: "3/"); empty for none, so a name stays a bare one.
+    void setInlineImages(QHash<QString, QByteArray> images, std::function<QString(qsizetype)> scopeAt = {});
     /// The index changed, so a link drawn as pointing nowhere may point
     /// somewhere now, or the reverse. Relays out only if one did.
     void refreshLinkStatus();
@@ -1520,9 +1523,9 @@ private:
     /// code block or a small card.
     bool layoutEmbed(BlockView &view);
     bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
-    /// `attachment:name` when setInlineImages holds a picture called `name`
-    /// (the "path" such an embed has), else empty.
-    QString attachmentPathOf(const QString &target) const;
+    /// `attachment:<scope><name>` when setInlineImages holds that picture for
+    /// the embed (the "path" such an embed has), else empty.
+    QString attachmentPathOf(const EmbedSpan &embed) const;
     /// The picture at `path`: a file, or an `attachment:` one from the table. Null when neither decodes.
     QPixmap loadEmbedPixmap(const QString &path) const;
     bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
@@ -1661,8 +1664,13 @@ private:
                               const QString &blockID, const QString &workingDir = QString(),
                               const CodeOptions *options = nullptr, int duplicateOrdinal = 0);
     /// How many fences before `fence` read the same (same language, same code):
-    /// NotebookRunOptions::duplicateOrdinal. Counted over every fence of the note, in order.
+    /// NotebookRunOptions::duplicateOrdinal. Counted over the fences that are cells of a notebook (a fence
+    /// that opens at the start of a line: not one quoted or listed inside a markdown cell), in order.
     int notebookDuplicateOrdinal(const CodeFenceSpan &fence) const;
+    /// Lays out every code block (and runnable embed) that is not yet laid out, so what a command for all of them
+    /// finds is decided for each (notebookEligible, the key, the options) and not just for the ones near the
+    /// view. The view stays where it is.
+    void layOutNotebookBlocks();
     /// The options a run of what `view` last laid out is made with.
     NotebookRunOptions notebookOptionsOf(const BlockView &view) const;
     void deliverNotebookResult(const QString &key, quint64 generation, NotebookRunResult result);
