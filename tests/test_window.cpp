@@ -126,6 +126,10 @@
 #include "InkCanvas.h"
 #include "InkFormat.h"
 #endif
+#ifdef NOTEAPPC_STATIC_INK
+#include <QtPlugin>
+Q_IMPORT_PLUGIN(InkModule) // NOTEAPPC_STATIC_MODULES: the ink module is linked into this test, as into the app
+#endif
 #include "ToggleSwitch.h"
 #include "QuickSwitcher.h"
 #include "Snapshots.h"

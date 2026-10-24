@@ -17,13 +17,17 @@ target_link_libraries(noteAppC_hwfont PUBLIC notolith-inkcore noteAppC_modules_h
 # links the core library the package notolith-ink installs next to it. No manifest "dependencies" key
 # (R2): with notolith-ink missing, the load fails with the dynamic linker's message.
 configure_file(manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/manifest.json @ONLY)
-add_library(notolith-hwfont MODULE HwfontModule.cpp)
-set_target_properties(notolith-hwfont PROPERTIES
-    AUTOMOC ON
-    PREFIX ""
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/modules
-    INSTALL_RPATH "$ORIGIN"
-    BUILD_WITH_INSTALL_RPATH ON)
-target_include_directories(notolith-hwfont PRIVATE ${CMAKE_CURRENT_BINARY_DIR}) # manifest.json for Q_PLUGIN_METADATA
-target_link_libraries(notolith-hwfont PRIVATE noteAppC_hwfont)
-install(TARGETS notolith-hwfont LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+if(NOTEAPPC_STATIC_MODULES)
+    noteappc_add_static_module(notolith-hwfont-static HwfontModule.cpp noteAppC_hwfont)
+else()
+    add_library(notolith-hwfont MODULE HwfontModule.cpp)
+    set_target_properties(notolith-hwfont PROPERTIES
+        AUTOMOC ON
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/modules
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_WITH_INSTALL_RPATH ON)
+    target_include_directories(notolith-hwfont PRIVATE ${CMAKE_CURRENT_BINARY_DIR}) # manifest.json for Q_PLUGIN_METADATA
+    target_link_libraries(notolith-hwfont PRIVATE noteAppC_hwfont)
+    install(TARGETS notolith-hwfont LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+endif()

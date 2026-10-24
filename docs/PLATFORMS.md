@@ -297,6 +297,41 @@ CMake 4.4.3 (installed here) still accepts, so the Android configure also
 needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` - harmless, it only affects that
 one fetched dependency's own policy floor.
 
+**Modules as Qt static plugins (`NOTEAPPC_STATIC_MODULES`).** Android loads only
+native libraries packaged in the APK, so the loadable modules of
+[PLUGINS.md](PLUGINS.md) "Tier 1b" cannot be `dlopen`'ed from
+`<libdir>/noteAppC/modules` there. The CMake option `NOTEAPPC_STATIC_MODULES`
+(default `OFF`; `ON` when `ANDROID`) builds a module as a static library
+instead (`noteappc_add_static_module` in `libs/modules/CMakeLists.txt`: its one
+source compiled with `QT_STATICPLUGIN`, `notolith-ink-static`,
+`notolith-hwfont-static`), links it into the executable and imports it with
+`Q_IMPORT_PLUGIN` in `apps/noteAppC/main.cpp`. `ModuleRegistry::scan` then also
+walks `QPluginLoader::staticPlugins()` with the same IID check and the same
+manifest: the module comes back with `ModuleInfo::isStatic` set and an empty
+`path`, and `ensureLoaded` returns the static instance - constructed on that
+first load, never by the scan. The ABI tag is still checked (it is the same
+build, so it always matches). With the option off nothing changes: every
+module stays a shared object, the registry finds no static plugin and pays one
+walk over Qt's own (which carry another IID). `libnotolith-inkcore` is a static
+library under the option (there is no directory beside the module for a shared
+one to sit in), so the executable then links the stroke modeler and Abseil
+itself; the `needed_exe` check drops `absl` from its list in that case.
+
+Only the ink and hwfont modules go through the helper. The PDF viewer and share
+modules stay shared objects: their poppler-qt6 and protobuf/libdatachannel
+stacks are not in the Android kit and their options are off there. The ink
+modules themselves are not built on Android yet either (the root
+`CMakeLists.txt` gates `libs/ext/ink` on `NOT ANDROID`: Abseil and the stroke
+modeler are not cross-built), so on Android today the option has no module to
+link; it is the path the first one takes. Checked on the desktop: a second
+configure with `-DNOTEAPPC_STATIC_MODULES=ON` builds the whole tree, links
+the executable with both module classes inside it and no `NEEDED` entry for
+`libnotolith-ink*`, and `test_modules` lists, loads and attaches a static test
+module (`tests/fakemodule/FakeStaticModule.cpp`); `test_window` and
+`test_hwfont` run their ink and glyph-studio tests against the static modules.
+Not checked: an Android build, because there is no Android toolchain for it in
+this configuration.
+
 **What is off, and why.** Four of the five options `docs/PLUGINS.md` lists as
 Tier 1 have a system dependency with no arm64 build in this toolchain -
 `NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING` (KF6), `NOTEAPPC_WITH_PDFVIEW` (poppler-qt6),

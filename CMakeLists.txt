@@ -32,6 +32,19 @@ if(NOT DEFINED NOTEAPPC_ABI_TOKEN)
 endif()
 set(NOTEAPPC_ABI_TAG "${PROJECT_VERSION}-${NOTEAPPC_ABI_TOKEN}-${Qt6_VERSION}")
 
+# The loadable modules (libs/modules) as Qt static plugins, linked into the executable instead of dlopen'ed
+# from <libdir>/noteAppC/modules. Android has no module directory and loads only libraries packaged in the
+# APK, so there it is the only way (docs/PLATFORMS.md, "Mobile"); a desktop build can switch it on to test
+# the path. Off, the default build is unchanged: every module is a shared object. Only the modules that go
+# through noteappc_add_static_module (ink, hwfont) change; the PDF and share modules stay shared, as their
+# poppler and protobuf stacks are not in the Android kit (those options are off there).
+if(ANDROID)
+    set(noteappc_static_default ON)
+else()
+    set(noteappc_static_default OFF)
+endif()
+option(NOTEAPPC_STATIC_MODULES "Build the loadable modules as Qt static plugins linked into the executable" ${noteappc_static_default})
+
 # Neither dependency is in the Android Qt kit, so both can be turned off for a
 # mobile/cross build; NOTEAPPC_WITH_PDFVIEW (below) covers dropping poppler-qt6
 # when it is installed but built against a Qt too new to link with that kit.

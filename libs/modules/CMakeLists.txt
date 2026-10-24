@@ -22,3 +22,19 @@ target_link_libraries(noteAppC_modules PUBLIC noteAppC_modules_headers noteAppC_
 target_include_directories(noteAppC_modules PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_compile_definitions(noteAppC_modules PRIVATE
     NOTEAPPC_MODULE_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/noteAppC/modules")
+
+# A module as a Qt static plugin (NOTEAPPC_STATIC_MODULES): the module's one source file compiled with
+# QT_STATICPLUGIN into a static library, which the executable links and imports with Q_IMPORT_PLUGIN
+# (apps/noteAppC/main.cpp). ModuleRegistry::scan lists it through QPluginLoader::staticPlugins(); nothing
+# is constructed until the first ensureLoaded. The caller configure_file's manifest.json into its own binary
+# directory first, as for the shared build (Q_PLUGIN_METADATA FILE "manifest.json").
+#   noteappc_add_static_module(<target> <source> <library the module needs>)
+# The target is named in the NOTEAPPC_STATIC_MODULE_TARGETS global property for the executable to link.
+function(noteappc_add_static_module target source library)
+    add_library(${target} STATIC ${source})
+    set_target_properties(${target} PROPERTIES AUTOMOC ON POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(${target} PRIVATE QT_STATICPLUGIN)
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    target_link_libraries(${target} PUBLIC ${library})
+    set_property(GLOBAL APPEND PROPERTY NOTEAPPC_STATIC_MODULE_TARGETS ${target})
+endfunction()

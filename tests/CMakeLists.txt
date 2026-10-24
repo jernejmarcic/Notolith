@@ -94,6 +94,19 @@ noteappc_fake_module(fake_twin fake-twin "${NOTEAPPC_ABI_TAG}" fake FakeModule.c
 noteappc_fake_module(fake_noid "" "${NOTEAPPC_ABI_TAG}" fakenoid FakeModule.cpp)
 noteappc_fake_module(fake_notmodule fake-notmodule "${NOTEAPPC_ABI_TAG}" fakenotmod NotAModule.cpp)
 noteappc_fake_module(fake_unresolved fake-unresolved "${NOTEAPPC_ABI_TAG}" fakeunres FakeModule.cpp FAKE_UNRESOLVED)
+# NOTEAPPC_STATIC_MODULES (R12, Android): the same discovery for a module linked into the executable. The test
+# module is a Qt static plugin in test_modules itself, imported there (Q_IMPORT_PLUGIN) like main.cpp imports ink.
+if(NOTEAPPC_STATIC_MODULES)
+    set(FAKE_ID fake-static)
+    set(FAKE_ABI "${NOTEAPPC_ABI_TAG}")
+    set(FAKE_SUFFIX fakestatic)
+    configure_file(fakemodule/manifest-static.json.in ${CMAKE_CURRENT_BINARY_DIR}/fake_static/manifest.json @ONLY)
+    add_library(fake_static STATIC fakemodule/FakeStaticModule.cpp)
+    set_target_properties(fake_static PROPERTIES AUTOMOC ON POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(fake_static PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/fake_static)
+    target_compile_definitions(fake_static PRIVATE QT_STATICPLUGIN FAKE_ID="${FAKE_ID}" FAKE_SUFFIX="${FAKE_SUFFIX}")
+    target_link_libraries(fake_static PUBLIC noteAppC_modules_headers Qt6::Widgets)
+endif()
 set(NOTEAPPC_FAKE_MODULE_TARGETS fake_good fake_badabi fake_twin fake_noid fake_notmodule fake_unresolved)
 
 add_executable(test_modules test_modules.cpp)
@@ -101,6 +114,10 @@ target_link_libraries(test_modules PRIVATE noteAppC_modules Qt6::Widgets GTest::
 target_compile_definitions(test_modules PRIVATE NOTEAPPC_FAKE_MODULES_DIR="${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
 set_target_properties(test_modules PROPERTIES ENABLE_EXPORTS ON) # the fake module resolves ModuleView here
 add_dependencies(test_modules ${NOTEAPPC_FAKE_MODULE_TARGETS})
+if(NOTEAPPC_STATIC_MODULES)
+    target_link_libraries(test_modules PRIVATE fake_static)
+    target_compile_definitions(test_modules PRIVATE NOTEAPPC_STATIC_FAKE)
+endif()
 if(TARGET notolith-ink) # the R2 case: the real module, copied away from its core library
     target_compile_definitions(test_modules PRIVATE NOTEAPPC_INK_MODULE_PATH="$<TARGET_FILE:notolith-ink>")
     add_dependencies(test_modules notolith-ink)
@@ -143,6 +160,9 @@ if(TARGET notolith-ink)
     # the one the module loads (same soname, found in modules/), never a second copy of InkView.
     target_link_libraries(test_window PRIVATE notolith-inkcore)
     set_property(TARGET test_window APPEND PROPERTY BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+elseif(TARGET notolith-ink-static) # NOTEAPPC_STATIC_MODULES: the same tests, the module a static plugin of test_window
+    target_compile_definitions(test_window PRIVATE NOTEAPPC_HAVE_INK_MODULE NOTEAPPC_STATIC_INK)
+    target_link_libraries(test_window PRIVATE notolith-ink-static notolith-inkcore)
 endif()
 # The PDF viewer module sits in the same directory (libs/ext/pdfview): the window tests that open a PDF, and the
 # ones that check what is mapped before one is opened, need it built.
@@ -190,7 +210,10 @@ if(TARGET notolith-share)
     noteappc_lazy_test(lazy_share_prescan ShareAskedForBeforeAnyScan "${noteappc_lazy_modules}")
     noteappc_lazy_test(lazy_share_off ShareOffMapsNothing "${noteappc_lazy_modules}")
     noteappc_lazy_test(lazy_share_missing ShareWithoutTheModuleSaysWhatIsMissing)
-    list(APPEND noteappc_exe_forbidden "protobuf" "datachannel" "avahi" "absl")
+    list(APPEND noteappc_exe_forbidden "protobuf" "datachannel" "avahi")
+    if(NOT TARGET notolith-ink-static) # a static ink module links the stroke modeler, and so Abseil, into the executable
+        list(APPEND noteappc_exe_forbidden "absl")
+    endif()
     list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-share>)
     add_test(NAME needed_share COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-share>
         "libnoteAppC_")
@@ -226,6 +249,9 @@ if(TARGET noteAppC_hwfont)
     set_tests_properties(hwfont PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
     if(TARGET notolith-hwfont)
         add_dependencies(test_hwfont notolith-hwfont)
+    elseif(TARGET notolith-hwfont-static) # NOTEAPPC_STATIC_MODULES: the module is a static plugin of this executable
+        target_link_libraries(test_hwfont PRIVATE notolith-hwfont-static)
+        target_compile_definitions(test_hwfont PRIVATE NOTEAPPC_STATIC_HWFONT)
     endif()
 endif()
 target_compile_definitions(test_window PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")

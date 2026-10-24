@@ -1,0 +1,9 @@
+{
+    "id": "@FAKE_ID@",
+    "feature": "@FAKE_ID@",
+    "name": "Fake static module (@FAKE_ID@)",
+    "description": "A static module built by the test suite.",
+    "suffixes": ["@FAKE_SUFFIX@"],
+    "commands": [{"id": "@FAKE_ID@:hello", "title": "Fake: say hello"}],
+    "abi": "@FAKE_ABI@"
+}

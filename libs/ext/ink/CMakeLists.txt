@@ -23,17 +23,21 @@ target_link_libraries(noteAppC_ink PUBLIC notolith-inkcore noteAppC_modules_head
 # Theme, Vault, ModuleView's vtable) resolve from the executable at load time
 # (ENABLE_EXPORTS on every host binary, ResolveAllSymbolsHint in the registry).
 configure_file(manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/manifest.json @ONLY)
-add_library(notolith-ink MODULE InkModule.cpp)
-# libnotolith-inkcore.so installs next to this module (core/CMakeLists.txt), so $ORIGIN finds it
-# installed and in the build tree alike. BUILD_WITH_INSTALL_RPATH, not BUILD_RPATH_USE_ORIGIN or
-# CMake's computed build RPATH: with the shared Abseil those come out as a RUNPATH of empty entries,
-# and an empty entry means "the current directory" (the same reasoning as notolith-inkcore).
-set_target_properties(notolith-ink PROPERTIES
-    AUTOMOC ON
-    PREFIX ""
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/modules
-    INSTALL_RPATH "$ORIGIN"
-    BUILD_WITH_INSTALL_RPATH ON)
-target_include_directories(notolith-ink PRIVATE ${CMAKE_CURRENT_BINARY_DIR}) # manifest.json for Q_PLUGIN_METADATA
-target_link_libraries(notolith-ink PRIVATE noteAppC_ink)
-install(TARGETS notolith-ink LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+if(NOTEAPPC_STATIC_MODULES)
+    noteappc_add_static_module(notolith-ink-static InkModule.cpp noteAppC_ink)
+else()
+    add_library(notolith-ink MODULE InkModule.cpp)
+    # libnotolith-inkcore.so installs next to this module (core/CMakeLists.txt), so $ORIGIN finds it
+    # installed and in the build tree alike. BUILD_WITH_INSTALL_RPATH, not BUILD_RPATH_USE_ORIGIN or
+    # CMake's computed build RPATH: with the shared Abseil those come out as a RUNPATH of empty entries,
+    # and an empty entry means "the current directory" (the same reasoning as notolith-inkcore).
+    set_target_properties(notolith-ink PROPERTIES
+        AUTOMOC ON
+        PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/modules
+        INSTALL_RPATH "$ORIGIN"
+        BUILD_WITH_INSTALL_RPATH ON)
+    target_include_directories(notolith-ink PRIVATE ${CMAKE_CURRENT_BINARY_DIR}) # manifest.json for Q_PLUGIN_METADATA
+    target_link_libraries(notolith-ink PRIVATE noteAppC_ink)
+    install(TARGETS notolith-ink LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+endif()

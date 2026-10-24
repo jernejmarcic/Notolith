@@ -2,6 +2,11 @@
 // set, the on-disk names and the Handwriting/<font>/<hex>/<n>.ink store.
 #include <gtest/gtest.h>
 
+#ifdef NOTEAPPC_STATIC_HWFONT
+#include <QtPlugin>
+Q_IMPORT_PLUGIN(HwfontModule) // NOTEAPPC_STATIC_MODULES: the module is linked into this test, as into the app
+#endif
+
 #include <algorithm>
 #include <memory>
 #include <optional>
