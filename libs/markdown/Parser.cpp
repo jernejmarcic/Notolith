@@ -2540,6 +2540,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
     }
     for (const Range &range : obsidian.comments)
         result.decorations.syntax.append(range);
+    result.decorations.comments = obsidian.comments;
     nestQuotedLists(text, map, result.decorations.listItems);
     scanFootnotes(text, walk.masked + obsidian.comments, result.decorations);
     // Bare brackets, meta notes and the word count's exclusion are all runs

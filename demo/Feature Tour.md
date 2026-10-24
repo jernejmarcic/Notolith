@@ -66,7 +66,7 @@ notes. For the older map see [[Welcome]] and [[Newer Features]].
 - [[Note History]] (`note-history`, `file-recovery`).
 - [[Encrypted Notes]] (`encrypted-notes`).
 - [[PDF Viewer]] (`pdf-viewer`), [[Image Annotation]] (`image-annotation`).
-- [[Export to PDF]], [[Publish]] (`publish`), [[Slides]] (`slides`),
+- [[Export to PDF]], [[Pandoc]] (`pandoc`), [[Publish]] (`publish`), [[Slides]] (`slides`),
   [[Audio Recorder]] (`audio-recorder`).
 - [[Sync and Share]] (`sync`, `share`) - needs a server or a second device.
 - [[Community Plugins]] (`community-plugins`) - needs a built plugin.

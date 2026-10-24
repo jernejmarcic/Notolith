@@ -143,6 +143,9 @@ target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 # GTEST_FILTER focuses it. This entry's filter is in its command: run it whole.
 set(noteappc_window_adopt WindowTest.AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads)
 add_test(NAME window COMMAND test_window)
+if(TARGET noteAppC_pandoc)
+    target_link_libraries(test_window PRIVATE noteAppC_pandoc) # the pandoc window tests ask whether it is installed
+endif()
 add_test(NAME window_modules_adopt COMMAND test_window --gtest_filter=${noteappc_window_adopt})
 set_tests_properties(window_modules_adopt PROPERTIES ENVIRONMENT "NOTEAPPC_WINDOW_ADOPT_ENTRY=1")
 # Modules load into the test's process: export the host symbols, and point the
@@ -664,3 +667,12 @@ foreach(target IN LISTS noteappc_targets)
             NOTEAPPC_TEST_HOME="${CMAKE_CURRENT_BINARY_DIR}/isolated-home")
     endif()
 endforeach()
+
+# Pandoc export and import: the Markdown pre-conversion and argument lists, and - when pandoc is
+# installed - the real program on a note -> docx -> Markdown round trip (skipped when it is not).
+if(TARGET noteAppC_pandoc)
+    add_executable(test_pandoc test_pandoc.cpp)
+    target_link_libraries(test_pandoc PRIVATE noteAppC_pandoc Qt6::Gui GTest::gtest)
+    add_test(NAME pandoc COMMAND test_pandoc)
+    set_tests_properties(pandoc PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;HOME=${CMAKE_BINARY_DIR}/pandoc-test-home")
+endif()

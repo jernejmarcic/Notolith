@@ -361,6 +361,9 @@ struct Decorations {
     /// Markers hidden while the cursor is outside the block: `#`, `**`, `[[`,
     /// `==`, fence lines, the target half of an aliased wikilink.
     QList<Range> syntax;
+    /// Every `%%comment%%`, delimiters included, sorted by position: also in
+    /// `syntax` (hidden in live preview), kept apart for what leaves them out.
+    QList<Range> comments;
     QList<StyleSpan> styles;
     /// Sorted by position. A reference to a label no definition names is
     /// not a footnote, as in Obsidian: it stays text.

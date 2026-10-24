@@ -77,6 +77,7 @@
 #include "MermaidBlock.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
+#include "DimMenu.h"
 #include "AudioRecorder.h"
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
 #include "DirectRunner.h"
@@ -98,6 +99,10 @@
 #include "EncryptionSession.h"
 #endif
 #include "ExportPdfDialog.h"
+#ifdef NOTEAPPC_HAVE_PANDOC
+#include "Pandoc.h"
+#include "PandocRunner.h"
+#endif
 #include "DictClient.h"
 #include "PagePreview.h"
 #include "PdfPage.h"
@@ -903,6 +908,17 @@ QWidget *MainWindow::buildSidebar()
     connect(fileTree, &FileTree::moveRequested, this,
             [this](const QString &path, const QString &folder) { moveToFolder(path, folder); },
             Qt::QueuedConnection);
+#ifdef NOTEAPPC_HAVE_PANDOC
+    // A .docx, .odt, .epub, .html, .rtf or .tex dragged in from a file manager: Import with pandoc.
+    connect(fileTree, &FileTree::filesDropped, this, [this](const QStringList &files, const QString &folder) {
+        if (!m_vault.isValid() || !featureOn("pandoc") || !m_vault.contains(folder))
+            return;
+        for (const QString &file : files) {
+            if (!pandoc::readerForSuffix(QFileInfo(file).suffix()).isEmpty())
+                importWithPandoc(file, m_vault.relative(folder));
+        }
+    });
+#endif
     fileTree->rowDelegate()->setIconHook([this](const QString &absolutePath) {
         return fileIconsOn() && m_vault.contains(absolutePath) ? m_fileIcons.iconFor(m_vault.relative(absolutePath))
                                                               : QString();
@@ -995,6 +1011,9 @@ QWidget *MainWindow::buildMainArea()
     connect(m_settingsPage, &SettingsPage::recoveryRequested, this, &MainWindow::openRecovery);
     connect(m_settingsPage, &SettingsPage::closeRequested, this, &MainWindow::closeSettings);
     connect(m_settingsPage, &SettingsPage::pluginsChanged, this, [this] { syncPlugins(true); });
+#ifdef NOTEAPPC_HAVE_PANDOC
+    connect(m_settingsPage, &SettingsPage::pandocNeeded, this, &MainWindow::showPandocMissing);
+#endif
 
     m_mainStack = new QStackedWidget(this);
     m_mainStack->setObjectName(QStringLiteral("mainStack"));
@@ -3262,6 +3281,12 @@ void MainWindow::applyFeatures()
         delete m_graph;
     }
 #endif
+#ifdef NOTEAPPC_HAVE_PANDOC
+    if (auto *tree = qobject_cast<FileTree *>(m_tree))
+        tree->setAcceptFileDrops(featureOn("pandoc") ? [](const QString &path) {
+            return !pandoc::readerForSuffix(QFileInfo(path).suffix()).isEmpty();
+        } : std::function<bool(const QString &)>());
+#endif
     if (!featureOn("page-preview"))
         delete m_preview;
     if (!featureOn("word-lookup")) { // nothing built, nothing listening
@@ -3681,6 +3706,9 @@ void MainWindow::buildActions()
                                           QFileInfo(m_active->notePath).completeBaseName());
         });
 
+#ifdef NOTEAPPC_HAVE_PANDOC
+    buildPandocActions();
+#endif
     buildPopoutActions();
     buildSidebarPopoutActions();
     rebuildHotkeyCommands();
@@ -4043,15 +4071,19 @@ void MainWindow::openCommandPalette()
         });
     }
 
+#ifdef NOTEAPPC_HAVE_PANDOC
+    refreshPandocCommands();
+#endif
     struct Entry {
         QString id;
         QString name;
         QList<QKeySequence> keys;
+        bool dimmed = false;
     };
     QList<Entry> entries;
     for (const QAction *action : std::as_const(m_commands)) {
         if (action->isEnabled() && action->objectName() != QLatin1String("command-palette:open"))
-            entries.append({action->objectName(), action->text(), action->shortcuts()});
+            entries.append({action->objectName(), action->text(), action->shortcuts(), action->property("dimmed").toBool()});
     }
     // Editing commands only while a note is open for editing, as in Obsidian.
     if (!m_active->notePath.isEmpty() && !m_active->view) {
@@ -4068,13 +4100,15 @@ void MainWindow::openCommandPalette()
 
     QStringList names;
     QStringList keys;
+    QList<bool> dimmed;
     m_paletteIDs.clear();
     for (const Entry &entry : std::as_const(entries)) {
         names << entry.name;
+        dimmed << entry.dimmed;
         keys << (entry.keys.isEmpty() ? QString() : entry.keys.constFirst().toString(QKeySequence::NativeText));
         m_paletteIDs.insert(entry.name, entry.id);
     }
-    m_palette->setCandidates(names, keys);
+    m_palette->setCandidates(names, keys, {}, dimmed);
     m_palette->popUp();
 }
 
@@ -8425,7 +8459,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         return;
 
     const QModelIndex index = m_tree->indexAt(pos);
-    QMenu menu(this);
+    DimMenu menu(this);
     QAction *newNoteAction = menu.addAction(tr("New note"));
     QAction *newFolderAction = menu.addAction(tr("New folder"));
     QAction *renameAction = nullptr;
@@ -8433,6 +8467,9 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     QAction *deleteAction = nullptr;
     QAction *copyAction = nullptr;
     QAction *openOutsideAction = nullptr;
+#ifdef NOTEAPPC_HAVE_PANDOC
+    QAction *importAction = nullptr;
+#endif
     QAction *showAction = nullptr;
     QAction *iconAction = nullptr;
     QAction *removeIconAction = nullptr;
@@ -8447,6 +8484,34 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         menu.addSeparator();
         if (!m_files->isDir(index))
             openOutsideAction = menu.addAction(tr("Open in default app"));
+#ifdef NOTEAPPC_HAVE_PANDOC
+        if (!m_files->isDir(index) && featureOn("pandoc")) {
+            // Looked for now, with the menu: the entries stay when it is missing, drawn disabled, and say why.
+            const bool missing = pandoc::locate(m_settings.text(QStringLiteral("pandoc.path"))).isEmpty();
+            const auto dim = [missing](QAction *action) {
+                if (missing) {
+                    action->setProperty("dimmed", true);
+                    action->setToolTip(QObject::tr("pandoc was not found: click to see how to get it"));
+                }
+            };
+            if (Vault::isNote(path)) {
+                auto *exportMenu = new DimMenu(tr("Export with pandoc"), &menu);
+                menu.addMenu(exportMenu);
+                dim(exportMenu->menuAction());
+                for (const pandoc::Format &format : pandoc::exportFormats()) {
+                    QAction *entry = exportMenu->addAction(format.label);
+                    entry->setProperty("pandocFormat", format.id);
+                    dim(entry);
+                }
+                QAction *other = exportMenu->addAction(tr("Other format..."));
+                other->setProperty("pandocFormat", QStringLiteral("other"));
+                dim(other);
+            } else if (!pandoc::readerForSuffix(QFileInfo(path).suffix()).isEmpty()) {
+                importAction = menu.addAction(tr("Import with pandoc"));
+                dim(importAction);
+            }
+        }
+#endif
         showAction = menu.addAction(tr("Show in system explorer"));
         if (fileIconsOn()) {
             menu.addSeparator();
@@ -8473,6 +8538,12 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         copyPath(path);
     else if (chosen == openOutsideAction)
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+#ifdef NOTEAPPC_HAVE_PANDOC
+    else if (chosen == importAction)
+        importWithPandoc(path, m_vault.relative(QFileInfo(path).absolutePath()));
+    else if (chosen->property("pandocFormat").isValid())
+        exportWithPandoc(path, chosen->property("pandocFormat").toString());
+#endif
     else if (chosen == showAction)
         // ponytail: opens the folder; selecting the file in it needs the
         // FileManager1 D-Bus call, add if the folder alone is not enough.

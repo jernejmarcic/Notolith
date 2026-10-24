@@ -54,6 +54,9 @@ class PluginRegistry;
 class SyncEngine;
 class ShareSession;
 class AudioRecorder;
+namespace pandoc {
+class Runner;
+}
 namespace crypt {
 class EncryptionSession;
 }
@@ -669,6 +672,30 @@ private:
     /// mind map in a window of its own (a reading-view editor holding a markmap
     /// fence, so folding by a click and the theme come with it).
     void showAsMindMap();
+#ifdef NOTEAPPC_HAVE_PANDOC
+    // --- pandoc (MainWindowPandoc.cpp) ---
+    /// The pandoc commands, as actions of the "pandoc" core plugin.
+    void buildPandocActions();
+    /// The program to run, looked up now (never earlier): empty after telling the person it is missing.
+    QString pandocProgram();
+    /// A dialog: pandoc was not found, how to get it, and a button to its path in Settings.
+    void showPandocMissing();
+    /// Marks the pandoc commands that cannot run (no pandoc) in the palette; looks pandoc up only when the plugin is on.
+    void refreshPandocCommands();
+    /// `formatID`: one of pandoc::exportFormats(), "other" (asks which) or "other:name". `notePath` is a note of
+    /// the vault; `outputPath` is where to write, empty to ask. Invokable, so a test can drive it past the dialogs.
+    Q_INVOKABLE void exportWithPandoc(const QString &notePath, const QString &formatID, const QString &outputPath = {});
+    /// Makes a note in `folderRelative` from `file`, which is never written to; the note never replaces another.
+    Q_INVOKABLE void importWithPandoc(const QString &file, const QString &folderRelative);
+    void importWithPandocChosen();
+    /// A pandoc run with a cancel button. `done` runs when it succeeds; a failure shows pandoc's own words, a cancel nothing.
+    void runPandoc(const QString &program, const QStringList &arguments, const QByteArray &input,
+                   const QString &workingDirectory, const QString &title,
+                   std::function<void()> done);
+    pandoc::Runner *m_pandocRunner = nullptr;
+    /// Imports asked for while one runs (several files dropped at once): file and folder, taken in order as each finishes.
+    QList<QPair<QString, QString>> m_pandocQueue;
+#endif
     /// Puts a snapshot back as `notePath`'s content, keeping what it held as
     /// a snapshot of its own first.
     void restoreSnapshot(const QString &notePath, const QString &text);

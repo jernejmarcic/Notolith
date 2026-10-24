@@ -128,6 +128,11 @@ QVariantMap &defaults()
         {QStringLiteral("render.latexTool"), QStringLiteral("latex")},
         {QStringLiteral("render.graphviz"), true},
         {QStringLiteral("render.dotTool"), QStringLiteral("dot")},
+        // Pandoc export and import (docs/PLUGINS.md): empty path is `pandoc` on PATH, looked for only when a
+        // pandoc command is used or the settings are open. Extra arguments are split like a shell would, run by none.
+        {QStringLiteral("pandoc.path"), QString()},
+        {QStringLiteral("pandoc.extraArguments"), QString()},
+        {QStringLiteral("pandoc.referenceDoc"), QString()},
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},
 
@@ -717,6 +722,11 @@ static QList<Settings::Feature> &mutableFeatures()
          QT_TRANSLATE_NOOP("Settings", "Export the vault, or its notes marked publish: true, as a static "
                                        "website."),
          true},
+        {"pandoc", QT_TRANSLATE_NOOP("Settings", "Pandoc"),
+         QT_TRANSLATE_NOOP("Settings", "Export a note as Word, OpenDocument, EPUB, HTML, LaTeX, RTF or slides, and "
+                                       "import such files as notes, through the pandoc program, which is installed "
+                                       "separately. Nothing runs until you use a pandoc command."),
+         false},
         {"sync", QT_TRANSLATE_NOOP("Settings", "Sync"),
          QT_TRANSLATE_NOOP("Settings", "Sync this vault through a server, end-to-end encrypted: the server "
                                        "never sees note contents, file names or tags."),

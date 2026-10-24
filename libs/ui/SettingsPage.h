@@ -71,6 +71,12 @@ signals:
     void recoveryRequested();
     /// A plugin was switched on or off: its commands and code blocks change.
     void pluginsChanged();
+    /// The Pandoc switch was pressed with no pandoc to be found: the window says what to do about it.
+    void pandocNeeded();
+
+public:
+    /// Shows the Core plugins page with the pandoc path under the cursor, for the dialog's button.
+    void showPandocSettings();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
