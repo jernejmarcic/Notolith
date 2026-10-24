@@ -12568,16 +12568,24 @@ TEST(ReferenceBlockTest, AHostingSitesPageLinkIsFetchedAsTheRawFile)
 
 namespace {
 
+/// The remote-host check refuses loopback, which is where the tests' server is:
+/// this lets 127.0.0.1 through for one test, and only that address.
+struct AllowLoopback {
+    AllowLoopback() { MarkdownEditor::allowReferenceAddressForTests(QStringLiteral("127.0.0.1")); }
+    ~AllowLoopback() { MarkdownEditor::allowReferenceAddressForTests(QString()); }
+};
+
 /// A web server on 127.0.0.1 answering every GET with `body`, counting them.
 struct FakeServer {
     QTcpServer server;
     int requests = 0;
     QByteArray body = "remote line 1\nremote line 2\n";
     int status = 200;
+    QByteArray redirectTo; ///< answered as a 302 to this URL
 
-    FakeServer()
+    explicit FakeServer(const QHostAddress &address = QHostAddress::LocalHost)
     {
-        EXPECT_TRUE(server.listen(QHostAddress::LocalHost));
+        EXPECT_TRUE(server.listen(address));
         QObject::connect(&server, &QTcpServer::newConnection, &server, [this] {
             while (QTcpSocket *socket = server.nextPendingConnection()) {
                 QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket] {
@@ -12585,8 +12593,12 @@ struct FakeServer {
                         return;
                     socket->readAll();
                     ++requests;
-                    socket->write("HTTP/1.1 " + QByteArray::number(status) + " X\r\nContent-Length: "
-                                  + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    if (!redirectTo.isEmpty())
+                        socket->write("HTTP/1.1 302 Found\r\nLocation: " + redirectTo
+                                      + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    else
+                        socket->write("HTTP/1.1 " + QByteArray::number(status) + " X\r\nContent-Length: "
+                                      + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
                     socket->disconnectFromHost();
                 });
                 QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
@@ -12609,11 +12621,12 @@ TEST(ReferenceBlockTest, ARemoteFileIsNotFetchedWhileTheSettingIsOff)
     EXPECT_EQ(server.requests, 0);
     EXPECT_EQ(editor->referenceCacheSize(), 0);
     EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("off")));
-    EXPECT_EQ(editor->panelLabelAt(kInsideReference), QStringLiteral("file.txt"));
+    EXPECT_EQ(editor->panelLabelAt(kInsideReference), QStringLiteral("file.txt (127.0.0.1)")) << "the host is in the title";
 }
 
 TEST(ReferenceBlockTest, ARemoteFileIsFetchedOnceAndCached)
 {
+    AllowLoopback allow;
     FakeServer server;
     const QString url = server.url(QStringLiteral("/dir/cached.txt"));
     auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
@@ -12634,6 +12647,7 @@ TEST(ReferenceBlockTest, ARemoteFileIsFetchedOnceAndCached)
 
 TEST(ReferenceBlockTest, ARemoteFailureIsShownAndNotRetriedPerLayout)
 {
+    AllowLoopback allow;
     FakeServer server;
     server.status = 404;
     auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url(QStringLiteral("/missing.txt"))),
@@ -12704,4 +12718,174 @@ TEST(ReferenceBlockTest, ARunawayStartPatternIsStoppedQuickly)
     clock.start();
     ASSERT_TRUE(waitForListing(*editor, QStringLiteral("No line matches start")));
     EXPECT_LT(clock.elapsed(), 1500) << "ms: without the match budget this took seconds";
+}
+
+// --- remote references: hosts that are not the internet ---------------------------------
+
+TEST(ReferenceBlockTest, LiteralLocalAndPrivateHostsAreRefused)
+{
+    const QStringList urls = {
+        QStringLiteral("http://10.1.2.3/a.txt"),         QStringLiteral("http://192.168.0.7/a.txt"),
+        QStringLiteral("http://172.16.0.1/a.txt"),       QStringLiteral("http://169.254.169.254/latest/meta-data"),
+        QStringLiteral("http://127.0.0.1:9/a.txt"),      QStringLiteral("http://[::1]/a.txt"),
+        QStringLiteral("http://[fd00::1]/a.txt"),        QStringLiteral("http://[fe80::1]/a.txt"),
+        QStringLiteral("http://0.0.0.0/a.txt"),          QStringLiteral("http://[::ffff:10.0.0.1]/a.txt")};
+    for (const QString &url : urls) {
+        SCOPED_TRACE(url.toStdString());
+        auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
+        editor->setRemoteReferences(true);
+        EXPECT_TRUE(waitForListing(*editor, QStringLiteral("local address")));
+        EXPECT_FALSE(editor->referencesPending());
+    }
+}
+
+TEST(ReferenceBlockTest, ANameThatResolvesToLoopbackIsRefusedBeforeAnyRequest)
+{
+    FakeServer server;
+    auto editor = referenceEditorWith(
+        QStringLiteral("link: http://localhost:%1/a.txt\n").arg(server.server.serverPort()), QString());
+    editor->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("local address")));
+    QTest::qWait(200);
+    EXPECT_EQ(server.requests, 0);
+
+    // by address, with no allowance for it, the same
+    auto direct = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url()), QString());
+    direct->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*direct, QStringLiteral("local address")));
+    QTest::qWait(200);
+    EXPECT_EQ(server.requests, 0);
+}
+
+TEST(ReferenceBlockTest, ARedirectToALocalHostIsRefusedToo)
+{
+    AllowLoopback allow; // 127.0.0.1 stands for "a public host" here; 127.0.0.2 is where it must not go
+    FakeServer inner(QHostAddress(QStringLiteral("127.0.0.2")));
+    FakeServer outer;
+    outer.redirectTo = QByteArray("http://127.0.0.2:") + QByteArray::number(inner.server.serverPort()) + "/secret.txt";
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(outer.url(QStringLiteral("/a.txt"))), QString());
+    editor->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("local address")));
+    EXPECT_EQ(outer.requests, 1);
+    EXPECT_EQ(inner.requests, 0);
+}
+
+TEST(ReferenceBlockTest, ARedirectToAPublicHostIsFollowed)
+{
+    AllowLoopback allow;
+    FakeServer target;
+    target.body = "landed\n";
+    FakeServer outer;
+    outer.redirectTo = target.url(QStringLiteral("/b.txt")).toUtf8();
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(outer.url(QStringLiteral("/a.txt"))), QString());
+    editor->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("landed")));
+    EXPECT_EQ(target.requests, 1);
+}
+
+// --- what is kept, and when it is dropped ----------------------------------------------------
+
+TEST(ReferenceBlockTest, TurningThePluginOffDropsTheCacheTheWatchesAndTheFetchedText)
+{
+    AllowLoopback allow;
+    FakeServer server;
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    const QString note = QStringLiteral("```reference\nfile: hello.py\n```\n\n```reference\nlink: %1\n```\n\nafter\n")
+                             .arg(server.url(QStringLiteral("/kept.txt")));
+    auto editor = stylerEditorWith(note, true);
+    editor->setLinkResolver([path](const QString &) { return path; });
+    editor->setVaultRootProvider([root = dir.path()] { return root; });
+    editor->setRemoteReferences(true);
+    editor->setCursorOffset(note.size() - 2);
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            (void)editor->grab();
+            return editor->referenceCacheSize() == 2 && !editor->referencesPending();
+        },
+        5000));
+    EXPECT_GT(editor->referenceWatchedForTests(), 0);
+    EXPECT_GT(MarkdownEditor::remoteReferenceCopiesForTests(), 0);
+
+    ParseOptions off = editor->parseOptions();
+    off.codeStyler = false;
+    editor->setParseOptions(off);
+    EXPECT_EQ(editor->referenceCacheSize(), 0);
+    EXPECT_EQ(editor->referenceWatchedForTests(), 0);
+    EXPECT_EQ(MarkdownEditor::remoteReferenceCopiesForTests(), 0);
+}
+
+TEST(ReferenceBlockTest, TurningRemoteFetchingOffForgetsWhatWasFetched)
+{
+    AllowLoopback allow;
+    FakeServer server;
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url(QStringLiteral("/gone.txt"))), QString());
+    editor->setRemoteReferences(true);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("remote line 1")));
+    ASSERT_EQ(editor->referenceCacheSize(), 1);
+
+    editor->setRemoteReferences(false);
+    EXPECT_EQ(editor->referenceCacheSize(), 0);
+    EXPECT_EQ(MarkdownEditor::remoteReferenceCopiesForTests(), 0);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("off")));
+}
+
+TEST(ReferenceBlockTest, ARelayoutDoesNotCutTheFileAgain)
+{
+    QTemporaryDir dir;
+    QByteArray bytes;
+    for (int i = 1; i <= 200; ++i)
+        bytes += "line " + QByteArray::number(i) + "\n";
+    const QString path = writeTextFile(dir, QStringLiteral("many.txt"), bytes);
+    auto editor = referenceEditorWith(QStringLiteral("file: many.txt\nstart: 20\nend: 40\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("line 40")));
+    const int scans = MarkdownEditor::referenceScansForTests();
+    EXPECT_GT(scans, 0);
+    for (int width : {700, 640, 800, 900}) {
+        editor->resize(width, 500);
+        (void)editor->grab();
+    }
+    EXPECT_EQ(MarkdownEditor::referenceScansForTests(), scans) << "the excerpt is kept per file, range and theme";
+    EXPECT_GT(editor->panelFormatCountAt(kInsideReference) + 1, 0);
+}
+
+TEST(ReferenceBlockTest, AVeryLongLineIsCutAndABinaryFileIsReadOnce)
+{
+    QTemporaryDir dir;
+    const QString minified = writeTextFile(dir, QStringLiteral("min.js"), QByteArray(100000, 'x') + "\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: min.js\n"), minified);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("xxx")));
+    EXPECT_LT(listingOf(*editor).size(), 3000);
+
+    static std::atomic<int> reads{0};
+    reads = 0;
+    const QString binary = writeTextFile(dir, QStringLiteral("blob.bin"), QByteArray("ab\0cd", 5) + QByteArray(100, 'x'));
+    MarkdownEditor::setReferenceReadHookForTests([](const QString &) { ++reads; });
+    auto second = referenceEditorWith(QStringLiteral("file: blob.bin\n"), binary);
+    const bool said = waitForListing(*second, QStringLiteral("not a text file"));
+    for (int width : {700, 640, 800})
+        second->resize(width, 500), (void)second->grab();
+    QTest::qWait(100);
+    MarkdownEditor::setReferenceReadHookForTests(nullptr);
+    ASSERT_TRUE(said);
+    EXPECT_EQ(reads.load(), 1) << "a file that is not text is not asked for again at every layout";
+}
+
+TEST(CodeStylerEditorTest, IgnoreWinsOverAnOptionLine)
+{
+    auto plain = stylerEditorWith(QStringLiteral("```cpp\nint a;\n```\n"));
+    auto ignored = stylerEditorWith(QStringLiteral("```cpp ignore\n#| title: X\nint a;\n```\n"));
+    EXPECT_GT(plain->documentHeight() - ignored->documentHeight(), 10) << "no header strip";
+}
+
+TEST(CodeStylerEditorTest, InlineLanguagePrefixIsTextInSourceModeAndHiddenInReading)
+{
+    const QString note = QStringLiteral("Say `{python} import os` now.\n\nend\n");
+    auto editor = stylerEditorWith(note);
+    editor->setCursorOffset(note.size() - 2);
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("{python}")));
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("{python}")));
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("{python}")));
 }

@@ -167,6 +167,17 @@ TEST(PublishTest, CodeStylerParametersTitleNumberAndColourTheLines)
     EXPECT_FALSE(plain.contains(QLatin1String("class=\"line hl")));
 }
 
+TEST(PublishTest, CodeStylerHighlightNumbersCountTheBlocksOwnLinesWhateverLnSays)
+{
+    TestSite site({{QStringLiteral("Code.md"), "```cpp ln:27 hl:2\nint a;\nint b;\n```\n"}});
+    Options on;
+    on.parse.codeStyler = true;
+    site.publish(on);
+    const QString page = site.read(QStringLiteral("code.html"));
+    EXPECT_TRUE(page.contains(QLatin1String("class=\"line hl\" data-line=\"28\""))) << page.toStdString();
+    EXPECT_FALSE(page.contains(QLatin1String("class=\"line hl\" data-line=\"27\"")));
+}
+
 TEST(PublishTest, CodeStylerInlineCodeIsHighlightedWithoutItsPrefix)
 {
     TestSite site({{QStringLiteral("Inline.md"), "Say `{python} import os` and `plain`.\n"}});

@@ -25,6 +25,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#include <QHostAddress>
+#include <QHostInfo>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -47,6 +49,12 @@ constexpr int kRemoteTimeoutMs = 15'000;
 // setReferenceReadHookForTests': read by worker threads, so atomic.
 std::atomic<void (*)(const QString &)> gReferenceReadHook{nullptr};
 
+std::atomic<int> gReferenceScans{0};
+QString gAllowedAddress; // the tests' server; UI thread only
+constexpr int kMaxRemoteCopies = 32;
+constexpr int kMaxRedirects = 5;
+constexpr int kReferenceMaxLineChars = 1000;
+
 struct RemoteCopy {
     QString text;
     QString error;
@@ -58,6 +66,45 @@ QHash<QString, RemoteCopy> &remoteCopies()
 {
     static QHash<QString, RemoteCopy> copies;
     return copies;
+}
+
+/// Every URL's text is kept for five minutes at most and 32 at a time.
+void rememberRemote(const QString &key, RemoteCopy copy)
+{
+    auto &copies = remoteCopies();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    for (auto it = copies.begin(); it != copies.end();) {
+        it = now - it->fetchedAt >= kRemoteFreshMs ? copies.erase(it) : std::next(it);
+    }
+    while (copies.size() >= kMaxRemoteCopies) {
+        auto oldest = copies.begin();
+        for (auto it = copies.begin(); it != copies.end(); ++it) {
+            if (it->fetchedAt < oldest->fetchedAt)
+                oldest = it;
+        }
+        copies.erase(oldest);
+    }
+    copies.insert(key, std::move(copy));
+}
+
+/// An address that is not the internet: this machine, its network, link-local
+/// (cloud metadata is 169.254.169.254), private, unique-local, shared (CGNAT),
+/// multicast, unspecified. A note must not make the machine ask them.
+bool isInternalAddress(const QHostAddress &address)
+{
+    if (!gAllowedAddress.isEmpty() && address.toString() == gAllowedAddress)
+        return false;
+    bool isV4 = false;
+    const quint32 v4 = address.toIPv4Address(&isV4); // also an IPv4-mapped IPv6 address
+    if (isV4) {
+        // Qt's isSiteLocal/isGlobal know no private IPv4: the ranges are spelled out
+        const auto in = [v4](quint32 net, int bits) { return (v4 >> (32 - bits)) == (net >> (32 - bits)); };
+        return in(0x00000000, 8) || in(0x0A000000, 8) || in(0x64400000, 10) || in(0x7F000000, 8)
+               || in(0xA9FE0000, 16) || in(0xAC100000, 12) || in(0xC0000000, 24) || in(0xC0A80000, 16)
+               || in(0xC6120000, 15) || v4 >= 0xE0000000; // multicast, reserved, broadcast
+    }
+    return address.isNull() || !address.isGlobal() || address.isLoopback() || address.isLinkLocal()
+           || address.isSiteLocal() || address.isUniqueLocalUnicast() || address.isMulticast();
 }
 
 bool isRemote(const QString &target)
@@ -72,7 +119,7 @@ QString rawURL(const QString &link)
 {
     const QUrl url(link);
     const QStringList parts = url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
-    if (url.host() == QLatin1String("github.com") && parts.size() > 4 && parts.at(2) == QLatin1String("blob"))
+    if ((url.host() == QLatin1String("github.com") || url.host() == QLatin1String("www.github.com")) && parts.size() > 4 && parts.at(2) == QLatin1String("blob"))
         return QStringLiteral("https://raw.githubusercontent.com/") + parts.mid(0, 2).join(QLatin1Char('/'))
                + QLatin1Char('/') + parts.mid(3).join(QLatin1Char('/'));
     if (url.host().startsWith(QLatin1String("gitlab")) && url.path().contains(QLatin1String("/-/blob/"))) {
@@ -139,20 +186,12 @@ int lineMatching(const QString &text, const QString &spec, int from)
     return 0;
 }
 
-struct Excerpt {
-    QString text;
-    QString error;
-    int first = 1;
-    int last = 0;      ///< the last line shown
-    bool ranged = false;
-    bool cut = false;  ///< more lines than kReferenceMaxLines
-};
-
 /// Lines `start` to `end` of `text`; `end` empty is the end of the file and
 /// `+N` is N lines past `start`.
-Excerpt excerptOf(const QString &text, const QString &start, const QString &end)
+ReferenceExcerpt excerptOf(const QString &text, const QString &start, const QString &end)
 {
-    Excerpt out;
+    ++gReferenceScans;
+    ReferenceExcerpt out;
     out.ranged = !start.isEmpty() || !end.isEmpty();
     if (!start.isEmpty()) {
         out.first = lineMatching(text, start, 1);
@@ -205,6 +244,16 @@ Excerpt excerptOf(const QString &text, const QString &start, const QString &end)
         return out;
     }
     out.text = text.mid(from, to - from);
+    // a minified file is one line of megabytes: the listing wraps what it shows,
+    // so a line is cut where nobody reads on
+    if (out.text.size() > kReferenceMaxLineChars) {
+        QStringList lines = out.text.split(QLatin1Char('\n'));
+        for (QString &row : lines) {
+            if (row.size() > kReferenceMaxLineChars)
+                row = row.left(kReferenceMaxLineChars) + QChar(0x2026);
+        }
+        out.text = lines.join(QLatin1Char('\n'));
+    }
     // a trailing newline is the end of the last line, not more lines after it
     out.cut = capped && to + 1 < text.size();
     return out;
@@ -217,11 +266,41 @@ void MarkdownEditor::setVaultRootProvider(std::function<QString()> provider)
     d->m_vaultRoot = std::move(provider);
 }
 
+void MarkdownEditor::dropRemoteReferences()
+{
+    // what a reply in flight would deliver is no longer wanted: cut it loose first
+    if (d->m_referenceNet) {
+        for (QNetworkReply *reply : d->m_referenceNet->findChildren<QNetworkReply *>()) {
+            reply->disconnect();
+            reply->abort();
+        }
+        d->m_referenceNet->deleteLater();
+        d->m_referenceNet = nullptr;
+    }
+    for (auto it = d->m_referenceCache.begin(); it != d->m_referenceCache.end();)
+        it = isRemote(it.key()) ? d->m_referenceCache.erase(it) : std::next(it);
+    remoteCopies().clear();
+}
+
+void MarkdownEditor::dropReferenceCache()
+{
+    dropRemoteReferences();
+    d->m_referenceCache.clear();
+    d->m_referenceGone.clear();
+    d->m_referenceWatched.clear();
+    if (d->m_referenceWatcher) {
+        d->m_referenceWatcher->removePaths(d->m_referenceWatcher->files());
+        d->m_referenceWatcher->removePaths(d->m_referenceWatcher->directories());
+    }
+}
+
 void MarkdownEditor::setRemoteReferences(bool on)
 {
     if (d->m_remoteReferences == on)
         return;
     d->m_remoteReferences = on;
+    if (!on)
+        dropRemoteReferences();
     for (BlockView &block : d->m_blocks) {
         if (block.referenceTarget.isEmpty())
             continue;
@@ -260,6 +339,27 @@ QString MarkdownEditor::rawReferenceURL(const QString &link)
     return rawURL(link);
 }
 
+int MarkdownEditor::referenceWatchedForTests() const
+{
+    return d->m_referenceWatcher ? int(d->m_referenceWatcher->files().size() + d->m_referenceWatcher->directories().size())
+                                 : 0;
+}
+
+int MarkdownEditor::remoteReferenceCopiesForTests()
+{
+    return int(remoteCopies().size());
+}
+
+int MarkdownEditor::referenceScansForTests()
+{
+    return gReferenceScans.load();
+}
+
+void MarkdownEditor::allowReferenceAddressForTests(const QString &address)
+{
+    gAllowedAddress = address;
+}
+
 void MarkdownEditor::setReferenceReadHookForTests(void (*hook)(const QString &))
 {
     gReferenceReadHook.store(hook);
@@ -290,9 +390,10 @@ bool MarkdownEditor::layoutReference(BlockView &view)
     if (remote) {
         target = reference->target;
         key = rawURL(target);
-        name = QUrl(key).fileName();
-        if (name.isEmpty())
-            name = QUrl(key).host();
+        // the host in the title: it is where a click goes
+        name = QUrl(key).host();
+        if (!QUrl(key).fileName().isEmpty())
+            name = QUrl(key).fileName() + QStringLiteral(" (") + name + QLatin1Char(')');
     } else {
         QString written = reference->target.trimmed();
         if (written.startsWith(QLatin1String("[[")) && written.endsWith(QLatin1String("]]"))) {
@@ -357,12 +458,12 @@ bool MarkdownEditor::layoutReference(BlockView &view)
             } else {
                 start(*it);
                 it->fetchedAt = now;
-                fetchReference(key, it->generation);
+                fetchReference(key, key, it->generation, 0);
             }
         } else if (!it->pending && now - it->fetchedAt >= kRemoteFreshMs && d->m_referenceDelivering != key) {
             start(*it); // the old text stays on screen until the new arrives
             it->fetchedAt = now;
-            fetchReference(key, it->generation);
+            fetchReference(key, key, it->generation, 0);
         }
     } else {
         const QFileInfo info(key);
@@ -371,7 +472,7 @@ bool MarkdownEditor::layoutReference(BlockView &view)
         const qint64 size = info.size();
         // A read that failed is never kept as the answer (the file may be
         // readable now - a chmod changes neither mtime nor size).
-        if (it != d->m_referenceCache.end() && !it->error.isEmpty() && d->m_referenceDelivering != key)
+        if (it != d->m_referenceCache.end() && !it->error.isEmpty() && !it->permanent && d->m_referenceDelivering != key)
             it->mtime = -1;
         if (it == d->m_referenceCache.end() || it->mtime != mtime || it->size != size) {
             if (it == d->m_referenceCache.end())
@@ -402,6 +503,7 @@ bool MarkdownEditor::layoutReference(BlockView &view)
                         result.error = unreadable;
                     else
                         result.text = decode(file.read(kReferenceMaxBytes), result.error, binary);
+                    result.permanent = result.error == binary; // the file would read the same again
                 } catch (...) { // out of memory, say: an error to show, never "Loading..." for good
                     result.text.clear();
                     result.error = unreadable;
@@ -418,63 +520,139 @@ bool MarkdownEditor::layoutReference(BlockView &view)
     if (it->text.isEmpty() && it->pending)
         return panel(name, tr("Loading…"), false);
 
-    const Excerpt excerpt = excerptOf(it->text, reference->start, reference->end);
+    // Cut to the block's lines and coloured once per file, range and theme:
+    // a relayout (a width change, a delivery elsewhere) takes the kept one.
+    const QString language = !reference->language.isEmpty() ? reference->language : QFileInfo(name).suffix();
+    const QString memoKey = reference->start + QLatin1Char('\x1f') + reference->end + QLatin1Char('\x1f') + language
+                            + QLatin1Char('\x1f') + embedThemeTag();
+    auto memo = it->excerpts.find(memoKey);
+    if (memo == it->excerpts.end()) {
+        ReferenceExcerpt made = excerptOf(it->text, reference->start, reference->end);
+        while (made.text.endsWith(QLatin1Char('\n')))
+            made.text.chop(1);
+        if (made.error.isEmpty() && !made.text.isEmpty()) {
+            SyntaxMap syntax;
+            const bool mapped = syntaxMapFor(styleOfLanguage(language), &syntax);
+            made.formats = d->m_code.highlight(made.text, language, mapped ? &syntax : nullptr);
+        }
+        memo = it->excerpts.insert(memoKey, std::move(made));
+    }
+    const ReferenceExcerpt &excerpt = *memo;
     if (!excerpt.error.isEmpty())
         return panel(name, excerpt.error, false);
-    QString body = excerpt.text;
-    while (body.endsWith(QLatin1Char('\n')))
-        body.chop(1);
-    if (body.isEmpty())
+    if (excerpt.text.isEmpty())
         return panel(name, tr("Empty file"), false);
 
     QString label = name;
     if (excerpt.ranged)
         label += excerpt.first == excerpt.last ? tr(":%1").arg(excerpt.first)
                                                : tr(":%1-%2").arg(excerpt.first).arg(excerpt.last);
-    const QString language = !reference->language.isEmpty() ? reference->language : QFileInfo(name).suffix();
-
-    SyntaxMap syntax;
-    const bool mapped = syntaxMapFor(styleOfLanguage(language), &syntax);
-    const QList<QTextLayout::FormatRange> formats = d->m_code.highlight(body, language, mapped ? &syntax : nullptr);
+    QString body = excerpt.text;
     if (excerpt.cut)
         body += QLatin1Char('\n') + tr("… more lines not shown");
     panel(label, body, true);
-    view.layout->setFormats(formats);
+    view.layout->setFormats(excerpt.formats);
     return true;
 }
 
-void MarkdownEditor::fetchReference(const QString &url, quint64 generation)
+void MarkdownEditor::fetchReference(const QString &key, const QString &url, quint64 generation, int hops)
 {
-    if (!d->m_referenceNet)
-        d->m_referenceNet = new QNetworkAccessManager(this);
-    QNetworkRequest request{QUrl(url)};
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setTransferTimeout(kRemoteTimeoutMs);
-    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Notolith"));
-    QNetworkReply *reply = d->m_referenceNet->get(request);
-    // set by the progress handler, read by finished: both live in the reply's closures
-    const auto large = std::make_shared<bool>(false);
-    connect(reply, &QNetworkReply::downloadProgress, reply, [reply, large](qint64 received, qint64) {
-        if (received > kReferenceMaxBytes) {
-            *large = true;
-            reply->abort();
+    // An answer that is a refusal: delivered from the event loop, never from
+    // inside the layout that asked (it relays that very block out).
+    const auto fail = [this, key, generation](const QString &why) {
+        QTimer::singleShot(0, this, [this, key, generation, why] {
+            ReferenceCacheEntry result;
+            result.pending = false;
+            result.generation = generation;
+            result.fetchedAt = QDateTime::currentMSecsSinceEpoch();
+            result.error = why;
+            deliverReference(key, generation, std::move(result));
+        });
+    };
+    const QUrl parsed(url);
+    const QString scheme = parsed.scheme().toLower();
+    if ((scheme != QLatin1String("http") && scheme != QLatin1String("https")) || parsed.host().isEmpty()) {
+        fail(tr("Not a web address: %1").arg(url));
+        return;
+    }
+    const QString host = parsed.host();
+    const auto get = [this, key, url, generation, hops] {
+        if (!d->m_referenceNet)
+            d->m_referenceNet = new QNetworkAccessManager(this);
+        QNetworkRequest request{QUrl(url)};
+        // followed here, hop by hop, so every host is checked
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+        request.setTransferTimeout(kRemoteTimeoutMs);
+        request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Notolith"));
+        QNetworkReply *reply = d->m_referenceNet->get(request);
+        // set by the progress handler, read by finished: both live in the reply's closures
+        const auto large = std::make_shared<bool>(false);
+        connect(reply, &QNetworkReply::downloadProgress, reply, [reply, large](qint64 received, qint64) {
+            if (received > kReferenceMaxBytes) {
+                *large = true;
+                reply->abort();
+            }
+        });
+        connect(reply, &QNetworkReply::finished, this, [this, reply, key, url, generation, hops, large] {
+            reply->deleteLater();
+            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (status >= 300 && status < 400 && reply->hasRawHeader("Location")) {
+                const QUrl next = reply->url().resolved(QUrl(QString::fromUtf8(reply->rawHeader("Location"))));
+                const bool downgrade = reply->url().scheme().toLower() == QLatin1String("https")
+                                       && next.scheme().toLower() != QLatin1String("https");
+                ReferenceCacheEntry refused;
+                refused.pending = false;
+                refused.generation = generation;
+                refused.fetchedAt = QDateTime::currentMSecsSinceEpoch();
+                if (hops >= kMaxRedirects)
+                    refused.error = tr("Too many redirects from %1").arg(url);
+                else if (downgrade)
+                    refused.error = tr("%1 redirects from https to http").arg(url);
+                if (!refused.error.isEmpty()) {
+                    deliverReference(key, generation, std::move(refused));
+                    return;
+                }
+                fetchReference(key, next.toString(), generation, hops + 1);
+                return;
+            }
+            ReferenceCacheEntry result;
+            result.pending = false;
+            result.generation = generation;
+            result.fetchedAt = QDateTime::currentMSecsSinceEpoch();
+            if (*large) {
+                result.error = tr("%1 is larger than %2 MB").arg(url).arg(kReferenceMaxBytes >> 20);
+            } else if (reply->error() != QNetworkReply::NoError || status >= 400) {
+                result.error = tr("Could not fetch %1 (%2)").arg(url, status >= 400 ? QString::number(status) : reply->errorString());
+            } else {
+                result.text = decode(reply->readAll(), result.error, tr("%1 is not a text file").arg(url));
+            }
+            deliverReference(key, generation, std::move(result));
+        });
+    };
+    const QString refusal = tr("%1 is a local address: not fetched").arg(host);
+    // ponytail: the name is resolved here for the check and again by the
+    // network manager for the request, so a name that changes in between (DNS
+    // rebinding) gets through; pinning the address needs a socket of our own.
+    const QHostAddress literal(host);
+    if (!literal.isNull()) {
+        if (isInternalAddress(literal))
+            fail(refusal);
+        else
+            get();
+        return;
+    }
+    QHostInfo::lookupHost(host, this, [this, fail, get, refusal, host](const QHostInfo &info) {
+        if (info.error() != QHostInfo::NoError || info.addresses().isEmpty()) {
+            fail(tr("Could not resolve %1").arg(host));
+            return;
         }
-    });
-    connect(reply, &QNetworkReply::finished, this, [this, reply, url, generation, large] {
-        reply->deleteLater();
-        ReferenceCacheEntry result;
-        result.pending = false;
-        result.generation = generation;
-        result.fetchedAt = QDateTime::currentMSecsSinceEpoch();
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        if (*large) {
-            result.error = tr("%1 is larger than %2 MB").arg(url).arg(kReferenceMaxBytes >> 20);
-        } else if (reply->error() != QNetworkReply::NoError || status >= 400) {
-            result.error = tr("Could not fetch %1 (%2)").arg(url, status >= 400 ? QString::number(status) : reply->errorString());
-        } else {
-            result.text = decode(reply->readAll(), result.error, tr("%1 is not a text file").arg(url));
+        for (const QHostAddress &address : info.addresses()) {
+            if (isInternalAddress(address)) {
+                fail(refusal);
+                return;
+            }
         }
-        deliverReference(url, generation, std::move(result));
+        get();
     });
 }
 
@@ -492,7 +670,7 @@ void MarkdownEditor::deliverReference(const QString &key, quint64 generation, Re
     *it = std::move(result);
     it->latest = latest;
     if (isRemote(key))
-        remoteCopies().insert(key, {it->text, it->error, it->fetchedAt});
+        rememberRemote(key, {it->text, it->error, it->fetchedAt});
     d->m_referenceDelivering = key;
     relayReferenceBlocks(key);
     d->m_referenceDelivering.clear();
@@ -517,6 +695,8 @@ void MarkdownEditor::relayReferenceBlocks(const QString &key)
 
 void MarkdownEditor::watchReference(const QString &path)
 {
+    if (d->m_referenceWatched.contains(path))
+        return; // asked at every layout: the watcher's lists are not copied for nothing
     if (!d->m_referenceWatcher) {
         d->m_referenceWatcher = new QFileSystemWatcher(this);
         d->m_referenceRefresh = new QTimer(this);
@@ -533,6 +713,7 @@ void MarkdownEditor::watchReference(const QString &path)
         d->m_referenceWatcher->addPath(folder);
     if (!d->m_referenceWatcher->files().contains(path))
         d->m_referenceWatcher->addPath(path);
+    d->m_referenceWatched.insert(path);
 }
 
 void MarkdownEditor::referenceFileEvent()
@@ -561,6 +742,7 @@ void MarkdownEditor::refreshReferences()
             relayReferenceBlocks(key);
             continue;
         }
+        d->m_referenceWatched.remove(key);
         watchReference(key); // put back what a rename-over-save took away
         if (info.lastModified().toMSecsSinceEpoch() != cached->mtime || info.size() != cached->size
             || !cached->error.isEmpty())

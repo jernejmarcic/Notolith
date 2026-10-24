@@ -89,7 +89,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     QElapsedTimer waited;
     waited.start();
     while (editor.referencesPending() && waited.elapsed() < 10'000) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 50); // no input while the page waits
         QThread::msleep(5);
     }
     for (BlockView &view : editor.d->m_blocks) {

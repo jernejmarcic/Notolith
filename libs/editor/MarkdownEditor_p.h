@@ -751,6 +751,18 @@ struct MarkdownEditor::CSVcacheEntry {
     bool partial = false;     ///< the file was larger than was read
 };
 
+/// The lines of a file a ```reference block shows, cut and coloured (kept per
+/// file, range and theme in ReferenceCacheEntry::excerpts).
+struct ReferenceExcerpt {
+    QString text;
+    QString error;
+    int first = 1;
+    int last = 0;     ///< the last line shown
+    bool ranged = false;
+    bool cut = false; ///< more lines than are shown
+    QList<QTextLayout::FormatRange> formats;
+};
+
 /// A file or URL a ```reference block names, as the last read left it - one
 /// per path or URL (ReferenceBlock.cpp). `text` stays on screen while a newer
 /// read is under way.
@@ -764,6 +776,8 @@ struct MarkdownEditor::ReferenceCacheEntry {
     QString error;
     /// The newest generation started for this key, readable from a worker.
     std::shared_ptr<std::atomic<quint64>> latest;
+    bool permanent = false; ///< the error is the file's (not text): asked again only when it changes
+    QHash<QString, ReferenceExcerpt> excerpts;
 };
 
 /// The recognised, paired inline tags in `view`'s block, in source
@@ -952,6 +966,7 @@ struct MarkdownEditor::Private {
     QNetworkAccessManager *m_referenceNet = nullptr; ///< made with the first fetch
     bool m_remoteReferences = false;
     std::function<QString()> m_vaultRoot;
+    QSet<QString> m_referenceWatched; ///< the paths already handed to the watcher
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()

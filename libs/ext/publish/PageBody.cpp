@@ -700,7 +700,8 @@ private:
         QString code;
         for (qsizetype i = 0; i < highlightedSplit.size(); ++i) {
             const int lineNo = firstLine + int(i);
-            QString classes = highlighted.contains(lineNo) ? QStringLiteral(" hl") : QString();
+            // highlight numbers count the block's own lines, whatever `ln:` numbers them from
+            QString classes = highlighted.contains(int(i) + 1) ? QStringLiteral(" hl") : QString();
             // Code Styler's named highlights: `info:2` is class `hl-info`, which the
             // stylesheet colours (the kind is a word, as the settings parse it).
             if (options) {

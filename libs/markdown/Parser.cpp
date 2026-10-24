@@ -1002,7 +1002,9 @@ QMap<QString, QString> parseCodeParameters(const QString &spec, const QStringLis
 /// configured highlight name with a value.
 bool looksLikeFenceParameter(const QString &word, const QStringList &kinds)
 {
-    const qsizetype separator = word.indexOf(QRegularExpression(QStringLiteral("[:=]")));
+    const qsizetype colon = word.indexOf(QLatin1Char(':'));
+    const qsizetype equals = word.indexOf(QLatin1Char('='));
+    const qsizetype separator = colon < 0 ? equals : (equals < 0 ? colon : qMin(colon, equals));
     const QString key = (separator < 0 ? word : word.left(separator)).toLower();
     static const QStringList own = {QStringLiteral("title"), QStringLiteral("ln"), QStringLiteral("hl"),
                                     QStringLiteral("fold"), QStringLiteral("unwrap"), QStringLiteral("wrap"),

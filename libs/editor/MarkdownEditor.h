@@ -824,6 +824,14 @@ public:
     static QString rawReferenceURL(const QString &link);
     /// For the tests: the number of colour runs the panel at `offset` drew.
     int panelFormatCountAt(qsizetype offset) const;
+    /// For the tests: what a reference block's watcher holds, how many URLs'
+    /// text the process keeps, how many times a file's text was cut to a
+    /// block's lines, and an address the remote-host check lets through (the
+    /// local servers the tests run); empty clears it.
+    int referenceWatchedForTests() const;
+    static int remoteReferenceCopiesForTests();
+    static int referenceScansForTests();
+    static void allowReferenceAddressForTests(const QString &address);
     /// For the tests: called on the worker thread at the top of every local
     /// reference read, with the path. Null clears it.
     static void setReferenceReadHookForTests(void (*hook)(const QString &));
@@ -1919,12 +1927,16 @@ private:
     /// no longer the one on record for `key`.
     void deliverReference(const QString &key, quint64 generation, ReferenceCacheEntry result);
     /// Asks for `url` through the network manager, never blocking.
-    void fetchReference(const QString &url, quint64 generation);
+    void fetchReference(const QString &key, const QString &url, quint64 generation, int hops);
     /// Relays out the blocks showing `key`.
     void relayReferenceBlocks(const QString &key);
     void watchReference(const QString &path);
     void referenceFileEvent();
     void refreshReferences();
+    /// Forgets every URL's text and the network manager: remote fetching went off.
+    void dropRemoteReferences();
+    /// Forgets everything a reference block kept - reads, watches, fetches: the plugin went off.
+    void dropReferenceCache();
     /// The view's name (if any) above the grid, then paintTable for the
     /// grid itself - the table painting is not duplicated, only framed.
     void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;

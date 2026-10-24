@@ -901,6 +901,8 @@ void MarkdownEditor::setParseOptions(const ParseOptions &options)
     };
     if (same(options, d->m_parseOptions))
         return; // every settings pass asks
+    if (!options.codeStyler && d->m_parseOptions.codeStyler)
+        dropReferenceCache(); // nothing parses to a reference now: what they held goes
     d->m_parseOptions = options;
     if (options.taskStates)
         TaskStates::reload();
