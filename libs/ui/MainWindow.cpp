@@ -838,7 +838,7 @@ QWidget *MainWindow::buildSidebar()
         connect(action, &QAction::triggered, this, [this, entry] {
             m_tree->sortByColumn(entry.column, entry.order);
             m_settings.setValue(QStringLiteral("files.sortOrder"), QLatin1String(entry.key));
-            m_settings.save();
+            saveSettings();
         });
     }
     sortButton->setMenu(sortMenu);
@@ -1000,7 +1000,7 @@ QWidget *MainWindow::buildMainArea()
     m_settingsPage = new SettingsPage(m_settingsWindow);
     settingsLayout->addWidget(m_settingsPage);
     connect(m_settingsWindow, &QDialog::finished, this, [this] {
-        m_settings.save();
+        saveSettings();
         if (isVisible())
             activateWindow(); // back to the notes: their shortcuts are this window's
         if (m_active && m_active->editor->isEnabled() && m_active->editor->isVisible())
@@ -7155,7 +7155,14 @@ void MainWindow::rememberCurrentPosition()
     m_settings.setNotePosition(m_active->notePath, m_active->editor->cursorOffset(),
                                m_active->editor->verticalScrollBar()->value(),
                                m_active->editor->foldState(), m_active->editor->topOffset());
-    m_settings.save();
+    saveSettings();
+}
+
+void MainWindow::saveSettings()
+{
+    m_settings.save(nullptr, 5); // from the UI thread, often (every note switch): never a 200 ms wait on another window's save
+    if (!m_settings.takeAdoptedKeys().isEmpty())
+        applySettings();
 }
 
 void MainWindow::revealInTree(const QString &path)
@@ -7394,6 +7401,13 @@ bool MainWindow::writeNote(const QString &path, const Note &note, QString *error
         return true;
     }
 #endif
+    if (path.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive)) {
+        // Never as Markdown, whatever the notebooks plugin is believed to be doing: that would replace the
+        // notebook's JSON (its outputs, counts and ids) with the cells' text.
+        if (error)
+            *error = tr("a Jupyter notebook is not written as Markdown (the Notebooks plugin is off)");
+        return false;
+    }
     if (!Vault::isEncryptedNote(path))
         return Vault::write(path, note, error);
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
@@ -7717,6 +7731,14 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
     }
     if (target->notePath.isEmpty())
         return true;
+    // An autosave of a notebook the plugin no longer handles would take the background path below, which
+    // writes the encoded text straight to the file: refused here, before either path, and again in writeNote().
+    if (target->notePath.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive) && !isNotebookFile(target->notePath)
+        && !target->view) {
+        reportSaveError(QFileInfo(target->notePath).fileName(),
+                        tr("a Jupyter notebook is not written as Markdown (the Notebooks plugin is off)"), quiet);
+        return false;
+    }
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;

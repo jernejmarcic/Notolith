@@ -863,6 +863,9 @@ void updateVimStatus();
     /// another, and on quit - never on every caret move, which is why this is
     /// its own function rather than something hung off a cursor signal.
     void rememberCurrentPosition();
+/// Settings::save(), then applies what it took over from another window (a feature it switched, an editor
+/// option): the file holds that value, so this window must run it too, not only hold it.
+void saveSettings();
     /// Expands `path`'s ancestors, selects it and scrolls it into view.
     /// QFileSystemModel fills a directory lazily on a worker thread, so a note
     /// revealed right after a vault switch may have no index yet; this waits
