@@ -46,8 +46,8 @@ QList<MarkdownEditor::QueryResultRow> MarkdownEditor::queryRowsAt(qsizetype offs
         return rows;
     const qreal left = contentLeft();
     const qreal top = view.y - verticalScrollBar()->value();
-    rows.reserve(int(view.queryRows.size()));
-    for (const BlockView::QueryRow &row : view.queryRows)
+    rows.reserve(int(view.x().queryRows.size()));
+    for (const BlockExtras::QueryRow &row : view.x().queryRows)
         rows.append({row.rect.translated(left, top), row.path, row.offset});
     return rows;
 }
@@ -233,14 +233,14 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
             // pane section lists "File name (A to Z)" among the sort
             // orders - modified time and match count are not there, so
             // only a name/best-match toggle is offered here).
-            view.queryResultCountText = entry.results.size() == 1
+            view.extrasMut().queryResultCountText = entry.results.size() == 1
                                             ? tr("1 result")
                                             : tr("%1 results").arg(entry.results.size());
             const QString collapseGlyph =
                 collapsed ? QStringLiteral("▸ ") : QStringLiteral("▾ ");
 
             collapseStart = display.size();
-            addPlainLine(collapseGlyph + view.queryResultCountText, textColour);
+            addPlainLine(collapseGlyph + view.x().queryResultCountText, textColour);
             collapseEnd = display.size();
 
             display += QStringLiteral("    ");
@@ -342,7 +342,7 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
     view.height = qMax(height, lineHeight) + view.textTop + 4;
     view.laidOut = true;
 
-    view.queryRows.clear();
+    view.extrasMut().queryRows.clear();
     for (const Row &row : rows) {
         QRectF rect;
         for (int i = 0; i < view.layout->lineCount(); ++i) {
@@ -353,7 +353,7 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
             rect = rect.isNull() ? lineRect : rect.united(lineRect);
         }
         if (!rect.isNull())
-            view.queryRows.push_back({rect, row.path, row.offset});
+            view.extrasMut().queryRows.push_back({rect, row.path, row.offset});
     }
 
     // The header's two controls sit side by side on one line, unlike a
@@ -373,8 +373,8 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
         }
         return QRectF();
     };
-    view.queryCollapseRect = inlineSpanRect(collapseStart, collapseEnd);
-    view.querySortRect = inlineSpanRect(sortStart, sortEnd);
+    view.extrasMut().queryCollapseRect = inlineSpanRect(collapseStart, collapseEnd);
+    view.extrasMut().querySortRect = inlineSpanRect(sortStart, sortEnd);
 
     return true;
 }
@@ -431,15 +431,15 @@ MarkdownEditor::QueryHeader MarkdownEditor::queryHeaderAt(qsizetype offset) cons
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return header;
     const BlockView &view = d->m_blocks[size_t(index)];
-    if (!view.isQuery || !view.queryCollapseRect.isValid())
+    if (!view.isQuery || !view.x().queryCollapseRect.isValid())
         return header; // no header yet: still searching, empty, or no runner
     const qreal left = contentLeft();
     const qreal top = view.y - verticalScrollBar()->value();
-    header.collapseRect = view.queryCollapseRect.translated(left, top);
-    header.sortRect = view.querySortRect.translated(left, top);
+    header.collapseRect = view.x().queryCollapseRect.translated(left, top);
+    header.sortRect = view.x().querySortRect.translated(left, top);
     header.collapsed = d->m_queryCollapsed.value(view.span.range.start, false);
     header.sortByName = d->m_queryNameSort.value(view.span.range.start, false);
-    header.countText = view.queryResultCountText;
+    header.countText = view.x().queryResultCountText;
     return header;
 }
 

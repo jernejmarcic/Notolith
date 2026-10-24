@@ -375,6 +375,104 @@ struct MarkdownEditor::BlockExtras {
     };
     std::vector<NotebookOutputCell> notebookOutputs;
 
+    /// One clickable result row, in block-local coordinates (add `left`
+    /// and `top` to place it in the viewport, the way every other rect
+    /// on a BlockView already does).
+    struct QueryRow {
+        QRectF rect;
+        QString path;
+        qsizetype offset = 0;
+    };
+    std::vector<QueryRow> queryRows;
+    /// The header's two clickable controls, block-local coordinates -
+    /// null-sized when the block has no header yet (still searching, an
+    /// error, or an empty search - see layoutQuery). queryHeaderAt and
+    /// handleBlockClick both read these rather than recomputing them, so
+    /// a click always lands exactly where the paint went.
+    QRectF queryCollapseRect;
+    QRectF querySortRect;
+    /// "N results", as last computed - what queryHeaderAt hands back
+    /// without re-running a search from a const accessor.
+    QString queryResultCountText;
+
+    /// The shown view's name, painted above the table - empty shows
+    /// nothing extra (an error or a still-loading block shows its
+    /// message instead of a table; see layoutBase).
+    QString baseViewName;
+    /// The view requested for this block - a `.base` embed's
+    /// `#fragment`, or empty for a fenced ```` ```base ```` block and for
+    /// an embed with no fragment. Part of the cache key alongside
+    /// baseYAML, and what deliverBaseResults matches a block back on, so
+    /// two embeds of the same file asking for different views never
+    /// share a result.
+    QString baseRequestedView;
+    QString baseYAML; ///< what the table shows: a fence's text, or a .base file's
+    /// One clickable row's first cell, block-local coordinates - only
+    /// the name column opens its note, mirroring
+    /// BaseTableModel::isNameColumn's choice for the real widget.
+    struct BaseRow {
+        QRectF rect;
+        QString path;
+    };
+    std::vector<BaseRow> baseRows;
+    /// The file a CSV/TSV embed shows (CSVembed.cpp), empty for any other
+    /// block: what deliverCSV matches a block back on. Such a block is also
+    /// isBase, which only means "painted as a data table".
+    QString CSVpath;
+
+    /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
+    /// resolved to a QTextCharFormat by layoutInlineHtml - added to
+    /// formatsIn's output the way spellcheck underlines are. Source
+    /// coordinates; formatsIn converts through `view.map` like every
+    /// other entry there.
+    std::vector<std::pair<Range, QTextCharFormat>> inlineHtmlFormats;
+
+    /// One inline `$...$` formula resolved while laying this block out.
+    /// `QTextLayout` has no notion of an inline object, so the lone "$"
+    /// the DisplayMap left visible carries letter spacing equal to the
+    /// image's width instead, reserving exactly the room the paint step
+    /// draws into once it knows which line that character landed on.
+    struct InlineMath {
+        qsizetype sourcePos = 0;  ///< the visible "$", in source coordinates
+        qsizetype displayPos = 0; ///< the same character, in display coordinates
+        QPixmap image;
+        QSize imageSize;
+    };
+    std::vector<InlineMath> inlineMaths;
+    /// A heading link's "#", which Obsidian shows as " > " between the
+    /// note and the heading. The same trick as inline maths: the "#"
+    /// stays, in invisible ink and as wide as the separator, and the paint
+    /// step draws the separator over it.
+    struct AnchorSeparator {
+        qsizetype sourcePos = 0;
+        qsizetype displayPos = 0;
+        QColor colour;
+    };
+    std::vector<AnchorSeparator> separators;
+
+    // --- footnotes, FootnoteMarks.cpp ----------------------------------
+    /// A footnote reference shown as its number (superscript, accent
+    /// colour) or a definition's marker shown as a small muted number -
+    /// the same invisible-ink trick as inline maths and the heading
+    /// separator above: one source character (the opening "[" or "^")
+    /// stays in the display, letter-spaced to the number's width, and
+    /// the paint step draws the number over it.
+    struct FootnoteMark {
+        qsizetype sourcePos = 0;  ///< the visible carrier character
+        qsizetype displayPos = 0; ///< the same character, in display coordinates
+        QString text;             ///< "1", "12.", ...
+        QColor colour;
+        bool superscript = false; ///< a reference; false is a definition's label
+    };
+    std::vector<FootnoteMark> footnoteMarks;
+    struct FootnotesListRow {
+        std::unique_ptr<QTextLayout> layout; ///< "1.  <first line of the text>"
+        QRectF rect;    ///< block-local, the whole row - a click jumps here too
+        QRectF backRef; ///< block-local, the "return" glyph
+        qsizetype jumpOffset = 0; ///< real source offset a click moves the caret to
+    };
+    std::vector<FootnotesListRow> footnoteListRows;
+
 };
 
 struct MarkdownEditor::BlockView {
@@ -479,55 +577,12 @@ struct MarkdownEditor::BlockView {
     /// search results: paintBlocks and handleBlockClick both skip the
     /// ordinary code-listing chrome (panel, "Copy", tabs) for it.
     bool isQuery = false;
-    /// One clickable result row, in block-local coordinates (add `left`
-    /// and `top` to place it in the viewport, the way every other rect
-    /// on a BlockView already does).
-    struct QueryRow {
-        QRectF rect;
-        QString path;
-        qsizetype offset = 0;
-    };
-    std::vector<QueryRow> queryRows;
-    /// The header's two clickable controls, block-local coordinates -
-    /// null-sized when the block has no header yet (still searching, an
-    /// error, or an empty search - see layoutQuery). queryHeaderAt and
-    /// handleBlockClick both read these rather than recomputing them, so
-    /// a click always lands exactly where the paint went.
-    QRectF queryCollapseRect;
-    QRectF querySortRect;
-    /// "N results", as last computed - what queryHeaderAt hands back
-    /// without re-running a search from a const accessor.
-    QString queryResultCountText;
 
     /// Set when this block is a fenced ```` ```base ```` block rendered
     /// as a table: paintBlocks and handleBlockClick both skip the
     /// ordinary code-listing chrome for it, the same gate isQuery is for
     /// a ```query``` block.
     bool isBase = false;
-    /// The shown view's name, painted above the table - empty shows
-    /// nothing extra (an error or a still-loading block shows its
-    /// message instead of a table; see layoutBase).
-    QString baseViewName;
-    /// The view requested for this block - a `.base` embed's
-    /// `#fragment`, or empty for a fenced ```` ```base ```` block and for
-    /// an embed with no fragment. Part of the cache key alongside
-    /// baseYAML, and what deliverBaseResults matches a block back on, so
-    /// two embeds of the same file asking for different views never
-    /// share a result.
-    QString baseRequestedView;
-    QString baseYAML; ///< what the table shows: a fence's text, or a .base file's
-    /// One clickable row's first cell, block-local coordinates - only
-    /// the name column opens its note, mirroring
-    /// BaseTableModel::isNameColumn's choice for the real widget.
-    struct BaseRow {
-        QRectF rect;
-        QString path;
-    };
-    std::vector<BaseRow> baseRows;
-    /// The file a CSV/TSV embed shows (CSVembed.cpp), empty for any other
-    /// block: what deliverCSV matches a block back on. Such a block is also
-    /// isBase, which only means "painted as a data table".
-    QString CSVpath;
 
     /// Set when this block is a raw HTML block (top-level `<div>`,
     /// `<table>`, `<details>`... - not inline HTML inside a paragraph)
@@ -550,58 +605,6 @@ struct MarkdownEditor::BlockView {
     /// output goes below it, plus a run control alongside "Copy" in the
     /// header (codeLabelOf, paintCodeChrome, handleBlockClick).
     bool notebookEligible = false;
-    /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
-    /// resolved to a QTextCharFormat by layoutInlineHtml - added to
-    /// formatsIn's output the way spellcheck underlines are. Source
-    /// coordinates; formatsIn converts through `view.map` like every
-    /// other entry there.
-    std::vector<std::pair<Range, QTextCharFormat>> inlineHtmlFormats;
-
-    /// One inline `$...$` formula resolved while laying this block out.
-    /// `QTextLayout` has no notion of an inline object, so the lone "$"
-    /// the DisplayMap left visible carries letter spacing equal to the
-    /// image's width instead, reserving exactly the room the paint step
-    /// draws into once it knows which line that character landed on.
-    struct InlineMath {
-        qsizetype sourcePos = 0;  ///< the visible "$", in source coordinates
-        qsizetype displayPos = 0; ///< the same character, in display coordinates
-        QPixmap image;
-        QSize imageSize;
-    };
-    std::vector<InlineMath> inlineMaths;
-    /// A heading link's "#", which Obsidian shows as " > " between the
-    /// note and the heading. The same trick as inline maths: the "#"
-    /// stays, in invisible ink and as wide as the separator, and the paint
-    /// step draws the separator over it.
-    struct AnchorSeparator {
-        qsizetype sourcePos = 0;
-        qsizetype displayPos = 0;
-        QColor colour;
-    };
-    std::vector<AnchorSeparator> separators;
-
-    // --- footnotes, FootnoteMarks.cpp ----------------------------------
-    /// A footnote reference shown as its number (superscript, accent
-    /// colour) or a definition's marker shown as a small muted number -
-    /// the same invisible-ink trick as inline maths and the heading
-    /// separator above: one source character (the opening "[" or "^")
-    /// stays in the display, letter-spaced to the number's width, and
-    /// the paint step draws the number over it.
-    struct FootnoteMark {
-        qsizetype sourcePos = 0;  ///< the visible carrier character
-        qsizetype displayPos = 0; ///< the same character, in display coordinates
-        QString text;             ///< "1", "12.", ...
-        QColor colour;
-        bool superscript = false; ///< a reference; false is a definition's label
-    };
-    std::vector<FootnoteMark> footnoteMarks;
-    struct FootnotesListRow {
-        std::unique_ptr<QTextLayout> layout; ///< "1.  <first line of the text>"
-        QRectF rect;    ///< block-local, the whole row - a click jumps here too
-        QRectF backRef; ///< block-local, the "return" glyph
-        qsizetype jumpOffset = 0; ///< real source offset a click moves the caret to
-    };
-    std::vector<FootnotesListRow> footnoteListRows;
 
     /// The rarely used fields, null until a layout fills one. Read them through
     /// x(), which answers a default when there are none; write through

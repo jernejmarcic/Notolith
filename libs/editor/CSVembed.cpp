@@ -124,7 +124,7 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     const QFileInfo info(path);
     if (!info.isFile())
         return false; // the resolver only answers with files that exist; this is a race with a delete
-    view.CSVpath = path;
+    view.extrasMut().CSVpath = path;
     watchCSV(path);
 
     const qint64 mtime = info.lastModified().toMSecsSinceEpoch();
@@ -177,10 +177,10 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     view.isBase = true;
     view.extrasMut().image = QPixmap();
     view.extrasMut().cells.clear();
-    view.baseRows.clear();
-    view.baseViewName.clear();
-    view.baseYAML.clear();
-    view.baseRequestedView.clear();
+    view.extrasMut().baseRows.clear();
+    view.extrasMut().baseViewName.clear();
+    view.extrasMut().baseYAML.clear();
+    view.extrasMut().baseRequestedView.clear();
     hideWholeBlockText(view);
 
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
@@ -221,7 +221,7 @@ void MarkdownEditor::relayCSVblocks(const QString &path)
 {
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isBase || block.CSVpath != path) // the flag is in the hot half of the struct
+        if (!block.isBase || block.x().CSVpath != path) // the flag is in the hot half of the struct
             continue;
         block.layout.reset();
         block.extrasMut().cells.clear();

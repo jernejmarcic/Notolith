@@ -16,8 +16,10 @@ using namespace noteAppC;
 
 namespace {
 
-// Tightened a slice at a time while the cold fields move off the view; the end is 400.
-constexpr std::size_t kBlockViewBudget = 720; // after slice 5 (plugin, reference and notebook payloads moved off): was 1984
+// 1984 before the cold fields moved into BlockExtras. Deliberately kept inline, because every layout writes them
+// and a write through extrasMut() would allocate for every laid-out block: revealed, caretWord, codeEnd,
+// listTextX/listParent, the kind flags (isQuery, isBase, isHtml, isPluginBlock, notebookEligible).
+constexpr std::size_t kBlockViewBudget = 400;
 
 /// An editor whose parse has landed (a note over 128 kB parses on the pool and is a
 /// placeholder until it comes back).
@@ -145,6 +147,18 @@ TEST(BlockViewTest, ACodeBlockAndAListWithoutARunnerHoldNoExtras)
     editor->show();
     (void)editor->grab();
     EXPECT_EQ(editor->blockExtrasCountForTest(), 0);
+}
+
+TEST(BlockViewTest, AFootnoteReferenceOwnsExtrasAndPlainTextDoesNot)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setNoteText(QStringLiteral("plain one\n\nSee this[^1] note.\n\nplain two\n\n[^1]: the footnote\n"));
+    editor->setCursorOffset(0);
+    editor->show();
+    (void)editor->grab();
+    EXPECT_GE(editor->blockExtrasCountForTest(), 1);
+    EXPECT_LE(editor->blockExtrasCountForTest(), 2); // the reference's block and the definition's
 }
 
 int main(int argc, char **argv)

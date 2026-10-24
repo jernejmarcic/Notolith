@@ -230,14 +230,14 @@ void MarkdownEditor::layoutInlineHtml(BlockView &view, QList<Range> &hidden)
     // between them, the way `**bold**` keeps its weight with its asterisks shown.
     for (const InlineHTMLpair &pair : inlineHTMLpairs(view)) {
         if (pair.shown) {
-            view.inlineHtmlFormats.push_back({Range{pair.open.start, pair.close.end}, pair.format});
+            view.extrasMut().inlineHtmlFormats.push_back({Range{pair.open.start, pair.close.end}, pair.format});
             continue;
         }
         if (!view.revealed.contains(pair.open))
             hidden.append(pair.open);
         if (!view.revealed.contains(pair.close))
             hidden.append(pair.close);
-        view.inlineHtmlFormats.push_back({Range{pair.open.end, pair.close.start}, pair.format});
+        view.extrasMut().inlineHtmlFormats.push_back({Range{pair.open.end, pair.close.start}, pair.format});
     }
 }
 

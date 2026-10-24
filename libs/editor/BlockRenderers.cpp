@@ -643,17 +643,17 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         }
 
         if (view.isQuery) {
-            if (view.queryCollapseRect.isValid()
-                && touchable(view.queryCollapseRect.translated(left, top)).contains(point)) {
+            if (view.x().queryCollapseRect.isValid()
+                && touchable(view.x().queryCollapseRect.translated(left, top)).contains(point)) {
                 toggleQueryCollapsed(view.span.range.start);
                 return true;
             }
-            if (view.querySortRect.isValid()
-                && touchable(view.querySortRect.translated(left, top)).contains(point)) {
+            if (view.x().querySortRect.isValid()
+                && touchable(view.x().querySortRect.translated(left, top)).contains(point)) {
                 cycleQuerySort(view.span.range.start);
                 return true;
             }
-            for (const BlockView::QueryRow &row : view.queryRows) {
+            for (const BlockExtras::QueryRow &row : view.x().queryRows) {
                 if (row.rect.translated(left, top).contains(point)) {
                     emit queryResultActivated(row.path, row.offset);
                     return true;
@@ -668,7 +668,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         }
 
         if (view.isBase) {
-            for (const BlockView::BaseRow &row : view.baseRows) {
+            for (const BlockExtras::BaseRow &row : view.x().baseRows) {
                 if (row.rect.translated(left, top).contains(point)) {
                     emit baseRowActivated(row.path);
                     return true;

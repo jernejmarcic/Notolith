@@ -1895,7 +1895,7 @@ void MarkdownEditor::rebuildBlocks()
             const auto old = oldBlockAt(view.span.range.start);
             // a CSV embed is a paragraph by kind: what it was laid out as (isBase) says it is a table
             const bool scrolls = view.span.kind == BlockSpan::Kind::Code || view.span.kind == BlockSpan::Kind::Table
-                                 || (old != d->m_blocks.cend() && old->isBase && !old->CSVpath.isEmpty());
+                                 || (old != d->m_blocks.cend() && old->isBase && !old->x().CSVpath.isEmpty());
             if (scrolls && old != d->m_blocks.cend() && old->span.range.start == view.span.range.start)
                 view.sideScroll = old->sideScroll;
         }
@@ -2696,7 +2696,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
     // Inline HTML tags layoutInlineHtml recognised and paired: it already
     // hid the tags themselves, so this is the format for the text between
     // them (`<b>text</b>` -> "text", bold).
-    for (const auto &[source, htmlFormat] : view.inlineHtmlFormats)
+    for (const auto &[source, htmlFormat] : view.x().inlineHtmlFormats)
         add(source, htmlFormat);
     return underlay + formats;
 }
@@ -3608,12 +3608,12 @@ void MarkdownEditor::layoutInlineMaths(BlockView &view, QList<Range> &hidden)
             d->m_images.insert(key, pixmap);
         }
 
-        BlockView::InlineMath formula;
+        BlockExtras::InlineMath formula;
         formula.sourcePos = math.range.start; // the "$" DisplayMap left visible
         formula.image = pixmap;
         formula.imageSize = QSize(int(pixmap.width() / pixmap.devicePixelRatio()),
                                   int(pixmap.height() / pixmap.devicePixelRatio()));
-        view.inlineMaths.push_back(formula);
+        view.extrasMut().inlineMaths.push_back(formula);
     }
 }
 
@@ -3641,7 +3641,7 @@ void MarkdownEditor::layoutAnchorSeparators(BlockView &view, QList<Range> &hidde
             hidden.append(span.anchorHash); // [[#Heading]]: this note's own heading
             continue;
         }
-        view.separators.push_back(
+        view.extrasMut().separators.push_back(
             {span.anchorHash.start, 0,
              linkColourFor(span.payload)});
     }
@@ -3650,11 +3650,11 @@ void MarkdownEditor::layoutAnchorSeparators(BlockView &view, QList<Range> &hidde
 void MarkdownEditor::paintAnchorSeparators(QPainter &painter, const BlockView &view, qreal left,
                                            qreal top) const
 {
-    if (view.separators.empty() || !view.layout)
+    if (view.x().separators.empty() || !view.layout)
         return;
     painter.save();
     painter.setFont(view.layout->font());
-    for (const BlockView::AnchorSeparator &separator : view.separators) {
+    for (const BlockExtras::AnchorSeparator &separator : view.x().separators) {
         const QTextLine line = view.layout->lineForTextPosition(int(separator.displayPos));
         if (!line.isValid())
             continue;
@@ -3669,10 +3669,10 @@ void MarkdownEditor::paintAnchorSeparators(QPainter &painter, const BlockView &v
 void MarkdownEditor::paintInlineMaths(QPainter &painter, const BlockView &view, qreal left,
                                       qreal top) const
 {
-    if (view.inlineMaths.empty() || !view.layout)
+    if (view.x().inlineMaths.empty() || !view.layout)
         return;
 
-    for (const BlockView::InlineMath &formula : view.inlineMaths) {
+    for (const BlockExtras::InlineMath &formula : view.x().inlineMaths) {
         const QTextLine line = view.layout->lineForTextPosition(int(formula.displayPos));
         if (!line.isValid())
             continue;
@@ -4288,30 +4288,30 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         e->codeBlockKey.clear();
         e->referenceTarget.clear();
         e->referenceKey.clear();
+        e->inlineMaths.clear();
+        e->separators.clear();
+        e->footnoteMarks.clear();
+        e->queryRows.clear();
+        e->queryCollapseRect = QRectF();
+        e->querySortRect = QRectF();
+        e->queryResultCountText.clear();
+        e->baseViewName.clear();
+        e->baseYAML.clear();
+        e->baseRows.clear();
+        e->CSVpath.clear();
+        e->inlineHtmlFormats.clear();
     }
     view.sideWidth = 0;
     view.callout = nullptr;
     view.options = nullptr;
     view.textTop = 0;
     view.folded = false;
-    view.inlineMaths.clear();
-    view.separators.clear();
-    view.footnoteMarks.clear();
     view.tabHidden = false;
     view.tabGroup = -1;
     view.isQuery = false;
-    view.queryRows.clear();
-    view.queryCollapseRect = QRectF();
-    view.querySortRect = QRectF();
-    view.queryResultCountText.clear();
     view.isBase = false;
-    view.baseViewName.clear();
-    view.baseYAML.clear();
-    view.baseRows.clear();
-    view.CSVpath.clear();
     view.isHtml = false;
     view.isPluginBlock = false;
-    view.inlineHtmlFormats.clear();
 
     // A tab group shows one of its fences under a strip of tabs, and hides the
     // rest along with the blank lines between them. With the caret anywhere
@@ -4468,12 +4468,14 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                              : DisplayMap::build(d->m_text, view.span.range, listFolds, {}))
                       : DisplayMap::build(d->m_text, view.span.range, hidden,
                                           openEntities.isEmpty() ? d->m_decorations.substitutions : withoutOpen);
-    for (BlockView::InlineMath &formula : view.inlineMaths)
-        formula.displayPos = view.map.toDisplay(formula.sourcePos);
-    for (BlockView::AnchorSeparator &separator : view.separators)
-        separator.displayPos = view.map.toDisplay(separator.sourcePos);
-    for (BlockView::FootnoteMark &mark : view.footnoteMarks)
-        mark.displayPos = view.map.toDisplay(mark.sourcePos);
+    if (BlockExtras *e = view.extras.get()) { // a plain paragraph has none of these
+        for (BlockExtras::InlineMath &formula : e->inlineMaths)
+            formula.displayPos = view.map.toDisplay(formula.sourcePos);
+        for (BlockExtras::AnchorSeparator &separator : e->separators)
+            separator.displayPos = view.map.toDisplay(separator.sourcePos);
+        for (BlockExtras::FootnoteMark &mark : e->footnoteMarks)
+            mark.displayPos = view.map.toDisplay(mark.sourcePos);
+    }
 
     // QTextLayout lays out one paragraph and ignores "\n"; U+2028 is the
     // character it does break on. Same length, so every display offset the
@@ -4594,7 +4596,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         heading.setFont(fontFor(view.span));
         formats.prepend({0, int(strayAt - 1), heading}); // under every style span, which refine it
     }
-    for (const BlockView::InlineMath &formula : view.inlineMaths) {
+    for (const BlockExtras::InlineMath &formula : view.x().inlineMaths) {
         // The "$" DisplayMap left visible carries the image: invisible ink,
         // and letter spacing wide enough that the line reserves exactly the
         // room the paint step draws into.
@@ -4606,7 +4608,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                           .horizontalAdvance(QLatin1Char('$')));
         formats.append({int(formula.displayPos), 1, format});
     }
-    if (!view.separators.empty()) {
+    if (!view.x().separators.empty()) {
         // ponytail: measured in the block's font; a "#" inside bold or italic
         // text is a little off from the separator painted over it.
         const QFontMetricsF metrics(view.layout->font());
@@ -4615,10 +4617,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
         format.setFontLetterSpacing(metrics.horizontalAdvance(QStringLiteral(" > "))
                                     - metrics.horizontalAdvance(QLatin1Char('#')));
-        for (const BlockView::AnchorSeparator &separator : view.separators)
+        for (const BlockExtras::AnchorSeparator &separator : view.x().separators)
             formats.append({int(separator.displayPos), 1, format});
     }
-    for (const BlockView::FootnoteMark &mark : view.footnoteMarks) {
+    for (const BlockExtras::FootnoteMark &mark : view.x().footnoteMarks) {
         // Same trick: the carrier character reserves exactly the width the
         // number needs, in whichever of the two footnote fonts it paints in.
         const QFontMetricsF metrics(footnoteMarkFont(view.layout->font(), mark.superscript));
