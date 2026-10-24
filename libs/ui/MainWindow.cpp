@@ -7294,6 +7294,14 @@ void MainWindow::pruneNotebookImages()
                                        [&path](const auto &leaf) { return !leaf->view && leaf->notePath == path; });
         it = shown ? std::next(it) : m_notebookImages.erase(it);
     }
+    // The runs a notebook no tab shows were saved or discarded with it; a key left behind would be written
+    // into whatever file later takes that name.
+    for (auto it = m_notebookDirty.begin(); it != m_notebookDirty.end();) {
+        const QString &path = it.key();
+        const bool shown = std::any_of(m_leaves.cbegin(), m_leaves.cend(),
+                                       [&path](const auto &leaf) { return !leaf->view && leaf->notePath == path; });
+        it = shown ? std::next(it) : m_notebookDirty.erase(it);
+    }
 #endif
 }
 
@@ -8318,6 +8326,15 @@ int MainWindow::lostStateForTests(const QString &path) const
 {
     const auto found = m_lostNotes.constFind(path);
     return found == m_lostNotes.constEnd() ? -1 : int(found.value());
+}
+
+qsizetype MainWindow::notebookRunSetsForTests() const
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    return m_notebookDirty.size();
+#else
+    return 0;
+#endif
 }
 
 qsizetype MainWindow::notebookPictureSetsForTests() const

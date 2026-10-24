@@ -193,6 +193,7 @@ public:
     int lostStateForTests(const QString &path) const;
     /// How many open or opened notebooks hold their attachment pictures. For the tests.
     qsizetype notebookPictureSetsForTests() const;
+    qsizetype notebookRunSetsForTests() const; ///< notebooks holding runs that await their save
     /// Runs on the save thread at the start of every background commit, before
     /// anything is read or written: a test holds a commit open with it.
     void setSaveJobHookForTests(std::function<void()> hook);

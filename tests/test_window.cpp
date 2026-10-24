@@ -6835,6 +6835,39 @@ TEST_F(WindowTest, IdenticalNotebookCellsShowTheirOwnOutputs)
     EXPECT_EQ(editor->notebookInfoAt(second).executionCount, 2);
 }
 
+// What ran in a notebook and was discarded with its tab must not wait for a file that later takes the name.
+TEST_F(WindowTest, DiscardedNotebookRunsAreForgottenWhenTheTabLeavesTheNotebook)
+{
+    write(QStringLiteral("Analysis.ipynb"), readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb")));
+    Settings config = Settings::load();
+    config.setValue(QStringLiteral("files.autosave"), false); // nothing saves it behind the test's back
+    ASSERT_TRUE(config.save());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size());
+        const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+        WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+        window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+        ASSERT_TRUE(editor->isModified());
+        ASSERT_EQ(window.notebookRunSetsForTests(), 1);
+
+        QTimer watch;
+        QObject::connect(&watch, &QTimer::timeout, [] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+                box->button(QMessageBox::Discard)->click();
+        });
+        watch.start(20);
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+        EXPECT_EQ(window.notebookRunSetsForTests(), 0);
+    }
+    config.setValue(QStringLiteral("files.autosave"), true);
+    config.save();
+}
+
 TEST_F(WindowTest, ANotebookFileIsNotANoteWithTheNotebooksFeatureOff)
 {
     write(QStringLiteral("Analysis.ipynb"), readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb")));
