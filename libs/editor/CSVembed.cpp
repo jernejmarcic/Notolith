@@ -10,15 +10,15 @@
 /// (CSVparser.h) and needs nothing from libs/ext, so no runner is registered
 /// by the window - the editor reads the file on its own.
 ///
-/// One cache entry per path, replaced when the file's mtime or size differs
+/// One cache entry per path, replaced when the file's mtime, ctime or size differs
 /// from what the entry was read at; the old table stays on screen until the
 /// new one lands. A QFileSystemWatcher, made on the first CSV embed and not
 /// before, holds the cached paths and their folders: a change (debounced)
 /// stats them and relays out only the blocks whose file moved, so a file
 /// rewritten by another program shows with nothing else happening. The
 /// generation counter drops a read that a newer one has superseded. A failed
-/// read is shown but never kept as the answer: the next watcher event or layout
-/// reads again.
+/// read stays shown until the file's ctime moves (a chmod is how it becomes
+/// readable): that is one read again, not one per layout.
 ///
 /// Bounded three ways, so a hostile or merely large file can neither stall
 /// layout nor fill memory: rows and cells shown (kCSVmaxRows, kCSVmaxCells -
@@ -128,19 +128,16 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     watchCSV(path);
 
     const qint64 mtime = info.lastModified().toMSecsSinceEpoch();
+    const qint64 ctime = info.metadataChangeTime().toMSecsSinceEpoch();
     const qint64 size = info.size();
     auto it = d->m_CSVcache.find(path);
-    // A read that failed is never kept as the answer: any layout but the one
-    // that shows its error asks again (the file may be readable now - a
-    // chmod changes neither mtime nor size).
-    if (it != d->m_CSVcache.end() && !it->table.error.isEmpty() && d->m_CSVdelivering != path)
-        it->mtime = -1;
-    if (it == d->m_CSVcache.end() || it->mtime != mtime || it->size != size) {
+    if (it == d->m_CSVcache.end() || it->mtime != mtime || it->ctime != ctime || it->size != size) {
         // A re-read keeps the entry's old table: it stays on screen until
         // the new one lands (a fresh entry has none, and shows "Loading...").
         if (it == d->m_CSVcache.end())
             it = d->m_CSVcache.insert(path, CSVcacheEntry());
         it->mtime = mtime;
+        it->ctime = ctime;
         it->size = size;
         it->pending = true;
         it->generation = ++d->m_CSVgeneration;
@@ -155,7 +152,7 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
         // Through m_lifeline, as every other embed's worker: the editor may
         // be gone by the time the file has been parsed.
         (void)QtConcurrent::run([this, lifeline = d->m_lifeline, latest, path, tsv, unreadable, moreColumns,
-                                 generation, mtime, size] {
+                                 generation, mtime, ctime, size] {
             if (latest->load() != generation)
                 return; // a newer read of this file has been asked for: not worth the parse
             CSVcacheEntry result;
@@ -167,6 +164,7 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
                 result.table.error = unreadable;
             }
             result.mtime = mtime;
+            result.ctime = ctime;
             result.size = size;
             result.generation = generation;
             lifeline->post(this, [this, path, generation, result = std::move(result)]() mutable {
@@ -216,9 +214,7 @@ void MarkdownEditor::deliverCSV(const QString &path, quint64 generation, CSVcach
     const auto latest = it->latest;
     *it = std::move(result);
     it->latest = latest;
-    d->m_CSVdelivering = path;
     relayCSVblocks(path);
-    d->m_CSVdelivering.clear();
 }
 
 void MarkdownEditor::relayCSVblocks(const QString &path)
@@ -291,11 +287,10 @@ void MarkdownEditor::refreshCSVfiles()
             continue;
         }
         watchCSV(path); // put back what a rename-over-save took away
-        // A read already under way for this very mtime and size has its own
-        // relayout coming; one that has moved on from its entry, or failed
-        // (see layoutCSVembed), needs one.
-        if (info.lastModified().toMSecsSinceEpoch() != cached->mtime || info.size() != cached->size
-            || !cached->table.error.isEmpty())
+        // A read already under way for this very mtime, ctime and size has its
+        // own relayout coming; one that has moved on from its entry needs one.
+        if (info.lastModified().toMSecsSinceEpoch() != cached->mtime
+            || info.metadataChangeTime().toMSecsSinceEpoch() != cached->ctime || info.size() != cached->size)
             relayCSVblocks(path);
     }
 }

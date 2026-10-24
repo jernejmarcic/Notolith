@@ -9701,7 +9701,9 @@ TEST(CSVembedTest, AReadErrorIsRetriedWhenTheFileBecomesReadable)
     auto editor = CSVeditorWith(path, false);
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked.csv")); }, 5000));
 
-    // a chmod changes neither mtime nor size, only ctime: the watcher's attribute event is all there is
+    // a chmod changes neither mtime nor size, only ctime (kept to the millisecond, so not within the one
+    // the first chmod fell in): the watcher's attribute event is all there is
+    QTest::qWait(20);
     const QDateTime mtime = QFileInfo(path).lastModified();
     ASSERT_TRUE(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
     ASSERT_EQ(QFileInfo(path).lastModified(), mtime);
@@ -9718,10 +9720,45 @@ TEST(CSVembedTest, AReadErrorIsRetriedAtTheNextLayout)
         GTEST_SKIP() << "this user can read a mode 000 file";
     auto editor = CSVeditorWith(path, false);
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked2.csv")); }, 5000));
+    QTest::qWait(20); // the ctime the cache is keyed on has millisecond resolution
     QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     // the next layout of the block - here the note set again - asks again, whatever the watcher did
     editor->setNoteText(QStringLiteral("![[locked2.csv]]\n\nafter\n"));
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+}
+
+namespace {
+std::atomic<int> gCSVreads{0};
+}
+
+TEST(CSVembedTest, AChmodIsOneReReadNotOnePerLayout)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("locked3.csv"), "a,b\n1,2\n");
+    QFile::setPermissions(path, QFileDevice::Permissions());
+    if (QFile(path).open(QIODevice::ReadOnly))
+        GTEST_SKIP() << "this user can read a mode 000 file";
+    gCSVreads = 0;
+    MarkdownEditor::setCSVreadHookForTests([](const QString &) { ++gCSVreads; });
+    auto editor = CSVeditorWith(path, false);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked3.csv")); }, 5000));
+    EXPECT_EQ(gCSVreads.load(), 1);
+    // layouts while it stays unreadable ask nothing: the ctime has not moved
+    for (int i = 0; i < 3; ++i) {
+        editor->setNoteText(QStringLiteral("![[locked3.csv]]\n\nlayout %1\n").arg(i));
+        QTest::qWait(30);
+    }
+    EXPECT_EQ(gCSVreads.load(), 1);
+
+    ASSERT_TRUE(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+    for (int i = 0; i < 3; ++i) {
+        editor->setNoteText(QStringLiteral("![[locked3.csv]]\n\nagain %1\n").arg(i));
+        QTest::qWait(30);
+    }
+    MarkdownEditor::setCSVreadHookForTests(nullptr);
+    EXPECT_EQ(gCSVreads.load(), 2) << "one read for the chmod, none for the layouts after it";
 }
 
 TEST(CSVembedTest, AFileAppendedToContinuouslyStillRefreshes)
@@ -12049,6 +12086,38 @@ TEST(CodeScrollTest, PiecesShareOneOffset)
 
     EXPECT_GT(editor->sideScrollAt(long35), 0);
     EXPECT_DOUBLE_EQ(editor->sideScrollAt(first), editor->sideScrollAt(long35));
+}
+
+// A parse landing looks the old view of each fresh one up (the sideways offset of a
+// listing lives there) with a forward cursor over the old blocks. The views a landing
+// remakes are the ones that were drawn - here four listings, one of them edited around -
+// and each must find its own old self, not a neighbour's, while the 80 paragraphs
+// nothing drew are not remade at all.
+TEST(CodeScrollTest, ALandingKeepsEveryListingsOffsetAndLeavesUntouchedViewsAlone)
+{
+    const QString fence = QStringLiteral("```text\n") + longLine() + QStringLiteral("\n```\n\n");
+    const QString note = fence + fence + QStringLiteral("middle\n\n") + fence + fence
+                         + QStringLiteral("after\n\n").repeated(80);
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.indexOf(QLatin1String("middle")));
+    (void)editor->grab();
+    const qsizetype first = kFenceBody;
+    const qsizetype second = first + fence.size();
+    sendWheel(*editor, centreOf(editor->blockPanelAt(first)), QPoint(), QPoint(0, -120), Qt::ShiftModifier);
+    sendWheel(*editor, centreOf(editor->blockPanelAt(second)), QPoint(), QPoint(0, -480), Qt::ShiftModifier);
+    const qreal one = editor->sideScrollAt(first);
+    const qreal two = editor->sideScrollAt(second);
+    ASSERT_GT(one, 0);
+    ASSERT_GT(two, one);
+
+    const quint64 rebuilt = editor->rebuiltViewCount();
+    QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    for (int waited = 0; editor->rebuiltViewCount() == rebuilt && waited < 5000; waited += 20)
+        QTest::qWait(20);
+    ASSERT_GT(editor->rebuiltViewCount(), rebuilt) << "the landing never came";
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(first), one);
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(second), two);
+    EXPECT_LT(editor->rebuiltViewCount() - rebuilt, 60u) << "the paragraphs nothing drew stay as they are";
 }
 
 TEST(CodeScrollTest, ALineNumberGutterStaysPut)
