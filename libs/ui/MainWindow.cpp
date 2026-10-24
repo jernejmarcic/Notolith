@@ -1440,8 +1440,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             deliver(result);
         });
     });
-    // A reference block's header: a note opens in a tab, anything else (a source
-    // file, a URL) with whatever the system opens it with.
+    // A reference block's header: a note opens in a tab and a URL in the browser; any other file of the
+    // vault is left alone (the file tree has "Open in default app").
     connect(editor, &MarkdownEditor::referenceActivated, this, [this](const QString &target) {
         if (target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
             || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
@@ -1451,8 +1451,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             return; // the editor only offers vault files; this is the second lock
         else if (Vault::isNote(target))
             openNote(target);
-        else
-            QDesktopServices::openUrl(QUrl::fromLocalFile(target));
+        else // a click on what looks like a title never hands a vault file to xdg-open: that is an explicit command
+            statusBar()->showMessage(tr("%1 is not a note: open it from the file tree").arg(QFileInfo(target).fileName()), 5000);
     });
     connect(editor, &MarkdownEditor::baseRowActivated, this, [this](const QString &relativePath) {
         openRelative(relativePath);

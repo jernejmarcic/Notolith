@@ -1671,6 +1671,23 @@ TEST_F(WindowTest, AQueuedPandocImportIsDroppedWhenAnotherVaultIsOpened)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// A click on a reference block's header opens a note in Notolith; any other file is not handed to the system.
+TEST_F(WindowTest, AReferenceHeaderOpensNotesAndNeverHandsOtherFilesToTheSystem)
+{
+    write(QStringLiteral("run.sh"), "#!/bin/sh\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    MarkdownEditor *editor = window.editor();
+    write(QStringLiteral("Other.md"), "# Other\n");
+    ASSERT_TRUE(QMetaObject::invokeMethod(editor, "referenceActivated", Q_ARG(QString, path(QStringLiteral("run.sh")))));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("run.sh")));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("not a note")));
+    ASSERT_TRUE(QMetaObject::invokeMethod(editor, "referenceActivated", Q_ARG(QString, path(QStringLiteral("Other.md")))));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Other\n"));
+}
+
 // An import that is already running when another vault opens belongs to the vault it was started for.
 TEST_F(WindowTest, ARunningPandocImportIsDroppedWhenAnotherVaultIsOpened)
 {
