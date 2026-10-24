@@ -107,12 +107,12 @@ bool MarkdownEditor::layoutTexEmbed(BlockView &view, const EmbedSpan &embed, con
         }
         const int width = int(pixmap.width() / pixmap.devicePixelRatio());
         const int height = int(pixmap.height() / pixmap.devicePixelRatio());
-        view.image = pixmap;
-        view.imageSize = QSize(width, height);
-        view.imageCentred = true;
-        view.imagePath = path;
+        view.extrasMut().image = pixmap;
+        view.extrasMut().imageSize = QSize(width, height);
+        view.extrasMut().imageCentred = true;
+        view.extrasMut().imagePath = path;
         view.layout.reset();
-        view.cells.clear();
+        view.extrasMut().cells.clear();
         view.height = height + 12;
         hideWholeBlockText(view);
         view.laidOut = true;
@@ -162,39 +162,39 @@ void MarkdownEditor::pdfMetadata(const QString &path, qint64 mtime, int &count,
 bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, const QString &label,
                                    const PdfEmbedArgs &args, int requestedWidth)
 {
-    view.isPdfEmbed = true;
-    view.pdfPath = pdfPath;
-    view.pdfArgs = args;
-    view.pdfCells.clear();
-    view.pdfError.clear();
-    view.pdfPrevRect = QRectF();
-    view.pdfNextRect = QRectF();
-    view.pdfCounterText.clear();
-    view.image = QPixmap();
+    view.extrasMut().isPdfEmbed = true;
+    view.extrasMut().pdfPath = pdfPath;
+    view.extrasMut().pdfArgs = args;
+    view.extrasMut().pdfCells.clear();
+    view.extrasMut().pdfError.clear();
+    view.extrasMut().pdfPrevRect = QRectF();
+    view.extrasMut().pdfNextRect = QRectF();
+    view.extrasMut().pdfCounterText.clear();
+    view.extrasMut().image = QPixmap();
     view.layout.reset();
-    view.cells.clear();
-    view.embedLabel = label;
-    view.embedPanel = true;
+    view.extrasMut().cells.clear();
+    view.extrasMut().embedLabel = label;
+    view.extrasMut().embedPanel = true;
     view.textTop = codeHeaderHeight();
     hideWholeBlockText(view); // every path below returns true - see the comment on hideWholeBlockText
 
     if (!args.ok()) {
-        view.pdfError = args.error;
+        view.extrasMut().pdfError = args.error;
         view.height = view.textTop + 24;
         view.laidOut = true;
         return true;
     }
 
     const qint64 mtime = QFileInfo(pdfPath).lastModified().toSecsSinceEpoch();
-    view.pdfMtime = mtime;
+    view.extrasMut().pdfMtime = mtime;
 
     int count = 0;
     QList<QSizeF> sizes;
     pdfMetadata(pdfPath, mtime, count, sizes);
-    view.pdfPageCount = count;
+    view.extrasMut().pdfPageCount = count;
     if (count <= 0) {
         // No poppler to ask (the notolith-pdfview package is not installed) is not a broken file.
-        view.pdfError = PdfPage::isAvailable() ? tr("could not open as a PDF")
+        view.extrasMut().pdfError = PdfPage::isAvailable() ? tr("could not open as a PDF")
                                                : tr("PDF support is not installed (the notolith-pdfview package)");
         view.height = view.textTop + 24;
         view.laidOut = true;
@@ -203,7 +203,7 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
 
     const QList<int> pages = resolvePdfPages(args, count);
     if (pages.isEmpty()) {
-        view.pdfError = tr("no pages to show");
+        view.extrasMut().pdfError = tr("no pages to show");
         view.height = view.textTop + 24;
         view.laidOut = true;
         return true;
@@ -225,13 +225,13 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
         return page >= 0 && page < sizes.size() ? sizes.at(page) : QSizeF(612, 792);
     };
 
-    if (view.pdfArgs.layout == PdfEmbedArgs::Layout::Slides) {
+    if (view.x().pdfArgs.layout == PdfEmbedArgs::Layout::Slides) {
         const qsizetype key = view.span.range.start;
         const int index = qBound(0, d->m_pdfSlideIndex.value(key, 0), int(pages.size()) - 1);
         d->m_pdfSlideIndex.insert(key, index);
-        view.pdfSlideIndex = index;
-        view.pdfSlideCount = int(pages.size());
-        view.pdfCounterText = tr("%1 / %2").arg(index + 1).arg(pages.size());
+        view.extrasMut().pdfSlideIndex = index;
+        view.extrasMut().pdfSlideCount = int(pages.size());
+        view.extrasMut().pdfCounterText = tr("%1 / %2").arg(index + 1).arg(pages.size());
 
         const int page = pages.at(index);
         const QSizeF pointSize = pointSizeOf(page);
@@ -239,18 +239,18 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
                                    ? args.height
                                    : int(qreal(fullWidth) * pointSize.height()
                                          / qMax<qreal>(1, pointSize.width()));
-        BlockView::PdfCell cell;
+        BlockExtras::PdfCell cell;
         cell.page = page;
         cell.rect = QRectF(0, 0, fullWidth, cellHeight);
         cell.pointSize = pointSize;
         cell.image = imageFor(page, fullWidth);
-        view.pdfCells.push_back(cell);
+        view.extrasMut().pdfCells.push_back(cell);
 
         constexpr qreal kNavHeight = 26;
-        view.pdfPrevRect = QRectF(0, cellHeight + 6, 70, kNavHeight);
-        view.pdfNextRect = QRectF(fullWidth - 70, cellHeight + 6, 70, kNavHeight);
+        view.extrasMut().pdfPrevRect = QRectF(0, cellHeight + 6, 70, kNavHeight);
+        view.extrasMut().pdfNextRect = QRectF(fullWidth - 70, cellHeight + 6, 70, kNavHeight);
         view.height = view.textTop + cellHeight + kNavHeight + 12;
-    } else if (view.pdfArgs.layout == PdfEmbedArgs::Layout::Grid) {
+    } else if (view.x().pdfArgs.layout == PdfEmbedArgs::Layout::Grid) {
         const int columns = qMax(1, args.columns);
         constexpr qreal gap = 10;
         const qreal cellWidth = (fullWidth - gap * (columns - 1)) / columns;
@@ -265,12 +265,12 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
                                             ? args.height
                                             : cellWidth * pointSize.height()
                                                   / qMax<qreal>(1, pointSize.width());
-                BlockView::PdfCell cell;
+                BlockExtras::PdfCell cell;
                 cell.page = page;
                 cell.rect = QRectF((i - rowStart) * (cellWidth + gap), y, cellWidth, cellHeight);
                 cell.pointSize = pointSize;
                 cell.image = imageFor(page, int(cellWidth));
-                view.pdfCells.push_back(cell);
+                view.extrasMut().pdfCells.push_back(cell);
                 rowHeight = qMax(rowHeight, cellHeight);
             }
             y += rowHeight + gap;
@@ -285,12 +285,12 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
                                         ? args.height
                                         : fullWidth * pointSize.height()
                                               / qMax<qreal>(1, pointSize.width());
-            BlockView::PdfCell cell;
+            BlockExtras::PdfCell cell;
             cell.page = page;
             cell.rect = QRectF(0, y, fullWidth, cellHeight);
             cell.pointSize = pointSize;
             cell.image = imageFor(page, fullWidth);
-            view.pdfCells.push_back(cell);
+            view.extrasMut().pdfCells.push_back(cell);
             y += cellHeight + gap;
         }
         view.height = view.textTop + qMax<qreal>(0, y - gap);
@@ -349,7 +349,7 @@ void MarkdownEditor::deliverPdfPage(const QString &key, quint64 generation, cons
 
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isPdfEmbed || block.pdfPath != path)
+        if (!block.extras || !block.extras->isPdfEmbed || block.extras->pdfPath != path)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -400,7 +400,7 @@ void MarkdownEditor::deliverTexCompiled(const QString &key, quint64 generation,
     // for what is, in practice, at most a handful of .tex embeds in a note.
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isPdfEmbed)
+        if (!block.extras || !block.extras->isPdfEmbed)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -419,19 +419,19 @@ void MarkdownEditor::paintPdfEmbed(QPainter &painter, const BlockView &view, qre
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
     const QColor placeholder = d->m_theme.color(QStringLiteral("--background-modifier-border"));
 
-    if (!view.pdfError.isEmpty()) {
+    if (!view.x().pdfError.isEmpty()) {
         painter.save();
         painter.setFont(d->m_theme.textFont());
         painter.setPen(muted);
         painter.drawText(QRectF(left, top + view.textTop, contentWidth(),
                                 qMax<qreal>(24, view.height - view.textTop)),
-                         Qt::AlignLeft | Qt::TextWordWrap, view.pdfError);
+                         Qt::AlignLeft | Qt::TextWordWrap, view.x().pdfError);
         painter.restore();
         return;
     }
 
     const Private::PdfZoom zoom = d->m_pdfZoom.value(view.span.range.start);
-    for (const BlockView::PdfCell &cell : view.pdfCells) {
+    for (const BlockExtras::PdfCell &cell : view.x().pdfCells) {
         const QRectF rect = cell.rect.translated(left, top + view.textTop);
         if (cell.image.isNull()) {
             painter.fillRect(rect, placeholder);
@@ -457,17 +457,17 @@ void MarkdownEditor::paintPdfEmbed(QPainter &painter, const BlockView &view, qre
         // timer fetch it (a page scrolled into view at this zoom, say).
         const int cellWidth = int(cell.rect.width());
         if (!d->m_pdfZoomSettle.isActive()
-            && !d->m_pdfPageCache.contains(pdfPageKey(view.pdfPath, view.pdfMtime, cell.page,
+            && !d->m_pdfPageCache.contains(pdfPageKey(view.x().pdfPath, view.x().pdfMtime, cell.page,
                                                       pdfZoomWidth(cellWidth, zoom.zoom))))
             d->m_pdfZoomSettle.start();
     }
-    if (zoom.zoom != 1 && !view.pdfCells.empty()) {
+    if (zoom.zoom != 1 && !view.x().pdfCells.empty()) {
         // Only feedback that a drag pans now; it takes no input.
         painter.save();
         QFont small = d->m_theme.uiFont();
         small.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
         painter.setFont(small);
-        const QRectF first = view.pdfCells.front().rect.translated(left, top + view.textTop);
+        const QRectF first = view.x().pdfCells.front().rect.translated(left, top + view.textTop);
         const QString text = tr("%1%").arg(qRound(zoom.zoom * 100));
         const QRectF badge(first.right() - 8 - QFontMetricsF(small).horizontalAdvance(text) - 12,
                            first.top() + 8, QFontMetricsF(small).horizontalAdvance(text) + 12, 20);
@@ -479,20 +479,20 @@ void MarkdownEditor::paintPdfEmbed(QPainter &painter, const BlockView &view, qre
         painter.restore();
     }
 
-    if (view.pdfArgs.layout == PdfEmbedArgs::Layout::Slides && !view.pdfCells.empty()) {
+    if (view.x().pdfArgs.layout == PdfEmbedArgs::Layout::Slides && !view.x().pdfCells.empty()) {
         painter.save();
         QFont small = d->m_theme.uiFont();
         small.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
         painter.setFont(small);
         painter.setPen(muted);
-        const QRectF prev = view.pdfPrevRect.translated(left, top + view.textTop);
-        const QRectF next = view.pdfNextRect.translated(left, top + view.textTop);
-        if (view.pdfSlideIndex > 0)
+        const QRectF prev = view.x().pdfPrevRect.translated(left, top + view.textTop);
+        const QRectF next = view.x().pdfNextRect.translated(left, top + view.textTop);
+        if (view.x().pdfSlideIndex > 0)
             painter.drawText(prev, Qt::AlignVCenter | Qt::AlignLeft, tr("< Previous"));
-        if (view.pdfSlideIndex + 1 < view.pdfSlideCount)
+        if (view.x().pdfSlideIndex + 1 < view.x().pdfSlideCount)
             painter.drawText(next, Qt::AlignVCenter | Qt::AlignRight, tr("Next >"));
         painter.drawText(QRectF(left, prev.top(), contentWidth(), prev.height()), Qt::AlignCenter,
-                         view.pdfCounterText);
+                         view.x().pdfCounterText);
         painter.restore();
     }
 }
@@ -507,9 +507,9 @@ constexpr qint64 kPdfStickyMs = 1000;   ///< ... for this long after its click
 
 std::optional<int> MarkdownEditor::pdfNavHit(const BlockView &view, const QPointF &local) const
 {
-    if (!view.isPdfEmbed || view.pdfArgs.layout != PdfEmbedArgs::Layout::Slides || view.pdfCells.empty())
+    if (!view.x().isPdfEmbed || view.x().pdfArgs.layout != PdfEmbedArgs::Layout::Slides || view.x().pdfCells.empty())
         return std::nullopt;
-    const QRectF cell = view.pdfCells.front().rect;
+    const QRectF cell = view.x().pdfCells.front().rect;
     if (local.x() < cell.left() || local.x() > cell.right() || local.y() > view.height - view.textTop)
         return std::nullopt;
     // The left half of the row under the slide steps back, the right half
@@ -529,7 +529,7 @@ std::optional<int> MarkdownEditor::pdfNavHit(const BlockView &view, const QPoint
 
 bool MarkdownEditor::pdfNavCanStep(const BlockView &view, int direction) const
 {
-    return direction < 0 ? view.pdfSlideIndex > 0 : view.pdfSlideIndex + 1 < view.pdfSlideCount;
+    return direction < 0 ? view.x().pdfSlideIndex > 0 : view.x().pdfSlideIndex + 1 < view.x().pdfSlideCount;
 }
 
 bool MarkdownEditor::handlePdfEmbedClick(const BlockView &view, const QPoint &point, qreal left,
@@ -558,9 +558,9 @@ std::optional<Qt::CursorShape> MarkdownEditor::pdfNavCursorAt(const QPoint &poin
     const std::optional<int> hit = pdfNavHit(view, local);
     if (!hit) {
         // Over a zoomed page a drag pans it.
-        const bool onPage = view.isPdfEmbed && d->m_pdfZoom.contains(view.span.range.start)
-                            && std::any_of(view.pdfCells.cbegin(), view.pdfCells.cend(),
-                                           [&local](const BlockView::PdfCell &cell) { return cell.rect.contains(local); });
+        const bool onPage = view.x().isPdfEmbed && d->m_pdfZoom.contains(view.span.range.start)
+                            && std::any_of(view.x().pdfCells.cbegin(), view.x().pdfCells.cend(),
+                                           [&local](const BlockExtras::PdfCell &cell) { return cell.rect.contains(local); });
         return onPage ? std::optional<Qt::CursorShape>(Qt::OpenHandCursor) : std::nullopt;
     }
     return *hit != 0 && pdfNavCanStep(view, *hit) ? Qt::PointingHandCursor : Qt::ArrowCursor;
@@ -573,23 +573,23 @@ MarkdownEditor::PdfEmbedInfo MarkdownEditor::pdfEmbedInfoAt(qsizetype offset) co
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return info;
     const BlockView &view = d->m_blocks[size_t(index)];
-    if (!view.isPdfEmbed)
+    if (!view.x().isPdfEmbed)
         return info;
     info.isPdfEmbed = true;
-    info.error = view.pdfError;
-    info.pageCount = view.pdfPageCount;
-    info.cellCount = int(view.pdfCells.size());
-    info.layout = view.pdfArgs.layout;
-    info.slideIndex = view.pdfSlideIndex;
-    info.slideCount = view.pdfSlideCount;
+    info.error = view.x().pdfError;
+    info.pageCount = view.x().pdfPageCount;
+    info.cellCount = int(view.x().pdfCells.size());
+    info.layout = view.x().pdfArgs.layout;
+    info.slideIndex = view.x().pdfSlideIndex;
+    info.slideCount = view.x().pdfSlideCount;
     const Private::PdfZoom zoom = d->m_pdfZoom.value(view.span.range.start);
     info.zoom = zoom.zoom;
     info.pan = zoom.pan;
-    if (!view.pdfCells.empty()) {
-        info.renderedWidth = view.pdfCells.front().image.width();
+    if (!view.x().pdfCells.empty()) {
+        info.renderedWidth = view.x().pdfCells.front().image.width();
         const QPointF origin(contentLeft(), view.y - verticalScrollBar()->value() + view.textTop);
-        info.cellRect = view.pdfCells.front().rect.translated(origin);
-        info.nextRect = view.pdfNextRect.translated(origin);
+        info.cellRect = view.x().pdfCells.front().rect.translated(origin);
+        info.nextRect = view.x().pdfNextRect.translated(origin);
     }
     return info;
 }
@@ -605,11 +605,11 @@ void MarkdownEditor::pdfSlideStep(qsizetype offset, int direction)
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
     BlockView &view = d->m_blocks[size_t(index)];
-    if (!view.isPdfEmbed || view.pdfSlideCount <= 0)
+    if (!view.x().isPdfEmbed || view.x().pdfSlideCount <= 0)
         return;
     const qsizetype key = view.span.range.start;
     const int current = d->m_pdfSlideIndex.value(key, 0);
-    const int next = qBound(0, current + direction, view.pdfSlideCount - 1);
+    const int next = qBound(0, current + direction, view.x().pdfSlideCount - 1);
     if (next == current)
         return;
     d->m_pdfSlideIndex.insert(key, next);
@@ -636,12 +636,12 @@ int MarkdownEditor::pdfCellAt(const QPoint &point, qsizetype *block, QPointF *bl
     if (index < 0)
         return -1;
     const BlockView &view = d->m_blocks[size_t(index)];
-    if (!view.isPdfEmbed)
+    if (!view.x().isPdfEmbed)
         return -1;
     const QPointF local = QPointF(point)
                           - QPointF(contentLeft(), view.y - verticalScrollBar()->value() + view.textTop);
-    for (size_t cell = 0; cell < view.pdfCells.size(); ++cell) {
-        if (view.pdfCells[cell].rect.contains(local)) {
+    for (size_t cell = 0; cell < view.x().pdfCells.size(); ++cell) {
+        if (view.x().pdfCells[cell].rect.contains(local)) {
             *block = index;
             *blockLocal = local;
             return int(cell);
@@ -666,7 +666,7 @@ bool MarkdownEditor::zoomPdfAt(const QPoint &point, qreal factor)
     if (cell < 0)
         return false;
     const BlockView &view = d->m_blocks[size_t(block)];
-    const QRectF rect = view.pdfCells[size_t(cell)].rect;
+    const QRectF rect = view.x().pdfCells[size_t(cell)].rect;
     const qsizetype key = view.span.range.start;
     Private::PdfZoom state = d->m_pdfZoom.value(key);
     qreal zoom = qBound<qreal>(1, state.zoom * factor, kPdfMaxZoom);
@@ -723,10 +723,10 @@ void MarkdownEditor::panPdfEmbed(qsizetype block, const QPointF &delta)
         return;
     const BlockView &view = d->m_blocks[size_t(block)];
     const auto it = d->m_pdfZoom.find(view.span.range.start);
-    if (it == d->m_pdfZoom.end() || view.pdfCells.empty())
+    if (it == d->m_pdfZoom.end() || view.x().pdfCells.empty())
         return;
     // The content follows the pointer, so the window moves the other way.
-    it->pan = clampPdfPan(it->pan - delta / it->zoom, it->zoom, view.pdfCells.front().rect.size());
+    it->pan = clampPdfPan(it->pan - delta / it->zoom, it->zoom, view.x().pdfCells.front().rect.size());
     viewport()->update();
 }
 
@@ -782,7 +782,7 @@ bool MarkdownEditor::resetPdfZoom()
         return false;
     d->m_pdfZoom.clear();
     for (qsizetype block = 0; block < qsizetype(d->m_blocks.size()); ++block) {
-        if (d->m_blocks[size_t(block)].isPdfEmbed)
+        if (d->m_blocks[size_t(block)].x().isPdfEmbed)
             invalidatePdfBlock(block);
     }
     updateLayout();
@@ -799,10 +799,10 @@ void MarkdownEditor::requestPdfZoomRenders()
     // delivery would evict a page still on screen and ask for it again.
     qint64 visibleBytes = 0;
     for (const BlockView &view : d->m_blocks) {
-        const auto zoom = view.isPdfEmbed ? d->m_pdfZoom.constFind(view.span.range.start) : d->m_pdfZoom.cend();
+        const auto zoom = view.extras && view.extras->isPdfEmbed ? d->m_pdfZoom.constFind(view.span.range.start) : d->m_pdfZoom.cend();
         if (zoom == d->m_pdfZoom.cend())
             continue;
-        for (const BlockView::PdfCell &cell : view.pdfCells) {
+        for (const BlockExtras::PdfCell &cell : view.x().pdfCells) {
             const QRectF rect = cell.rect.translated(0, view.y - scroll + view.textTop);
             const int base = int(cell.rect.width());
             const int wanted = pdfZoomWidth(base, zoom->zoom);
@@ -813,10 +813,10 @@ void MarkdownEditor::requestPdfZoomRenders()
             if (visibleBytes > 0 && visibleBytes + bytes > d->m_pdfZoomBudget)
                 return;
             visibleBytes += bytes;
-            const QString key = pdfPageKey(view.pdfPath, view.pdfMtime, cell.page, wanted);
+            const QString key = pdfPageKey(view.x().pdfPath, view.x().pdfMtime, cell.page, wanted);
             if (d->m_pdfPageCache.contains(key))
                 continue;
-            ensurePdfPageAsync(view.pdfPath, view.pdfMtime, cell.page, wanted);
+            ensurePdfPageAsync(view.x().pdfPath, view.x().pdfMtime, cell.page, wanted);
             d->m_pdfPageCache[key].zoomed = true;
         }
     }

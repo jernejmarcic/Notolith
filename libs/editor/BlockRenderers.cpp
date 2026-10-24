@@ -626,7 +626,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         // for a fenced block's header, reached from here instead of the
         // Code-kind branch below since an embed's own span.kind is
         // Paragraph, not Code.
-        if (view.embedPanel && view.notebookEligible) {
+        if (view.x().embedPanel && view.notebookEligible) {
             const QRectF runRect = notebookRunRectFor(view, left, top);
             if (runRect.isValid() && touchable(runRect, 4).contains(point)) {
                 runNotebookBlockAt(view.span.range.start);
@@ -636,24 +636,24 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
 
         // A reference block's header is the link to what it shows; the rest of
         // it is an ordinary click, which puts the caret in and shows its source.
-        if (!view.referenceTarget.isEmpty()
+        if (!view.x().referenceTarget.isEmpty()
             && QRectF(left, top, contentWidth(), codeHeaderHeight()).contains(point)) {
-            emit referenceActivated(view.referenceTarget);
+            emit referenceActivated(view.x().referenceTarget);
             return true;
         }
 
         if (view.isQuery) {
-            if (view.queryCollapseRect.isValid()
-                && touchable(view.queryCollapseRect.translated(left, top)).contains(point)) {
+            if (view.x().queryCollapseRect.isValid()
+                && touchable(view.x().queryCollapseRect.translated(left, top)).contains(point)) {
                 toggleQueryCollapsed(view.span.range.start);
                 return true;
             }
-            if (view.querySortRect.isValid()
-                && touchable(view.querySortRect.translated(left, top)).contains(point)) {
+            if (view.x().querySortRect.isValid()
+                && touchable(view.x().querySortRect.translated(left, top)).contains(point)) {
                 cycleQuerySort(view.span.range.start);
                 return true;
             }
-            for (const BlockView::QueryRow &row : view.queryRows) {
+            for (const BlockExtras::QueryRow &row : view.x().queryRows) {
                 if (row.rect.translated(left, top).contains(point)) {
                     emit queryResultActivated(row.path, row.offset);
                     return true;
@@ -668,7 +668,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         }
 
         if (view.isBase) {
-            for (const BlockView::BaseRow &row : view.baseRows) {
+            for (const BlockExtras::BaseRow &row : view.x().baseRows) {
                 if (row.rect.translated(left, top).contains(point)) {
                     emit baseRowActivated(row.path);
                     return true;
@@ -680,7 +680,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 return true;
         }
 
-        for (const NestedCallout &nested : view.nested) {
+        for (const NestedCallout &nested : view.x().nested) {
             if (nested.span->foldable
                 && touchable(nestedFoldHandleRect(view, nested, left, top), 6).contains(point)) {
                 toggleFoldAt(nested.span->range.start);
@@ -719,7 +719,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 setFolded(view, !view.folded);
                 return true;
             }
-            for (const PropertyRow &row : view.propertyRows) {
+            for (const PropertyRow &row : view.x().propertyRows) {
                 if (!row.control.isNull()) {
                     if (touchable(row.control.translated(left, top), 4).contains(point)) {
                         toggleProperty(row.property);
@@ -772,7 +772,8 @@ qreal MarkdownEditor::propertyRowHeight() const
 
 bool MarkdownEditor::layoutProperties(BlockView &view)
 {
-    view.propertyRows.clear();
+    if (view.extras)
+        view.extras->propertyRows.clear();
     if (d->m_properties.isEmpty())
         return false; // nothing to show: fall back to the hidden YAML
 
@@ -785,7 +786,7 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
         hidden.append(d->m_decorations.syntax.at(i));
     view.map = DisplayMap::build(d->m_text, view.span.range, hidden);
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
 
     const qreal rowHeight = propertyRowHeight();
     view.folded = d->m_folds.value(view.span.range.start, false);
@@ -843,7 +844,7 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
 
         row.rect = QRectF(0, y, contentWidth(), height);
         y += height;
-        view.propertyRows.push_back(row);
+        view.extrasMut().propertyRows.push_back(row);
     }
 
     // Obsidian closes the table with a hairline and a breath of space.
@@ -884,7 +885,7 @@ void MarkdownEditor::paintProperties(QPainter &painter, const BlockView &view, q
     }
 
     const qreal iconSize = qMin<qreal>(15, metrics.height());
-    for (const PropertyRow &row : view.propertyRows) {
+    for (const PropertyRow &row : view.x().propertyRows) {
         const Property &property = d->m_properties.at(row.property);
         const QRectF rect = row.rect.translated(left, top);
         const qreal keyTop = rect.top() + (propertyRowHeight() - metrics.height()) / 2;
@@ -1090,10 +1091,10 @@ bool MarkdownEditor::listIsRewritable(const Property &property) const
 const MarkdownEditor::PropertyRow *MarkdownEditor::propertyRowOf(int index, qreal *top) const
 {
     for (const BlockView &view : d->m_blocks) {
-        if (view.span.kind != BlockSpan::Kind::Frontmatter || view.propertyRows.empty()
+        if (view.span.kind != BlockSpan::Kind::Frontmatter || view.x().propertyRows.empty()
             || view.folded)
             continue;
-        for (const PropertyRow &row : view.propertyRows) {
+        for (const PropertyRow &row : view.x().propertyRows) {
             if (row.property == index) {
                 *top = view.y - verticalScrollBar()->value();
                 return &row;
@@ -1466,7 +1467,7 @@ QRectF MarkdownEditor::bandOf(const BlockView &view, const Range &source) const
 void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,
                                          qreal top) const
 {
-    for (const NestedCallout &nested : view.nested) {
+    for (const NestedCallout &nested : view.x().nested) {
         const QRectF band = bandOf(view, nested.span->range);
         if (band.height() <= 0)
             continue;

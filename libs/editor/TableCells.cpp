@@ -96,9 +96,9 @@ QPointF MarkdownEditor::cellTextOrigin(const BlockView &view, const Cell &cell) 
 
 const MarkdownEditor::Cell *MarkdownEditor::caretCell(const BlockView &view) const
 {
-    if (view.cells.empty() || d->m_anchor != d->m_cursor)
+    if (view.x().cells.empty() || d->m_anchor != d->m_cursor)
         return nullptr;
-    for (const Cell &cell : view.cells) {
+    for (const Cell &cell : view.x().cells) {
         if (cell.source.start <= d->m_cursor && d->m_cursor <= cell.source.end)
             return &cell;
     }
@@ -178,7 +178,7 @@ bool MarkdownEditor::formatTables(qsizetype offset)
 bool MarkdownEditor::tableRenderedAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].cells.empty();
+    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].x().cells.empty();
 }
 
 void MarkdownEditor::revealCaretCell()
@@ -284,13 +284,13 @@ bool MarkdownEditor::fillShortRowAt(const QPoint &viewportPoint)
     const qreal y = viewportPoint.y() + verticalScrollBar()->value();
     const qreal x = viewportPoint.x() - contentLeft();
     for (const BlockView &view : d->m_blocks) {
-        if (view.cells.empty() || view.foldHidden || y < view.y || y > view.y + view.height
+        if (view.x().cells.empty() || view.foldHidden || y < view.y || y > view.y + view.height
             || d->m_mode == Mode::Source)
             continue;
         const TableSpan *table = tableFor(view);
         if (!table)
             return false; // a base's cells, not a table's
-        for (const Cell &cell : view.cells) {
+        for (const Cell &cell : view.x().cells) {
             if (!cell.source.isValid() && cell.rect.translated(-view.sideScroll, view.y).contains(QPointF(x, y)))
                 return fillShortRow(table - d->m_decorations.tables.constData(), cell.row);
         }

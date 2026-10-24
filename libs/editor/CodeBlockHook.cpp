@@ -48,7 +48,8 @@ void MarkdownEditor::pruneCodeBlockCache(const QString &keep)
         return;
     QSet<QString> shown;
     for (const BlockView &block : d->m_blocks)
-        shown.insert(block.codeBlockKey);
+        if (block.extras) // most blocks have none: no static-default guard per block
+            shown.insert(block.extras->codeBlockKey);
     for (auto it = d->m_codeBlockCache.begin(); it != d->m_codeBlockCache.end();) {
         if (it.key() != keep && !shown.contains(it.key()))
             it = d->m_codeBlockCache.erase(it);
@@ -104,25 +105,25 @@ bool MarkdownEditor::layoutPluginCode(BlockView &view)
         return false; // nothing drawable came back: the listing shows
 
     view.isPluginBlock = true;
-    view.codeBlockKey = key;
-    view.embedLabel = fence->language;
-    view.embedPanel = true;
+    view.extrasMut().codeBlockKey = key;
+    view.extrasMut().embedLabel = fence->language;
+    view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = codeHeaderHeight();
     hideWholeBlockText(view);
     if (entry->pending) {
-        view.image = QPixmap();
+        view.extrasMut().image = QPixmap();
         view.height = view.textTop + 60; // a placeholder until the plugin answers
         view.laidOut = true;
         return true;
     }
     const QPixmap pixmap = QPixmap::fromImage(entry->image);
     const qreal ratio = pixmap.devicePixelRatio();
-    view.image = pixmap;
-    view.imageSize = QSize(qMin(width, int(pixmap.width() / ratio)), int(pixmap.height() / ratio));
-    view.imageCentred = false;
-    view.height = view.imageSize.height() + view.textTop;
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(qMin(width, int(pixmap.width() / ratio)), int(pixmap.height() / ratio));
+    view.extrasMut().imageCentred = false;
+    view.height = view.x().imageSize.height() + view.textTop;
     view.laidOut = true;
     return true;
 }
@@ -144,7 +145,7 @@ void MarkdownEditor::deliverCodeBlock(const QString &key, quint64 generation, Co
 
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (block.codeBlockKey != key)
+        if (!block.extras || block.extras->codeBlockKey != key)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -163,15 +164,15 @@ QRect MarkdownEditor::codeBlockImageRectAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
-    return view.isPluginBlock && !view.image.isNull() ? hookedEmbedImageRect(view).toRect() : QRect();
+    return view.isPluginBlock && !view.x().image.isNull() ? hookedEmbedImageRect(view).toRect() : QRect();
 }
 
 bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
 {
     for (const BlockView &view : d->m_blocks) {
-        if (!view.isPluginBlock || view.image.isNull())
+        if (!view.isPluginBlock || view.x().image.isNull())
             continue;
-        const auto it = d->m_codeBlockCache.constFind(view.codeBlockKey);
+        const auto it = d->m_codeBlockCache.constFind(view.x().codeBlockKey);
         if (it == d->m_codeBlockCache.cend() || it->hotspots.isEmpty() || !it->activate)
             continue;
         const QRectF image = hookedEmbedImageRect(view);
@@ -183,7 +184,7 @@ bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
                 continue;
             // The picture it leads to comes the way any answer does; until then the old one stays, and an
             // answer that is overtaken by another click is dropped (the generation).
-            const QString key = view.codeBlockKey;
+            const QString key = view.x().codeBlockKey;
             const int id = hotspot.id;
             const quint64 generation = ++d->m_codeBlockGeneration;
             auto activate = it->activate;

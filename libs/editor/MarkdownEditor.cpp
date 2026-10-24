@@ -1441,6 +1441,27 @@ int MarkdownEditor::parseCountForTest() const
     return d->m_parses;
 }
 
+std::size_t MarkdownEditor::blockViewSizeForTest()
+{
+    return sizeof(BlockView);
+}
+
+int MarkdownEditor::blockExtrasCountForTest() const
+{
+    return int(std::count_if(d->m_blocks.cbegin(), d->m_blocks.cend(), [](const BlockView &view) { return view.extras != nullptr; }));
+}
+
+int MarkdownEditor::blockCountForTest() const
+{
+    return int(d->m_blocks.size());
+}
+
+int MarkdownEditor::untouchedBlockExtrasCountForTest() const
+{
+    return int(std::count_if(d->m_blocks.cbegin(), d->m_blocks.cend(),
+                             [](const BlockView &view) { return !view.touched && view.extras != nullptr; }));
+}
+
 void MarkdownEditor::setLastParseTimeForTest(qint64 nanoseconds)
 {
     d->m_lastParseNs = nanoseconds;
@@ -1879,7 +1900,7 @@ void MarkdownEditor::rebuildBlocks()
             const auto old = oldBlockAt(view.span.range.start);
             // a CSV embed is a paragraph by kind: what it was laid out as (isBase) says it is a table
             const bool scrolls = view.span.kind == BlockSpan::Kind::Code || view.span.kind == BlockSpan::Kind::Table
-                                 || (old != d->m_blocks.cend() && old->isBase && !old->CSVpath.isEmpty());
+                                 || (old != d->m_blocks.cend() && old->isBase && !old->x().CSVpath.isEmpty());
             if (scrolls && old != d->m_blocks.cend() && old->span.range.start == view.span.range.start)
                 view.sideScroll = old->sideScroll;
         }
@@ -2573,7 +2594,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         add({item.marker.end, item.range.end}, struck);
     }
 
-    for (const NestedCallout &nested : view.nested) {
+    for (const NestedCallout &nested : view.x().nested) {
         if (!nested.span->titleRange.isValid() || !nested.span->titleRange.overlaps(block))
             continue;
         QTextCharFormat title;
@@ -2680,7 +2701,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
     // Inline HTML tags layoutInlineHtml recognised and paired: it already
     // hid the tags themselves, so this is the format for the text between
     // them (`<b>text</b>` -> "text", bold).
-    for (const auto &[source, htmlFormat] : view.inlineHtmlFormats)
+    for (const auto &[source, htmlFormat] : view.x().inlineHtmlFormats)
         add(source, htmlFormat);
     return underlay + formats;
 }
@@ -3168,7 +3189,7 @@ void MarkdownEditor::toggleTask(const ListItemSpan &item)
 int MarkdownEditor::nestingDepthAt(const BlockView &view, qsizetype source) const
 {
     int depth = 0;
-    for (const NestedCallout &nested : view.nested) {
+    for (const NestedCallout &nested : view.x().nested) {
         if (nested.span->range.contains(source))
             depth = qMax(depth, nested.span->depth);
     }
@@ -3196,7 +3217,7 @@ void MarkdownEditor::paintCallout(QPainter &painter, const BlockView &view, qrea
     if (!view.callout)
         return;
 
-    const CalloutStyle &style = view.calloutStyle;
+    const CalloutStyle &style = view.x().calloutStyle;
     // A callout in pieces is one panel: each piece draws its slice of it, the
     // rounded corners only where the panel really begins and ends.
     const bool first = view.piece == 0;
@@ -3276,22 +3297,26 @@ void MarkdownEditor::hideWholeBlockText(BlockView &view)
 
 bool MarkdownEditor::layoutEmbed(BlockView &view)
 {
-    view.image = QPixmap();
-    view.imagePath.clear();
-    view.embedLabel.clear();
-    view.embedPanel = false;
-    view.mediaPath.clear();
-    view.mediaVideo = false;
-    view.isPdfEmbed = false;
-    view.pdfCells.clear();
-    view.pdfError.clear();
-    view.isFileCard = false;
+    // Nothing to reset in a view that never held anything: no allocation for a plain paragraph.
+    if (BlockExtras *e = view.extras.get()) {
+        e->image = QPixmap();
+        e->imagePath.clear();
+        e->embedLabel.clear();
+        e->embedPanel = false;
+        e->mediaPath.clear();
+        e->mediaVideo = false;
+        e->isPdfEmbed = false;
+        e->pdfCells.clear();
+        e->pdfError.clear();
+        e->isFileCard = false;
+    }
     // A runnable embed (layoutSourceFile, NotebookEmbed part) sets these;
     // reset here so a file that stops being runnable - a non-code extension
     // now, or the notebooks feature toggled off - does not keep showing a
     // stale run control or a previous run's output.
     view.notebookEligible = false;
-    view.notebookOutputs.clear();
+    if (view.extras)
+        view.extras->notebookOutputs.clear();
 
     const EmbedSpan *embed = soleEmbedOf(view);
     if (!embed)
@@ -3379,11 +3404,11 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
     const int width = qMax(1, qRound(size.width()));
     const int height = qMax(1, qRound(size.height()));
 
-    view.image = pixmap;
-    view.imageSize = QSize(width, height);
-    view.imagePath = path;
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(width, height);
+    view.extrasMut().imagePath = path;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.height = height;
     hideWholeBlockText(view);
     view.laidOut = true;
@@ -3403,10 +3428,10 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
     if (isBinaryFile(path))
         return layoutFileCard(view, embed, path);
 
-    view.embedLabel = info.fileName();
-    view.embedPanel = true;
+    view.extrasMut().embedLabel = info.fileName();
+    view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = codeHeaderHeight();
 
     QString body;
@@ -3433,7 +3458,7 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
                                  ? first
                                  : qBound(first, match.captured(2).toInt(), int(lines.size()));
             body = lines.mid(first - 1, last - first + 1).join(QLatin1Char('\n'));
-            view.embedLabel =
+            view.extrasMut().embedLabel =
                 first == last ? tr("%1:%2").arg(info.fileName()).arg(first)
                               : tr("%1:%2-%3").arg(info.fileName()).arg(first).arg(last);
         }
@@ -3531,11 +3556,11 @@ bool MarkdownEditor::layoutMath(BlockView &view)
     // Display maths is centred in the column, as TeX sets it.
     const int width = int(pixmap.width() / pixmap.devicePixelRatio());
     const int height = int(pixmap.height() / pixmap.devicePixelRatio());
-    view.image = pixmap;
-    view.imageSize = QSize(width, height);
-    view.imageCentred = true;
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(width, height);
+    view.extrasMut().imageCentred = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.height = height + 12;
     view.laidOut = true;
     return true;
@@ -3588,12 +3613,12 @@ void MarkdownEditor::layoutInlineMaths(BlockView &view, QList<Range> &hidden)
             d->m_images.insert(key, pixmap);
         }
 
-        BlockView::InlineMath formula;
+        BlockExtras::InlineMath formula;
         formula.sourcePos = math.range.start; // the "$" DisplayMap left visible
         formula.image = pixmap;
         formula.imageSize = QSize(int(pixmap.width() / pixmap.devicePixelRatio()),
                                   int(pixmap.height() / pixmap.devicePixelRatio()));
-        view.inlineMaths.push_back(formula);
+        view.extrasMut().inlineMaths.push_back(formula);
     }
 }
 
@@ -3621,7 +3646,7 @@ void MarkdownEditor::layoutAnchorSeparators(BlockView &view, QList<Range> &hidde
             hidden.append(span.anchorHash); // [[#Heading]]: this note's own heading
             continue;
         }
-        view.separators.push_back(
+        view.extrasMut().separators.push_back(
             {span.anchorHash.start, 0,
              linkColourFor(span.payload)});
     }
@@ -3630,11 +3655,11 @@ void MarkdownEditor::layoutAnchorSeparators(BlockView &view, QList<Range> &hidde
 void MarkdownEditor::paintAnchorSeparators(QPainter &painter, const BlockView &view, qreal left,
                                            qreal top) const
 {
-    if (view.separators.empty() || !view.layout)
+    if (view.x().separators.empty() || !view.layout)
         return;
     painter.save();
     painter.setFont(view.layout->font());
-    for (const BlockView::AnchorSeparator &separator : view.separators) {
+    for (const BlockExtras::AnchorSeparator &separator : view.x().separators) {
         const QTextLine line = view.layout->lineForTextPosition(int(separator.displayPos));
         if (!line.isValid())
             continue;
@@ -3649,10 +3674,10 @@ void MarkdownEditor::paintAnchorSeparators(QPainter &painter, const BlockView &v
 void MarkdownEditor::paintInlineMaths(QPainter &painter, const BlockView &view, qreal left,
                                       qreal top) const
 {
-    if (view.inlineMaths.empty() || !view.layout)
+    if (view.x().inlineMaths.empty() || !view.layout)
         return;
 
-    for (const BlockView::InlineMath &formula : view.inlineMaths) {
+    for (const BlockExtras::InlineMath &formula : view.x().inlineMaths) {
         const QTextLine line = view.layout->lineForTextPosition(int(formula.displayPos));
         if (!line.isValid())
             continue;
@@ -3690,7 +3715,8 @@ QColor cssColor(const QString &text)
 
 bool MarkdownEditor::layoutTable(BlockView &view)
 {
-    view.cells.clear();
+    if (view.extras)
+        view.extras->cells.clear();
     const TableSpan *table = tableFor(view);
     if (!table || table->columns <= 0 || table->rows.isEmpty())
         return false;
@@ -3881,8 +3907,8 @@ bool MarkdownEditor::layoutTable(BlockView &view)
                            widths.value(cell.column), rowHeights.value(cell.row));
     }
 
-    view.cells = std::move(cells);
-    view.headerRows = table->headerRows;
+    view.extrasMut().cells = std::move(cells);
+    view.extrasMut().headerRows = table->headerRows;
     view.sideScroll = qBound<qreal>(0, view.sideScroll,
                                      qMax<qreal>(0, view.sideWidth - contentWidth()));
     view.layout.reset();
@@ -3920,14 +3946,14 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     // outside a paint event (an export paints the whole table).
     const QRectF exposed = d->m_exposed;
     int painted = 0;
-    for (const Cell &cell : view.cells) {
+    for (const Cell &cell : view.x().cells) {
         const QRectF rect = cell.rect.translated(left + shift, top);
         if (rect.right() < window.left() - 2 || rect.left() > window.right() + 2)
             continue;
         if (!exposed.isNull() && (rect.bottom() < exposed.top() - 2 || rect.top() > exposed.bottom() + 2))
             continue;
         ++painted;
-        if (cell.row < view.headerRows)
+        if (cell.row < view.x().headerRows)
             painter.fillRect(rect, header);
         if (cell.fill.isValid())
             painter.fillRect(rect, cell.fill);
@@ -3979,7 +4005,7 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     d->m_tableCellsPainted = painted;
     if (!picked.isNull()) {
         const auto cellAt = [&](int row, int column) {
-            return view.cells[size_t(row) * size_t(tableFor(view)->columns) + size_t(column)].rect;
+            return view.x().cells[size_t(row) * size_t(tableFor(view)->columns) + size_t(column)].rect;
         };
         const QRectF box = cellAt(picked.top(), picked.left()).united(cellAt(picked.bottom(), picked.right()));
         painter.setBrush(Qt::NoBrush);
@@ -4045,12 +4071,12 @@ QString clockOf(qint64 milliseconds)
 
 bool MarkdownEditor::layoutMedia(BlockView &view, const QString &path, bool video)
 {
-    view.mediaPath = path;
-    view.mediaVideo = video;
-    view.embedLabel = QFileInfo(path).fileName();
-    view.embedPanel = true;
+    view.extrasMut().mediaPath = path;
+    view.extrasMut().mediaVideo = video;
+    view.extrasMut().embedLabel = QFileInfo(path).fileName();
+    view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = codeHeaderHeight();
     view.height = view.textTop + mediaScreenRect(view, 0, 0).height() + kMediaControls;
     hideWholeBlockText(view);
@@ -4060,7 +4086,7 @@ bool MarkdownEditor::layoutMedia(BlockView &view, const QString &path, bool vide
 
 QRectF MarkdownEditor::mediaScreenRect(const BlockView &view, qreal left, qreal top) const
 {
-    if (!view.mediaVideo)
+    if (!view.x().mediaVideo)
         return QRectF(left, top + view.textTop, contentWidth(), 0);
     const qreal height = qMin<qreal>(contentWidth() * 9.0 / 16.0, 420);
     return QRectF(left, top + view.textTop, contentWidth(), height);
@@ -4081,14 +4107,14 @@ QRectF MarkdownEditor::mediaBarRect(const BlockView &view, qreal left, qreal top
 void MarkdownEditor::paintMedia(QPainter &painter, const BlockView &view, qreal left,
                                 qreal top) const
 {
-    const bool current = d->m_media && d->m_media->path() == view.mediaPath;
+    const bool current = d->m_media && d->m_media->path() == view.x().mediaPath;
     const bool playing = current && d->m_media->isPlaying();
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
     const QColor accent = d->m_theme.color(QStringLiteral("--interactive-accent"));
 
     painter.save();
     const QRectF screen = mediaScreenRect(view, left, top);
-    if (view.mediaVideo) {
+    if (view.x().mediaVideo) {
         painter.fillRect(screen, Qt::black);
         const QImage frame = current ? d->m_media->frame() : QImage();
         if (!frame.isNull()) {
@@ -4146,7 +4172,7 @@ void MarkdownEditor::paintMedia(QPainter &painter, const BlockView &view, qreal 
 bool MarkdownEditor::handleMediaClick(const BlockView &view, const QPoint &point, qreal left,
                                       qreal top)
 {
-    if (view.mediaPath.isEmpty())
+    if (view.x().mediaPath.isEmpty())
         return false;
     const QRectF bar = mediaBarRect(view, left, top).adjusted(0, -8, 0, 8);
     const bool onButton = mediaButtonRect(view, left, top).adjusted(-4, -4, 4, 4).contains(point)
@@ -4154,7 +4180,7 @@ bool MarkdownEditor::handleMediaClick(const BlockView &view, const QPoint &point
     if (!onButton && !bar.contains(point))
         return false;
     if (!MediaPlayback::isAvailable()) {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(view.mediaPath));
+        QDesktopServices::openUrl(QUrl::fromLocalFile(view.x().mediaPath));
         return true;
     }
     if (!d->m_media) {
@@ -4163,21 +4189,21 @@ bool MarkdownEditor::handleMediaClick(const BlockView &view, const QPoint &point
         connect(d->m_media, &MediaPlayback::changed, this, [this] {
             const qreal scroll = verticalScrollBar()->value();
             for (const BlockView &block : d->m_blocks) {
-                if (block.mediaPath == d->m_media->path()) {
+                if (block.x().mediaPath == d->m_media->path()) {
                     viewport()->update(QRect(0, int(block.y - scroll) - 8, viewport()->width(),
                                              int(block.height) + 16));
                 }
             }
         });
     }
-    const bool current = d->m_media->path() == view.mediaPath;
+    const bool current = d->m_media->path() == view.x().mediaPath;
     if (bar.contains(point) && current && d->m_media->duration() > 0) {
         const qreal fraction = qBound<qreal>(0, (point.x() - bar.left()) / bar.width(), 1);
         d->m_media->seek(qint64(fraction * d->m_media->duration()));
     } else if (current && d->m_media->isPlaying()) {
         d->m_media->pause();
     } else {
-        d->m_media->play(view.mediaPath);
+        d->m_media->play(view.x().mediaPath);
     }
     viewport()->update();
     return true;
@@ -4191,7 +4217,7 @@ void MarkdownEditor::paintEmbedChrome(QPainter &painter, const BlockView &view, 
     rounded.addRoundedRect(panel, 6, 6);
     painter.fillPath(rounded, d->m_theme.color(QStringLiteral("--background-primary-alt")));
 
-    if (view.embedLabel.isEmpty())
+    if (view.x().embedLabel.isEmpty())
         return;
 
     painter.save();
@@ -4201,7 +4227,7 @@ void MarkdownEditor::paintEmbedChrome(QPainter &painter, const BlockView &view, 
     painter.setPen(d->m_theme.color(QStringLiteral("--text-faint")));
     painter.drawText(QRectF(panel.left() + 12, panel.top() + 6, panel.width() - 24,
                             view.textTop),
-                     Qt::AlignVCenter | Qt::AlignLeft, view.embedLabel);
+                     Qt::AlignVCenter | Qt::AlignLeft, view.x().embedLabel);
     painter.restore();
 }
 
@@ -4232,7 +4258,7 @@ MarkdownEditor::BlockView *MarkdownEditor::sidewaysScrollableAt(const QPoint &vi
         if (view.span.kind == BlockSpan::Kind::Code) {
             if (sideExtent(view) > contentWidth())
                 return &view - view.piece;
-        } else if (!view.cells.empty() && view.sideWidth > contentWidth()) {
+        } else if (!view.x().cells.empty() && view.sideWidth > contentWidth()) {
             return &view;
         }
     }
@@ -4246,49 +4272,51 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // Whatever this block drew rendered last time goes: a block being edited
     // shows its source, and a PDF, a video or a card left over from before
     // would be painted over that source and the blocks below it.
-    view.isPdfEmbed = false;
-    view.pdfCells.clear();
-    view.pdfError.clear();
-    view.mediaPath.clear();
-    view.mediaVideo = false;
-    view.imagePath.clear();
-    view.cells.clear();
+    if (BlockExtras *e = view.extras.get()) {
+        e->isPdfEmbed = false;
+        e->pdfCells.clear();
+        e->pdfError.clear();
+        e->mediaPath.clear();
+        e->mediaVideo = false;
+        e->imagePath.clear();
+        e->image = QPixmap();
+        e->imageCentred = false;
+        e->embedCells.clear();
+        e->isFileCard = false;
+        e->embedPanel = false;
+        e->embedLabel.clear();
+        e->previewImage = QPixmap();
+        e->previewHint.clear();
+        e->previewRect = QRectF();
+        e->cells.clear();
+        e->propertyRows.clear();
+        e->codeBlockKey.clear();
+        e->referenceTarget.clear();
+        e->referenceKey.clear();
+        e->inlineMaths.clear();
+        e->separators.clear();
+        e->footnoteMarks.clear();
+        e->queryRows.clear();
+        e->queryCollapseRect = QRectF();
+        e->querySortRect = QRectF();
+        e->queryResultCountText.clear();
+        e->baseViewName.clear();
+        e->baseYAML.clear();
+        e->baseRows.clear();
+        e->CSVpath.clear();
+        e->inlineHtmlFormats.clear();
+    }
     view.sideWidth = 0;
     view.callout = nullptr;
     view.options = nullptr;
-    view.propertyRows.clear();
-    view.image = QPixmap();
-    view.imageCentred = false;
     view.textTop = 0;
     view.folded = false;
-    view.inlineMaths.clear();
-    view.separators.clear();
-    view.footnoteMarks.clear();
     view.tabHidden = false;
     view.tabGroup = -1;
     view.isQuery = false;
-    view.queryRows.clear();
-    view.queryCollapseRect = QRectF();
-    view.querySortRect = QRectF();
-    view.queryResultCountText.clear();
     view.isBase = false;
-    view.baseViewName.clear();
-    view.baseYAML.clear();
-    view.baseRows.clear();
-    view.CSVpath.clear();
-    view.embedCells.clear();
-    view.isFileCard = false;
     view.isHtml = false;
     view.isPluginBlock = false;
-    view.codeBlockKey.clear();
-    view.referenceTarget.clear();
-    view.referenceKey.clear();
-    view.embedPanel = false;
-    view.embedLabel.clear();
-    view.inlineHtmlFormats.clear();
-    view.previewImage = QPixmap();
-    view.previewHint.clear();
-    view.previewRect = QRectF();
 
     // A tab group shows one of its fences under a strip of tabs, and hides the
     // rest along with the blank lines between them. With the caret anywhere
@@ -4399,7 +4427,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // Decided under an earlier state (the tab shown with its run control,
         // before the caret came into the group): plain source has none.
         view.notebookEligible = false;
-        view.notebookOutputs.clear();
+        if (view.extras)
+            view.extras->notebookOutputs.clear();
     }
 
     const bool perElement = d->m_mode == Mode::LivePreview && view.active && !revealsWholeBlock(view);
@@ -4444,12 +4473,14 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                              : DisplayMap::build(d->m_text, view.span.range, listFolds, {}))
                       : DisplayMap::build(d->m_text, view.span.range, hidden,
                                           openEntities.isEmpty() ? d->m_decorations.substitutions : withoutOpen);
-    for (BlockView::InlineMath &formula : view.inlineMaths)
-        formula.displayPos = view.map.toDisplay(formula.sourcePos);
-    for (BlockView::AnchorSeparator &separator : view.separators)
-        separator.displayPos = view.map.toDisplay(separator.sourcePos);
-    for (BlockView::FootnoteMark &mark : view.footnoteMarks)
-        mark.displayPos = view.map.toDisplay(mark.sourcePos);
+    if (BlockExtras *e = view.extras.get()) { // a plain paragraph has none of these
+        for (BlockExtras::InlineMath &formula : e->inlineMaths)
+            formula.displayPos = view.map.toDisplay(formula.sourcePos);
+        for (BlockExtras::AnchorSeparator &separator : e->separators)
+            separator.displayPos = view.map.toDisplay(separator.sourcePos);
+        for (BlockExtras::FootnoteMark &mark : e->footnoteMarks)
+            mark.displayPos = view.map.toDisplay(mark.sourcePos);
+    }
 
     // QTextLayout lays out one paragraph and ignores "\n"; U+2028 is the
     // character it does break on. Same length, so every display offset the
@@ -4472,17 +4503,18 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 
     view.callout = view.span.kind == BlockSpan::Kind::Callout && !plainSource(view) ? calloutFor(view) : nullptr;
     if (view.callout)
-        view.calloutStyle = d->m_calloutStyles.resolve(view.callout->type, view.callout->attributes,
+        view.extrasMut().calloutStyle = d->m_calloutStyles.resolve(view.callout->type, view.callout->attributes,
                                                     d->m_theme);
     // Callouts nest, and only the outermost one is a block. The rest are
     // painted inside this layout, so they have to be found before it is built:
     // each nested one indents the lines it covers.
-    view.nested.clear();
+    if (view.extras)
+        view.extras->nested.clear();
     if (view.callout) {
         for (const CalloutSpan &callout : d->m_decorations.callouts) {
             // One that began in an earlier piece still covers lines of this.
             if (callout.depth > 0 && callout.range.overlaps(view.span.range))
-                view.nested.push_back(
+                view.extrasMut().nested.push_back(
                     {&callout,
                      d->m_calloutStyles.resolve(callout.type, callout.attributes, d->m_theme)});
         }
@@ -4535,7 +4567,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.layout->setCacheEnabled(true);
     // A callout may name its own body font, size and effects; everything else
     // takes the font its kind implies.
-    view.layout->setFont(view.callout ? view.calloutStyle.bodyFont(d->m_theme)
+    view.layout->setFont(view.callout ? view.x().calloutStyle.bodyFont(d->m_theme)
                                       : fontFor(strayAt >= 0 ? BlockSpan{BlockSpan::Kind::Paragraph, {0, 0}, 0}
                                                              : view.span));
 
@@ -4569,7 +4601,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         heading.setFont(fontFor(view.span));
         formats.prepend({0, int(strayAt - 1), heading}); // under every style span, which refine it
     }
-    for (const BlockView::InlineMath &formula : view.inlineMaths) {
+    for (const BlockExtras::InlineMath &formula : view.x().inlineMaths) {
         // The "$" DisplayMap left visible carries the image: invisible ink,
         // and letter spacing wide enough that the line reserves exactly the
         // room the paint step draws into.
@@ -4581,7 +4613,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                           .horizontalAdvance(QLatin1Char('$')));
         formats.append({int(formula.displayPos), 1, format});
     }
-    if (!view.separators.empty()) {
+    if (!view.x().separators.empty()) {
         // ponytail: measured in the block's font; a "#" inside bold or italic
         // text is a little off from the separator painted over it.
         const QFontMetricsF metrics(view.layout->font());
@@ -4590,10 +4622,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
         format.setFontLetterSpacing(metrics.horizontalAdvance(QStringLiteral(" > "))
                                     - metrics.horizontalAdvance(QLatin1Char('#')));
-        for (const BlockView::AnchorSeparator &separator : view.separators)
+        for (const BlockExtras::AnchorSeparator &separator : view.x().separators)
             formats.append({int(separator.displayPos), 1, format});
     }
-    for (const BlockView::FootnoteMark &mark : view.footnoteMarks) {
+    for (const BlockExtras::FootnoteMark &mark : view.x().footnoteMarks) {
         // Same trick: the carrier character reserves exactly the width the
         // number needs, in whichever of the two footnote fonts it paints in.
         const QFontMetricsF metrics(footnoteMarkFont(view.layout->font(), mark.superscript));
@@ -4619,8 +4651,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     else
         view.listTextX.clear();
     const qreal codeGutter = codeGutterWidth(view);
-    const qreal lineHeight = view.callout && view.calloutStyle.size > 0
-                                 ? view.calloutStyle.size * 1.5
+    const qreal lineHeight = view.callout && view.x().calloutStyle.size > 0
+                                 ? view.x().calloutStyle.size * 1.5
                                  : lineHeightFor(view.span);
     const qreal bodyLineHeight = lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0});
     view.layout->beginLayout();
@@ -4640,7 +4672,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                           - (view.callout ? 28 : 0));
         // A line carrying an inline embed taller than its text grows above
         // the text to hold it.
-        const qreal grow = view.embedCells.empty()
+        const qreal grow = view.x().embedCells.empty()
                                ? 0
                                : qMax<qreal>(0, textEmbedHeightOn(view, line) - lineHeight);
         line.setPosition(QPointF(indent, height + grow));
@@ -4663,7 +4695,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // The title line is drawn by the callout header, so the body starts
         // below it; an empty callout still shows its title. A later piece
         // carries on the body.
-        view.textTop = view.piece == 0 ? calloutHeaderHeight(view.calloutStyle) : 0;
+        view.textTop = view.piece == 0 ? calloutHeaderHeight(view.x().calloutStyle) : 0;
         view.height = height;
     } else if (hasCodeHeader(view) && view.piece == 0) {
         view.textTop = codeHeaderHeight(); // the `#|` header, the tab strip, or the run control
@@ -4677,9 +4709,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // see the `view.notebookEligible` block just under this one.
     view.height = (view.folded || notebookEchoHidden) ? 0 : view.height + codeCaptionHeight(view);
     view.height += view.textTop;
-    if (view.folded)
-        view.embedCells.clear();
-    else
+    if (view.folded) {
+        if (view.extras)
+            view.extras->embedCells.clear();
+    } else
         placeTextEmbeds(view, lineHeight);
     // A notebook block's output, below its own listing - never in place of
     // it, unlike layoutPluginCode's fences. Only the first piece carries it
@@ -5091,7 +5124,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
 
         if (view.callout) {
             paintCallout(painter, view, left, top);
-            painter.setPen(view.calloutStyle.color.isValid() ? view.calloutStyle.color : text);
+            painter.setPen(view.x().calloutStyle.color.isValid() ? view.x().calloutStyle.color : text);
         } else {
             painter.setPen(text);
         }
@@ -5153,7 +5186,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
         // text: drawn inline, under the text's invisible carriers.
         paintEmbedCells(painter, view, left, top);
 
-        if (view.embedPanel) {
+        if (view.x().embedPanel) {
             paintEmbedChrome(painter, view, left, top);
             // A runnable code-file embed (NotebookEmbed part of
             // FileEmbedBlock.cpp): the same run control and output cells a
@@ -5166,37 +5199,37 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
                     paintNotebookOutput(painter, view, left, top);
             }
         }
-        if (view.isPdfEmbed) {
+        if (view.x().isPdfEmbed) {
             paintPdfEmbed(painter, view, left, top);
             continue;
         }
-        if (view.isFileCard) {
+        if (view.x().isFileCard) {
             paintFileCard(painter, view, left, top);
             continue;
         }
-        if (!view.mediaPath.isEmpty()) {
+        if (!view.x().mediaPath.isEmpty()) {
             paintMedia(painter, view, left, top);
             continue;
         }
 
-        if (!view.image.isNull()) {
+        if (!view.x().image.isNull()) {
             const qreal imageX =
-                view.imageCentred ? left + (contentWidth() - view.imageSize.width()) / 2.0 : left;
-            const QRectF target(imageX, top + view.textTop, view.imageSize.width(),
-                                view.imageSize.height());
-            painter.drawPixmap(target.toRect(), GIFframe(painter, view.imagePath, target, view.image));
+                view.x().imageCentred ? left + (contentWidth() - view.x().imageSize.width()) / 2.0 : left;
+            const QRectF target(imageX, top + view.textTop, view.x().imageSize.width(),
+                                view.x().imageSize.height());
+            painter.drawPixmap(target.toRect(), GIFframe(painter, view.x().imagePath, target, view.x().image));
             continue;
         }
-        if (view.isBase && !view.cells.empty()) {
+        if (view.isBase && !view.x().cells.empty()) {
             paintBase(painter, view, left, top);
             continue;
         }
-        if (!view.cells.empty()) {
+        if (!view.x().cells.empty()) {
             paintTable(painter, view, left, top);
             continue;
         }
         if (view.layout) {
-            const qreal indent = view.callout ? 14 : (view.embedPanel ? 2 : 0);
+            const qreal indent = view.callout ? 14 : (view.x().embedPanel ? 2 : 0);
             const qreal drop = view.textTop;
             if (d->m_mode != Mode::Source) {
                 // Behind the text, outermost first: a nested callout's panel,
@@ -5407,7 +5440,7 @@ QPointF MarkdownEditor::pointFor(qsizetype offset, qreal *height) const
     if (view.foldHidden)
         return {}; // a caret restored inside a fold has nowhere to be drawn
     const Cell *cell = nullptr;
-    for (const Cell &candidate : view.cells) {
+    for (const Cell &candidate : view.x().cells) {
         if (candidate.source.isValid() && candidate.source.start <= offset && offset <= candidate.source.end)
             cell = &candidate;
     }
@@ -5458,12 +5491,12 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
     for (const BlockView &view : d->m_blocks) {
         if (view.foldHidden)
             continue;
-        if (!view.cells.empty()) {
+        if (!view.x().cells.empty()) {
             if (y < view.y || y > view.y + view.height)
                 continue;
             // Clicking a cell puts the caret on the character under the
             // pointer, and the table is edited where it is drawn.
-            for (const Cell &cell : view.cells) {
+            for (const Cell &cell : view.x().cells) {
                 // A cell with no source - a base's, or one a short row lacks
                 // - has no character to land on; the block's start does.
                 if (!cell.source.isValid() || !cell.rect.translated(-view.sideScroll, view.y).contains(QPointF(x, y)))
@@ -5669,7 +5702,7 @@ void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
             // for a moment, as an edit that rewrites it leaves it) has no
             // cells either, and is the one that must be drawn as a grid now.
             if (block < 0 || block >= qsizetype(d->m_blocks.size())
-                || (d->m_blocks[size_t(block)].cells.empty() && d->m_blocks[size_t(block)].span.kind != BlockSpan::Kind::Table))
+                || (d->m_blocks[size_t(block)].x().cells.empty() && d->m_blocks[size_t(block)].span.kind != BlockSpan::Kind::Table))
                 continue;
             BlockView &view = d->m_blocks[size_t(block)];
             view.laidOut = false;

@@ -42,7 +42,7 @@ QSize MarkdownEditor::htmlImageSizeAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
-    return view.isHtml ? view.imageSize : QSize();
+    return view.isHtml ? view.x().imageSize : QSize();
 }
 
 bool MarkdownEditor::layoutHtml(BlockView &view)
@@ -59,8 +59,8 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
         return false;
 
     view.isHtml = true;
-    view.image = QPixmap();
-    view.cells.clear();
+    view.extrasMut().image = QPixmap();
+    view.extrasMut().cells.clear();
 
     // A script never runs (litehtml has no interpreter, and sanitise() strips
     // it anyway); its source is shown in its place instead, red and bold, so
@@ -115,9 +115,9 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
     }
 
     const int height = int(pixmap.height() / pixmap.devicePixelRatio());
-    view.image = pixmap;
-    view.imageSize = QSize(int(pixmap.width() / pixmap.devicePixelRatio()), height);
-    view.imageCentred = false;
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(int(pixmap.width() / pixmap.devicePixelRatio()), height);
+    view.extrasMut().imageCentred = false;
     view.layout.reset();
     view.height = height + 8;
     view.laidOut = true;
@@ -230,14 +230,14 @@ void MarkdownEditor::layoutInlineHtml(BlockView &view, QList<Range> &hidden)
     // between them, the way `**bold**` keeps its weight with its asterisks shown.
     for (const InlineHTMLpair &pair : inlineHTMLpairs(view)) {
         if (pair.shown) {
-            view.inlineHtmlFormats.push_back({Range{pair.open.start, pair.close.end}, pair.format});
+            view.extrasMut().inlineHtmlFormats.push_back({Range{pair.open.start, pair.close.end}, pair.format});
             continue;
         }
         if (!view.revealed.contains(pair.open))
             hidden.append(pair.open);
         if (!view.revealed.contains(pair.close))
             hidden.append(pair.close);
-        view.inlineHtmlFormats.push_back({Range{pair.open.end, pair.close.start}, pair.format});
+        view.extrasMut().inlineHtmlFormats.push_back({Range{pair.open.end, pair.close.start}, pair.format});
     }
 }
 

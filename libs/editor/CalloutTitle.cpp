@@ -20,7 +20,7 @@ QRectF MarkdownEditor::calloutTitleRect(const BlockView &view, qreal left, qreal
     if (!callout || callout->depth != 0 || view.piece != 0 || !callout->titleRange.isValid()
         || d->m_text.at(callout->marker.start) != QLatin1Char('['))
         return {};
-    const QFontMetricsF metrics(view.calloutStyle.titleFont(d->m_theme));
+    const QFontMetricsF metrics(view.x().calloutStyle.titleFont(d->m_theme));
     const qreal height = metrics.height();
     // The same box paintCallout draws the text in: from the icon to the fold arrow.
     const qreal titleLeft = left + height + 8;
@@ -70,16 +70,16 @@ void MarkdownEditor::openCalloutTitleEditor(const CalloutSpan &callout, const QR
     auto *edit = new QLineEdit(viewport());
     edit->setObjectName(QStringLiteral("calloutTitleEdit"));
     edit->setFrame(false);
-    edit->setFont(view.calloutStyle.titleFont(d->m_theme));
+    edit->setFont(view.x().calloutStyle.titleFont(d->m_theme));
     // The panel's own colour, so the field looks like the header it sits in: the
     // callout background is translucent over the page.
     const QColor page = d->m_theme.color(QStringLiteral("--background-primary"));
-    const QColor tint = view.calloutStyle.background;
+    const QColor tint = view.x().calloutStyle.background;
     const auto mix = [&tint](int below, int above) { return int(below + (above - below) * tint.alphaF() + 0.5); };
     QPalette palette = edit->palette();
     palette.setColor(QPalette::Base, QColor(mix(page.red(), tint.red()), mix(page.green(), tint.green()),
                                             mix(page.blue(), tint.blue())));
-    palette.setColor(QPalette::Text, view.calloutStyle.headingColor);
+    palette.setColor(QPalette::Text, view.x().calloutStyle.headingColor);
     palette.setColor(QPalette::Highlight, d->m_theme.color(QStringLiteral("--interactive-accent")));
     edit->setPalette(palette);
     // QLineEdit insets its text by 2 px; start that far left so the text stays put.

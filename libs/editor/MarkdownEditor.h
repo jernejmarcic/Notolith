@@ -961,6 +961,13 @@ public:
     /// How many parses have run on this editor, on the calling thread or the
     /// pool. For the tests.
     int parseCountForTest() const;
+    /// sizeof one block view: a 1 MB note has tens of thousands of them. For the tests.
+    static std::size_t blockViewSizeForTest();
+    /// How many block views hold a BlockExtras (the rarely used fields), and how many
+    /// of those were never laid out - always 0, an untouched view is a bare one. For the tests.
+    int blockExtrasCountForTest() const;
+    int blockCountForTest() const;
+    int untouchedBlockExtrasCountForTest() const;
     /// How many diagrams the fence cache holds (drawn, pending or failed).
     int codeBlockCacheSizeForTest() const;
     /// Pretends the last parse took this long, which is what decides whether
@@ -1247,6 +1254,7 @@ private:
     struct NestedCallout;
     struct EmbedCell;
     struct BlockView;
+    struct BlockExtras;
     struct FoldMark;
     struct CodeLabel;
     struct TabGroup;

@@ -91,7 +91,7 @@ void MarkdownEditor::appendPreview(BlockView &view)
             // The drawing this replaces is no longer wanted, unless a block still shows it.
             if (!d->m_previewRequested.isEmpty() && d->m_previewRequested != key) {
                 const bool shown = std::any_of(d->m_blocks.cbegin(), d->m_blocks.cend(), [this](const BlockView &block) {
-                    return block.codeBlockKey == d->m_previewRequested;
+                    return block.extras && block.extras->codeBlockKey == d->m_previewRequested;
                 });
                 if (!shown)
                     d->m_codeBlockCache.remove(d->m_previewRequested);
@@ -99,7 +99,7 @@ void MarkdownEditor::appendPreview(BlockView &view)
             QString requested;
             const CodeBlockCacheEntry *entry = requestCodeBlock(language, source, width, &requested);
             d->m_previewRequested = requested;
-            view.codeBlockKey = requested; // deliverCodeBlock lays this block out again when the drawing lands
+            view.extrasMut().codeBlockKey = requested; // deliverCodeBlock lays this block out again when the drawing lands
             if (entry && !entry->pending && !entry->image.isNull()) {
                 image = QPixmap::fromImage(entry->image);
                 d->m_previewStale = image;
@@ -135,29 +135,29 @@ void MarkdownEditor::appendPreview(BlockView &view)
         const qreal ratio = image.devicePixelRatio();
         const qreal width = qMin<qreal>(contentWidth(), image.width() / ratio);
         const qreal height = image.height() / ratio;
-        view.previewImage = image;
-        view.previewRect = QRectF(centred ? (contentWidth() - width) / 2.0 : 0, view.height + kGap, width, height);
+        view.extrasMut().previewImage = image;
+        view.extrasMut().previewRect = QRectF(centred ? (contentWidth() - width) / 2.0 : 0, view.height + kGap, width, height);
         view.height += kGap + height;
     } else if (!hint.isEmpty()) {
         const qreal height = QFontMetricsF(d->m_theme.textFont()).height();
-        view.previewHint = hint;
-        view.previewRect = QRectF(0, view.height + kGap / 2, contentWidth(), height);
+        view.extrasMut().previewHint = hint;
+        view.extrasMut().previewRect = QRectF(0, view.height + kGap / 2, contentWidth(), height);
         view.height += kGap / 2 + height;
     }
 }
 
 void MarkdownEditor::paintPreview(QPainter &painter, const BlockView &view, qreal left, qreal top) const
 {
-    if (view.previewRect.isEmpty())
+    if (view.x().previewRect.isEmpty())
         return;
-    const QRectF rect = view.previewRect.translated(left, top);
-    if (!view.previewImage.isNull()) {
-        painter.drawPixmap(rect.toRect(), view.previewImage);
-    } else if (!view.previewHint.isEmpty()) {
+    const QRectF rect = view.x().previewRect.translated(left, top);
+    if (!view.x().previewImage.isNull()) {
+        painter.drawPixmap(rect.toRect(), view.x().previewImage);
+    } else if (!view.x().previewHint.isEmpty()) {
         painter.save();
         painter.setFont(d->m_theme.textFont());
         painter.setPen(d->m_theme.color(QStringLiteral("--text-muted")));
-        painter.drawText(rect, Qt::AlignVCenter | Qt::AlignLeft, view.previewHint);
+        painter.drawText(rect, Qt::AlignVCenter | Qt::AlignLeft, view.x().previewHint);
         painter.restore();
     }
 }
@@ -168,7 +168,7 @@ QSize MarkdownEditor::previewSizeAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = lastPiece(d->m_blocks[size_t(index)]);
-    return view.previewImage.isNull() ? QSize() : view.previewRect.size().toSize();
+    return view.x().previewImage.isNull() ? QSize() : view.x().previewRect.size().toSize();
 }
 
 QString MarkdownEditor::previewHintAt(qsizetype offset) const
@@ -176,7 +176,7 @@ QString MarkdownEditor::previewHintAt(qsizetype offset) const
     const qsizetype index = blockAt(offset);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    return lastPiece(d->m_blocks[size_t(index)]).previewHint;
+    return lastPiece(d->m_blocks[size_t(index)]).x().previewHint;
 }
 
 } // namespace noteAppC

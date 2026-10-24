@@ -234,117 +234,12 @@ struct MarkdownEditor::FoldMark {
     qreal rowBottom = 0;
 };
 
-struct MarkdownEditor::BlockView {
-    // The fields every pass over all the blocks reads (rebuildBlocks, indexDecorations, the
-    // first loop of updateLayout) come first, in one or two cache lines of the 1.6 kB view.
-    BlockSpan span;
-    /// A fence longer than kCodePieceLines is split into pieces of that
-    /// many lines, each a block of its own, so an edit relays out one
-    /// piece and not the whole listing. The fence's chrome is drawn across
-    /// its pieces: header, label and tabs on the first, caption on the
-    /// last. A fence that fits, and every other block, is piece 0 of 1.
-    int piece = 0;
-    int pieces = 1;
-    /// True only for the synthetic block reading view appends after the
-    /// note's own: the numbered footnote list Obsidian's reading view
-    /// shows at the end. `span.range` is a zero-length range past the
-    /// end of the text - there is no source here, so unlike every other
-    /// block it keeps its own rows instead of a QTextLayout over view.map,
-    /// the way the properties table (PropertyRow) already does.
-    bool isFootnotesList = false;
-    /// Set the first time a layout or a highlight writes to this view, and
-    /// never cleared. The invariant: an untouched view is a default one plus its
-    /// span, and every function that puts content into a view (layoutBlock and
-    /// what it calls, highlightPiece) sets this first. That is what lets a parse
-    /// that changed nothing here keep the view (rebuildBlocks): a new writer that
-    /// fills a view without going through those two would leave stale state in it.
-    bool touched = false;
-    qreal y = 0;
-    qreal height = 0;
-    /// How far a callout's panel reaches past the box above and below (panelBleed).
-    qreal bleedAbove = 0;
-    qreal bleedBelow = 0;
-    bool active = false;
-    bool laidOut = false;
-    bool heightEstimated = false;
-    /// Inside a folded heading's section: it keeps its layout and height, so
-    /// opening the fold costs nothing, but takes no room and is never painted
-    /// or hit.
-    bool foldHidden = false;
-    /// Inside the tab group the caret is in, which shows every fence.
-    /// Tracked so the caret crossing a group's edge relays out the whole
-    /// group, not only the block it landed in.
-    bool editedAsSource = false;
-    /// A single listing whose fences the caret has opened. Its source is
-    /// plain text like a group's, but it keeps its panel (drawn out over
-    /// the two fence lines, editedListingPanel), run control and output.
-    bool editedListing = false;
-    DisplayMap map;
-    std::unique_ptr<QTextLayout> layout;
-    /// Indices into the sorted decoration lists that touch this block, so
-    /// laying one out never walks the whole document.
-    int firstStyle = 0;
-    int lastStyle = 0;
-    int firstSyntax = 0;
-    int lastSyntax = 0;
-    /// Filled instead of `layout` when a table renders as a grid.
-    std::vector<Cell> cells;
-    int headerRows = 0;
-    /// A wide table's columns, or a listing's longest line, at their natural
-    /// width: when the total exceeds the readable column the block scrolls
-    /// sideways inside itself, exactly as it does in Obsidian. 0 for a block
-    /// that fits. A fence keeps one offset for all its pieces, on the first.
-    qreal sideWidth = 0;
-    qreal sideScroll = 0;
-    /// Set when this block is a callout, so painting knows its colour,
-    /// icon and title without looking the span up again.
-    const CalloutSpan *callout = nullptr;
-    /// The callout's resolved look: the built-in type, then callouts.ini,
-    /// then whatever the callout itself says. Resolved before the block is
-    /// laid out, because it can change the body font and so the metrics.
-    CalloutStyle calloutStyle;
-    /// Callouts nested inside this block, outer first. Only the outermost
-    /// callout is a block of its own; the rest are painted into this one's
-    /// layout, which is why they are resolved before it is built.
-    std::vector<NestedCallout> nested;
-    /// A fence in a tab group that is not the tab being shown, or the
-    /// blank lines between two of them: no height, nothing painted.
-    bool tabHidden = false;
-    /// Where its geometry ends: a hidden block takes no room.
-    qreal bottomY() const { return foldHidden ? y : y + height; }
-    /// Set on the fence a tab group is showing: it paints the strip.
-    /// An index into m_tabGroups, -1 outside any group.
-    int tabGroup = -1;
-    /// Where highlighting stood at the end of this piece, the state the
-    /// next one starts from. Valid when it was worked out from this
-    /// piece's current text and the end state of the piece before it.
-    CodeHighlighter::State codeEnd;
-    bool codeEndValid = false;
-    /// The caret's block, in a kind that reveals per element: the syntax
-    /// ranges the caret has uncovered. Kept so a caret moving within the
-    /// block relays it out only when this actually changes.
-    QList<Range> revealed;
-    /// The word spelling skipped because the caret was in it. Kept so
-    /// the caret moving on to another word relays the block out and the
-    /// finished one is checked.
-    Range caretWord;
-    /// Set when this block is a fenced code block carrying `#|` options.
-    const CodeOptions *options = nullptr;
-    /// Filled instead of `layout` when this is the frontmatter and live
-    /// preview draws it as Obsidian's properties table.
-    std::vector<PropertyRow> propertyRows;
-    /// For each of the block's list items (listItemsIn order): where its
-    /// text starts, block-local, and the item it is nested in (-1 for
-    /// none). Siblings share one marker column, as wide as their widest
-    /// number, so "10." pushes its list's text over rather than into it.
-    std::vector<qreal> listTextX;
-    std::vector<int> listParent;
-    /// Space above the text: a callout's title row, a code block's header
-    /// strip, or the air Obsidian puts over a heading.
-    qreal textTop = 0;
-    /// Showing its header only. Callouts, `:::` containers, `#| fold`
-    /// code blocks and the properties table can all be in this state.
-    bool folded = false;
+/// The fields of a block view that only a few kinds of block use (an image, a
+/// table, a callout, a notebook cell...), kept off the view itself: a 1 MB note
+/// is 57 000 views and a view with all of them was 1.8 kB. A view owns one only
+/// once a layout function has filled it, so a view nothing has laid out (nearly
+/// all of a big note) never allocates one, and the `touched` invariant holds.
+struct MarkdownEditor::BlockExtras {
     /// Set when the whole block is one image embed.
     QPixmap image;
     QSize imageSize;
@@ -403,73 +298,30 @@ struct MarkdownEditor::BlockView {
 
     std::vector<EmbedCell> embedCells;
 
-    /// Set when this block is a fenced ```query``` block rendered as
-    /// search results: paintBlocks and handleBlockClick both skip the
-    /// ordinary code-listing chrome (panel, "Copy", tabs) for it.
-    bool isQuery = false;
-    /// One clickable result row, in block-local coordinates (add `left`
-    /// and `top` to place it in the viewport, the way every other rect
-    /// on a BlockView already does).
-    struct QueryRow {
-        QRectF rect;
-        QString path;
-        qsizetype offset = 0;
-    };
-    std::vector<QueryRow> queryRows;
-    /// The header's two clickable controls, block-local coordinates -
-    /// null-sized when the block has no header yet (still searching, an
-    /// error, or an empty search - see layoutQuery). queryHeaderAt and
-    /// handleBlockClick both read these rather than recomputing them, so
-    /// a click always lands exactly where the paint went.
-    QRectF queryCollapseRect;
-    QRectF querySortRect;
-    /// "N results", as last computed - what queryHeaderAt hands back
-    /// without re-running a search from a const accessor.
-    QString queryResultCountText;
+    /// What appendPreview drew under this block's source (PreviewBelow.cpp):
+    /// the formula or diagram, or the line saying why there is none.
+    QPixmap previewImage;
+    QString previewHint;
+    QRectF previewRect; ///< block-local
 
-    /// Set when this block is a fenced ```` ```base ```` block rendered
-    /// as a table: paintBlocks and handleBlockClick both skip the
-    /// ordinary code-listing chrome for it, the same gate isQuery is for
-    /// a ```query``` block.
-    bool isBase = false;
-    /// The shown view's name, painted above the table - empty shows
-    /// nothing extra (an error or a still-loading block shows its
-    /// message instead of a table; see layoutBase).
-    QString baseViewName;
-    /// The view requested for this block - a `.base` embed's
-    /// `#fragment`, or empty for a fenced ```` ```base ```` block and for
-    /// an embed with no fragment. Part of the cache key alongside
-    /// baseYAML, and what deliverBaseResults matches a block back on, so
-    /// two embeds of the same file asking for different views never
-    /// share a result.
-    QString baseRequestedView;
-    QString baseYAML; ///< what the table shows: a fence's text, or a .base file's
-    /// One clickable row's first cell, block-local coordinates - only
-    /// the name column opens its note, mirroring
-    /// BaseTableModel::isNameColumn's choice for the real widget.
-    struct BaseRow {
-        QRectF rect;
-        QString path;
-    };
-    std::vector<BaseRow> baseRows;
-    /// The file a CSV/TSV embed shows (CSVembed.cpp), empty for any other
-    /// block: what deliverCSV matches a block back on. Such a block is also
-    /// isBase, which only means "painted as a data table".
-    QString CSVpath;
+    /// Filled instead of `layout` when a table renders as a grid.
+    std::vector<Cell> cells;
+    int headerRows = 0;
 
-    /// Set when this block is a raw HTML block (top-level `<div>`,
-    /// `<table>`, `<details>`... - not inline HTML inside a paragraph)
-    /// rendered by litehtml. It paints through `image` exactly like an
-    /// embed, so nothing else needs to know it came from HtmlRenderer
-    /// rather than an image file; this flag exists only so the "Copy"
-    /// button and tab strip a Code-kind block would otherwise carry
-    /// never gets a chance to (HTML blocks are BlockSpan::Kind::Html,
-    /// which has no such chrome to begin with - kept for symmetry with
-    /// isQuery and in case a future BlockSpan kind needs the same gate).
-    bool isHtml = false;
-    /// Set when a plugin draws this fence (CodeBlockHook.cpp): no
-    /// listing chrome, and codeBlockKey finds it again on delivery.
-    bool isPluginBlock = false;
+    /// Filled instead of `layout` when this is the frontmatter and live
+    /// preview draws it as Obsidian's properties table.
+    std::vector<PropertyRow> propertyRows;
+
+    /// The callout's resolved look: the built-in type, then callouts.ini,
+    /// then whatever the callout itself says. Resolved before the block is
+    /// laid out, because it can change the body font and so the metrics.
+    CalloutStyle calloutStyle;
+
+    /// Callouts nested inside this block, outer first. Only the outermost
+    /// callout is a block of its own; the rest are painted into this one's
+    /// layout, which is why they are resolved before it is built.
+    std::vector<NestedCallout> nested;
+
     QString codeBlockKey;
     /// A ```reference block shown as the file it names (ReferenceBlock.cpp):
     /// what a click on its header opens (the resolved path or the URL; empty
@@ -478,13 +330,6 @@ struct MarkdownEditor::BlockView {
     QString referenceTarget;
     QString referenceKey;
 
-    // --- Jupyter kernel output, NotebookBlock.cpp ----------------------
-    /// A fenced code block with a language, shown while the notebooks
-    /// feature and setNotebookRunner are both on - unlike isPluginBlock,
-    /// this never replaces the listing: the source stays, and any
-    /// output goes below it, plus a run control alongside "Copy" in the
-    /// header (codeLabelOf, paintCodeChrome, handleBlockClick).
-    bool notebookEligible = false;
     QString notebookKey; ///< "language|tier|source" - m_notebookCache's own key
     int notebookOrdinal = 0; ///< NotebookRunOptions::duplicateOrdinal, part of that key
     /// What the run control's click re-runs - exactly the language,
@@ -529,11 +374,52 @@ struct MarkdownEditor::BlockView {
         QRectF rect; ///< block-local
     };
     std::vector<NotebookOutputCell> notebookOutputs;
-    /// What appendPreview drew under this block's source (PreviewBelow.cpp):
-    /// the formula or diagram, or the line saying why there is none.
-    QPixmap previewImage;
-    QString previewHint;
-    QRectF previewRect; ///< block-local
+
+    /// One clickable result row, in block-local coordinates (add `left`
+    /// and `top` to place it in the viewport, the way every other rect
+    /// on a BlockView already does).
+    struct QueryRow {
+        QRectF rect;
+        QString path;
+        qsizetype offset = 0;
+    };
+    std::vector<QueryRow> queryRows;
+    /// The header's two clickable controls, block-local coordinates -
+    /// null-sized when the block has no header yet (still searching, an
+    /// error, or an empty search - see layoutQuery). queryHeaderAt and
+    /// handleBlockClick both read these rather than recomputing them, so
+    /// a click always lands exactly where the paint went.
+    QRectF queryCollapseRect;
+    QRectF querySortRect;
+    /// "N results", as last computed - what queryHeaderAt hands back
+    /// without re-running a search from a const accessor.
+    QString queryResultCountText;
+
+    /// The shown view's name, painted above the table - empty shows
+    /// nothing extra (an error or a still-loading block shows its
+    /// message instead of a table; see layoutBase).
+    QString baseViewName;
+    /// The view requested for this block - a `.base` embed's
+    /// `#fragment`, or empty for a fenced ```` ```base ```` block and for
+    /// an embed with no fragment. Part of the cache key alongside
+    /// baseYAML, and what deliverBaseResults matches a block back on, so
+    /// two embeds of the same file asking for different views never
+    /// share a result.
+    QString baseRequestedView;
+    QString baseYAML; ///< what the table shows: a fence's text, or a .base file's
+    /// One clickable row's first cell, block-local coordinates - only
+    /// the name column opens its note, mirroring
+    /// BaseTableModel::isNameColumn's choice for the real widget.
+    struct BaseRow {
+        QRectF rect;
+        QString path;
+    };
+    std::vector<BaseRow> baseRows;
+    /// The file a CSV/TSV embed shows (CSVembed.cpp), empty for any other
+    /// block: what deliverCSV matches a block back on. Such a block is also
+    /// isBase, which only means "painted as a data table".
+    QString CSVpath;
+
     /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
     /// resolved to a QTextCharFormat by layoutInlineHtml - added to
     /// formatsIn's output the way spellcheck underlines are. Source
@@ -586,6 +472,159 @@ struct MarkdownEditor::BlockView {
         qsizetype jumpOffset = 0; ///< real source offset a click moves the caret to
     };
     std::vector<FootnotesListRow> footnoteListRows;
+
+};
+
+struct MarkdownEditor::BlockView {
+    // The fields every pass over all the blocks reads (rebuildBlocks, indexDecorations, the
+    // first loop of updateLayout) come first, in one or two cache lines of the 1.6 kB view.
+    BlockSpan span;
+    /// A fence longer than kCodePieceLines is split into pieces of that
+    /// many lines, each a block of its own, so an edit relays out one
+    /// piece and not the whole listing. The fence's chrome is drawn across
+    /// its pieces: header, label and tabs on the first, caption on the
+    /// last. A fence that fits, and every other block, is piece 0 of 1.
+    int piece = 0;
+    int pieces = 1;
+    /// True only for the synthetic block reading view appends after the
+    /// note's own: the numbered footnote list Obsidian's reading view
+    /// shows at the end. `span.range` is a zero-length range past the
+    /// end of the text - there is no source here, so unlike every other
+    /// block it keeps its own rows instead of a QTextLayout over view.map,
+    /// the way the properties table (PropertyRow) already does.
+    bool isFootnotesList = false;
+    /// Set the first time a layout or a highlight writes to this view, and
+    /// never cleared. The invariant: an untouched view is a default one plus its
+    /// span, and every function that puts content into a view (layoutBlock and
+    /// what it calls, highlightPiece) sets this first. That is what lets a parse
+    /// that changed nothing here keep the view (rebuildBlocks): a new writer that
+    /// fills a view without going through those two would leave stale state in it.
+    bool touched = false;
+    qreal y = 0;
+    qreal height = 0;
+    /// How far a callout's panel reaches past the box above and below (panelBleed).
+    qreal bleedAbove = 0;
+    qreal bleedBelow = 0;
+    bool active = false;
+    bool laidOut = false;
+    bool heightEstimated = false;
+    /// Inside a folded heading's section: it keeps its layout and height, so
+    /// opening the fold costs nothing, but takes no room and is never painted
+    /// or hit.
+    bool foldHidden = false;
+    /// Inside the tab group the caret is in, which shows every fence.
+    /// Tracked so the caret crossing a group's edge relays out the whole
+    /// group, not only the block it landed in.
+    bool editedAsSource = false;
+    /// A single listing whose fences the caret has opened. Its source is
+    /// plain text like a group's, but it keeps its panel (drawn out over
+    /// the two fence lines, editedListingPanel), run control and output.
+    bool editedListing = false;
+    DisplayMap map;
+    std::unique_ptr<QTextLayout> layout;
+    /// Indices into the sorted decoration lists that touch this block, so
+    /// laying one out never walks the whole document.
+    int firstStyle = 0;
+    int lastStyle = 0;
+    int firstSyntax = 0;
+    int lastSyntax = 0;
+    /// A wide table's columns, or a listing's longest line, at their natural
+    /// width: when the total exceeds the readable column the block scrolls
+    /// sideways inside itself, exactly as it does in Obsidian. 0 for a block
+    /// that fits. A fence keeps one offset for all its pieces, on the first.
+    qreal sideWidth = 0;
+    qreal sideScroll = 0;
+    /// Set when this block is a callout, so painting knows its colour,
+    /// icon and title without looking the span up again.
+    const CalloutSpan *callout = nullptr;
+    /// A fence in a tab group that is not the tab being shown, or the
+    /// blank lines between two of them: no height, nothing painted.
+    bool tabHidden = false;
+    /// Where its geometry ends: a hidden block takes no room.
+    qreal bottomY() const { return foldHidden ? y : y + height; }
+    /// Set on the fence a tab group is showing: it paints the strip.
+    /// An index into m_tabGroups, -1 outside any group.
+    int tabGroup = -1;
+    /// Where highlighting stood at the end of this piece, the state the
+    /// next one starts from. Valid when it was worked out from this
+    /// piece's current text and the end state of the piece before it.
+    CodeHighlighter::State codeEnd;
+    bool codeEndValid = false;
+    /// The caret's block, in a kind that reveals per element: the syntax
+    /// ranges the caret has uncovered. Kept so a caret moving within the
+    /// block relays it out only when this actually changes.
+    QList<Range> revealed;
+    /// The word spelling skipped because the caret was in it. Kept so
+    /// the caret moving on to another word relays the block out and the
+    /// finished one is checked.
+    Range caretWord;
+    /// Set when this block is a fenced code block carrying `#|` options.
+    const CodeOptions *options = nullptr;
+    /// For each of the block's list items (listItemsIn order): where its
+    /// text starts, block-local, and the item it is nested in (-1 for
+    /// none). Siblings share one marker column, as wide as their widest
+    /// number, so "10." pushes its list's text over rather than into it.
+    std::vector<qreal> listTextX;
+    std::vector<int> listParent;
+    /// Space above the text: a callout's title row, a code block's header
+    /// strip, or the air Obsidian puts over a heading.
+    qreal textTop = 0;
+    /// Showing its header only. Callouts, `:::` containers, `#| fold`
+    /// code blocks and the properties table can all be in this state.
+    bool folded = false;
+
+    /// Set when this block is a fenced ```query``` block rendered as
+    /// search results: paintBlocks and handleBlockClick both skip the
+    /// ordinary code-listing chrome (panel, "Copy", tabs) for it.
+    bool isQuery = false;
+
+    /// Set when this block is a fenced ```` ```base ```` block rendered
+    /// as a table: paintBlocks and handleBlockClick both skip the
+    /// ordinary code-listing chrome for it, the same gate isQuery is for
+    /// a ```query``` block.
+    bool isBase = false;
+
+    /// Set when this block is a raw HTML block (top-level `<div>`,
+    /// `<table>`, `<details>`... - not inline HTML inside a paragraph)
+    /// rendered by litehtml. It paints through `image` exactly like an
+    /// embed, so nothing else needs to know it came from HtmlRenderer
+    /// rather than an image file; this flag exists only so the "Copy"
+    /// button and tab strip a Code-kind block would otherwise carry
+    /// never gets a chance to (HTML blocks are BlockSpan::Kind::Html,
+    /// which has no such chrome to begin with - kept for symmetry with
+    /// isQuery and in case a future BlockSpan kind needs the same gate).
+    bool isHtml = false;
+    /// Set when a plugin draws this fence (CodeBlockHook.cpp): no
+    /// listing chrome, and codeBlockKey finds it again on delivery.
+    bool isPluginBlock = false;
+
+    // --- Jupyter kernel output, NotebookBlock.cpp ----------------------
+    /// A fenced code block with a language, shown while the notebooks
+    /// feature and setNotebookRunner are both on - unlike isPluginBlock,
+    /// this never replaces the listing: the source stays, and any
+    /// output goes below it, plus a run control alongside "Copy" in the
+    /// header (codeLabelOf, paintCodeChrome, handleBlockClick).
+    bool notebookEligible = false;
+
+    /// The rarely used fields, null until a layout fills one. Read them through
+    /// x(), which answers a default when there are none; write through
+    /// extrasMut(), which makes them. A write through x() does not compile.
+    std::unique_ptr<BlockExtras> extras;
+    const BlockExtras &x() const
+    {
+        if (extras)
+            return *extras;
+        // Built on first use, after the QGuiApplication a QPixmap member needs, and never
+        // destroyed, so no static destructor runs a QFont's after the application is gone.
+        static const BlockExtras &none = *new BlockExtras;
+        return none;
+    }
+    BlockExtras &extrasMut()
+    {
+        if (!extras)
+            extras = std::make_unique<BlockExtras>();
+        return *extras;
+    }
 };
 
 /// The copy button at the right of a code block's header ("Copy" under the

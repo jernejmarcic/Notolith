@@ -116,7 +116,7 @@ QList<QRect> MarkdownEditor::GIFrectsInView(const QString &path) const
             break;
         if (view.tabHidden || view.foldHidden || view.folded)
             continue;
-        for (const EmbedCell &cell : view.embedCells) {
+        for (const EmbedCell &cell : view.x().embedCells) {
             // The painter animates a plain image only (paintEmbedCellList).
             if (cell.openPath == path && !cell.image.isNull() && !cell.panel && !cell.isNote)
                 add(cell.rect.translated(left, top));
@@ -125,7 +125,7 @@ QList<QRect> MarkdownEditor::GIFrectsInView(const QString &path) const
         // scrolled out of it sideways (paintTable).
         const QRectF tableWindow(left, top, contentWidth(), view.height);
         const bool clipped = view.sideWidth > contentWidth();
-        for (const Cell &cell : view.cells) {
+        for (const Cell &cell : view.x().cells) {
             if (clipped) {
                 const QRectF box = cell.rect.translated(left - view.sideScroll, top);
                 if (box.right() < tableWindow.left() - 2 || box.left() > tableWindow.right() + 2)
@@ -138,9 +138,9 @@ QList<QRect> MarkdownEditor::GIFrectsInView(const QString &path) const
                 add(clipped ? rect.intersected(tableWindow) : rect);
             }
         }
-        if (view.imagePath == path && !view.image.isNull()) {
-            const qreal x = view.imageCentred ? left + (contentWidth() - view.imageSize.width()) / 2.0 : left;
-            add(QRectF(x, top + view.textTop, view.imageSize.width(), view.imageSize.height()));
+        if (view.x().imagePath == path && !view.x().image.isNull()) {
+            const qreal x = view.x().imageCentred ? left + (contentWidth() - view.x().imageSize.width()) / 2.0 : left;
+            add(QRectF(x, top + view.textTop, view.x().imageSize.width(), view.x().imageSize.height()));
         }
     }
     return found;

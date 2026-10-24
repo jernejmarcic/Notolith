@@ -53,12 +53,12 @@ bool MarkdownEditor::hasEditButton(const BlockView &view) const
     // A table is edited where it is drawn, so its grid stays while the caret
     // is in a cell; every other block drops its widget for the source.
     if (view.span.kind == BlockSpan::Kind::Table)
-        return !view.isBase && !view.cells.empty();
+        return !view.isBase && !view.x().cells.empty();
     if (view.active || view.span.kind == BlockSpan::Kind::Frontmatter)
         return false;
     return view.callout || view.isQuery || view.isBase || view.isPluginBlock || view.isHtml
-           || view.embedPanel || view.isPdfEmbed || view.isFileCard || !view.mediaPath.isEmpty()
-           || !view.image.isNull(); // a formula, or an embedded image
+           || view.x().embedPanel || view.x().isPdfEmbed || view.x().isFileCard || !view.x().mediaPath.isEmpty()
+           || !view.x().image.isNull(); // a formula, or an embedded image
 }
 
 qsizetype MarkdownEditor::blockAtPoint(const QPoint &point) const

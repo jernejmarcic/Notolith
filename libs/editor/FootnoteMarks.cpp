@@ -65,7 +65,7 @@ QStringList MarkdownEditor::footnoteMarkTexts() const
 {
     QStringList texts;
     for (const BlockView &view : d->m_blocks) {
-        for (const BlockView::FootnoteMark &mark : view.footnoteMarks)
+        for (const BlockExtras::FootnoteMark &mark : view.x().footnoteMarks)
             texts << mark.text;
     }
     return texts;
@@ -75,7 +75,7 @@ int MarkdownEditor::footnotesListRowCount() const
 {
     for (const BlockView &view : d->m_blocks) {
         if (view.isFootnotesList)
-            return int(view.footnoteListRows.size());
+            return int(view.x().footnoteListRows.size());
     }
     return 0;
 }
@@ -114,14 +114,14 @@ void MarkdownEditor::layoutFootnotes(BlockView &view, QList<Range> &hidden)
             std::find_if(d->m_decorations.footnotes.cbegin(), d->m_decorations.footnotes.cend(),
                          [&span](const FootnoteSpan &footnote) { return footnote.range == span.range; });
         if (reference != d->m_decorations.footnotes.cend()) {
-            view.footnoteMarks.push_back({span.range.start, 0, QString::number(reference->number), footnote, true});
+            view.extrasMut().footnoteMarks.push_back({span.range.start, 0, QString::number(reference->number), footnote, true});
             continue;
         }
         const auto definition =
             std::find_if(d->m_decorations.footnoteDefinitions.cbegin(), d->m_decorations.footnoteDefinitions.cend(),
                          [&span](const FootnoteDefinition &def) { return def.range.start == span.range.start; });
         if (definition != d->m_decorations.footnoteDefinitions.cend() && definition->number > 0) {
-            view.footnoteMarks.push_back(
+            view.extrasMut().footnoteMarks.push_back(
                 {span.range.start, 0, QString::number(definition->number) + QStringLiteral(". "), muted, false});
         }
     }
@@ -129,10 +129,10 @@ void MarkdownEditor::layoutFootnotes(BlockView &view, QList<Range> &hidden)
 
 void MarkdownEditor::paintFootnoteMarks(QPainter &painter, const BlockView &view, qreal left, qreal top) const
 {
-    if (view.footnoteMarks.empty() || !view.layout)
+    if (view.x().footnoteMarks.empty() || !view.layout)
         return;
     painter.save();
-    for (const BlockView::FootnoteMark &mark : view.footnoteMarks) {
+    for (const BlockExtras::FootnoteMark &mark : view.x().footnoteMarks) {
         const QTextLine line = view.layout->lineForTextPosition(int(mark.displayPos));
         if (!line.isValid())
             continue;
@@ -172,7 +172,7 @@ bool MarkdownEditor::footnoteDefinitionBlock(const BlockView &view) const
 
 void MarkdownEditor::layoutFootnotesList(BlockView &view)
 {
-    view.footnoteListRows.clear();
+    view.extrasMut().footnoteListRows.clear();
     view.layout.reset();
     view.map = DisplayMap();
     view.textTop = 0;
@@ -198,7 +198,7 @@ void MarkdownEditor::layoutFootnotesList(BlockView &view)
     const qreal backWidth = metrics.horizontalAdvance(back) + 8;
     qreal y = rule;
     for (const FootnoteDefinition *definition : std::as_const(numbered)) {
-        BlockView::FootnotesListRow row;
+        BlockExtras::FootnotesListRow row;
         const QString body = d->m_text.mid(definition->content.start, definition->content.length()).simplified();
         row.layout = std::make_unique<QTextLayout>(QString::number(definition->number) + QStringLiteral(". ") + body,
                                                    font);
@@ -228,7 +228,7 @@ void MarkdownEditor::layoutFootnotesList(BlockView &view)
                                         });
         row.jumpOffset = first != d->m_decorations.footnotes.cend() ? first->range.end : definition->range.start;
         y += row.rect.height() + 4;
-        view.footnoteListRows.push_back(std::move(row));
+        view.extrasMut().footnoteListRows.push_back(std::move(row));
     }
     view.height = y + 8;
     view.laidOut = true;
@@ -237,7 +237,7 @@ void MarkdownEditor::layoutFootnotesList(BlockView &view)
 
 void MarkdownEditor::paintFootnotesList(QPainter &painter, const BlockView &view, qreal left, qreal top) const
 {
-    if (view.footnoteListRows.empty())
+    if (view.x().footnoteListRows.empty())
         return;
     painter.save();
     painter.setPen(QPen(d->m_theme.color(QStringLiteral("--background-modifier-border")), 1));
@@ -246,7 +246,7 @@ void MarkdownEditor::paintFootnotesList(QPainter &painter, const BlockView &view
     painter.setFont(font);
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
     const QColor accent = d->m_theme.color(QStringLiteral("--text-accent"));
-    for (const BlockView::FootnotesListRow &row : view.footnoteListRows) {
+    for (const BlockExtras::FootnotesListRow &row : view.x().footnoteListRows) {
         painter.setPen(muted);
         row.layout->draw(&painter, QPointF(left + row.rect.x(), top + row.rect.y()));
         painter.setPen(accent);
@@ -270,7 +270,7 @@ bool MarkdownEditor::jumpToFootnote(const QPoint &viewportPoint)
             continue;
 
         if (view.isFootnotesList) {
-            for (const BlockView::FootnotesListRow &row : view.footnoteListRows) {
+            for (const BlockExtras::FootnotesListRow &row : view.x().footnoteListRows) {
                 if (row.rect.translated(left, top).contains(viewportPoint)) {
                     goTo(row.jumpOffset);
                     return true;
@@ -280,8 +280,8 @@ bool MarkdownEditor::jumpToFootnote(const QPoint &viewportPoint)
         }
         if (!view.layout)
             continue;
-        const qreal indent = view.callout ? 14 : (view.embedPanel ? 2 : 0);
-        for (const BlockView::FootnoteMark &mark : view.footnoteMarks) {
+        const qreal indent = view.callout ? 14 : (view.x().embedPanel ? 2 : 0);
+        for (const BlockExtras::FootnoteMark &mark : view.x().footnoteMarks) {
             const QTextLine line = view.layout->lineForTextPosition(int(mark.displayPos));
             if (!line.isValid())
                 continue;
@@ -303,7 +303,7 @@ bool MarkdownEditor::jumpToFootnote(const QPoint &viewportPoint)
                     for (const BlockView &list : d->m_blocks) {
                         if (!list.isFootnotesList)
                             continue;
-                        for (const BlockView::FootnotesListRow &row : list.footnoteListRows) {
+                        for (const BlockExtras::FootnotesListRow &row : list.x().footnoteListRows) {
                             if (row.layout->text().startsWith(QString::number(reference->number) + QLatin1Char('.'))) {
                                 verticalScrollBar()->setValue(int(list.y + row.rect.y() - viewport()->height() / 3));
                                 return true;
