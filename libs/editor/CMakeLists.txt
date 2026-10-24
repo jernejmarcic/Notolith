@@ -23,6 +23,8 @@ add_library(noteAppC_editor STATIC
     MarkdownEditor.cpp
     MarkdownEditor.h
     MarkdownEditor_p.h
+    MarkmapBlock.cpp
+    MarkmapBlock.h
     MermaidBlock.cpp
     MermaidBlock.h
     NotebookBlock.cpp

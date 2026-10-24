@@ -59,10 +59,14 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     ParseOptions parse = editor.parseOptions(); // the editor's own defaults, but for the states
     parse.taskStates = options.taskStates;
     editor.setParseOptions(parse);
-    // A diagram fence (mermaid, plantuml, tikz, dot) is the diagram the editor already made (never the
+    // A diagram fence (mermaid, plantuml, tikz, dot, markmap) is the diagram the editor already made (never the
     // tool: an export waits for nothing); one it never made stays its listing.
     for (const DiagramKind kind : {DiagramKind::Mermaid, DiagramKind::PlantUML, DiagramKind::TikZ, DiagramKind::Graphviz})
         editor.setCodeBlockRenderer(diagramLanguages(kind), diagramCachedRenderer(kind, Theme::builtin(Theme::Mode::Light)));
+    // A mind map needs no tool: it is drawn from the fence's text, in the paper's colours (never the window's).
+    if (options.mindMaps)
+        editor.setCodeBlockRenderer(diagramLanguages(DiagramKind::Markmap),
+                                    diagramCachedRenderer(DiagramKind::Markmap, options.theme.value_or(Theme::builtin(Theme::Mode::Light))));
     const QSize viewport(int(page.width() / scale), int(page.height() / scale));
     editor.resize(viewport);
     editor.setNoteText(printed);

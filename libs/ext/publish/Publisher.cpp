@@ -740,7 +740,8 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
                      bothThemes ? &highlighterLight : nullptr,
                      themeDark,
                      themeLight,
-                     4};
+                     4,
+                     options.mindMaps};
         const ParsedNote &note = notes.value(relativePath);
         ContentResult content = PageBody::render(note, env);
 
@@ -836,7 +837,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         highlighterDark.setTheme(themeDark);
         highlighterLight.setTheme(themeLight);
         RenderEnv env{notes, resolveCache, highlighterDark,
-                     bothThemes ? &highlighterLight : nullptr, themeDark, themeLight, 4};
+                     bothThemes ? &highlighterLight : nullptr, themeDark, themeLight, 4, options.mindMaps};
         ContentResult content = PageBody::render(atRoot, env);
         resolveFormulas(content);
         const QString backlinks = renderBacklinks(atRoot, notes, backlinksMap);

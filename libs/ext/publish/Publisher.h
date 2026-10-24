@@ -45,6 +45,9 @@ struct Options {
     /// What the editor reads a note with, so a published note is the one on
     /// screen: only taskStates changes what the page says.
     noteAppC::ParseOptions parse;
+    /// The markmap plugin: on, a ```markmap fence goes out as the map, drawn
+    /// from its text; off, as the plain listing every fence is.
+    bool mindMaps = true;
 };
 
 /// What one publish() call did, for the caller to report.

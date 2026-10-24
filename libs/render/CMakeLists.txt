@@ -58,6 +58,8 @@ add_library(noteAppC_render STATIC
     TexCompiler.h
     MathRenderer.cpp
     MathRenderer.h
+    Markmap.cpp
+    Markmap.h
     MermaidCache.cpp
     MermaidCache.h)
 
@@ -66,7 +68,7 @@ target_include_directories(noteAppC_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # noteAppC_modules: PdfPage finds libnotolith-pdfpage.so in the module directories and checks the ABI tag.
 target_link_libraries(noteAppC_render
     PUBLIC Qt6::Gui noteAppC_theme
-    PRIVATE microtex Qt6::Svg noteAppC_sandbox noteAppC_modules)
+    PRIVATE microtex Qt6::Svg noteAppC_sandbox noteAppC_modules noteAppC_markdown)
 target_compile_definitions(noteAppC_render PRIVATE
     NOTEAPPC_MICROTEX_RES="${CMAKE_BINARY_DIR}/microtex/res")
 

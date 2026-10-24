@@ -1,10 +1,14 @@
 #include "MermaidCache.h"
 
+#include "Markmap.h"
+
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFont>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
@@ -50,6 +54,7 @@ QStringList diagramLanguages(DiagramKind kind)
     case DiagramKind::PlantUML: return {QStringLiteral("plantuml"), QStringLiteral("puml")};
     case DiagramKind::TikZ: return {QStringLiteral("tikz")};
     case DiagramKind::Graphviz: return {QStringLiteral("dot"), QStringLiteral("graphviz")};
+    case DiagramKind::Markmap: return {QStringLiteral("markmap")};
     }
     return {};
 }
@@ -58,10 +63,22 @@ QByteArray diagramConfig(DiagramKind kind, const Theme &theme)
 {
     if (kind == DiagramKind::Mermaid)
         return mermaidConfig(theme);
-    return QJsonDocument(QJsonObject{{QStringLiteral("dark"), theme.isDark()},
-                                     {QStringLiteral("text"), theme.color(QStringLiteral("--text-normal")).name()},
-                                     {QStringLiteral("background"), theme.color(QStringLiteral("--background-primary")).name()}})
-        .toJson(QJsonDocument::Compact);
+    QJsonObject colours{{QStringLiteral("dark"), theme.isDark()},
+                        {QStringLiteral("text"), theme.color(QStringLiteral("--text-normal")).name()},
+                        {QStringLiteral("background"), theme.color(QStringLiteral("--background-primary")).name()}};
+    if (kind == DiagramKind::Markmap) {
+        // The branch colours are the theme's own named colours, the order markmap.js's palette has them in spirit.
+        QJsonArray palette;
+        for (const char *token : {"--color-blue", "--color-orange", "--color-green", "--color-red", "--color-purple", "--color-cyan",
+                                  "--color-pink", "--color-yellow"})
+            palette.append(theme.color(QString::fromLatin1(token)).name());
+        colours.insert(QStringLiteral("muted"), theme.color(QStringLiteral("--text-muted")).name());
+        colours.insert(QStringLiteral("accent"), theme.color(QStringLiteral("--interactive-accent")).name());
+        colours.insert(QStringLiteral("palette"), palette);
+        colours.insert(QStringLiteral("font"), theme.textFont().family());
+        colours.insert(QStringLiteral("mono"), theme.monospaceFont().family());
+    }
+    return QJsonDocument(colours).toJson(QJsonDocument::Compact);
 }
 
 QString diagramCacheDirectory(DiagramKind kind)
@@ -111,6 +128,9 @@ QByteArray mermaidCachedSVG(const QString &path)
 
 QByteArray diagramCachedSVG(DiagramKind kind, const QString &source, const Theme &theme)
 {
+    // No tool and nothing worth keeping: the map is drawn from the text, in `theme`'s own colours.
+    if (kind == DiagramKind::Markmap)
+        return drawMarkmap(parseMarkmap(source), markmapLook(diagramConfig(kind, theme))).svg;
     if (const QByteArray exact = mermaidCachedSVG(diagramCachePath(kind, source, diagramConfig(kind, theme))); !exact.isEmpty())
         return exact;
     // Not in this theme's colours (the app's own may carry a user's accent, which

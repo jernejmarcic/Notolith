@@ -98,6 +98,7 @@ struct RenderEnv {
     const noteAppC::Theme &themeDark;
     const noteAppC::Theme &themeLight;
     int embedDepthLimit = 4;
+    bool mindMaps = true; ///< Options::mindMaps
 };
 
 /// Renders one note's Markdown to the site's HTML, honouring Obsidian's own

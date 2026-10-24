@@ -6500,6 +6500,8 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         d->m_embedDrag.moved = false;
         return;
     }
+    if (pressCodeBlockHotspot(event->pos()))
+        return;
     if (pressPdfCell(event->pos(), touch))
         return;
 

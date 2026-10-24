@@ -72,6 +72,8 @@
 #include "Icons.h"
 #include "MarkdownEditor.h"
 #include "SingleInstance.h"
+#include "Markmap.h"
+#include "MarkmapBlock.h"
 #include "MermaidBlock.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
@@ -1601,6 +1603,30 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
                     }
                     renderer(language, source, width, theme, deliver);
                 });
+        }
+    }
+    // Mind maps (```markmap): the renderer is the switch here too. Nothing is made until a fence is laid out.
+    {
+        const QString key = featureOn("markmap") ? QStringLiteral("1") : QString();
+        if (editor->property("markmapKey").toString() != key) {
+            editor->setProperty("markmapKey", key);
+            if (key.isEmpty()) {
+                editor->setCodeBlockRenderer({QStringLiteral("markmap")}, nullptr);
+            } else {
+                if (!m_markmapRenderer)
+                    m_markmapRenderer = markmapRenderer([this] { return m_theme; });
+                // The text goes to the disk cache publish and PDF export read: not for an encrypted note.
+                editor->setCodeBlockRenderer(
+                    {QStringLiteral("markmap")},
+                    [this, editor](const QString &language, const QString &source, int width, const QString &theme,
+                                   const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
+                        if (showsEncryptedNote(editor)) {
+                            deliver({true, tr("*Mind maps are not drawn for encrypted notes.*"), QImage()});
+                            return;
+                        }
+                        m_markmapRenderer(language, source, width, theme, deliver);
+                    });
+            }
         }
     }
     // "/" commands: the palette's own list, the window's then the editor's,
@@ -3565,6 +3591,7 @@ void MainWindow::buildActions()
         &MainWindow::openRecovery);
     add(QStringLiteral("workspace:export-pdf"), tr("Export to PDF"), QString(),
         &MainWindow::exportPdf);
+    add(QStringLiteral("markmap:show-note"), tr("Mind maps: Show as mind map"), QString(), &MainWindow::showAsMindMap);
     add(QStringLiteral("daily-notes"), tr("Daily notes: Open today's daily note"), QString(),
         [this] { openDailyNote(0); });
     add(QStringLiteral("daily-notes:goto-prev"), tr("Daily notes: Open previous daily note"),
@@ -4548,6 +4575,41 @@ void MainWindow::jumpToHeading(const QString &subpath)
     });
 }
 
+void MainWindow::showAsMindMap()
+{
+    if (!m_active || !m_active->editor || m_active->view)
+        return;
+    if (showsEncryptedNote(m_active->editor)) { // the dialog's editor is not the note's, and has no key
+        QMessageBox::information(this, tr("Mind map"), tr("Mind maps are not drawn for encrypted notes."));
+        return;
+    }
+    const QString title = m_active->notePath.isEmpty() ? tr("Untitled") : QFileInfo(m_active->notePath).completeBaseName();
+    const QString outline = markmapSourceOfNote(m_active->editor->noteText());
+    if (outline.isEmpty()) {
+        QMessageBox::information(this, tr("Mind map"), tr("This note has nothing to draw."));
+        return;
+    }
+    // A fence longer than any run of backticks in the text, so nothing in it can close it early.
+    qsizetype longest = 0, run = 0;
+    for (const QChar c : outline)
+        longest = qMax(longest, run = (c == QLatin1Char('`') ? run + 1 : 0));
+    const QString fence(qMax<qsizetype>(3, longest + 1), QLatin1Char('`'));
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("mindMapDialog"));
+    dialog.setWindowTitle(tr("Mind map: %1").arg(title));
+    dialog.resize(1000, 700);
+    auto *editor = new MarkdownEditor(&dialog);
+    editor->setTheme(m_theme);
+    applyEditorSettings(editor); // registers the markmap renderer, as for any note
+    editor->setReadableLineLength(false);
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    editor->setNoteText(fence + QStringLiteral("markmap\n") + outline + QLatin1Char('\n') + fence + QLatin1Char('\n'));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(editor);
+    dialog.exec();
+}
+
 void MainWindow::exportPdf()
 {
     if (m_active->notePath.isEmpty())
@@ -4564,6 +4626,7 @@ void MainWindow::exportPdf()
     QString error;
     MarkdownEditor::PdfOptions pdf = options.options();
     pdf.taskStates = featureOn("task-states");
+    pdf.mindMaps = featureOn("markmap");
     pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
     applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
@@ -5010,13 +5073,14 @@ void MainWindow::publishSite()
     // (a built-in scheme has none), on the worker with the rest.
     const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
     const bool taskStates = featureOn("task-states");
+    const bool mindMaps = featureOn("markmap");
     // The formatting colours too, read here: Settings is not for the worker.
     QHash<QString, QString> colours;
     for (const FormatRow &row : formatRows())
         for (const FormatColour &colour : row.colours)
             for (const bool dark : {true, false})
                 colours.insert(formatColourKey(colour, dark), m_settings.text(formatColourKey(colour, dark)));
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates] {
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates, mindMaps] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -5031,6 +5095,7 @@ void MainWindow::publishSite()
         options.siteName = choices.siteName.isEmpty() ? vault.name() : choices.siteName;
         options.theme = publish::Options::ThemeMode(choices.theme);
         options.parse.taskStates = taskStates;
+        options.mindMaps = mindMaps;
         for (const Theme::Mode mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
             Theme theme = schemePath.isEmpty() ? Theme::builtin(mode) : Scheme::apply(schemePath, mode);
             applyUserColours(theme, [&colours](const QString &key) { return colours.value(key); });

@@ -257,6 +257,17 @@ target_link_libraries(test_mermaid PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 add_test(NAME mermaid COMMAND test_mermaid)
 set_tests_properties(mermaid PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# ```markmap fences: the tree and the SVG (the pure part), then the editor's renderer and its folding, PDF
+# export, the window's core plugin and its command.
+add_executable(test_markmap test_markmap.cpp)
+target_link_libraries(test_markmap PRIVATE noteAppC_render Qt6::Widgets Qt6::Svg GTest::gtest)
+add_test(NAME markmap COMMAND test_markmap)
+set_tests_properties(markmap PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_executable(test_markmap_block test_markmap_block.cpp)
+target_link_libraries(test_markmap_block PRIVATE noteAppC_ui Qt6::Test Qt6::Svg GTest::gtest)
+add_test(NAME markmap_block COMMAND test_markmap_block)
+set_tests_properties(markmap_block PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # PlantUML, TikZ and Graphviz fences with the real tools in their sandbox (skipped where a tool is missing).
 add_executable(test_diagrams test_diagrams.cpp)
 target_link_libraries(test_diagrams PRIVATE noteAppC_ui noteAppC_sandbox Qt6::Test GTest::gtest)
