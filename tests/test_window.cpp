@@ -5548,6 +5548,38 @@ TEST_F(WindowTest, ClearingANotebooksOutputsIsSavedIntoTheFile)
     EXPECT_EQ(after.at(4).toObject().value(QStringLiteral("source")), before.at(4).toObject().value(QStringLiteral("source")));
 }
 
+// Closing a notebook without saving what ran in it, and opening it again: the file
+// is the truth, so the next save writes none of those runs (the sample's traceback
+// carries colour codes that a rewrite from the cache would change).
+TEST_F(WindowTest, AReopenedNotebookWritesNoneOfTheRunsItDiscarded)
+{
+    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("Analysis.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+    WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+    window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+    ASSERT_TRUE(editor->isModified());
+    editor->setModified(false); // "close it without saving"
+
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *again = window.editor();
+    again->setCursorOffset(again->noteText().size());
+    QTest::keyClicks(again, QStringLiteral("x")); // something to save
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonArray before = notebookCells(original);
+    const QJsonArray after = notebookCells(readAll(path(QStringLiteral("Analysis.ipynb"))));
+    ASSERT_EQ(after.size(), before.size());
+    for (qsizetype i = 0; i < 4; ++i)
+        EXPECT_EQ(after.at(i).toObject(), before.at(i).toObject()) << "cell " << i << " was not touched in this session";
+}
+
 // Running cell 2 of 3 makes the notebook modified, and the save puts that run's
 // output and count on that cell alone.
 TEST_F(WindowTest, ARunOfOneNotebookCellIsSavedOnThatCellAlone)

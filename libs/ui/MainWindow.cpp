@@ -5685,9 +5685,14 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     if (!maybeLeave())
         return false;
 
+    // Another tab showing it already holds the document, runs not yet saved included: the file is not the truth
+    // for it, so its outputs are not read in again over them.
+    const bool shownElsewhere = std::any_of(m_leaves.cbegin(), m_leaves.cend(), [&](const auto &other) {
+        return other.get() != m_active && !other->view && other->notePath == path;
+    });
     Note note;
     QString error;
-    if (!readNote(path, note, &error, true)) {
+    if (!readNote(path, note, &error, !shownElsewhere)) {
         // Replaying history over a note that has since been deleted or
         // renamed is not an error, just a dead end to skip past; a password
         // prompt cancelled is not one either.
@@ -7040,6 +7045,8 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error, bool s
         out = Note();
         const QByteArray bytes = file.readAll();
         if (seedOutputs) {
+            // The file is the truth from here: what ran before it was read (and was discarded) is not its to save.
+            m_notebookDirty.remove(path);
             QHash<QString, QByteArray> images;
             const bool read = notebook::readIpynb(bytes, &out.text, error, &images);
             if (images.isEmpty())
