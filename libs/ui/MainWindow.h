@@ -188,6 +188,11 @@ public:
     void setEncryptionPromptForTests(std::function<QString(bool creating, bool retry)> prompt);
     /// The autosave pause and its longest wait, in ms. For the tests.
     void setAutosaveIntervalsForTests(int pause, int maxWait);
+    /// Whether an open file's tab has lost it: -1 not lost, 0 gone and in the grace before it is looked for
+    /// elsewhere, 1 gone and not found. For the tests.
+    int lostStateForTests(const QString &path) const;
+    /// How many open or opened notebooks hold their attachment pictures. For the tests.
+    qsizetype notebookPictureSetsForTests() const;
     /// Runs on the save thread at the start of every background commit, before
     /// anything is read or written: a test holds a commit open with it.
     void setSaveJobHookForTests(std::function<void()> hook);
@@ -637,6 +642,8 @@ private:
     void notebookOutputsChanged(const QString &path, const QString &cacheKey, const notebook::NotebookRunResult &result);
     /// What a notebook's state (the runs awaiting a save, its pictures) was kept under, kept under its new name.
     void moveNotebookState(const QString &from, const QString &to);
+    /// Lets go of the pictures of every notebook no tab shows any more.
+    void pruneNotebookImages();
     /// `editor` shows the pictures of the notebook at `path`, each cell its own; none for any other note.
     void showNotebookPictures(MarkdownEditor *editor, const QString &path);
     /// The bytes of an encrypted note of this vault, preferring `path`: what

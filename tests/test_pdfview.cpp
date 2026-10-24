@@ -493,6 +493,33 @@ TEST(PdfPagesAreaTest, PagesLayOutWithRightSizesBeforeAnyRenderLands)
     EXPECT_LT(area.pageLayoutRect(1).bottom(), area.pageLayoutRect(2).top());
 }
 
+// A file renamed keeps its modification time, so a page already drawn is still the page: the next paint after setPath()
+// shows it at once instead of a blank page waiting for a render.
+TEST(PdfPagesAreaTest, APageAlreadyDrawnIsStillDrawnAfterTheFileIsRenamed)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString pdf = makeTestPdf(dir.path(), 1);
+
+    PdfPagesArea area;
+    ASSERT_TRUE(area.load(pdf));
+    area.resize(800, 600);
+    area.show();
+    const QImage blank = area.viewport()->grab().toImage();
+    QImage drawn;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        drawn = area.viewport()->grab().toImage();
+        return drawn != blank;
+    }, 10000)) << "the render landed";
+    QTest::qWait(200); // settled: nothing more to come for this page
+    drawn = area.viewport()->grab().toImage();
+
+    const QString renamed = dir.path() + QStringLiteral("/renamed.pdf");
+    ASSERT_TRUE(QFile::rename(pdf, renamed));
+    area.setPath(renamed);
+    EXPECT_EQ(area.viewport()->grab().toImage(), drawn) << "no event loop ran: the picture came from the cache, under the new name";
+}
+
 TEST(PdfPagesAreaTest, ARenderDeliveredAfterTheViewIsDestroyedDoesNothing)
 {
     QTemporaryDir dir;
