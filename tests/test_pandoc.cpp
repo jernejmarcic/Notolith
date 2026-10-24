@@ -286,6 +286,9 @@ TEST(PandocImport, RewritesWhatNotolithReads)
               QStringLiteral("![[rId9.png|192]]"));
     EXPECT_EQ(rewriteImported(QStringLiteral("# <span id=\"anchor\"></span>Title and <span id=\"x\">kept</span>"), names),
               QStringLiteral("# Title and <span id=\"x\">kept</span>"));
+    // the same text in a code block is the document's own
+    EXPECT_EQ(rewriteImported(QStringLiteral("# <span id=\"a\"></span>T\n\n```html\n<span id=\"a\"></span>\n```\n<span id=\"b\"></span>end"), names),
+              QStringLiteral("# T\n\n```html\n<span id=\"a\"></span>\n```\nend"));
     EXPECT_EQ(rewriteImported(QStringLiteral("a <span class=\"mark\">hi *there*</span> b"), names),
               QStringLiteral("a ==hi *there*== b"));
     EXPECT_EQ(rewriteImported(QStringLiteral("- \\[ \\] a\n  - \\[x\\] b\n\\[ \\] not a list"), names),

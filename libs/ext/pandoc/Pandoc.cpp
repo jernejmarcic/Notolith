@@ -280,8 +280,26 @@ QString rewriteImported(const QString &markdown, const QHash<QString, QString> &
         return QStringLiteral("==") + match.captured(1) + QStringLiteral("==");
     });
     // The empty anchors Word, ODT and EPUB headings come with (`# <span id="anchor"></span>Title`).
+    // Not inside a fenced code block, where the same text is the document's own.
     static const QRegularExpression anchor(QStringLiteral("<span id=\"[^\"]*\"></span>"));
-    out.remove(anchor);
+    static const QRegularExpression fence(QStringLiteral("^ {0,3}(`{3,}|~{3,})"));
+    {
+        QStringList lines = out.split(QLatin1Char('\n'));
+        QString open; // the fence being inside of, if any
+        for (QString &line : lines) {
+            if (const auto marker = fence.match(line); marker.hasMatch()) {
+                const QString run = marker.captured(1);
+                if (open.isEmpty())
+                    open = run;
+                else if (run.at(0) == open.at(0) && run.size() >= open.size())
+                    open.clear();
+                continue;
+            }
+            if (open.isEmpty())
+                line.remove(anchor);
+        }
+        out = lines.join(QLatin1Char('\n'));
+    }
     // A task list item pandoc read from Word as text, which its Markdown writer escapes.
     static const QRegularExpression task(QStringLiteral("^(\\s*(?:[-*+]|\\d+[.)])\\s+)\\\\\\[([ xX])\\\\\\]"),
                                          QRegularExpression::MultilineOption);
