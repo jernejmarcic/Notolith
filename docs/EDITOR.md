@@ -745,6 +745,60 @@ the file is then the plain source listing it was before. Tests
 `CSVparserTest.*`, `CSVembedTest.*`, `FeaturesTest.CSVembedsToggle`; the demo
 vault's `Embeds/CSV Embeds.md` shows one of each kind.
 
+## Advanced code blocks (Code Styler)
+
+Core plugin `advanced-code-blocks` (Settings > Core plugins, "Advanced code
+blocks", on by default) reads Obsidian's Code Styler syntax; the user-facing
+description is in STYLING.md ("Code Styler syntax", "Inline code in a
+language", "File references"). One switch covers all four parts and it is a
+parse-level one, `ParseOptions::codeStyler` (like `taskStates`): off, the
+parser never looks at a fence line's parameters, an inline code's `{lang}`
+prefix or a `reference` fence, so notes parse, lay out and paint exactly as
+before and the paint paths find nothing to do. `MainWindow::parseOptions()`
+fills it from `featureOn("advanced-code-blocks")`; PDF export and publish carry
+the same flag (`PdfOptions::codeStyler`, `Options::parse`). A note with
+`code-styler-ignore: true` in its properties parses as with the plugin off.
+
+- **Parameters** (`Parser.cpp`, `parseCodeParameters` and `applyFenceParameters`)
+  fill the same `CodeOptions` a `#|` line fills; a `#|` line wins when both
+  give a key. The tokens are also `CodeFenceSpan::attributes`, so the tab-group
+  grouping keeps working, and `title:"a tab b"` no longer makes a stray `tab`.
+- **Named highlights** are `CodeOptions::highlights`, kind name to line
+  numbers, painted by `paintCodeRows` after the default highlight in the
+  colour `codeHighlightColour()` finds (a theme token or a hex, alpha 0.16 dark
+  and 0.24 light unless the hex has its own). The names and colours are the
+  `editor.codeHighlights` setting.
+- **Inline code** is `StyleSpan::code`, the part after the `{lang}` prefix; the
+  prefix is in `Decorations::syntax`, so it hides outside the caret's element
+  like any marker. `inlineCodeFormats` colours it through the fence's own
+  highlighter.
+- **Reference blocks** are `ReferenceSpan` in `Decorations::references`
+  (`Parser.cpp`, `parseReference`) and `ReferenceBlock.cpp`. `layoutReference`
+  runs in `layoutBlock` after `layoutPluginCode` and makes a text panel
+  (`layoutTextPanel`), marked `isPluginBlock` so no listing chrome is drawn;
+  A file is shown only if its canonical path is under the canonical vault
+  root (`setVaultRootProvider`; the window and the PDF export pass it), else
+  the block says "Outside the vault" and nothing is read; the window checks
+  again before it opens a header click's target.
+  `BlockView::referenceTarget` is what a header click emits as
+  `referenceActivated`, which the window opens. It follows CSVembed.cpp's
+  pattern: one cache entry per resolved path or URL, a read on a worker
+  (`QtConcurrent` through `m_lifeline->post`) or by `QNetworkAccessManager`, a
+  generation counter dropping a superseded answer, a `QFileSystemWatcher` and a
+  200 ms debounce for the files. A URL's copies are also kept in a
+  process-wide table, fresh for five minutes. Nothing is read in layout, and
+  `setReferenceReadHookForTests` is how the tests see which thread the read ran
+  on. PDF export waits (at most 10 s) for `referencesPending()` to clear before
+  it lays out for the page. `setRemoteReferences(false)` (the default, from the
+  `editor.remoteReferences` setting) keeps every URL from being requested.
+  ponytail: a target missing at layout time is not watched for; it shows when
+  the block is next laid out.
+
+Tests: `CodeStylerTest.*` (parser, tests/test_markdown.cpp),
+`CodeStylerEditorTest.*` and `ReferenceBlockTest.*` (tests/test_editor.cpp, the
+remote ones against a local `QTcpServer`), `SettingsFeatureTest.*`; the demo
+vault's `Code/Code Styler.md` shows every part.
+
 ## `[[` link completion
 
 Typing `[[` (or `![[`) opens a popup of note names; a name is matched anywhere

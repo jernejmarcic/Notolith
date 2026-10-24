@@ -471,6 +471,12 @@ struct MarkdownEditor::BlockView {
     /// listing chrome, and codeBlockKey finds it again on delivery.
     bool isPluginBlock = false;
     QString codeBlockKey;
+    /// A ```reference block shown as the file it names (ReferenceBlock.cpp):
+    /// what a click on its header opens (the resolved path or the URL; empty
+    /// for a file that is not there), and the cache key deliverReference
+    /// finds the block again by. Such a block is also isPluginBlock.
+    QString referenceTarget;
+    QString referenceKey;
 
     // --- Jupyter kernel output, NotebookBlock.cpp ----------------------
     /// A fenced code block with a language, shown while the notebooks
@@ -752,6 +758,36 @@ struct MarkdownEditor::CSVcacheEntry {
     bool partial = false;     ///< the file was larger than was read
 };
 
+/// The lines of a file a ```reference block shows, cut and coloured (kept per
+/// file, range and theme in ReferenceCacheEntry::excerpts).
+struct ReferenceExcerpt {
+    QString text;
+    QString error;
+    int first = 1;
+    int last = 0;     ///< the last line shown
+    bool ranged = false;
+    bool cut = false; ///< more lines than are shown
+    QList<QTextLayout::FormatRange> formats;
+};
+
+/// A file or URL a ```reference block names, as the last read left it - one
+/// per path or URL (ReferenceBlock.cpp). `text` stays on screen while a newer
+/// read is under way.
+struct MarkdownEditor::ReferenceCacheEntry {
+    qint64 mtime = 0;     ///< a file's, to tell it changed
+    qint64 size = 0;
+    qint64 fetchedAt = 0; ///< a URL's, when it was asked for: the copy is kept a few minutes
+    bool pending = true;
+    quint64 generation = 0;
+    QString text;
+    QString error;
+    /// The newest generation started for this key, readable from a worker.
+    std::shared_ptr<std::atomic<quint64>> latest;
+    bool permanent = false; ///< the error is the file's (not text): asked again only when it changes
+    QHash<QString, ReferenceExcerpt> excerpts;
+    QSet<QString> scanning; ///< excerpts being cut on a worker
+};
+
 /// The recognised, paired inline tags in `view`'s block, in source
 /// order: what layoutInlineHtml hides, and what revealedSyntax shows
 /// while the caret touches the element.
@@ -951,6 +987,17 @@ struct MarkdownEditor::Private {
     QTimer *m_CSVrefresh = nullptr;
     QElapsedTimer m_CSVpendingSince; ///< the first unanswered change event, for the debounce's longest wait
     QString m_CSVdelivering; ///< the path whose read has just landed: its failure is shown, not retried, by the relayout
+    QHash<QString, ReferenceCacheEntry> m_referenceCache; ///< resolved path or URL -> its last read
+    quint64 m_referenceGeneration = 0;
+    QFileSystemWatcher *m_referenceWatcher = nullptr; ///< made with the first local reference
+    QTimer *m_referenceRefresh = nullptr;
+    QElapsedTimer m_referencePendingSince;
+    QSet<QString> m_referenceGone; ///< cached files that were deleted: refreshReferences looks for them coming back
+    QString m_referenceDelivering; ///< the key whose read has just landed: its failure is shown, not retried, by the relayout
+    QNetworkAccessManager *m_referenceNet = nullptr; ///< made with the first fetch
+    bool m_remoteReferences = false;
+    std::function<QString()> m_vaultRoot;
+    QSet<QString> m_referenceWatched; ///< the paths already handed to the watcher
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()
@@ -965,6 +1012,8 @@ struct MarkdownEditor::Private {
     CalloutStyles m_calloutStyles = CalloutStyles::load();
     LanguageStyles m_languageStyles = LanguageStyles::load();
     bool m_complexCodeBlocks = true;
+    /// editor.codeHighlights, parsed: the named highlights and their colours as written.
+    QList<std::pair<QString, QString>> m_codeHighlights;
     quint64 m_layoutCount = 0;
     quint64 m_rebuiltViews = 0;
     SyntaxStyles m_themeSyntax; ///< m_theme's `syntax` layer, rebuilt in setTheme

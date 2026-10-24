@@ -283,6 +283,155 @@ fence publishes as an ordinary block.
 With the caret inside the group every fence shows as written, so you can edit
 any of them. Obsidian shows the same note as separate blocks.
 
+### Code Styler syntax
+
+Obsidian's [Code Styler](https://github.com/mayurankv/Obsidian-Code-Styler)
+plugin puts its parameters on the opening fence line; a note written for it
+renders the same here. The core plugin **Advanced code blocks** (Settings >
+Core plugins, on by default) reads them. Off, they are the plain text they are
+in Obsidian without the plugin, and the parse never looks for them.
+
+```markdown
+    ```cpp title:"long filename.cpp" ln:27 hl:2,4-6 fold
+    ```python unwrap:false
+    ``` fold:"Collapsed listing"
+```
+
+| parameter | does |
+|---|---|
+| `title:x`, `title:"a b"`, `title:'a b'` | the header strip's name (`:` and `=` are the same; any order) |
+| `ln:true`, `ln:false`, `ln:27` | line numbers, from 27 for a number |
+| `hl:...` | highlights lines: `hl:1,3-4,foo,'bar baz',"bar and baz",/#\w{6}/` - numbers, ranges, a word, quoted text, a regular expression (PCRE, not JavaScript's flavour), comma-separated with no spaces. `{1,3-4}` after the language is the same with numbers only |
+| `fold`, `fold:Folded`, `fold:"Collapsed"` | folded when the note opens; the text names the block while it is folded and has no title |
+| `unwrap`, `unwrap:true`, `unwrap:false`, `wrap` | long lines scroll sideways (the default here) or wrap |
+| `ignore` | the block keeps its panel and colours and loses the header strip |
+| `ref:[[Note]]`, `reference:[[Note\|alias]]` | with no `title:`, the link's text is the title |
+| `info:2 warn:4-6 error:'boom'` | named highlights, below |
+
+**Named highlights.** A name is an alternative `hl`: it takes the same items
+(numbers, ranges, words, quoted text, `/regex/`) and tints its lines in a colour
+of its own, so `cpp info:2 warn:4-6 error:8` marks three kinds of line. The
+names and colours are Settings > Editor > "Named highlights", a comma list of
+`name=colour`: a theme colour (`blue`, `red`, `orange`, `yellow`, `green`,
+`cyan`, `purple`, `pink`, each following the theme and so light and dark) or a
+hex code (`#E5A100`, or `#E5A10040` with its own alpha). The default is
+`info=blue, warn=orange, error=red, add=green, del=red`; the plugin has no
+defaults of its own, these are the README's three plus the two a diff wants.
+A word that is not in the list is not a parameter. A published page colours the
+five default names (`hl-info` ... `hl-del` in `site.css`); other names are
+classes a stylesheet of your own can colour.
+
+With no language, leave a space after the fence (``` ` ``` fold title:x ```):
+the first word is then a parameter. Without the space it is the language, as
+CommonMark reads it. The parameters are hidden outside the caret's block, like
+the language tag.
+
+**Together with `#|` lines.** Both spellings fill the same options. When a key
+is given both ways the `#|` line wins, being inside the block and the form
+noteAppC wrote first; `#| highlight:` also reads text and `/regex/` items while
+the plugin is on.
+
+**Regular expressions** (`hl:/re/`, the named kinds, a reference's `start:` and
+`end:`) run with a match budget, so a catastrophic one (`(a+)+$`) simply
+matches nothing instead of stalling the editor; a pattern longer than 256
+characters, or one starting with `(*`, is ignored.
+
+**Differences from the plugin.** `unwrap:inactive` unwraps and does not wrap
+while the mouse is held down. The highlights do not cover the line numbers, and
+there is no gradient. `ref:` shows the link's text but the title is not
+clickable. `{r title, hl=5}` (R Markdown) is not read: its first word is
+`{r`, which CommonMark takes as the language. The plugin's settings
+(themes, icons, language borders, excluded languages) are not read; the theme
+and `codeblocks.ini` do that job. `code-styler-ignore: true` in a note's
+properties turns the plugin off for that note.
+
+### Inline code in a language
+
+Part of the same core plugin: inline code that starts with `{language}` is
+coloured as a code block of that language is.
+
+```markdown
+Use `{python} sorted(x, key=len)` or `{c++ title:'Inline' icon} std::move(x)`.
+```
+
+The `{python}` and the space after it are hidden, and come back while the caret
+is in the span (like the `**` of bold). `title:` and `icon` after the language
+are accepted and hidden but drawn as nothing: there is no label or icon before
+inline code here. Inline code is everywhere, so the prefix is recognised
+narrowly: the `{` is followed at once by a letter, the word is a language the
+highlighter has (`python`, `py`, `c++`, `js`, `rust`, `sql`, `bash` ... and
+their usual aliases), and nothing but `title:...` and `icon` follows it inside
+the braces. `{0} items`, `{name} is required`, `{ x + y } * 2`, `{"a": 1}` and
+`{mylang} code` are all plain inline code. Code that really starts with the
+braces of a language takes an empty `{}` in front, which is all that is
+hidden: `` `{}{python} x` `` shows `{python} x`. Published pages and PDF export
+draw it the same way.
+
+### File references
+
+Part of the same core plugin: a fence whose language is `reference` shows a
+file, or part of one, as a highlighted listing with the file's name as its
+title.
+
+```markdown
+    ```reference
+    file: ./src/main.py
+    lang: python
+    start: 10
+    end: +20
+    ```
+```
+
+The block's own lines are `key: value`. The target is `file`, `path`,
+`filePath` or `link`: a path beside the note (`./x.py`) or from the vault's
+root (`@/x.py`), a wikilink (`[[x.py]]`), a bare name the vault knows, or an
+`http(s)` URL. **Only files inside the vault are shown, or opened by a click**:
+the path is resolved with symlinks followed, and anything that ends up outside
+(an absolute path, `../`, `@/../`, a symlink pointing out) is refused with
+"Outside the vault" in the block and is never read. Copy a file in to show it.
+`language` (or `lang`) overrides the language the file's
+suffix names. `start` and `end` are a line number, a word (the first line
+containing it) or a `/regex/` (the first line it matches, PCRE); `end` is
+searched from `start` on and may be `+10`, ten lines past `start` (so lines
+980 to 990 for `start: 980`, `end: +10`). With a range the title is
+`name.py:10-30`. At most 500 lines are shown, with a last line saying so.
+
+A click on the title opens the file: a note in a tab, anything else in the
+system's own program, a URL in the browser. A click anywhere else puts the
+caret in the block, which then shows as the lines above. A vault file is read
+off the UI thread (the block says "Loading..." until it lands) and read again
+when it changes on disk. A file that is not there says so in the block.
+
+**Remote files.** A `link:` URL is fetched only while Settings > Editor >
+"Fetch remote references" is on, and **that setting is off by default**: the
+block then shows a notice and the title still links to the URL, and nothing is
+sent anywhere. Chosen over on-by-default because a note someone sent you could
+otherwise make your machine request any address; vault files are the
+feature's main use and need no network. When on, the fetch is asynchronous
+(15 s limit, 2 MB cap, at most 5 redirects, none from https to http), and a
+copy is kept for five minutes (32 at most) for every note in the session, the
+old one shown while the next one comes. **Addresses that are not the internet
+are refused**: the host is resolved first, and a loopback, link-local (cloud
+metadata), private, unique-local, shared (100.64/10), multicast or unspecified
+address, an IPv4-mapped, IPv4-compatible (`::a.b.c.d`), NAT64 (`64:ff9b::/96`) or 6to4 one included, shows "is a local address: not fetched"
+in the block. Every redirect is checked the same way. A name that answers
+differently to the second lookup (DNS rebinding) is not caught. The title
+shows the host (`name.py (example.com)`). Turning the setting off, or the
+plugin off, forgets what was fetched and cancels what is in flight; the
+excerpt is cut on a worker (the block says "Loading..." until it lands; a
+`start:`/`end:` pattern is tried on the first 50 000 lines only) and coloured
+once per file, range and theme, and a line over 1000 characters is cut with an
+ellipsis. Shared-range (100.64.0.0/10, Tailscale) hosts stay refused. GitHub `.../blob/...` and GitLab `.../-/blob/...` links
+are fetched as the raw file.
+
+**Differences from the plugin.** The plugin downloads remote files into the
+vault's plugin folder; this one keeps them in memory only, so nothing is left
+on disk, and shows no repository, version or update-button in the header. The
+file name is the title and `title:` on a reference block is not read. No line
+numbers are drawn, the range being in the title; long lines wrap rather than
+scroll. PDF export shows the same listing; a published page keeps the block as
+its `key: value` lines.
+
 ## Themes
 
 Pick a colour scheme on the settings page's Appearance tab. A theme file goes

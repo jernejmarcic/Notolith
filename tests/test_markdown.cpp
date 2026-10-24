@@ -1202,6 +1202,215 @@ TEST(CodeOptionTest, QuartoExecutionKeysAreParsed)
     EXPECT_TRUE(later.codeOptions.isEmpty());
 }
 
+// --- Code Styler: the fence line's own parameters ----------------------------
+
+namespace {
+
+ParseOptions codeStylerOn()
+{
+    ParseOptions options;
+    options.codeStyler = true;
+    options.highlightKinds = {QStringLiteral("info"), QStringLiteral("warn"), QStringLiteral("error")};
+    return options;
+}
+
+CodeOptions fenceOptionsOf(const QString &info, const QString &listing = QStringLiteral("a\nb\nc\nd\ne\nf\n"))
+{
+    const Decorations decorations =
+        decorationsOf(QStringLiteral("```") + info + QStringLiteral("\n") + listing + QStringLiteral("```\n"),
+                      codeStylerOn());
+    return decorations.codeOptions.isEmpty() ? CodeOptions() : decorations.codeOptions.first();
+}
+
+} // namespace
+
+TEST(CodeStylerTest, TitleAndItsQuoting)
+{
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp title:test.cpp")).title, QStringLiteral("test.cpp"));
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp title:\"long filename.cpp\"")).title,
+              QStringLiteral("long filename.cpp"));
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp title='single quoted'")).title, QStringLiteral("single quoted"));
+    // `:` and `=` are the same, and the order of the parameters is free.
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp fold title=example_title")).title, QStringLiteral("example_title"));
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("cpp fold title=example_title")).fold);
+}
+
+TEST(CodeStylerTest, LineNumbers)
+{
+    CodeOptions options = fenceOptionsOf(QStringLiteral("cpp ln:true"));
+    EXPECT_TRUE(options.lineNumbers);
+    EXPECT_EQ(options.firstLine, 1);
+    options = fenceOptionsOf(QStringLiteral("cpp ln:27"));
+    EXPECT_TRUE(options.lineNumbers);
+    EXPECT_EQ(options.firstLine, 27);
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("cpp ln:false title:x")).lineNumbers);
+}
+
+TEST(CodeStylerTest, HighlightEveryFormTheReadmeDocuments)
+{
+    // The README's own example, spaces inside the quotes and all.
+    const QString info = QStringLiteral(R"(cpp hl:1,3-4,foo,'bar baz',"bar and baz",/#\w{6}/)");
+    const QString listing = QStringLiteral("one\n"       // 1: number
+                                           "foo here\n"  // 2: word
+                                           "three\n"     // 3: range
+                                           "four\n"      // 4: range
+                                           "bar baz\n"   // 5: single-quoted text
+                                           "bar and baz\n" // 6: double-quoted text
+                                           "color #a1b2c3\n" // 7: regex
+                                           "none of it\n");  // 8
+    const CodeOptions options = fenceOptionsOf(info, listing);
+    EXPECT_EQ(options.highlight, QList<int>({1, 2, 3, 4, 5, 6, 7}));
+
+    // The `{1,3-4}` spelling other tools use, which cannot match text.
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp {1,3-4,6}")).highlight, QList<int>({1, 3, 4, 6}));
+    // An invalid regular expression highlights nothing and breaks nothing.
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("cpp hl:/(unclosed/")).highlight.isEmpty());
+}
+
+TEST(CodeStylerTest, FoldWithAndWithoutAPlaceholder)
+{
+    CodeOptions options = fenceOptionsOf(QStringLiteral("cpp fold"));
+    EXPECT_TRUE(options.fold);
+    EXPECT_TRUE(options.foldLabel.isEmpty());
+    options = fenceOptionsOf(QStringLiteral("cpp fold:\"This is collapsed\""));
+    EXPECT_TRUE(options.fold);
+    EXPECT_EQ(options.foldLabel, QStringLiteral("This is collapsed"));
+    options = fenceOptionsOf(QStringLiteral("cpp fold:Folded"));
+    EXPECT_EQ(options.foldLabel, QStringLiteral("Folded"));
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("cpp fold:false title:x")).fold);
+}
+
+TEST(CodeStylerTest, UnwrapAndItsAliases)
+{
+    // Lines scroll by default here (`#| wrap: false`), so wrapping is the opt-in.
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("python unwrap")).wrap);
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("python unwrap:true")).wrap);
+    EXPECT_FALSE(fenceOptionsOf(QStringLiteral("python unwrap:inactive")).wrap);
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("python unwrap:false")).wrap);
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("python wrap")).wrap);
+}
+
+TEST(CodeStylerTest, IgnoreLeavesTheBlockAlone)
+{
+    const Decorations decorations = decorationsOf(
+        QStringLiteral("```cpp ignore title:x ln:3\nint a;\n```\n"), codeStylerOn());
+    EXPECT_TRUE(decorations.codeOptions.isEmpty());
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    EXPECT_TRUE(decorations.codeFences.first().ignored);
+    EXPECT_EQ(decorations.codeFences.first().language, QStringLiteral("cpp"));
+}
+
+TEST(CodeStylerTest, NoLanguageNeedsTheSpaceAfterTheFence)
+{
+    const Decorations decorations = decorationsOf(
+        QStringLiteral("``` fold title:example_title\nplain\n```\n"), codeStylerOn());
+    ASSERT_EQ(decorations.codeOptions.size(), 1);
+    EXPECT_TRUE(decorations.codeOptions.first().fold);
+    EXPECT_EQ(decorations.codeOptions.first().title, QStringLiteral("example_title"));
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    EXPECT_TRUE(decorations.codeFences.first().language.isEmpty());
+    // Without the space it is the language, as CommonMark reads it.
+    const Decorations tight = decorationsOf(QStringLiteral("```fold title:x\nplain\n```\n"), codeStylerOn());
+    ASSERT_EQ(tight.codeFences.size(), 1);
+    EXPECT_EQ(tight.codeFences.first().language, QStringLiteral("fold"));
+}
+
+TEST(CodeStylerTest, HashOptionLinesWinOverTheFenceLine)
+{
+    const CodeOptions options = fenceOptionsOf(
+        QStringLiteral("cpp title:fence ln:5"), QStringLiteral("//| title: block\nint a;\n"));
+    EXPECT_EQ(options.title, QStringLiteral("block"));
+    EXPECT_TRUE(options.lineNumbers); // nothing in the block said otherwise
+    EXPECT_EQ(options.firstLine, 5);
+    EXPECT_TRUE(options.range.isValid());
+}
+
+TEST(CodeStylerTest, ParametersOnTheFenceLineAreHiddenAndKeepTheListing)
+{
+    const QString text = QStringLiteral("```cpp title:x ln:2\nint a;\n```\n");
+    const Decorations decorations = decorationsOf(text, codeStylerOn());
+    const Range attributes = decorations.codeFences.first().attributesRange;
+    ASSERT_TRUE(attributes.isValid());
+    EXPECT_TRUE(std::any_of(decorations.syntax.cbegin(), decorations.syntax.cend(),
+                            [&](const Range &range) { return range.contains(attributes.start) && range.contains(attributes.end - 1); }));
+    // A title with a space in it is not tokens of its own: `tab` inside one is not a tab.
+    const Decorations tabby = decorationsOf(QStringLiteral("```cpp title:\"my tab\"\nx\n```\n```cpp title:\"another tab\"\ny\n```\n"),
+                                            codeStylerOn());
+    ASSERT_EQ(tabby.codeFences.size(), 2);
+    EXPECT_EQ(tabby.codeFences.at(0).tabGroup, -1);
+    EXPECT_EQ(tabby.codeFences.at(1).tabGroup, -1);
+}
+
+TEST(CodeStylerTest, NamedHighlightsTakeTheSameItemsAsHl)
+{
+    const CodeOptions options = fenceOptionsOf(
+        QStringLiteral("cpp info:2 warn:4-5 error:'boom' hl:1"),
+        QStringLiteral("a\nb\nc\nd\ne\nboom here\n"));
+    EXPECT_EQ(options.highlight, QList<int>({1}));
+    EXPECT_EQ(options.highlights.value(QStringLiteral("info")), QList<int>({2}));
+    EXPECT_EQ(options.highlights.value(QStringLiteral("warn")), QList<int>({4, 5}));
+    EXPECT_EQ(options.highlights.value(QStringLiteral("error")), QList<int>({6}));
+
+    // A word that is not one of the configured names is no highlight.
+    const Decorations decorations = decorationsOf(QStringLiteral("```cpp nope:2\na\nb\n```\n"), codeStylerOn());
+    EXPECT_TRUE(decorations.codeOptions.isEmpty());
+}
+
+TEST(CodeStylerTest, TheHighlightNamesComeFromASettingString)
+{
+    const auto kinds = parseHighlightKinds(QStringLiteral("info=blue, WARN=#E5A100 ,title=red, bad name=x, info=green, add"));
+    ASSERT_EQ(kinds.size(), 3); // `title` is a parameter, "bad name" is two words, the second `info` is ignored
+    EXPECT_EQ(kinds.at(0), (std::pair<QString, QString>(QStringLiteral("info"), QStringLiteral("blue"))));
+    EXPECT_EQ(kinds.at(1), (std::pair<QString, QString>(QStringLiteral("warn"), QStringLiteral("#E5A100"))));
+    EXPECT_EQ(kinds.at(2).first, QStringLiteral("add")); // no colour: the editor picks one
+    EXPECT_TRUE(parseHighlightKinds(QString()).isEmpty());
+}
+
+TEST(CodeStylerTest, InlineCodeNamesItsLanguageAndHidesThePrefix)
+{
+    const QString text = QStringLiteral("Run `{python} x = [1]` or `{}{keep}` or `plain` or `{c++ title:'T' icon} int a;`.\n");
+    const Decorations decorations = decorationsOf(text, codeStylerOn());
+    QStringList languages;
+    for (const StyleSpan &span : decorations.styles) {
+        if (span.kind == StyleSpan::Kind::InlineCode)
+            languages << span.payload;
+    }
+    EXPECT_EQ(languages, QStringList({QStringLiteral("python"), QString(), QString(), QStringLiteral("c++")}));
+    EXPECT_EQ(rendered(text, codeStylerOn()), QStringLiteral("Run x = [1] or {keep} or plain or int a;.\n"));
+
+    // The code the highlighter is given is what follows the prefix.
+    const auto first = std::find_if(decorations.styles.cbegin(), decorations.styles.cend(),
+                                    [](const StyleSpan &span) { return span.kind == StyleSpan::Kind::InlineCode; });
+    ASSERT_NE(first, decorations.styles.cend());
+    EXPECT_EQ(text.mid(first->code.start, first->code.length()), QStringLiteral("x = [1]"));
+
+    // Off, the prefix is text, and nothing names a language.
+    EXPECT_EQ(rendered(text), QStringLiteral("Run {python} x = [1] or {}{keep} or plain or {c++ title:'T' icon} int a;.\n"));
+    for (const StyleSpan &span : decorationsOf(text).styles)
+        EXPECT_TRUE(span.payload.isEmpty());
+}
+
+TEST(CodeStylerTest, ThePropertyTurnsTheNoteOff)
+{
+    QString note = QStringLiteral("---\ncode-styler-ignore: true\n---\n```cpp title:x\nint a;\n```\n");
+    EXPECT_TRUE(decorationsOf(note, codeStylerOn()).codeOptions.isEmpty());
+    note.replace(QStringLiteral("true"), QStringLiteral("false"));
+    EXPECT_EQ(decorationsOf(note, codeStylerOn()).codeOptions.size(), 1);
+}
+
+TEST(CodeStylerTest, OffMeansTheNoteParsesAsBefore)
+{
+    const QString text = QStringLiteral("```cpp title:x ln:3 hl:1 fold\nint a;\n```\n");
+    const Decorations off = decorationsOf(text);
+    EXPECT_TRUE(off.codeOptions.isEmpty());
+    ASSERT_EQ(off.codeFences.size(), 1);
+    EXPECT_FALSE(off.codeFences.first().ignored);
+    // The Quarto lines still work with it off, and `highlight:` stays numbers only.
+    const Decorations quarto = decorationsOf(QStringLiteral("```cpp\n#| highlight: foo\nint foo;\n```\n").replace(QStringLiteral("#|"), QStringLiteral("//|")));
+    ASSERT_EQ(quarto.codeOptions.size(), 1);
+    EXPECT_TRUE(quarto.codeOptions.first().highlight.isEmpty());
+}
+
 TEST(ParagraphTest, SoftBreaksAreMarked)
 {
     const QString text = QStringLiteral("one\ntwo\n\nthree\n");
@@ -2410,4 +2619,113 @@ TEST(WordCountTest, ExclusionAndFormattingCompose)
     options.ignoreFormatting = true;
     options.excludeBetween = true;
     EXPECT_EQ(wordCountOf(QStringLiteral("- one [skip this] **two**\n"), options), 2);
+}
+
+// --- Code Styler: ```reference blocks ----------------------------------------
+
+TEST(CodeStylerTest, ReferenceBlockReadsItsKeys)
+{
+    const QString note = QStringLiteral(
+        "intro\n\n```reference\nfile: ./src/main.py\nlang: python\nstart: 3\nend: +5\n```\n\nafter\n");
+    const Decorations decorations = decorationsOf(note, codeStylerOn());
+    ASSERT_EQ(decorations.references.size(), 1);
+    const ReferenceSpan &reference = decorations.references.first();
+    EXPECT_EQ(reference.target, QStringLiteral("./src/main.py"));
+    EXPECT_EQ(reference.language, QStringLiteral("python"));
+    EXPECT_EQ(reference.start, QStringLiteral("3"));
+    EXPECT_EQ(reference.end, QStringLiteral("+5"));
+    EXPECT_EQ(note.mid(reference.block.start, 12), QStringLiteral("```reference"));
+    EXPECT_TRUE(note.mid(reference.content.start, reference.content.length()).startsWith(QStringLiteral("file:")));
+}
+
+TEST(CodeStylerTest, ReferenceBlockKeyAliasesAndQuotes)
+{
+    const auto targetOf = [](const QString &lines) {
+        const Decorations decorations =
+            decorationsOf(QStringLiteral("```reference\n") + lines + QStringLiteral("```\n"), codeStylerOn());
+        return decorations.references.isEmpty() ? QString() : decorations.references.first().target;
+    };
+    EXPECT_EQ(targetOf(QStringLiteral("path: a.py\n")), QStringLiteral("a.py"));
+    EXPECT_EQ(targetOf(QStringLiteral("filePath: a.py\n")), QStringLiteral("a.py"));
+    EXPECT_EQ(targetOf(QStringLiteral("link: https://example.com/a.py\n")), QStringLiteral("https://example.com/a.py"));
+    EXPECT_EQ(targetOf(QStringLiteral("file: \"my file.py\"\n")), QStringLiteral("my file.py"));
+    EXPECT_EQ(targetOf(QStringLiteral("file: [[a.py]]\n")), QStringLiteral("[[a.py]]"));
+    // a URL's colon is part of the value, not a second key separator
+    EXPECT_EQ(targetOf(QStringLiteral("LINK:  http://h:8080/x\n")), QStringLiteral("http://h:8080/x"));
+}
+
+TEST(CodeStylerTest, ReferenceBlockNeedsTheFeatureAndATarget)
+{
+    const QString note = QStringLiteral("```reference\nfile: a.py\n```\n");
+    EXPECT_TRUE(decorationsOf(note).references.isEmpty()); // codeStyler off: the plain listing
+    EXPECT_TRUE(decorationsOf(QStringLiteral("```reference\nstart: 3\n```\n"), codeStylerOn()).references.isEmpty());
+    EXPECT_TRUE(decorationsOf(QStringLiteral("```python\nfile: a.py\n```\n"), codeStylerOn()).references.isEmpty());
+}
+
+// --- Code Styler: a user's regular expression cannot stall the parse -----------
+
+TEST(CodeStylerTest, ARunawayRegexIsStoppedQuickly)
+{
+    // `(a+)+$` is exponential on `aaa...!`: without a match budget 300 of these
+    // lines took about four seconds.
+    QString listing;
+    for (int i = 0; i < 300; ++i)
+        listing += QString(30, QLatin1Char('a')) + QStringLiteral("!\n");
+    QElapsedTimer clock;
+    clock.start();
+    const CodeOptions runaway = fenceOptionsOf(QStringLiteral("cpp hl:/(a+)+$/"), listing);
+    const CodeOptions named = fenceOptionsOf(QStringLiteral("cpp info:/(a+)+$/"), listing);
+    EXPECT_LT(clock.elapsed(), 1000) << "ms";
+    EXPECT_TRUE(runaway.highlight.isEmpty());
+    EXPECT_TRUE(named.highlights.value(QStringLiteral("info")).isEmpty());
+
+    // an ordinary pattern still works through the same door
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp hl:/a+!/"), listing).highlight.size(), 300);
+}
+
+TEST(CodeStylerTest, APatternThatSetsItsOwnLimitOrIsLongIsRefused)
+{
+    QString listing;
+    for (int i = 0; i < 300; ++i)
+        listing += QString(30, QLatin1Char('a')) + QStringLiteral("!\n");
+    QElapsedTimer clock;
+    clock.start();
+    // a second `(*LIMIT_MATCH=...)` overrides the budget: no pattern starting with `(*` is accepted
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("cpp hl:/(*LIMIT_MATCH=100000000)(a+)+$/"), listing).highlight.isEmpty());
+    EXPECT_LT(clock.elapsed(), 1000);
+
+    QString padded;
+    for (int i = 0; i < 80; ++i)
+        padded += QStringLiteral("(?:)");
+    const QString line = QStringLiteral("a needle\n");
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp hl:/needle/"), line).highlight, QList<int>({1}));
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("cpp hl:/") + padded + QStringLiteral("needle/"), line).highlight.isEmpty())
+        << "over 256 characters";
+}
+
+// --- Code Styler: inline `{lang}` is only for a language -----------------------
+
+TEST(CodeStylerTest, BracesThatAreNotALanguageStayText)
+{
+    const QStringList plain = {
+        QStringLiteral("{0} items"),       QStringLiteral("{name} is required"), QStringLiteral("{ x + y } * 2"),
+        QStringLiteral("{a b} c"),         QStringLiteral("{\"a\": 1} x"),        QStringLiteral("{...rest} = o"),
+        QStringLiteral("{mylang} code"),   QStringLiteral("{python +} code"),    QStringLiteral("{python foo} code"),
+        QStringLiteral("{ python} code"),  QStringLiteral("{1abc} code"),    QStringLiteral("{d} days"),
+        QStringLiteral("{text} more"),     QStringLiteral("{v} volts"),
+    };
+    for (const QString &code : plain) {
+        SCOPED_TRACE(code.toStdString());
+        const QString text = QStringLiteral("See `") + code + QStringLiteral("` here.\n");
+        EXPECT_EQ(rendered(text, codeStylerOn()), QStringLiteral("See ") + code + QStringLiteral(" here.\n"));
+        for (const StyleSpan &span : decorationsOf(text, codeStylerOn()).styles)
+            EXPECT_TRUE(span.payload.isEmpty());
+    }
+    // known languages, their aliases, and the title/icon forms still are
+    for (const QString &code : {QStringLiteral("{python} x"), QStringLiteral("{py} x"), QStringLiteral("{C++} x"),
+                                QStringLiteral("{js title:\"T\"} x"), QStringLiteral("{rust icon} x"),
+                                QStringLiteral("{cpp title:a icon} x")}) {
+        SCOPED_TRACE(code.toStdString());
+        EXPECT_EQ(rendered(QStringLiteral("`") + code + QStringLiteral("`\n"), codeStylerOn()), QStringLiteral("x\n"));
+    }
 }

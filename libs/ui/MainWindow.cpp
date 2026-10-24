@@ -1149,6 +1149,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         }
         return {};
     });
+    editor->setVaultRootProvider([this] { return m_vault.isValid() ? m_vault.root() : QString(); });
     connect(editor, &MarkdownEditor::linkActivated, this, &MainWindow::followLink);
     connect(editor, &MarkdownEditor::noticeRaised, this, [this](const QString &message) { statusBar()->showMessage(message, 6000); });
     connect(editor, &MarkdownEditor::linkHovered, this,
@@ -1404,6 +1405,20 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             deliver(result);
         });
     });
+    // A reference block's header: a note opens in a tab, anything else (a source
+    // file, a URL) with whatever the system opens it with.
+    connect(editor, &MarkdownEditor::referenceActivated, this, [this](const QString &target) {
+        if (target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+            || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
+            QDesktopServices::openUrl(QUrl(target));
+        else if (!m_vault.isValid()
+                 || !QFileInfo(target).canonicalFilePath().startsWith(QDir(m_vault.root()).canonicalPath() + QLatin1Char('/')))
+            return; // the editor only offers vault files; this is the second lock
+        else if (Vault::isNote(target))
+            openNote(target);
+        else
+            QDesktopServices::openUrl(QUrl::fromLocalFile(target));
+    });
     connect(editor, &MarkdownEditor::baseRowActivated, this, [this](const QString &relativePath) {
         openRelative(relativePath);
         m_active->editor->setFocus();
@@ -1557,6 +1572,11 @@ ParseOptions MainWindow::parseOptions() const
     }
     options.ignoreFormatting = m_settings.boolean(QStringLiteral("editor.countIgnoreFormatting"));
     options.taskStates = featureOn("task-states");
+    options.codeStyler = featureOn("advanced-code-blocks");
+    if (options.codeStyler) {
+        for (const auto &kind : parseHighlightKinds(m_settings.text(QStringLiteral("editor.codeHighlights"))))
+            options.highlightKinds.append(kind.first);
+    }
     return options;
 }
 
@@ -1579,6 +1599,8 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setHoverEditButton(m_settings.boolean(QStringLiteral("editor.hoverEditButton")));
     editor->setTableHandles(m_settings.boolean(QStringLiteral("editor.tableHandles")));
     editor->setComplexCodeBlocks(m_settings.boolean(QStringLiteral("editor.complexCodeBlocks")));
+    editor->setCodeHighlights(m_settings.text(QStringLiteral("editor.codeHighlights")));
+    editor->setRemoteReferences(m_settings.boolean(QStringLiteral("editor.remoteReferences")));
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setParseOptions(parseOptions());
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
@@ -4668,6 +4690,10 @@ void MainWindow::exportPdf()
     MarkdownEditor::PdfOptions pdf = options.options();
     pdf.taskStates = featureOn("task-states");
     pdf.mindMaps = featureOn("markmap");
+    pdf.codeStyler = featureOn("advanced-code-blocks");
+    pdf.codeHighlights = m_settings.text(QStringLiteral("editor.codeHighlights"));
+    pdf.remoteReferences = m_settings.boolean(QStringLiteral("editor.remoteReferences"));
+    pdf.vaultRoot = m_vault.isValid() ? m_vault.root() : QString();
     pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
     applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
@@ -5115,13 +5141,15 @@ void MainWindow::publishSite()
     const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
     const bool taskStates = featureOn("task-states");
     const bool mindMaps = featureOn("markmap");
+    const ParseOptions codeStylerOptions = parseOptions(); // codeStyler and the highlight names, which are all of it
     // The formatting colours too, read here: Settings is not for the worker.
     QHash<QString, QString> colours;
     for (const FormatRow &row : formatRows())
         for (const FormatColour &colour : row.colours)
             for (const bool dark : {true, false})
                 colours.insert(formatColourKey(colour, dark), m_settings.text(formatColourKey(colour, dark)));
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates, mindMaps] {
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates, mindMaps,
+                                         codeStylerOptions] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -5137,6 +5165,8 @@ void MainWindow::publishSite()
         options.theme = publish::Options::ThemeMode(choices.theme);
         options.parse.taskStates = taskStates;
         options.mindMaps = mindMaps;
+        options.parse.codeStyler = codeStylerOptions.codeStyler;
+        options.parse.highlightKinds = codeStylerOptions.highlightKinds;
         for (const Theme::Mode mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
             Theme theme = schemePath.isEmpty() ? Theme::builtin(mode) : Scheme::apply(schemePath, mode);
             applyUserColours(theme, [&colours](const QString &key) { return colours.value(key); });

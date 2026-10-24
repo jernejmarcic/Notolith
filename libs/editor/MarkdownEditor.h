@@ -17,6 +17,7 @@
 class QAbstractItemModel;
 class QCompleter;
 class QFileSystemWatcher;
+class QNetworkAccessManager;
 class QMimeData;
 class QModelIndex;
 class QStringListModel;
@@ -41,6 +42,8 @@ class QLineEdit;
 class QMenu;
 
 namespace noteAppC {
+
+struct ReferenceExcerpt;
 
 class SyntaxMap;
 class VimEngine;
@@ -191,6 +194,11 @@ public:
     /// codeblocks.ini, a fence's own attributes and the theme. On by default;
     /// off draws every block as if none of it were configured.
     void setComplexCodeBlocks(bool on);
+    /// The alternative highlights `info:2 warn:4-6` may name, as the
+    /// `editor.codeHighlights` setting spells them (`info=blue, warn=#E5A100`).
+    /// Only painting reads this: the names the parser accepts are
+    /// ParseOptions::highlightKinds.
+    void setCodeHighlights(const QString &spec);
     bool complexCodeBlocks() const;
     bool outlineNumbering() const;
     /// What an ordered number ends in as drawn: "." (the default), ":", ")" or
@@ -291,6 +299,10 @@ public:
         qreal marginMillimetres = 25.4; ///< "Default", about an inch
         int downscalePercent = 100;
         bool taskStates = false; ///< ParseOptions::taskStates: the note's own checkbox states
+        bool codeStyler = false; ///< ParseOptions::codeStyler: Code Styler's syntax, drawn as on screen
+        QString codeHighlights;  ///< the `editor.codeHighlights` setting: the names `info:2` may use
+        QString vaultRoot; ///< what a ```reference block may read from: empty shows no local file
+        bool remoteReferences = false; ///< the `editor.remoteReferences` setting: a ```reference may fetch a URL
         /// Paper is white, so the light theme unless a caller passes its own
         /// (the person's formatting colours on top of it).
         std::optional<Theme> theme;
@@ -817,6 +829,33 @@ public:
     /// read, with the path; one that throws is what an out-of-memory looks
     /// like. Null clears it.
     static void setCSVreadHookForTests(void (*hook)(const QString &));
+    /// The vault's root, asked each time a ```reference block is laid out: a
+    /// reference may show and open only files inside it (symlinks resolved).
+    /// Without one, no local file is shown.
+    void setVaultRootProvider(std::function<QString()> provider);
+    /// Whether a ```reference block may fetch an `http(s)` URL. Off by
+    /// default: nothing touches the network unasked (ReferenceBlock.cpp).
+    void setRemoteReferences(bool on);
+    /// Whether a file or URL a reference block shows is still being read.
+    bool referencesPending() const;
+    /// For the tests: how many files and URLs this editor holds a read of.
+    int referenceCacheSize() const;
+    /// The address a hosting site's page for a file (GitHub `/blob/`, GitLab
+    /// `/-/blob/`) is fetched as: the raw file's; any other link as it is.
+    static QString rawReferenceURL(const QString &link);
+    /// For the tests: the number of colour runs the panel at `offset` drew.
+    int panelFormatCountAt(qsizetype offset) const;
+    /// For the tests: what a reference block's watcher holds, how many URLs'
+    /// text the process keeps, how many times a file's text was cut to a
+    /// block's lines, and an address the remote-host check lets through (the
+    /// local servers the tests run); empty clears it.
+    int referenceWatchedForTests() const;
+    static int remoteReferenceCopiesForTests();
+    static int referenceScansForTests();
+    static void allowReferenceAddressForTests(const QString &address);
+    /// For the tests: called on the worker thread at the top of every local
+    /// reference read, with the path. Null clears it.
+    static void setReferenceReadHookForTests(void (*hook)(const QString &));
     /// For the tests: that cell's caption - the file name of a card, the
     /// `alt` of an `<img>` whose file is missing. Empty for an image.
     QString embedCellLabelAt(qsizetype offset, int cell) const;
@@ -1151,6 +1190,10 @@ signals:
     /// opened the same way every other pane's noteActivated already is:
     /// MainWindow connects this straight to openRelative().
     void fileEmbedActivated(const QString &relativePath);
+    /// The header of a ```reference block was clicked: `target` is the file's
+    /// absolute path or the URL, for the window to open - a note in a tab,
+    /// anything else with the system's own handler.
+    void referenceActivated(const QString &target);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -1207,6 +1250,7 @@ private:
     struct QueryCacheEntry;
     struct BaseCacheEntry;
     struct CSVcacheEntry;
+    struct ReferenceCacheEntry;
     struct InlineHTMLpair;
     struct HTMLtableEdit;
     struct CellRef;
@@ -1309,6 +1353,12 @@ private:
     /// The same for a listing nested in a callout or quote, which has the
     /// language and nothing else to go on.
     LanguageStyle styleOfLanguage(const QString &language) const;
+    /// A named highlight's row colour, with the alpha a highlighted row gets;
+    /// invalid for a name the setting does not have.
+    QColor codeHighlightColour(const QString &kind) const;
+    /// The highlighter's tokens for an inline code span written `{lang} code`,
+    /// in `map`'s display coordinates.
+    QList<QTextLayout::FormatRange> inlineCodeFormats(const StyleSpan &span, const DisplayMap &map) const;
     /// Token colours for a block styled `style`: its own `syntax.*` over the
     /// theme's. False (and `*out` untouched) when nothing is configured or the
     /// setting is off, which is when the highlighter must get no map at all.
@@ -1918,6 +1968,29 @@ private:
     void refreshCSVfiles();
     /// Forgets every cached file and its watch: the feature went off.
     void dropCSVcache();
+    // --- ```reference blocks, implemented in ReferenceBlock.cpp --------------
+
+    /// A fenced block Code Styler's `reference` names a file or URL for: that
+    /// file's lines (`start`/`end`) as a listing under the file's name. The
+    /// read is on a worker thread - or the network - never in layout: "Loading..."
+    /// until deliverReference lands. False for any other block.
+    bool layoutReference(BlockView &view);
+    /// A read or fetch finished (on this thread); ignored if `generation` is
+    /// no longer the one on record for `key`.
+    void deliverReference(const QString &key, quint64 generation, ReferenceCacheEntry result);
+    /// Asks for `url` through the network manager, never blocking.
+    void fetchReference(const QString &key, const QString &url, quint64 generation, int hops);
+    /// Relays out the blocks showing `key`.
+    void relayReferenceBlocks(const QString &key);
+    void deliverExcerpt(const QString &key, quint64 generation, const QString &memoKey, const QString &language,
+                        ReferenceExcerpt made);
+    void watchReference(const QString &path);
+    void referenceFileEvent();
+    void refreshReferences();
+    /// Forgets every URL's text and the network manager: remote fetching went off.
+    void dropRemoteReferences();
+    /// Forgets everything a reference block kept - reads, watches, fetches: the plugin went off.
+    void dropReferenceCache();
     /// The view's name (if any) above the grid, then paintTable for the
     /// grid itself - the table painting is not duplicated, only framed.
     void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;

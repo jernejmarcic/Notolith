@@ -899,10 +899,13 @@ void MarkdownEditor::setParseOptions(const ParseOptions &options)
                && (!l.metaNotes || (l.open == r.open && l.close == r.close))
                && l.excludeBetween == r.excludeBetween
                && (!l.excludeBetween || (l.excludeOpen == r.excludeOpen && l.excludeClose == r.excludeClose))
-               && l.ignoreFormatting == r.ignoreFormatting && l.taskStates == r.taskStates;
+               && l.ignoreFormatting == r.ignoreFormatting && l.taskStates == r.taskStates
+               && l.codeStyler == r.codeStyler && (!l.codeStyler || l.highlightKinds == r.highlightKinds);
     };
     if (same(options, d->m_parseOptions))
         return; // every settings pass asks
+    if (!options.codeStyler && d->m_parseOptions.codeStyler)
+        dropReferenceCache(); // nothing parses to a reference now: what they held goes
     d->m_parseOptions = options;
     if (options.taskStates)
         TaskStates::reload();
@@ -2552,6 +2555,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             continue;
 
         QTextCharFormat format;
+        // Tokens that go on after the span's own format, which they refine.
+        QList<QTextLayout::FormatRange> tokens;
         switch (span.kind) {
         case StyleSpan::Kind::Bold:
             format.setFontWeight(QFont::Bold);
@@ -2570,6 +2575,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             format.setFont(d->m_theme.monospaceFont());
             format.setForeground(codeColour);
             format.setBackground(codeBackground);
+            if (span.code.isValid()) // `{python} code`: the language's own colours (Code Styler)
+                tokens = inlineCodeFormats(span, map);
             break;
         case StyleSpan::Kind::CodeBlock:
             if (view.span.kind == BlockSpan::Kind::Code)
@@ -2635,6 +2642,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             continue; // carried by the block font
         }
         add(span.range, format);
+        formats += tokens;
     }
     // Inline HTML tags layoutInlineHtml recognised and paired: it already
     // hid the tags themselves, so this is the format for the text between
@@ -2642,6 +2650,20 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
     for (const auto &[source, htmlFormat] : view.inlineHtmlFormats)
         add(source, htmlFormat);
     return underlay + formats;
+}
+
+QList<QTextLayout::FormatRange> MarkdownEditor::inlineCodeFormats(const StyleSpan &span, const DisplayMap &map) const
+{
+    const Range shown = map.toDisplay(span.code);
+    if (shown.length() != span.code.length())
+        return {}; // something inside it is hidden: the offsets would not line up
+    SyntaxMap syntax;
+    const bool mapped = syntaxMapFor(styleOfLanguage(span.payload), &syntax);
+    QList<QTextLayout::FormatRange> tokens = d->m_code.highlight(
+        d->m_text.mid(span.code.start, span.code.length()), span.payload, mapped ? &syntax : nullptr);
+    for (QTextLayout::FormatRange &token : tokens)
+        token.start += int(shown.start);
+    return tokens;
 }
 
 Range MarkdownEditor::codeContentOf(const BlockView &view, QString *language) const
@@ -4223,6 +4245,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.isHtml = false;
     view.isPluginBlock = false;
     view.codeBlockKey.clear();
+    view.referenceTarget.clear();
+    view.referenceKey.clear();
     view.embedPanel = false;
     view.embedLabel.clear();
     view.inlineHtmlFormats.clear();
@@ -4285,6 +4309,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (renderMedia && layoutBase(view))
         return;
     if (renderMedia && layoutPluginCode(view))
+        return;
+    if (renderMedia && layoutReference(view))
         return;
     if (renderMedia && layoutHtml(view))
         return;
@@ -5786,6 +5812,10 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
         shift(fence.block);
         shift(fence.content);
         shift(fence.attributesRange);
+    }
+    for (ReferenceSpan &reference : d->m_decorations.references) {
+        shift(reference.block);
+        shift(reference.content);
     }
     for (TabGroup &group : d->m_tabGroups) {
         shift(group.span);

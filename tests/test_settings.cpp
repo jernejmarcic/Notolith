@@ -613,6 +613,22 @@ TEST(SettingsModuleTest, RegisteredDefaultsAndFeaturesAreLiveAndSaved)
     QFile::remove(Settings::configFile()); // it saved fake.greeting = false into the isolated config
 }
 
+TEST(SettingsFeatureTest, AdvancedCodeBlocksIsACorePluginAndOnByDefault)
+{
+    bool listed = false;
+    for (const Settings::Feature &feature : Settings::features())
+        listed = listed || (QByteArray(feature.id) == "advanced-code-blocks" && !feature.obsidian);
+    EXPECT_TRUE(listed);
+    EXPECT_EQ(Settings::defaultValue(Settings::featureKey("advanced-code-blocks")), QVariant(true));
+    EXPECT_EQ(Settings::defaultValue(QStringLiteral("editor.codeHighlights")).toString().left(9), QStringLiteral("info=blue"));
+}
+
+TEST(SettingsFeatureTest, RemoteReferencesAreOffByDefault)
+{
+    // a ```reference block never touches the network until this is turned on
+    EXPECT_EQ(Settings::defaultValue(QStringLiteral("editor.remoteReferences")), QVariant(false));
+}
+
 TEST(SettingsModuleTest, StoredValuesOfKeysRegisteredAfterLoadAreAdopted)
 {
     // The window loads Settings before the module scan registers a module's

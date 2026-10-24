@@ -58,6 +58,8 @@ notes. For the older map see [[Welcome]] and [[Newer Features]].
 
 - [[Code Blocks]], [[Fence Options]], [[Implicit Code]], [[Running Code]],
   [[Runnable File Embeds]], [[Notebook.ipynb]] (`notebooks`).
+- [[Code Styler]] (`advanced-code-blocks`): fence parameters, named highlights,
+  `{lang}` inline code, ` ```reference ` blocks.
 
 ## Files, safety and sharing
 

@@ -75,6 +75,8 @@ QVariantMap &defaults()
         {QStringLiteral("editor.alignTables"), true},
         {QStringLiteral("editor.hoverEditButton"), true},
         {QStringLiteral("editor.tableHandles"), true}, // row/column grips, add bars, cell selection on a drawn table
+        {QStringLiteral("editor.remoteReferences"), false}, // a ```reference block may fetch an http(s) URL: off, nothing touches the network unasked
+        {QStringLiteral("editor.codeHighlights"), QStringLiteral("info=blue, warn=orange, error=red, add=green, del=red")},
         {QStringLiteral("editor.complexCodeBlocks"), true}, // bg/fg/border/syntax.* on code blocks; nothing configured draws as before
         {QStringLiteral("editor.metaNotes"), false}, // [like this] in --meta-note-color; off: the parse never looks
         {QStringLiteral("editor.metaNoteOpen"), QStringLiteral("[")},   // 1-3 characters
@@ -652,6 +654,12 @@ static QList<Settings::Feature> &mutableFeatures()
         {"markmap", QT_TRANSLATE_NOOP("Settings", "Mind maps"),
          QT_TRANSLATE_NOOP("Settings", "Draw markmap code blocks as mind maps, laid out and drawn by Notolith itself "
                                        "(no web view). Off, the block is a plain listing."),
+         false},
+        {"advanced-code-blocks", QT_TRANSLATE_NOOP("Settings", "Advanced code blocks"),
+         QT_TRANSLATE_NOOP("Settings", "Obsidian's Code Styler syntax: title:, ln:, hl:, fold and unwrap on a "
+                                       "code block's first line, coloured named highlights, `{python} code` "
+                                       "inline code with highlighting, and ```reference blocks that show a file. "
+                                       "Off, they are plain text."),
          false},
         {"epub-reader", QT_TRANSLATE_NOOP("Settings", "EPUB reader"),
          QT_TRANSLATE_NOOP("Settings", "Open .epub books in a tab, with highlights and notes kept in a note "
