@@ -4477,10 +4477,15 @@ void MainWindow::startRecording()
 
 void MainWindow::mergeCurrentNote()
 {
-    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath) || !save())
+    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath)
+        || !Vault::isNote(m_active->notePath) || !save()) // never from a notebook: its JSON is not a note's text
         return;
     const QString source = m_active->notePath;
-    QStringList notes = m_index.allPaths();
+    QStringList notes;
+    for (const QString &path : m_index.allPaths()) { // the index lists a notebook too, while the reader is on
+        if (Vault::isNote(path))
+            notes << path;
+    }
     notes.removeOne(m_vault.relative(source));
     auto *picker = new QuickSwitcher(this);
     picker->setObjectName(QStringLiteral("mergePicker"));
@@ -4496,6 +4501,12 @@ void MainWindow::mergeCurrentNote()
 
 bool MainWindow::mergeNote(const QString &source, const QString &target)
 {
+    // Both ends are Markdown notes: appending text to a notebook's JSON, or its JSON to a note, corrupts it.
+    if (!Vault::isNote(source) || !Vault::isNote(target)) {
+        QMessageBox::warning(this, tr("Merge"), tr("Only Markdown notes can be merged: %1")
+                                                    .arg(QFileInfo(Vault::isNote(source) ? target : source).fileName()));
+        return false;
+    }
     // What the target's tabs hold unsaved is its text too.
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath == target && isModified(leaf.get()) && !saveLeaf(leaf.get(), false))
@@ -5517,6 +5528,7 @@ void MainWindow::openVault(const QString &path)
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
     m_settings.save(); // at once: another process's bare launch reopens the vault most recently opened
+    m_settings.takeAdoptedKeys(); // applySettings() follows: nothing left to report
     // Before the scan, by this vault's settings: its notebooks and meta notes
     // are indexed by the first one, and a warm cache is checked against them.
     updateNotebookIndex();

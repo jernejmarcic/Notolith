@@ -4810,6 +4810,54 @@ TEST_F(WindowTest, NoteComposerMergesANoteAndItsLinksFollow)
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("Bravo\n\nAlpha\n"));
 }
 
+// A notebook is never a merge target or source: appending Markdown to its JSON, or its JSON to a note, corrupts it.
+TEST_F(WindowTest, NoteComposerNeverMergesIntoOrFromANotebook)
+{
+    const QByteArray notebook = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("A.md"), "Alpha\n");
+    write(QStringLiteral("B.md"), "Bravo\n");
+    write(QStringLiteral("Nb.ipynb"), notebook);
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    WAIT_TRUE(window.index()->allPaths().contains(QStringLiteral("Nb.ipynb")), 5000); // the indexer does list it
+
+    QString refusals;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&refusals] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            refusals += box->text();
+            box->close();
+        }
+    });
+    watch.start(20);
+
+    // As a target: not offered, and refused when named anyway.
+    window.openNote(path(QStringLiteral("A.md")));
+    window.findChild<QAction *>(QStringLiteral("note-composer:merge-file"))->trigger();
+    auto *picker = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("mergePicker"));
+    ASSERT_NE(picker, nullptr);
+    auto *list = picker->findChild<QListWidget *>();
+    ASSERT_NE(list, nullptr);
+    QStringList offered;
+    for (int i = 0; i < list->count(); ++i)
+        offered << list->item(i)->text();
+    EXPECT_TRUE(offered.contains(QStringLiteral("B.md")));
+    EXPECT_FALSE(offered.contains(QStringLiteral("Nb.ipynb")));
+    emit picker->accepted(QStringLiteral("Nb.ipynb"));
+    EXPECT_EQ(readAll(path(QStringLiteral("Nb.ipynb"))), notebook);
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("A.md")))) << "the source is kept";
+
+    // As a source: the command does nothing from a notebook tab.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Nb.ipynb"))));
+    window.findChild<QAction *>(QStringLiteral("note-composer:merge-file"))->trigger();
+    EXPECT_EQ(window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("mergePicker")), nullptr);
+    EXPECT_EQ(readAll(path(QStringLiteral("B.md"))), QByteArray("Bravo\n"));
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Nb.ipynb"))));
+}
+
 TEST_F(WindowTest, NoteComposerMergeKeepsAnUnsavedLinkInAnotherTab)
 {
     write(QStringLiteral("A.md"), "Alpha\n");
