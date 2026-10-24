@@ -72,6 +72,14 @@ TEST(MarkmapTreeTest, ASkippedHeadingLevelStillNestsUnderTheNearestLowerOne)
     EXPECT_EQ(shape(tree), QStringLiteral("R(deep,shallow(deepest))"));
 }
 
+// What the note shows in place of source (a backslash escape, an entity) is what a map node shows too.
+TEST(MarkmapTreeTest, EscapesAndEntitiesShowAsTheNoteShowsThem)
+{
+    const MarkmapTree tree = noteAppC::parseMarkmap(QStringLiteral("# R\n- \\*not bold\\* &amp; **bold**\n"));
+    ASSERT_EQ(tree.nodes.size(), 2);
+    EXPECT_EQ(tree.nodes.at(1).plain(), QStringLiteral("*not bold* & bold"));
+}
+
 TEST(MarkmapTreeTest, SeveralTopLevelItemsGetAnEmptyRootLikeMarkmapJs)
 {
     const MarkmapTree tree = noteAppC::parseMarkmap(QStringLiteral("- one\n- two\n  - three\n"));
