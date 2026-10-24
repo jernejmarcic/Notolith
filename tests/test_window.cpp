@@ -1596,6 +1596,81 @@ TEST_F(WindowTest, PandocImportReportsAPictureItCouldNotCopy)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// pandoc copies the pictures first and makes the note after: a note that cannot be made takes them back out.
+TEST_F(WindowTest, PandocImportTakesItsPicturesBackWhenTheNoteCannotBeMade)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "mkdir media; echo png > media/x.png; printf 'text ![a](media/x.png)\\n' > out.md"));
+    QFile input(inputs.filePath(QStringLiteral("Doc.docx")));
+    ASSERT_TRUE(input.open(QIODevice::WriteOnly));
+    input.write("x");
+    input.close();
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    write(QStringLiteral(".obsidian/app.json"), R"({"attachmentFolderPath": "assets"})");
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Locked")));
+    const QFile::Permissions open = QFile::permissions(path(QStringLiteral("Locked")));
+    ASSERT_TRUE(QFile::setPermissions(path(QStringLiteral("Locked")), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    if (QFile(path(QStringLiteral("Locked/probe"))).open(QIODevice::WriteOnly)) {
+        QFile::setPermissions(path(QStringLiteral("Locked")), open);
+        GTEST_SKIP() << "this user can write into a read-only folder (root)";
+    }
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        bool warned = false;
+        QTimer closer; // "Could not create the note" is modal
+        QObject::connect(&closer, &QTimer::timeout, &window, [&] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                warned = warned || box->text().contains(QStringLiteral("Could not create the note"));
+                box->close();
+            }
+        });
+        closer.start(20);
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, input.fileName()), Q_ARG(QString, QStringLiteral("Locked")));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return warned; }, 20000));
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("assets/x.png")))) << "the picture of a note that is not there";
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("assets")))) << "and the folder it made for it";
+    }
+    QFile::setPermissions(path(QStringLiteral("Locked")), open);
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// A file waiting for pandoc was dropped for the vault that was open then: another vault opened since does not get it.
+TEST_F(WindowTest, AQueuedPandocImportIsDroppedWhenAnotherVaultIsOpened)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    QTemporaryDir other;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "sleep 0.3\nprintf 'imported %s\\n' \"$(basename \"$last\")\" > out.md"));
+    QStringList files;
+    for (const char *name : {"first.docx", "second.docx"}) {
+        QFile file(inputs.filePath(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("x");
+        files << file.fileName();
+    }
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        for (const QString &file : files)
+            QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, file), Q_ARG(QString, QString()));
+        window.openVault(other.path()); // the second is queued behind the first, which still runs
+        QTest::qWait(2500);
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("second.md"))));
+        EXPECT_FALSE(QFileInfo::exists(other.filePath(QStringLiteral("second.md")))) << "not imported into the vault opened since";
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // Pandoc found (a stand-in executable): the switch is a switch again, and off takes the commands away.
 TEST_F(WindowTest, PandocFoundIsToggleable)
 {
@@ -6619,6 +6694,57 @@ TEST_F(WindowTest, ANotebooksCellAttachmentIsShownAsAnImage)
                                                   << saved.left(600).toStdString() << editor->noteText().toStdString();
 }
 
+namespace {
+/// A notebook with one markdown cell that carries a picture as an attachment.
+QByteArray notebookWithAPicture()
+{
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    const QJsonObject cell{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                           {QStringLiteral("id"), QStringLiteral("m")},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("![pic](attachment:image.png)")}},
+                           {QStringLiteral("attachments"),
+                            QJsonObject{{QStringLiteral("image.png"),
+                                         QJsonObject{{QStringLiteral("image/png"), QString::fromLatin1(png.toBase64())}}}}}};
+    return QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                     {QStringLiteral("nbformat_minor"), 5},
+                                     {QStringLiteral("metadata"),
+                                      QJsonObject{{QStringLiteral("language_info"),
+                                                   QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                     {QStringLiteral("cells"), QJsonArray{cell}}})
+        .toJson();
+}
+} // namespace
+
+// The pictures of a notebook are kept while a tab shows it and let go when none does: a tab that goes on to another
+// note, and the last tab closed, both free them.
+TEST_F(WindowTest, ANotebooksPicturesAreFreedWhenNoTabShowsIt)
+{
+    write(QStringLiteral("Pic.ipynb"), notebookWithAPicture());
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 0);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Pic.ipynb"))));
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 1);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md")))); // the same tab goes on
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 0);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Pic.ipynb"))));
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 1);
+    command(window, "workspace:split-vertical")->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 1) << "still shown in the first split";
+    command(window, "workspace:close")->trigger(); // the split's tab: the notebook's tab stays
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 1);
+    command(window, "workspace:close")->trigger(); // the last one
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 0);
+}
+
 // Two cells that read the same are two results: each block shows the output
 // its own cell had, not one that was cached under the shared text.
 TEST_F(WindowTest, IdenticalNotebookCellsShowTheirOwnOutputs)
@@ -11137,6 +11263,89 @@ TEST_F(InkWindowTest, AnOpenInkTabWhoseFileIsDeletedIsMarkedMissingAndRefusesToS
     EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "the file is not recreated";
 }
 
+// An autosave that came due while the file was gone was skipped: once the file is followed, the edits are saved at its new
+// path without another keystroke.
+TEST_F(InkWindowTest, AModifiedInkTabIsSavedAtItsNewPathOnceItsMovedFileIsFollowed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    window.setAutosaveIntervalsForTests(600000, 600000); // nothing is due until the move has been seen
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(view->isModified());
+    ASSERT_TRUE(QFile::rename(path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink"))));
+    WAIT_TRUE(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))) == 0, 5000); // gone, in the grace
+    window.setAutosaveIntervalsForTests(100, 100);
+    inktest::penStroke(canvas, QPointF(100, 700), QPointF(300, 740), 1000); // arms an autosave that falls in the grace
+    WAIT_TRUE(window.windowTitle().contains(QStringLiteral("Dest/Sketch.ink")), 5000); // followed
+    WAIT_TRUE(!view->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Dest/Sketch.ink"))).count("\"type\":\"stroke\""), 3);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "never written back at the old name";
+}
+
+// The second between the file going and its tab saying "missing" is no licence to write it back: Ctrl+S refuses at once.
+TEST_F(InkWindowTest, ASaveInTheGraceOfAGoneInkFileIsRefusedAsWell)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    window.setAutosaveIntervalsForTests(600000, 600000);
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Sketch.ink"))));
+    WAIT_TRUE(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))) == 0, 5000);
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
+    ASSERT_EQ(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))), 0) << "still in the grace";
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(asked) << "the refusal is said out loud";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "the file is not recreated";
+}
+
+// Likewise closing: Save is not offered while the file is only just gone.
+TEST_F(InkWindowTest, ClosingInTheGraceOfAGoneInkFileOffersOnlyDiscardAndCancel)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    window.setAutosaveIntervalsForTests(600000, 600000);
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Sketch.ink"))));
+    WAIT_TRUE(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))) == 0, 5000);
+    int questions = 0;
+    bool hadSave = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            ++questions;
+            hadSave = box->button(QMessageBox::Save) != nullptr;
+            closeBoxWith(box, QMessageBox::Cancel);
+        }
+    });
+    watch.start(20);
+    ASSERT_EQ(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))), 0) << "still in the grace";
+    EXPECT_FALSE(window.close()) << "Cancel keeps the window";
+    EXPECT_EQ(questions, 1);
+    EXPECT_FALSE(hadSave);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "nothing is written back";
+}
+
 // A look-alike is not the file: another document of the same name elsewhere in the vault is not followed to (its size
 // or modification time is not the one this tab's file had), so a save cannot write over it.
 class InkLookAlikeTest : public InkWindowTest {
@@ -11432,6 +11641,7 @@ TEST_F(WindowTest, AnOpenCanvasFollowsItsFileMovedOutsideTheApp)
     WAIT_TRUE(canvas->path() == path(QStringLiteral("Dest/Board.canvas")), 5000);
     ASSERT_TRUE(QFile::remove(path(QStringLiteral("Dest/Board.canvas")))); // so a save is seen to write it
     command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Dest/Board.canvas")))) << "the save landed at the new name";
     EXPECT_FALSE(QFile::exists(path(QStringLiteral("Board.canvas")))) << "the old name is not recreated";
 }
 
@@ -11483,6 +11693,66 @@ TEST_F(WindowTest, AnOpenImageFollowsItsFileMovedOutsideTheAppOrIsMarkedMissing)
     WAIT_TRUE(image->path() == path(QStringLiteral("Dest/pic.png")), 5000);
     ASSERT_TRUE(QFile::remove(path(QStringLiteral("Dest/pic.png"))));
     WAIT_TRUE(currentTabText(window).contains(QStringLiteral("missing")), 5000);
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+// An image is never saved by the window (its marks go to their own file as they are made): Ctrl+S on a missing one is not
+// a "could not save" box.
+TEST_F(WindowTest, SavingAMissingImageTabSaysNothingAndWritesNothing)
+{
+    QImage picture(40, 20, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+    Settings config = Settings::load();
+    const QVariant before = config.value(Settings::featureKey("image-annotation"));
+    config.setValue(Settings::featureKey("image-annotation"), true);
+    ASSERT_TRUE(config.save());
+    const auto restore = qScopeGuard([&config, before] {
+        config.setValue(Settings::featureKey("image-annotation"), before.isValid() ? before : QVariant(false));
+        config.save();
+    });
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("pic.png"))));
+    ASSERT_NE(window.findChild<noteAppC::ImageView *>(), nullptr);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("pic.png"))));
+    WAIT_TRUE(currentTabText(window).contains(QStringLiteral("missing")), 5000);
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
+    command(window, "editor:save-file")->trigger();
+    EXPECT_FALSE(asked);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("pic.png"))));
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_CANVAS
+// The same file open in a tab of each split: "(missing)" is in both, not only in the group of the first.
+TEST_F(WindowTest, AMissingFilesTabSaysSoInEverySplit)
+{
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    command(window, "workspace:split-vertical")->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    const auto bars = mainBars(window);
+    ASSERT_EQ(bars.size(), 2);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Board.canvas"))));
+    WAIT_TRUE(tabTexts(bars.at(0)).join(QString()).contains(QStringLiteral("missing"))
+                  && tabTexts(bars.at(1)).join(QString()).contains(QStringLiteral("missing")), 5000);
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})"); // found again, as a recreation
+    WAIT_TRUE(!tabTexts(bars.at(0)).join(QString()).contains(QStringLiteral("missing"))
+                  && !tabTexts(bars.at(1)).join(QString()).contains(QStringLiteral("missing")), 5000);
 }
 #endif
 

@@ -144,6 +144,10 @@ void MainWindow::runPandoc(const QString &program, const QStringList &arguments,
             QTimer::singleShot(0, this, [this] {
                 if (m_pandocQueue.isEmpty() || (m_pandocRunner && m_pandocRunner->running()))
                     return;
+                if (!featureOn("pandoc")) { // switched off meanwhile: nothing more is started
+                    m_pandocQueue.clear();
+                    return;
+                }
                 const auto next = m_pandocQueue.takeFirst();
                 importWithPandoc(next.first, next.second);
             });
@@ -432,6 +436,11 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
                   const QString path = m_vault.createNote(folderRelative, base, &error, QStringLiteral(".md"),
                                                           pandoc::rewriteImported(text, names));
                   if (path.isEmpty()) {
+                      for (const QString &name : std::as_const(names)) { // no note will show them: take them back out
+                          if (!name.isEmpty())
+                              QFile::remove(QDir(attachments).filePath(name));
+                      }
+                      QDir().rmdir(attachments); // only when that left it empty
                       QMessageBox::warning(this, tr("Import with pandoc"), tr("Could not create the note: %1").arg(error));
                       return;
                   }

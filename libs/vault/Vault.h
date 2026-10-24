@@ -117,9 +117,10 @@ public:
 
     /// Renames a file or folder in place. `newBaseName` carries no path and, for
     /// a note, no extension. Refuses a name that already exists or that holds
-    /// Obsidian's invalid characters (`# ^ [ ] | : \ /`).
+    /// Obsidian's invalid characters (`# ^ [ ] | : \ /`). `warning`, when given, says what did not go with a
+    /// rename that succeeded (an image's annotations file).
     bool renamePath(const QString &absolutePath, const QString &newBaseName,
-                    QString *newAbsolutePath, QString *error = nullptr) const;
+                    QString *newAbsolutePath, QString *error = nullptr, QString *warning = nullptr) const;
 
     /// True when the two paths differ in letter case alone.
     static bool isCaseOnlyChange(const QString &oldPath, const QString &newPath);
@@ -129,7 +130,7 @@ public:
     /// `.obsidian`), and a folder moved into itself or its own subfolder.
     /// Moving into the folder it is already in succeeds and changes nothing.
     bool movePath(const QString &absolutePath, const QString &targetFolder,
-                  QString *newAbsolutePath, QString *error = nullptr) const;
+                  QString *newAbsolutePath, QString *error = nullptr, QString *warning = nullptr) const;
 
     /// Moves to the vault's own `.trash/`, the way Obsidian's default does,
     /// keeping the relative folder structure and suffixing on collision.
