@@ -1711,7 +1711,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
             } else {
                 if (!m_markmapRenderer)
                     m_markmapRenderer = markmapRenderer([this] { return m_theme; });
-                // The text goes to the disk cache publish and PDF export read: not for an encrypted note.
+                // The map is drawn from the fence's text here, in the window; publish and PDF export draw their own.
                 editor->setCodeBlockRenderer(
                     {QStringLiteral("markmap")},
                     [this, editor](const QString &language, const QString &source, int width, const QString &theme,

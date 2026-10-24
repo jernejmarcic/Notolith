@@ -120,6 +120,8 @@ QList<ModuleInfo> ModuleRegistry::scan(const QStringList &directories, const Suf
             builtIn.last().isStatic = true;
         }
     }
+    // No de-dup of a static module and a file module with one id: a file module from another build carries another
+    // ABI token and is listed with a problem, never loaded, and the static entry (first) wins every lookup.
     found = builtIn + found;
     // First claim wins (M3): the first module without a problem to claim a suffix owns it, in
     // scan order (directories as given, files by name). A later claimant is listed with a

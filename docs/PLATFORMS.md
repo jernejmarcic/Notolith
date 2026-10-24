@@ -323,7 +323,11 @@ stacks are not in the Android kit and their options are off there. The ink
 modules themselves are not built on Android yet either (the root
 `CMakeLists.txt` gates `libs/ext/ink` on `NOT ANDROID`: Abseil and the stroke
 modeler are not cross-built), so on Android today the option has no module to
-link; it is the path the first one takes. Checked on the desktop: a second
+link; it is the path the first one takes. Two things block lifting that gate: the root requires system Abseil
+(`find_package(absl)`), which the NDK does not have, and `libs/ext/ink/core/CMakeLists.txt` forces
+`INK_STROKE_MODELER_FIND_DEPENDENCIES` and writes a googletest shim that does `find_package(GTest CONFIG REQUIRED)`.
+The stroke modeler's own CMake fetches a pinned Abseil and googletest when `FIND_DEPENDENCIES` is `OFF`, so the fix
+is that setting under `ANDROID` and dropping `NOT ANDROID` from the gate. Checked on the desktop: a second
 configure with `-DNOTEAPPC_STATIC_MODULES=ON` builds the whole tree, links
 the executable with both module classes inside it and no `NEEDED` entry for
 `libnotolith-ink*`, and `test_modules` lists, loads and attaches a static test

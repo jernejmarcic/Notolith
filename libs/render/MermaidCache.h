@@ -30,7 +30,7 @@ QStringList diagramLanguages(DiagramKind kind);
 /// for Markmap also the colours and fonts of its map (Markmap.h's MarkmapLook).
 QByteArray diagramConfig(DiagramKind kind, const Theme &theme);
 
-/// $XDG_CACHE_HOME/noteAppC/<mermaid|plantuml|tikz|dot|markmap>.
+/// $XDG_CACHE_HOME/noteAppC/<mermaid|plantuml|tikz|dot> (a mind map is drawn from its text, never cached).
 QString diagramCacheDirectory(DiagramKind kind);
 
 /// mermaidCachePath for any kind.

@@ -1623,7 +1623,8 @@ PDF export show the same map, each drawn from the fence's text in its own theme.
   light theme for a PDF whatever the window uses), so a note never opened in the
   editor still gets its map, as the source asks for it (not as a click folded it).
   With the plugin off (`publish::Options::mindMaps`, `PdfOptions::mindMaps`) they
-  show the plain listing. An encrypted note is not drawn.
+  show the plain listing. An encrypted note is not drawn in the editor or in a publish; a PDF of an unlocked one
+  draws its maps from the text in memory.
 - **Show as mind map**: the command "Mind maps: Show as mind map" (`markmap:show-note`,
   off with the plugin) opens the whole note as a map in a window of its own, as
   markmap.js reads a document: headings, lists and text, less the frontmatter and
