@@ -312,6 +312,16 @@ struct MarkdownEditor::BlockExtras {
     /// preview draws it as Obsidian's properties table.
     std::vector<PropertyRow> propertyRows;
 
+    /// The callout's resolved look: the built-in type, then callouts.ini,
+    /// then whatever the callout itself says. Resolved before the block is
+    /// laid out, because it can change the body font and so the metrics.
+    CalloutStyle calloutStyle;
+
+    /// Callouts nested inside this block, outer first. Only the outermost
+    /// callout is a block of its own; the rest are painted into this one's
+    /// layout, which is why they are resolved before it is built.
+    std::vector<NestedCallout> nested;
+
 };
 
 struct MarkdownEditor::BlockView {
@@ -376,14 +386,6 @@ struct MarkdownEditor::BlockView {
     /// Set when this block is a callout, so painting knows its colour,
     /// icon and title without looking the span up again.
     const CalloutSpan *callout = nullptr;
-    /// The callout's resolved look: the built-in type, then callouts.ini,
-    /// then whatever the callout itself says. Resolved before the block is
-    /// laid out, because it can change the body font and so the metrics.
-    CalloutStyle calloutStyle;
-    /// Callouts nested inside this block, outer first. Only the outermost
-    /// callout is a block of its own; the rest are painted into this one's
-    /// layout, which is why they are resolved before it is built.
-    std::vector<NestedCallout> nested;
     /// A fence in a tab group that is not the tab being shown, or the
     /// blank lines between two of them: no height, nothing painted.
     bool tabHidden = false;

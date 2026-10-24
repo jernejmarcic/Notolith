@@ -680,7 +680,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 return true;
         }
 
-        for (const NestedCallout &nested : view.nested) {
+        for (const NestedCallout &nested : view.x().nested) {
             if (nested.span->foldable
                 && touchable(nestedFoldHandleRect(view, nested, left, top), 6).contains(point)) {
                 toggleFoldAt(nested.span->range.start);
@@ -1467,7 +1467,7 @@ QRectF MarkdownEditor::bandOf(const BlockView &view, const Range &source) const
 void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,
                                          qreal top) const
 {
-    for (const NestedCallout &nested : view.nested) {
+    for (const NestedCallout &nested : view.x().nested) {
         const QRectF band = bandOf(view, nested.span->range);
         if (band.height() <= 0)
             continue;

@@ -17,7 +17,7 @@ using namespace noteAppC;
 namespace {
 
 // Tightened a slice at a time while the cold fields move off the view; the end is 400.
-constexpr std::size_t kBlockViewBudget = 1280; // after slice 3 (table cells and property rows moved off): was 1984
+constexpr std::size_t kBlockViewBudget = 1088; // after slice 4 (callout style and nested callouts moved off): was 1984
 
 /// An editor whose parse has landed (a note over 128 kB parses on the pool and is a
 /// placeholder until it comes back).
@@ -70,11 +70,17 @@ TEST(BlockViewTest, AReparseKeepsUntouchedViewsBare)
     ASSERT_TRUE(editor);
     editor->show();
     (void)editor->grab();
-    // One character at the end: the same blocks again, the old views kept.
+    const int drawn = editor->blockExtrasCountForTest();
+    ASSERT_GE(drawn, 1) << "the table on the first screen was laid out";
+    // One character at the end: the same blocks again, so the old untouched views are kept.
+    const int parses = editor->parseCountForTest();
     editor->setCursorOffset(editor->noteText().size());
     QTest::keyClicks(editor.get(), QStringLiteral("x"));
-    QTest::qWait(300);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->parseCountForTest() > parses; }, 5000)) << "no reparse ran";
+    QTest::qWait(300); // a note this size parses on the pool: let it land
+    (void)editor->grab();
     EXPECT_EQ(editor->untouchedBlockExtrasCountForTest(), 0);
+    EXPECT_GE(editor->blockExtrasCountForTest(), 1) << "the screen was drawn again";
     EXPECT_LT(editor->blockExtrasCountForTest(), 100);
 }
 
@@ -119,6 +125,16 @@ TEST(BlockViewTest, ATableOwnsExtrasAndTheParagraphsAroundItDoNot)
     const auto rows = editor->tableCellTextsAt(editor->noteText().indexOf(QLatin1Char('|')));
     ASSERT_EQ(rows.size(), 2);
     EXPECT_EQ(rows.at(1), (QStringList{QStringLiteral("1"), QStringLiteral("2")}));
+}
+
+TEST(BlockViewTest, ACalloutOwnsExtrasAndAParagraphDoesNot)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setNoteText(QStringLiteral("before\n\n> [!note] Title\n> body\n\nafter\n"));
+    editor->show();
+    (void)editor->grab();
+    EXPECT_EQ(editor->blockExtrasCountForTest(), 1);
 }
 
 int main(int argc, char **argv)

@@ -2589,7 +2589,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         add({item.marker.end, item.range.end}, struck);
     }
 
-    for (const NestedCallout &nested : view.nested) {
+    for (const NestedCallout &nested : view.x().nested) {
         if (!nested.span->titleRange.isValid() || !nested.span->titleRange.overlaps(block))
             continue;
         QTextCharFormat title;
@@ -3184,7 +3184,7 @@ void MarkdownEditor::toggleTask(const ListItemSpan &item)
 int MarkdownEditor::nestingDepthAt(const BlockView &view, qsizetype source) const
 {
     int depth = 0;
-    for (const NestedCallout &nested : view.nested) {
+    for (const NestedCallout &nested : view.x().nested) {
         if (nested.span->range.contains(source))
             depth = qMax(depth, nested.span->depth);
     }
@@ -3212,7 +3212,7 @@ void MarkdownEditor::paintCallout(QPainter &painter, const BlockView &view, qrea
     if (!view.callout)
         return;
 
-    const CalloutStyle &style = view.calloutStyle;
+    const CalloutStyle &style = view.x().calloutStyle;
     // A callout in pieces is one panel: each piece draws its slice of it, the
     // rounded corners only where the panel really begins and ends.
     const bool first = view.piece == 0;
@@ -4494,17 +4494,18 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 
     view.callout = view.span.kind == BlockSpan::Kind::Callout && !plainSource(view) ? calloutFor(view) : nullptr;
     if (view.callout)
-        view.calloutStyle = d->m_calloutStyles.resolve(view.callout->type, view.callout->attributes,
+        view.extrasMut().calloutStyle = d->m_calloutStyles.resolve(view.callout->type, view.callout->attributes,
                                                     d->m_theme);
     // Callouts nest, and only the outermost one is a block. The rest are
     // painted inside this layout, so they have to be found before it is built:
     // each nested one indents the lines it covers.
-    view.nested.clear();
+    if (view.extras)
+        view.extras->nested.clear();
     if (view.callout) {
         for (const CalloutSpan &callout : d->m_decorations.callouts) {
             // One that began in an earlier piece still covers lines of this.
             if (callout.depth > 0 && callout.range.overlaps(view.span.range))
-                view.nested.push_back(
+                view.extrasMut().nested.push_back(
                     {&callout,
                      d->m_calloutStyles.resolve(callout.type, callout.attributes, d->m_theme)});
         }
@@ -4557,7 +4558,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.layout->setCacheEnabled(true);
     // A callout may name its own body font, size and effects; everything else
     // takes the font its kind implies.
-    view.layout->setFont(view.callout ? view.calloutStyle.bodyFont(d->m_theme)
+    view.layout->setFont(view.callout ? view.x().calloutStyle.bodyFont(d->m_theme)
                                       : fontFor(strayAt >= 0 ? BlockSpan{BlockSpan::Kind::Paragraph, {0, 0}, 0}
                                                              : view.span));
 
@@ -4641,8 +4642,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     else
         view.listTextX.clear();
     const qreal codeGutter = codeGutterWidth(view);
-    const qreal lineHeight = view.callout && view.calloutStyle.size > 0
-                                 ? view.calloutStyle.size * 1.5
+    const qreal lineHeight = view.callout && view.x().calloutStyle.size > 0
+                                 ? view.x().calloutStyle.size * 1.5
                                  : lineHeightFor(view.span);
     const qreal bodyLineHeight = lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0});
     view.layout->beginLayout();
@@ -4685,7 +4686,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // The title line is drawn by the callout header, so the body starts
         // below it; an empty callout still shows its title. A later piece
         // carries on the body.
-        view.textTop = view.piece == 0 ? calloutHeaderHeight(view.calloutStyle) : 0;
+        view.textTop = view.piece == 0 ? calloutHeaderHeight(view.x().calloutStyle) : 0;
         view.height = height;
     } else if (hasCodeHeader(view) && view.piece == 0) {
         view.textTop = codeHeaderHeight(); // the `#|` header, the tab strip, or the run control
@@ -5114,7 +5115,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
 
         if (view.callout) {
             paintCallout(painter, view, left, top);
-            painter.setPen(view.calloutStyle.color.isValid() ? view.calloutStyle.color : text);
+            painter.setPen(view.x().calloutStyle.color.isValid() ? view.x().calloutStyle.color : text);
         } else {
             painter.setPen(text);
         }
