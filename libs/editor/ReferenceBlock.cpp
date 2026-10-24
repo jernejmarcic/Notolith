@@ -54,6 +54,7 @@ QString gAllowedAddress; // the tests' server; UI thread only
 constexpr int kMaxRemoteCopies = 32;
 constexpr int kMaxRedirects = 5;
 constexpr int kReferenceMaxLineChars = 1000;
+constexpr int kReferenceMaxScanLines = 50000; ///< lines a start:/end: pattern is tried on
 
 struct RemoteCopy {
     QString text;
@@ -90,18 +91,42 @@ void rememberRemote(const QString &key, RemoteCopy copy)
 /// An address that is not the internet: this machine, its network, link-local
 /// (cloud metadata is 169.254.169.254), private, unique-local, shared (CGNAT),
 /// multicast, unspecified. A note must not make the machine ask them.
+bool isInternalV4(quint32 v4)
+{
+    // Qt's isSiteLocal/isGlobal know no private IPv4: the ranges are spelled out
+    const auto in = [v4](quint32 net, int bits) { return (v4 >> (32 - bits)) == (net >> (32 - bits)); };
+    return in(0x00000000, 8) || in(0x0A000000, 8) || in(0x64400000, 10) || in(0x7F000000, 8)
+           || in(0xA9FE0000, 16) || in(0xAC100000, 12) || in(0xC0000000, 24) || in(0xC0A80000, 16)
+           || in(0xC6120000, 15) || v4 >= 0xE0000000; // multicast, reserved, broadcast
+}
+
 bool isInternalAddress(const QHostAddress &address)
 {
-    if (!gAllowedAddress.isEmpty() && address.toString() == gAllowedAddress)
+    if (!gAllowedAddress.isEmpty() && gAllowedAddress.split(QLatin1Char(',')).contains(address.toString()))
         return false;
     bool isV4 = false;
     const quint32 v4 = address.toIPv4Address(&isV4); // also an IPv4-mapped IPv6 address
-    if (isV4) {
-        // Qt's isSiteLocal/isGlobal know no private IPv4: the ranges are spelled out
-        const auto in = [v4](quint32 net, int bits) { return (v4 >> (32 - bits)) == (net >> (32 - bits)); };
-        return in(0x00000000, 8) || in(0x0A000000, 8) || in(0x64400000, 10) || in(0x7F000000, 8)
-               || in(0xA9FE0000, 16) || in(0xAC100000, 12) || in(0xC0000000, 24) || in(0xC0A80000, 16)
-               || in(0xC6120000, 15) || v4 >= 0xE0000000; // multicast, reserved, broadcast
+    if (isV4)
+        return isInternalV4(v4);
+    // IPv4 carried inside IPv6 reaches the same hosts: ::a.b.c.d (compatible),
+    // 64:ff9b::a.b.c.d (NAT64 on a network that has a gateway) and 2002:a.b:c.d:: (6to4)
+    const Q_IPV6ADDR six = address.toIPv6Address();
+    const auto low = [&six] {
+        return (quint32(six[12]) << 24) | (quint32(six[13]) << 16) | (quint32(six[14]) << 8) | quint32(six[15]);
+    };
+    bool zeros = true;
+    for (int n = 0; n < 12; ++n)
+        zeros = zeros && six[n] == 0;
+    static const uchar nat64[12] = {0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0};
+    if ((zeros && address.protocol() == QAbstractSocket::IPv6Protocol && low() > 1)
+        || std::equal(nat64, nat64 + 12, six.c)) {
+        if (isInternalV4(low()))
+            return true;
+    }
+    if (six[0] == 0x20 && six[1] == 0x02) {
+        const quint32 embedded = (quint32(six[2]) << 24) | (quint32(six[3]) << 16) | (quint32(six[4]) << 8) | quint32(six[5]);
+        if (isInternalV4(embedded))
+            return true;
     }
     return address.isNull() || !address.isGlobal() || address.isLoopback() || address.isLinkLocal()
            || address.isSiteLocal() || address.isUniqueLocalUnicast() || address.isMulticast();
@@ -173,6 +198,8 @@ int lineMatching(const QString &text, const QString &spec, int from)
         qsizetype end = text.indexOf(QLatin1Char('\n'), at);
         if (end < 0)
             end = text.size();
+        if (line > kReferenceMaxScanLines && isRegex)
+            return 0; // the pattern has had its share: a worker does the scan, but not for ever
         if (line >= from) {
             const QStringView row = QStringView(text).mid(at, end - at);
             if (isRegex ? pattern->match(row).hasMatch() : row.contains(spec))
@@ -288,10 +315,12 @@ void MarkdownEditor::dropReferenceCache()
     d->m_referenceCache.clear();
     d->m_referenceGone.clear();
     d->m_referenceWatched.clear();
-    if (d->m_referenceWatcher) {
-        d->m_referenceWatcher->removePaths(d->m_referenceWatcher->files());
-        d->m_referenceWatcher->removePaths(d->m_referenceWatcher->directories());
-    }
+    // the watcher goes too: its inotify instance is released, and the next
+    // reference block makes a new one
+    delete d->m_referenceWatcher;
+    d->m_referenceWatcher = nullptr;
+    delete d->m_referenceRefresh;
+    d->m_referenceRefresh = nullptr;
 }
 
 void MarkdownEditor::setRemoteReferences(bool on)
@@ -527,15 +556,28 @@ bool MarkdownEditor::layoutReference(BlockView &view)
                             + QLatin1Char('\x1f') + embedThemeTag();
     auto memo = it->excerpts.find(memoKey);
     if (memo == it->excerpts.end()) {
-        ReferenceExcerpt made = excerptOf(it->text, reference->start, reference->end);
-        while (made.text.endsWith(QLatin1Char('\n')))
-            made.text.chop(1);
-        if (made.error.isEmpty() && !made.text.isEmpty()) {
-            SyntaxMap syntax;
-            const bool mapped = syntaxMapFor(styleOfLanguage(language), &syntax);
-            made.formats = d->m_code.highlight(made.text, language, mapped ? &syntax : nullptr);
+        // The scan (a start:/end: regex over the whole file) is a worker's job,
+        // next to the read: the UI thread never runs a user pattern.
+        if (!it->scanning.contains(memoKey)) {
+            it->scanning.insert(memoKey);
+            const quint64 generation = it->generation;
+            (void)QtConcurrent::run([this, lifeline = d->m_lifeline, key, memoKey, language, generation,
+                                     text = it->text, start = reference->start, end = reference->end] {
+                ReferenceExcerpt made;
+                try {
+                    made = excerptOf(text, start, end);
+                    while (made.text.endsWith(QLatin1Char('\n')))
+                        made.text.chop(1);
+                } catch (...) { // out of memory, say: an error to show, never "Loading..." for good
+                    made = ReferenceExcerpt();
+                    made.error = QObject::tr("Could not read the file");
+                }
+                lifeline->post(this, [this, key, memoKey, language, generation, made = std::move(made)]() mutable {
+                    deliverExcerpt(key, generation, memoKey, language, std::move(made));
+                });
+            });
         }
-        memo = it->excerpts.insert(memoKey, std::move(made));
+        return panel(name, tr("Loading…"), false);
     }
     const ReferenceExcerpt &excerpt = *memo;
     if (!excerpt.error.isEmpty())
@@ -577,6 +619,9 @@ void MarkdownEditor::fetchReference(const QString &key, const QString &url, quin
     }
     const QString host = parsed.host();
     const auto get = [this, key, url, generation, hops] {
+        // a lookup that ends after the setting, the plugin or the block went away sends nothing
+        if (!d->m_remoteReferences || !d->m_referenceCache.contains(key))
+            return;
         if (!d->m_referenceNet)
             d->m_referenceNet = new QNetworkAccessManager(this);
         QNetworkRequest request{QUrl(url)};
@@ -671,6 +716,24 @@ void MarkdownEditor::deliverReference(const QString &key, quint64 generation, Re
     it->latest = latest;
     if (isRemote(key))
         rememberRemote(key, {it->text, it->error, it->fetchedAt});
+    d->m_referenceDelivering = key;
+    relayReferenceBlocks(key);
+    d->m_referenceDelivering.clear();
+}
+
+void MarkdownEditor::deliverExcerpt(const QString &key, quint64 generation, const QString &memoKey,
+                                    const QString &language, ReferenceExcerpt made)
+{
+    auto it = d->m_referenceCache.find(key);
+    if (it == d->m_referenceCache.end() || it->generation != generation)
+        return; // the file changed or the cache was dropped meanwhile
+    it->scanning.remove(memoKey);
+    if (made.error.isEmpty() && !made.text.isEmpty()) {
+        SyntaxMap syntax;
+        const bool mapped = syntaxMapFor(styleOfLanguage(language), &syntax);
+        made.formats = d->m_code.highlight(made.text, language, mapped ? &syntax : nullptr);
+    }
+    it->excerpts.insert(memoKey, std::move(made));
     d->m_referenceDelivering = key;
     relayReferenceBlocks(key);
     d->m_referenceDelivering.clear();

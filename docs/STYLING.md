@@ -413,13 +413,15 @@ copy is kept for five minutes (32 at most) for every note in the session, the
 old one shown while the next one comes. **Addresses that are not the internet
 are refused**: the host is resolved first, and a loopback, link-local (cloud
 metadata), private, unique-local, shared (100.64/10), multicast or unspecified
-address, an IPv4-mapped one included, shows "is a local address: not fetched"
+address, an IPv4-mapped, IPv4-compatible (`::a.b.c.d`), NAT64 (`64:ff9b::/96`) or 6to4 one included, shows "is a local address: not fetched"
 in the block. Every redirect is checked the same way. A name that answers
 differently to the second lookup (DNS rebinding) is not caught. The title
 shows the host (`name.py (example.com)`). Turning the setting off, or the
 plugin off, forgets what was fetched and cancels what is in flight; the
-excerpt is cut and coloured once per file, range and theme, and a line over
-1000 characters is cut with an ellipsis. GitHub `.../blob/...` and GitLab `.../-/blob/...` links
+excerpt is cut on a worker (the block says "Loading..." until it lands; a
+`start:`/`end:` pattern is tried on the first 50 000 lines only) and coloured
+once per file, range and theme, and a line over 1000 characters is cut with an
+ellipsis. Shared-range (100.64.0.0/10, Tailscale) hosts stay refused. GitHub `.../blob/...` and GitLab `.../-/blob/...` links
 are fetched as the raw file.
 
 **Differences from the plugin.** The plugin downloads remote files into the

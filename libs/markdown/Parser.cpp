@@ -1019,7 +1019,7 @@ bool isInlineLanguage(const QString &word)
 {
     static const QSet<QString> known = [] {
         const QStringList names = {
-            "python", "py", "c", "cpp", "c++", "cc", "cxx", "h", "hpp", "java", "javascript", "js", "jsx", "mjs",
+            "python", "py", "c", "cpp", "c++", "cc", "cxx", "hpp", "java", "javascript", "js", "jsx", "mjs",
             "typescript", "ts", "tsx", "json", "jsonc", "json5", "yaml", "yml", "toml", "xml", "html", "htm", "css",
             "scss", "sass", "less", "sh", "bash", "zsh", "fish", "shell", "shellscript", "console", "sql", "mysql",
             "postgresql", "sqlite", "rust", "rs", "go", "golang", "kotlin", "kt", "swift", "ruby", "rb", "php", "perl",
@@ -1028,10 +1028,10 @@ bool isInlineLanguage(const QString &word)
             "ini", "dockerfile", "docker", "makefile", "make", "cmake", "nix", "elixir", "ex", "erlang", "clojure",
             "clj", "lisp", "scheme", "racket", "ocaml", "ml", "vb", "vbnet", "vba", "powershell", "ps1", "pwsh", "asm",
             "nasm", "gdscript", "glsl", "hlsl", "wgsl", "graphql", "gql", "proto", "protobuf", "regex", "zig", "nim",
-            "crystal", "d", "ada", "fortran", "cobol", "groovy", "gradle", "terraform", "hcl", "vue", "svelte",
-            "text", "txt", "plaintext", "plain", "bat", "batch", "awk", "sed", "vim", "viml", "tcl", "prolog",
+            "crystal", "ada", "fortran", "cobol", "groovy", "gradle", "terraform", "hcl", "vue", "svelte",
+            "txt", "plaintext", "bat", "batch", "awk", "sed", "vim", "viml", "tcl", "prolog",
             "verilog", "vhdl", "systemverilog", "solidity", "sol", "apache", "nginx", "csv", "mermaid", "dot",
-            "graphviz", "plantuml", "tikz", "jupyter", "ipynb", "kql", "p4", "v", "wasm", "wat"};
+            "graphviz", "plantuml", "tikz", "jupyter", "ipynb", "kql", "p4", "wasm", "wat"};
         QSet<QString> set;
         for (const QString &name : names)
             set.insert(name);

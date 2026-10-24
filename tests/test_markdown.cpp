@@ -2708,7 +2708,8 @@ TEST(CodeStylerTest, BracesThatAreNotALanguageStayText)
         QStringLiteral("{0} items"),       QStringLiteral("{name} is required"), QStringLiteral("{ x + y } * 2"),
         QStringLiteral("{a b} c"),         QStringLiteral("{\"a\": 1} x"),        QStringLiteral("{...rest} = o"),
         QStringLiteral("{mylang} code"),   QStringLiteral("{python +} code"),    QStringLiteral("{python foo} code"),
-        QStringLiteral("{ python} code"),  QStringLiteral("{1abc} code"),
+        QStringLiteral("{ python} code"),  QStringLiteral("{1abc} code"),    QStringLiteral("{d} days"),
+        QStringLiteral("{text} more"),     QStringLiteral("{v} volts"),
     };
     for (const QString &code : plain) {
         SCOPED_TRACE(code.toStdString());

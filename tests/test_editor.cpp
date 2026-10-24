@@ -12637,7 +12637,7 @@ TEST(ReferenceBlockTest, ARemoteFileIsFetchedOnceAndCached)
     // another editor, the same URL: the copy of the first is what it shows
     auto second = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
     second->setRemoteReferences(true);
-    EXPECT_TRUE(listingOf(*second).contains(QStringLiteral("remote line 1"))) << "from the cache, at once";
+    EXPECT_TRUE(waitForListing(*second, QStringLiteral("remote line 1"))) << "from the cache (the cut is on a worker)";
     // a relayout of the first (a width change) asks for nothing either
     editor->resize(700, 500);
     (void)editor->grab();
@@ -12720,6 +12720,31 @@ TEST(ReferenceBlockTest, ARunawayStartPatternIsStoppedQuickly)
     EXPECT_LT(clock.elapsed(), 1500) << "ms: without the match budget this took seconds";
 }
 
+TEST(ReferenceBlockTest, AScanOverABigFileNeverStallsTheUIthread)
+{
+    QTemporaryDir dir;
+    QByteArray bytes;
+    for (int i = 0; i < 80000; ++i)
+        bytes += "lorem ipsum dolor sit am!\n"; // 2 MB of prose no `$` can follow a word on
+    const QString path = writeTextFile(dir, QStringLiteral("big.txt"), bytes);
+    auto editor = referenceEditorWith(QStringLiteral("file: big.txt\nstart: /(\\w+\\s?)+$/\n"), path);
+    (void)editor->grab();
+    // a ticking timer measures the longest the event loop was kept from running
+    QElapsedTimer since;
+    since.start();
+    qint64 last = 0;
+    qint64 longest = 0;
+    QTimer ticker;
+    QObject::connect(&ticker, &QTimer::timeout, [&] {
+        longest = qMax(longest, since.elapsed() - last);
+        last = since.elapsed();
+    });
+    ticker.start(2);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return listingOf(*editor).contains(QStringLiteral("No line matches start")); }, 15000));
+    ticker.stop();
+    EXPECT_LT(longest, 300) << "ms the UI thread was held: the scan belongs on the worker";
+}
+
 // --- remote references: hosts that are not the internet ---------------------------------
 
 TEST(ReferenceBlockTest, LiteralLocalAndPrivateHostsAreRefused)
@@ -12729,7 +12754,10 @@ TEST(ReferenceBlockTest, LiteralLocalAndPrivateHostsAreRefused)
         QStringLiteral("http://172.16.0.1/a.txt"),       QStringLiteral("http://169.254.169.254/latest/meta-data"),
         QStringLiteral("http://127.0.0.1:9/a.txt"),      QStringLiteral("http://[::1]/a.txt"),
         QStringLiteral("http://[fd00::1]/a.txt"),        QStringLiteral("http://[fe80::1]/a.txt"),
-        QStringLiteral("http://0.0.0.0/a.txt"),          QStringLiteral("http://[::ffff:10.0.0.1]/a.txt")};
+        QStringLiteral("http://0.0.0.0/a.txt"),          QStringLiteral("http://[::ffff:10.0.0.1]/a.txt"),
+        QStringLiteral("http://[::127.0.0.1]/a.txt"),    QStringLiteral("http://[::a00:1]/a.txt"),
+        QStringLiteral("http://[64:ff9b::7f00:1]/a.txt"), QStringLiteral("http://[64:ff9b::a9fe:a9fe]/a.txt"),
+        QStringLiteral("http://[2002:7f00:1::1]/a.txt")};
     for (const QString &url : urls) {
         SCOPED_TRACE(url.toStdString());
         auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
@@ -12754,6 +12782,41 @@ TEST(ReferenceBlockTest, ANameThatResolvesToLoopbackIsRefusedBeforeAnyRequest)
     direct->setRemoteReferences(true);
     EXPECT_TRUE(waitForListing(*direct, QStringLiteral("local address")));
     QTest::qWait(200);
+    EXPECT_EQ(server.requests, 0);
+}
+
+TEST(ReferenceBlockTest, ALookupThatEndsAfterTheSettingIsOffSendsNothing)
+{
+    // "localhost" stands for a public name: both of its addresses are allowed
+    MarkdownEditor::allowReferenceAddressForTests(QStringLiteral("127.0.0.1,::1"));
+    const auto restore = qScopeGuard([] { MarkdownEditor::allowReferenceAddressForTests(QString()); });
+    FakeServer server;
+    const QString note = QStringLiteral("link: http://localhost:%1/a.txt\n").arg(server.server.serverPort());
+
+    // control: left on, the request does arrive
+    {
+        auto editor = referenceEditorWith(note, QString());
+        editor->setRemoteReferences(true);
+        EXPECT_TRUE(QTest::qWaitFor([&] { (void)editor->grab(); return server.requests > 0; }, 5000));
+    }
+    server.requests = 0;
+
+    // the lookup is asked for in the layout and answers on the event loop: the setting goes off in between
+    auto off = referenceEditorWith(note, QString());
+    off->setRemoteReferences(true);
+    (void)off->grab();
+    off->setRemoteReferences(false);
+    QTest::qWait(500);
+    EXPECT_EQ(server.requests, 0);
+
+    // and so does the plugin
+    auto plugin = referenceEditorWith(note, QString());
+    plugin->setRemoteReferences(true);
+    (void)plugin->grab();
+    auto none = plugin->parseOptions();
+    none.codeStyler = false;
+    plugin->setParseOptions(none);
+    QTest::qWait(500);
     EXPECT_EQ(server.requests, 0);
 }
 

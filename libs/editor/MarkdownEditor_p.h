@@ -778,6 +778,7 @@ struct MarkdownEditor::ReferenceCacheEntry {
     std::shared_ptr<std::atomic<quint64>> latest;
     bool permanent = false; ///< the error is the file's (not text): asked again only when it changes
     QHash<QString, ReferenceExcerpt> excerpts;
+    QSet<QString> scanning; ///< excerpts being cut on a worker
 };
 
 /// The recognised, paired inline tags in `view`'s block, in source

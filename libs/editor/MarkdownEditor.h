@@ -43,6 +43,8 @@ class QMenu;
 
 namespace noteAppC {
 
+struct ReferenceExcerpt;
+
 class SyntaxMap;
 class VimEngine;
 
@@ -1930,6 +1932,8 @@ private:
     void fetchReference(const QString &key, const QString &url, quint64 generation, int hops);
     /// Relays out the blocks showing `key`.
     void relayReferenceBlocks(const QString &key);
+    void deliverExcerpt(const QString &key, quint64 generation, const QString &memoKey, const QString &language,
+                        ReferenceExcerpt made);
     void watchReference(const QString &path);
     void referenceFileEvent();
     void refreshReferences();
