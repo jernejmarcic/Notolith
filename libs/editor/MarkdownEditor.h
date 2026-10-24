@@ -848,8 +848,11 @@ public:
     /// Whether a ```reference block may fetch an `http(s)` URL. Off by
     /// default: nothing touches the network unasked (ReferenceBlock.cpp).
     void setRemoteReferences(bool on);
-    /// Whether a file or URL a reference block shows is still being read.
+    /// Whether a file or URL a reference block shows is still being read, or its excerpt cut.
     bool referencesPending() const;
+    /// Blocks until every reference block shows its excerpt (a file read, then the cut), or `timeoutMs` ran out:
+    /// what a printed page waits for. Lays the blocks out as it goes, so each one's work has been started.
+    void awaitReferences(int timeoutMs);
     /// For the tests: how many files and URLs this editor holds a read of.
     int referenceCacheSize() const;
     /// The address a hosting site's page for a file (GitHub `/blob/`, GitLab

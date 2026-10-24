@@ -20,7 +20,9 @@
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -31,6 +33,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 #include <QtConcurrent>
@@ -344,10 +347,27 @@ void MarkdownEditor::setRemoteReferences(bool on)
 bool MarkdownEditor::referencesPending() const
 {
     for (const ReferenceCacheEntry &entry : std::as_const(d->m_referenceCache)) {
-        if (entry.pending)
+        if (entry.pending || !entry.scanning.isEmpty())
             return true;
     }
     return false;
+}
+
+void MarkdownEditor::awaitReferences(int timeoutMs)
+{
+    QElapsedTimer waited;
+    waited.start();
+    for (;;) {
+        // The layout is what starts a read, and what starts the cut once the read has landed.
+        for (BlockView &view : d->m_blocks) {
+            if (!view.laidOut)
+                layoutBlock(view);
+        }
+        if (!referencesPending() || waited.elapsed() >= timeoutMs)
+            return;
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 50); // no input while the page waits
+        QThread::msleep(5);
+    }
 }
 
 int MarkdownEditor::referenceCacheSize() const
