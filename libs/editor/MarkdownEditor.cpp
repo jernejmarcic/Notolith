@@ -1441,6 +1441,22 @@ int MarkdownEditor::parseCountForTest() const
     return d->m_parses;
 }
 
+std::size_t MarkdownEditor::blockViewSizeForTest()
+{
+    return sizeof(BlockView);
+}
+
+int MarkdownEditor::blockExtrasCountForTest() const
+{
+    return int(std::count_if(d->m_blocks.cbegin(), d->m_blocks.cend(), [](const BlockView &view) { return view.extras != nullptr; }));
+}
+
+int MarkdownEditor::untouchedBlockExtrasCountForTest() const
+{
+    return int(std::count_if(d->m_blocks.cbegin(), d->m_blocks.cend(),
+                             [](const BlockView &view) { return !view.touched && view.extras != nullptr; }));
+}
+
 void MarkdownEditor::setLastParseTimeForTest(qint64 nanoseconds)
 {
     d->m_lastParseNs = nanoseconds;

@@ -580,6 +580,11 @@ add_executable(test_tables test_tables.cpp)
 target_link_libraries(test_tables PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
 add_test(NAME tables COMMAND test_tables)
 
+# The size of a BlockView and what lives in its BlockExtras (MarkdownEditor_p.h).
+add_executable(test_blockview test_blockview.cpp)
+target_link_libraries(test_blockview PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
+add_test(NAME blockview COMMAND test_blockview)
+
 # List editing and display (EditingCommands.cpp, BulletGlyphs.cpp): keys go in as real key events.
 add_executable(test_lists test_lists.cpp)
 target_link_libraries(test_lists PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)

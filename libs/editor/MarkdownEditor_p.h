@@ -234,6 +234,14 @@ struct MarkdownEditor::FoldMark {
     qreal rowBottom = 0;
 };
 
+/// The fields of a block view that only a few kinds of block use (an image, a
+/// table, a callout, a notebook cell...), kept off the view itself: a 1 MB note
+/// is 57 000 views and a view with all of them was 1.8 kB. A view owns one only
+/// once a layout function has filled it, so a view nothing has laid out (nearly
+/// all of a big note) never allocates one, and the `touched` invariant holds.
+struct MarkdownEditor::BlockExtras {
+};
+
 struct MarkdownEditor::BlockView {
     // The fields every pass over all the blocks reads (rebuildBlocks, indexDecorations, the
     // first loop of updateLayout) come first, in one or two cache lines of the 1.6 kB view.
@@ -586,6 +594,26 @@ struct MarkdownEditor::BlockView {
         qsizetype jumpOffset = 0; ///< real source offset a click moves the caret to
     };
     std::vector<FootnotesListRow> footnoteListRows;
+
+    /// The rarely used fields, null until a layout fills one. Read them through
+    /// x(), which answers a default when there are none; write through
+    /// extrasMut(), which makes them. A write through x() does not compile.
+    std::unique_ptr<BlockExtras> extras;
+    const BlockExtras &x() const
+    {
+        if (extras)
+            return *extras;
+        // Built on first use, after the QGuiApplication a QPixmap member needs, and never
+        // destroyed, so no static destructor runs a QFont's after the application is gone.
+        static const BlockExtras &none = *new BlockExtras;
+        return none;
+    }
+    BlockExtras &extrasMut()
+    {
+        if (!extras)
+            extras = std::make_unique<BlockExtras>();
+        return *extras;
+    }
 };
 
 /// The copy button at the right of a code block's header ("Copy" under the
