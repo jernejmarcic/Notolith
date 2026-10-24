@@ -1671,6 +1671,33 @@ TEST_F(WindowTest, AQueuedPandocImportIsDroppedWhenAnotherVaultIsOpened)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// An import that is already running when another vault opens belongs to the vault it was started for.
+TEST_F(WindowTest, ARunningPandocImportIsDroppedWhenAnotherVaultIsOpened)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    QTemporaryDir other;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "sleep 0.3\nprintf 'imported %s\\n' \"$(basename \"$last\")\" > out.md"));
+    QFile file(inputs.filePath(QStringLiteral("first.docx")));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("x");
+    file.close();
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, file.fileName()), Q_ARG(QString, QString()));
+        window.openVault(other.path()); // pandoc is still running
+        QTest::qWait(2000);
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("first.md"))));
+        EXPECT_FALSE(QFileInfo::exists(other.filePath(QStringLiteral("first.md")))) << "not imported into the vault opened since";
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // Pandoc found (a stand-in executable): the switch is a switch again, and off takes the commands away.
 TEST_F(WindowTest, PandocFoundIsToggleable)
 {
