@@ -276,6 +276,7 @@ void MainWindow::exportWithPandoc(const QString &notePath, const QString &format
     }
 
     pandoc::PrepareContext context;
+    context.vaultRoot = m_vault.isValid() ? m_vault.root() : note.absolutePath(); // a stray note: its own folder
     context.resolve = [this](const QString &name, const QString &from) -> QString {
         if (m_vault.isValid()) {
             const QString resolved = m_index.resolve(name, from);

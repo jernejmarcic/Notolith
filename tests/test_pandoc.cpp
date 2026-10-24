@@ -140,6 +140,35 @@ TEST(PandocPrepare, OtherFilesAndMissingEmbeds)
     EXPECT_EQ(missing.unresolved, 1);
 }
 
+// An embed that names a file above the vault (here by "../") is not brought into the export, even though
+// the window's resolver finds it; the same goes for a link inside the vault that points out of it.
+TEST(PandocPrepare, AnEmbedOutsideTheVaultIsLeftMissing)
+{
+    QTemporaryDir outer;
+    ASSERT_TRUE(outer.isValid());
+    const QString vault = outer.filePath(QStringLiteral("vault"));
+    ASSERT_TRUE(QDir().mkpath(vault));
+    for (const QString &file : {vault + QStringLiteral("/inside.png"), outer.filePath(QStringLiteral("secret.png"))}) {
+        QFile out(file);
+        ASSERT_TRUE(out.open(QIODevice::WriteOnly));
+        out.write("x");
+    }
+    ASSERT_TRUE(QFile::link(QStringLiteral("../secret.png"), vault + QStringLiteral("/escape.png")));
+
+    PrepareContext context;
+    context.vaultRoot = vault;
+    context.resolve = [vault](const QString &target, const QString &) { return QDir(vault).filePath(target); };
+    const QString note = vault + QStringLiteral("/Note.md");
+
+    const PrepareResult inside = prepareMarkdown(QStringLiteral("![[inside.png]]"), note, context);
+    EXPECT_EQ(inside.unresolved, 0);
+    for (const QString &target : {QStringLiteral("../secret.png"), QStringLiteral("escape.png")}) {
+        const PrepareResult outside = prepareMarkdown(QStringLiteral("![[%1]]").arg(target), note, context);
+        EXPECT_EQ(outside.unresolved, 1) << target.toStdString();
+        EXPECT_EQ(outside.markdown, QLatin1Char('*') + target + QLatin1Char('*')) << "only its name, no path or file";
+    }
+}
+
 TEST(PandocPrepare, Callouts)
 {
     EXPECT_EQ(prepared(QStringLiteral("> [!note] A [[x|title]]\n> body\n> more\n\nafter")),

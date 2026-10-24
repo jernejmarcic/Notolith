@@ -22,6 +22,9 @@ struct PrepareContext {
     /// that names a language; the answer is the caller's to cache.
     std::function<QString(const QString &language, const QString &source)> diagramImage;
     int embedDepth = 3; ///< notes embedded in notes embedded in notes
+    /// What an embed may bring in: only files under this folder, symlinks resolved. A note from elsewhere must
+    /// not make `![[../../.ssh/id_ed25519.pub]]` travel with an export. Empty: no check (the pure tests).
+    QString vaultRoot;
 };
 
 struct PrepareResult {
