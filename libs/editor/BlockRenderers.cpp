@@ -626,7 +626,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         // for a fenced block's header, reached from here instead of the
         // Code-kind branch below since an embed's own span.kind is
         // Paragraph, not Code.
-        if (view.embedPanel && view.notebookEligible) {
+        if (view.x().embedPanel && view.notebookEligible) {
             const QRectF runRect = notebookRunRectFor(view, left, top);
             if (runRect.isValid() && touchable(runRect, 4).contains(point)) {
                 runNotebookBlockAt(view.span.range.start);

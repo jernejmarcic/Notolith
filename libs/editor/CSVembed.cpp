@@ -175,7 +175,7 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
 
     // Painted as a data table, like a base's: paintBase with no view name.
     view.isBase = true;
-    view.image = QPixmap();
+    view.extrasMut().image = QPixmap();
     view.cells.clear();
     view.baseRows.clear();
     view.baseViewName.clear();

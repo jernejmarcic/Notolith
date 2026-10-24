@@ -105,24 +105,24 @@ bool MarkdownEditor::layoutPluginCode(BlockView &view)
 
     view.isPluginBlock = true;
     view.codeBlockKey = key;
-    view.embedLabel = fence->language;
-    view.embedPanel = true;
+    view.extrasMut().embedLabel = fence->language;
+    view.extrasMut().embedPanel = true;
     view.layout.reset();
     view.cells.clear();
     view.textTop = codeHeaderHeight();
     hideWholeBlockText(view);
     if (entry->pending) {
-        view.image = QPixmap();
+        view.extrasMut().image = QPixmap();
         view.height = view.textTop + 60; // a placeholder until the plugin answers
         view.laidOut = true;
         return true;
     }
     const QPixmap pixmap = QPixmap::fromImage(entry->image);
     const qreal ratio = pixmap.devicePixelRatio();
-    view.image = pixmap;
-    view.imageSize = QSize(qMin(width, int(pixmap.width() / ratio)), int(pixmap.height() / ratio));
-    view.imageCentred = false;
-    view.height = view.imageSize.height() + view.textTop;
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(qMin(width, int(pixmap.width() / ratio)), int(pixmap.height() / ratio));
+    view.extrasMut().imageCentred = false;
+    view.height = view.x().imageSize.height() + view.textTop;
     view.laidOut = true;
     return true;
 }
@@ -163,13 +163,13 @@ QRect MarkdownEditor::codeBlockImageRectAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
-    return view.isPluginBlock && !view.image.isNull() ? hookedEmbedImageRect(view).toRect() : QRect();
+    return view.isPluginBlock && !view.x().image.isNull() ? hookedEmbedImageRect(view).toRect() : QRect();
 }
 
 bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
 {
     for (const BlockView &view : d->m_blocks) {
-        if (!view.isPluginBlock || view.image.isNull())
+        if (!view.isPluginBlock || view.x().image.isNull())
             continue;
         const auto it = d->m_codeBlockCache.constFind(view.codeBlockKey);
         if (it == d->m_codeBlockCache.cend() || it->hotspots.isEmpty() || !it->activate)

@@ -230,7 +230,7 @@ bool MarkdownEditor::layoutPlainMessage(BlockView &view, const QString &text, co
 bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, const QString &viewName)
 {
     view.isBase = true;
-    view.image = QPixmap();
+    view.extrasMut().image = QPixmap();
     view.cells.clear();
     view.baseRows.clear();
     view.baseViewName.clear();

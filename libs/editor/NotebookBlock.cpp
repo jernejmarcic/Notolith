@@ -65,7 +65,7 @@ void MarkdownEditor::setNotebookRunner(NotebookRunner runner)
         // become eligible under the new one, the same reasoning
         // setCodeBlockRenderer's own reset loop follows. A runnable
         // `![[script.py]]` is a source-file embed, which a paragraph holds.
-        if (block.span.kind != BlockSpan::Kind::Code && !block.embedPanel && !block.notebookEligible)
+        if (block.span.kind != BlockSpan::Kind::Code && !block.x().embedPanel && !block.notebookEligible)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -642,7 +642,7 @@ int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
     // script that needs a variable a fence set - and a fence cannot hand one
     // to a file embed anyway.
     for (const BlockView &view : d->m_blocks) {
-        if (view.embedPanel && view.notebookEligible && view.span.range.start <= offset)
+        if (view.x().embedPanel && view.notebookEligible && view.span.range.start <= offset)
             starts.append(view.span.range.start);
     }
     // An edit meanwhile (another person's, while a block asked first) moves
@@ -667,7 +667,7 @@ int MarkdownEditor::runNotebookBlocksFrom(qsizetype offset)
             starts.append(fence.content.start);
     }
     for (const BlockView &view : d->m_blocks) {
-        if (view.embedPanel && view.notebookEligible && view.span.range.end > offset)
+        if (view.x().embedPanel && view.notebookEligible && view.span.range.end > offset)
             starts.append(view.span.range.start);
     }
     const quint64 version = d->m_textVersion;

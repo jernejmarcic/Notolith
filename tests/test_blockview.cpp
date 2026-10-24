@@ -3,7 +3,9 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QImage>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QtTest/QTest>
 
 #include <memory>
@@ -15,7 +17,7 @@ using namespace noteAppC;
 namespace {
 
 // Tightened a slice at a time while the cold fields move off the view; the end is 400.
-constexpr std::size_t kBlockViewBudget = 1992; // slice 1: 1984 plus the extras pointer
+constexpr std::size_t kBlockViewBudget = 1336; // after slice 2 (embeds, PDF, file cards, previews moved off): was 1984
 
 /// An editor whose parse has landed (a note over 128 kB parses on the pool and is a
 /// placeholder until it comes back).
@@ -84,6 +86,26 @@ TEST(BlockViewTest, APlainParagraphNeverAllocatesExtras)
     editor->show();
     (void)editor->grab();
     EXPECT_EQ(editor->blockExtrasCountForTest(), 0);
+}
+
+TEST(BlockViewTest, AnImageEmbedOwnsExtrasAndItsNeighboursDoNot)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    const QString path = dir.filePath(QStringLiteral("a.png"));
+    ASSERT_TRUE(image.save(path));
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setLinkResolver([&](const QString &target) { return target == QLatin1String("a.png") ? path : QString(); });
+    editor->setNoteText(QStringLiteral("before\n\n![[a.png]]\n\nafter\n"));
+    editor->show();
+    (void)editor->grab();
+    EXPECT_EQ(editor->blockExtrasCountForTest(), 1);
+    // The picture is still there for the paint step, not just allocated.
+    EXPECT_EQ(editor->embedCellCountAt(0), 0);
+    EXPECT_GT(editor->documentHeight(), 100);
 }
 
 int main(int argc, char **argv)

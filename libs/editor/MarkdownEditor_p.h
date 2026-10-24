@@ -240,6 +240,70 @@ struct MarkdownEditor::FoldMark {
 /// once a layout function has filled it, so a view nothing has laid out (nearly
 /// all of a big note) never allocates one, and the `touched` invariant holds.
 struct MarkdownEditor::BlockExtras {
+    /// Set when the whole block is one image embed.
+    QPixmap image;
+    QSize imageSize;
+    bool imageCentred = false;
+    QString imagePath;
+    /// The embed's own subpath/fragment (`![[x.canvas#frag]]`'s
+    /// `#frag`), empty for none - kept alongside imagePath so a hooked
+    /// embed's input handler can be called with the same two strings
+    /// its renderer already was.
+    QString embedSubpath;
+    /// Filename shown in the header strip of a source-file or PDF embed.
+    QString embedLabel;
+    /// Draw the code panel and header behind this block.
+    bool embedPanel = false;
+    /// An audio or video embed's file: the block is a player card.
+    QString mediaPath;
+    bool mediaVideo = false;
+
+    // --- PDF and .tex embeds, PdfEmbedBlock.cpp -----------------------
+    /// Set when this block is a PDF, or a compiled `.tex`, page embed -
+    /// laid out by pdfArgs instead of the single `image` field above,
+    /// which a plain one-page PDF still uses when that is all pdfArgs
+    /// asks for (see layoutPdf).
+    bool isPdfEmbed = false;
+    PdfEmbedArgs pdfArgs;
+    QString pdfPath;   ///< the PDF actually shown - a .tex's own compiled output
+    qint64 pdfMtime = 0;
+    QString pdfError;  ///< a bad argument, a missing file, or a failed compile
+    int pdfPageCount = 0;
+    /// One requested page. Column and grid lay out every page pdfArgs
+    /// resolved to; slides lays out the one currently shown. `image` is
+    /// null while its render is still in flight off the UI thread -
+    /// painted as a placeholder box sized from `pointSize` until then.
+    struct PdfCell {
+        int page = 0;
+        QRectF rect; ///< block-local
+        QPixmap image;
+        QSizeF pointSize; ///< the page's own size, in PDF points
+    };
+    std::vector<PdfCell> pdfCells;
+    int pdfSlideIndex = 0;
+    int pdfSlideCount = 0;
+    QRectF pdfPrevRect, pdfNextRect; ///< slide nav, block-local; null when not slides
+    QString pdfCounterText;          ///< "3 / 12"
+
+    // --- file cards and note embeds, FileEmbedBlock.cpp ---------------
+    /// Set when this block is a file noteAppC has no richer renderer
+    /// for: a small card (icon, name, size) that opens the file on
+    /// click - never a binary file's bytes shown as text.
+    bool isFileCard = false;
+    QString fileCardPath;
+    QString fileCardLabel;
+    QString fileCardSize;
+    QRectF fileCardRect; ///< block-local; the whole card is the click target
+    QPixmap fileCardCover; ///< an EPUB's cover, when it has one and it has been read
+
+    std::vector<EmbedCell> embedCells;
+
+    /// What appendPreview drew under this block's source (PreviewBelow.cpp):
+    /// the formula or diagram, or the line saying why there is none.
+    QPixmap previewImage;
+    QString previewHint;
+    QRectF previewRect; ///< block-local
+
 };
 
 struct MarkdownEditor::BlockView {
@@ -353,63 +417,6 @@ struct MarkdownEditor::BlockView {
     /// Showing its header only. Callouts, `:::` containers, `#| fold`
     /// code blocks and the properties table can all be in this state.
     bool folded = false;
-    /// Set when the whole block is one image embed.
-    QPixmap image;
-    QSize imageSize;
-    bool imageCentred = false;
-    QString imagePath;
-    /// The embed's own subpath/fragment (`![[x.canvas#frag]]`'s
-    /// `#frag`), empty for none - kept alongside imagePath so a hooked
-    /// embed's input handler can be called with the same two strings
-    /// its renderer already was.
-    QString embedSubpath;
-    /// Filename shown in the header strip of a source-file or PDF embed.
-    QString embedLabel;
-    /// Draw the code panel and header behind this block.
-    bool embedPanel = false;
-    /// An audio or video embed's file: the block is a player card.
-    QString mediaPath;
-    bool mediaVideo = false;
-
-    // --- PDF and .tex embeds, PdfEmbedBlock.cpp -----------------------
-    /// Set when this block is a PDF, or a compiled `.tex`, page embed -
-    /// laid out by pdfArgs instead of the single `image` field above,
-    /// which a plain one-page PDF still uses when that is all pdfArgs
-    /// asks for (see layoutPdf).
-    bool isPdfEmbed = false;
-    PdfEmbedArgs pdfArgs;
-    QString pdfPath;   ///< the PDF actually shown - a .tex's own compiled output
-    qint64 pdfMtime = 0;
-    QString pdfError;  ///< a bad argument, a missing file, or a failed compile
-    int pdfPageCount = 0;
-    /// One requested page. Column and grid lay out every page pdfArgs
-    /// resolved to; slides lays out the one currently shown. `image` is
-    /// null while its render is still in flight off the UI thread -
-    /// painted as a placeholder box sized from `pointSize` until then.
-    struct PdfCell {
-        int page = 0;
-        QRectF rect; ///< block-local
-        QPixmap image;
-        QSizeF pointSize; ///< the page's own size, in PDF points
-    };
-    std::vector<PdfCell> pdfCells;
-    int pdfSlideIndex = 0;
-    int pdfSlideCount = 0;
-    QRectF pdfPrevRect, pdfNextRect; ///< slide nav, block-local; null when not slides
-    QString pdfCounterText;          ///< "3 / 12"
-
-    // --- file cards and note embeds, FileEmbedBlock.cpp ---------------
-    /// Set when this block is a file noteAppC has no richer renderer
-    /// for: a small card (icon, name, size) that opens the file on
-    /// click - never a binary file's bytes shown as text.
-    bool isFileCard = false;
-    QString fileCardPath;
-    QString fileCardLabel;
-    QString fileCardSize;
-    QRectF fileCardRect; ///< block-local; the whole card is the click target
-    QPixmap fileCardCover; ///< an EPUB's cover, when it has one and it has been read
-
-    std::vector<EmbedCell> embedCells;
 
     /// Set when this block is a fenced ```query``` block rendered as
     /// search results: paintBlocks and handleBlockClick both skip the
@@ -537,11 +544,6 @@ struct MarkdownEditor::BlockView {
         QRectF rect; ///< block-local
     };
     std::vector<NotebookOutputCell> notebookOutputs;
-    /// What appendPreview drew under this block's source (PreviewBelow.cpp):
-    /// the formula or diagram, or the line saying why there is none.
-    QPixmap previewImage;
-    QString previewHint;
-    QRectF previewRect; ///< block-local
     /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
     /// resolved to a QTextCharFormat by layoutInlineHtml - added to
     /// formatsIn's output the way spellcheck underlines are. Source

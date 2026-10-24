@@ -175,7 +175,7 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
         return false;
 
     view.isQuery = true;
-    view.image = QPixmap();
+    view.extrasMut().image = QPixmap();
     view.cells.clear();
 
     const QString queryText = d->m_text.mid(fence->content.start, fence->content.length()).trimmed();

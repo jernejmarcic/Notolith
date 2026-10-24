@@ -280,7 +280,7 @@ bool MarkdownEditor::jumpToFootnote(const QPoint &viewportPoint)
         }
         if (!view.layout)
             continue;
-        const qreal indent = view.callout ? 14 : (view.embedPanel ? 2 : 0);
+        const qreal indent = view.callout ? 14 : (view.x().embedPanel ? 2 : 0);
         for (const BlockView::FootnoteMark &mark : view.footnoteMarks) {
             const QTextLine line = view.layout->lineForTextPosition(int(mark.displayPos));
             if (!line.isValid())

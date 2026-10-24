@@ -42,7 +42,7 @@ QSize MarkdownEditor::htmlImageSizeAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
-    return view.isHtml ? view.imageSize : QSize();
+    return view.isHtml ? view.x().imageSize : QSize();
 }
 
 bool MarkdownEditor::layoutHtml(BlockView &view)
@@ -59,7 +59,7 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
         return false;
 
     view.isHtml = true;
-    view.image = QPixmap();
+    view.extrasMut().image = QPixmap();
     view.cells.clear();
 
     // A script never runs (litehtml has no interpreter, and sanitise() strips
@@ -115,9 +115,9 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
     }
 
     const int height = int(pixmap.height() / pixmap.devicePixelRatio());
-    view.image = pixmap;
-    view.imageSize = QSize(int(pixmap.width() / pixmap.devicePixelRatio()), height);
-    view.imageCentred = false;
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(int(pixmap.width() / pixmap.devicePixelRatio()), height);
+    view.extrasMut().imageCentred = false;
     view.layout.reset();
     view.height = height + 8;
     view.laidOut = true;
