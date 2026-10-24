@@ -91,7 +91,7 @@ void MarkdownEditor::appendPreview(BlockView &view)
             // The drawing this replaces is no longer wanted, unless a block still shows it.
             if (!d->m_previewRequested.isEmpty() && d->m_previewRequested != key) {
                 const bool shown = std::any_of(d->m_blocks.cbegin(), d->m_blocks.cend(), [this](const BlockView &block) {
-                    return block.codeBlockKey == d->m_previewRequested;
+                    return block.extras && block.extras->codeBlockKey == d->m_previewRequested;
                 });
                 if (!shown)
                     d->m_codeBlockCache.remove(d->m_previewRequested);
@@ -99,7 +99,7 @@ void MarkdownEditor::appendPreview(BlockView &view)
             QString requested;
             const CodeBlockCacheEntry *entry = requestCodeBlock(language, source, width, &requested);
             d->m_previewRequested = requested;
-            view.codeBlockKey = requested; // deliverCodeBlock lays this block out again when the drawing lands
+            view.extrasMut().codeBlockKey = requested; // deliverCodeBlock lays this block out again when the drawing lands
             if (entry && !entry->pending && !entry->image.isNull()) {
                 image = QPixmap::fromImage(entry->image);
                 d->m_previewStale = image;

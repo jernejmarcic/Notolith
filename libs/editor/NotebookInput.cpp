@@ -95,7 +95,7 @@ void MarkdownEditor::showNotebookInput(const QString &key, quint64 generation, c
 
     // The block makes room for the row, then the edit sits in it.
     for (BlockView &block : d->m_blocks) {
-        if (block.notebookKey != key)
+        if (block.x().notebookKey != key)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -123,7 +123,7 @@ void MarkdownEditor::finishNotebookInput(bool ok)
         setFocus();
     }
     for (BlockView &block : d->m_blocks) {
-        if (block.notebookKey != done.key)
+        if (block.x().notebookKey != done.key)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -150,15 +150,15 @@ void MarkdownEditor::dropNotebookInput(const QString &key)
 
 void MarkdownEditor::appendNotebookInput(BlockView &view)
 {
-    if (!d->m_notebookInput.reply || view.notebookKey != d->m_notebookInput.key)
+    if (!d->m_notebookInput.reply || view.x().notebookKey != d->m_notebookInput.key)
         return;
     // The prompt as the kernel wrote it (trailing space and all), then the edit's row.
     appendNotebookMessage(view, d->m_notebookInput.prompt.isEmpty() ? tr("Input:") : d->m_notebookInput.prompt,
                           QStringLiteral("--text-normal"));
     const qreal width = contentWidth() - 28;
     const qreal height = QFontMetricsF(fontFor({BlockSpan::Kind::Code, {0, 0}, 0})).height() + 8;
-    view.notebookInputRect = QRectF(0, view.height + 4, width, height);
-    view.height = view.notebookInputRect.bottom() + 8;
+    view.extrasMut().notebookInputRect = QRectF(0, view.height + 4, width, height);
+    view.height = view.x().notebookInputRect.bottom() + 8;
 }
 
 void MarkdownEditor::positionNotebookInput()
@@ -167,9 +167,9 @@ void MarkdownEditor::positionNotebookInput()
     if (!edit)
         return;
     for (const BlockView &block : d->m_blocks) {
-        if (block.notebookKey != d->m_notebookInput.key || !block.laidOut || block.notebookInputRect.isEmpty())
+        if (block.x().notebookKey != d->m_notebookInput.key || !block.laidOut || block.x().notebookInputRect.isEmpty())
             continue;
-        const QRectF rect = block.notebookInputRect.translated(contentLeft(), block.y - verticalScrollBar()->value());
+        const QRectF rect = block.x().notebookInputRect.translated(contentLeft(), block.y - verticalScrollBar()->value());
         edit->setGeometry(rect.toRect());
         edit->setVisible(rect.bottom() > 0 && rect.top() < viewport()->height());
         return;

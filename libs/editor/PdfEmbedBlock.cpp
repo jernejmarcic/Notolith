@@ -349,7 +349,7 @@ void MarkdownEditor::deliverPdfPage(const QString &key, quint64 generation, cons
 
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.x().isPdfEmbed || block.x().pdfPath != path)
+        if (!block.extras || !block.extras->isPdfEmbed || block.extras->pdfPath != path)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -400,7 +400,7 @@ void MarkdownEditor::deliverTexCompiled(const QString &key, quint64 generation,
     // for what is, in practice, at most a handful of .tex embeds in a note.
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.x().isPdfEmbed)
+        if (!block.extras || !block.extras->isPdfEmbed)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -799,7 +799,7 @@ void MarkdownEditor::requestPdfZoomRenders()
     // delivery would evict a page still on screen and ask for it again.
     qint64 visibleBytes = 0;
     for (const BlockView &view : d->m_blocks) {
-        const auto zoom = view.x().isPdfEmbed ? d->m_pdfZoom.constFind(view.span.range.start) : d->m_pdfZoom.cend();
+        const auto zoom = view.extras && view.extras->isPdfEmbed ? d->m_pdfZoom.constFind(view.span.range.start) : d->m_pdfZoom.cend();
         if (zoom == d->m_pdfZoom.cend())
             continue;
         for (const BlockExtras::PdfCell &cell : view.x().pdfCells) {

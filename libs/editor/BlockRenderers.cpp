@@ -636,9 +636,9 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
 
         // A reference block's header is the link to what it shows; the rest of
         // it is an ordinary click, which puts the caret in and shows its source.
-        if (!view.referenceTarget.isEmpty()
+        if (!view.x().referenceTarget.isEmpty()
             && QRectF(left, top, contentWidth(), codeHeaderHeight()).contains(point)) {
-            emit referenceActivated(view.referenceTarget);
+            emit referenceActivated(view.x().referenceTarget);
             return true;
         }
 

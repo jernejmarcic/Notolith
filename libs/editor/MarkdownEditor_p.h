@@ -322,6 +322,59 @@ struct MarkdownEditor::BlockExtras {
     /// layout, which is why they are resolved before it is built.
     std::vector<NestedCallout> nested;
 
+    QString codeBlockKey;
+    /// A ```reference block shown as the file it names (ReferenceBlock.cpp):
+    /// what a click on its header opens (the resolved path or the URL; empty
+    /// for a file that is not there), and the cache key deliverReference
+    /// finds the block again by. Such a block is also isPluginBlock.
+    QString referenceTarget;
+    QString referenceKey;
+
+    QString notebookKey; ///< "language|tier|source" - m_notebookCache's own key
+    int notebookOrdinal = 0; ///< NotebookRunOptions::duplicateOrdinal, part of that key
+    /// What the run control's click re-runs - exactly the language,
+    /// source, working directory and sandbox tier appendNotebookOutput
+    /// was last called with, whether that came from a fenced block's own
+    /// `#|` options or a runnable `![[x.py]]` embed's file. Kept on the
+    /// view instead of re-derived at click time so both paths share the
+    /// one run() call in runNotebookBlockAt.
+    QString notebookLanguage;
+    QString notebookSource;
+    QString notebookWorkingDir;
+    bool notebookSandboxHost = false;
+    bool notebookSandboxWasm = false;
+    bool notebookCacheOn = true;
+    bool notebookShowOutput = true; ///< `#| output: false` clears it
+    int notebookTimeout = 0;
+    QString notebookKernel;
+    QString notebookImplicit;     ///< the note's `implicit-<lang>` code for this block, "" for none
+    QString notebookImplicitMain; ///< ... and its `-main` wrapper
+    QString notebookBlockID; ///< "f2" (the third fence) or "e<path>": which block this is across edits
+    bool notebookStale = false; ///< showing an earlier run of different source
+    int notebookCount = 0;      ///< the kernel's execution count, 0 for none
+    bool notebookHasRun = false;
+    bool notebookRunning = false;
+    bool notebookOk = true;
+    /// Top of the output area, below the listing (view.textTop + the
+    /// listing's own height + caption); == view.height while there is
+    /// no output to show.
+    qreal notebookOutputTop = 0;
+    /// Where the line edit of a pending input() goes, block-local; empty
+    /// when this block is not the one asking (NotebookInput.cpp).
+    QRectF notebookInputRect;
+    /// One output, in the order the kernel produced it. A Text/Error
+    /// cell draws through its own QTextLayout (monospace, ANSI already
+    /// stripped by the runner); an ImagePng/ImageSvg/Markdown cell
+    /// through `image`, `image` already rendered from raw bytes/SVG/
+    /// markdown by appendNotebookOutput so painting never re-decodes it.
+    struct NotebookOutputCell {
+        NotebookOutput::Kind kind = NotebookOutput::Kind::Text;
+        std::unique_ptr<QTextLayout> layout;
+        QPixmap image;
+        QRectF rect; ///< block-local
+    };
+    std::vector<NotebookOutputCell> notebookOutputs;
+
 };
 
 struct MarkdownEditor::BlockView {
@@ -489,13 +542,6 @@ struct MarkdownEditor::BlockView {
     /// Set when a plugin draws this fence (CodeBlockHook.cpp): no
     /// listing chrome, and codeBlockKey finds it again on delivery.
     bool isPluginBlock = false;
-    QString codeBlockKey;
-    /// A ```reference block shown as the file it names (ReferenceBlock.cpp):
-    /// what a click on its header opens (the resolved path or the URL; empty
-    /// for a file that is not there), and the cache key deliverReference
-    /// finds the block again by. Such a block is also isPluginBlock.
-    QString referenceTarget;
-    QString referenceKey;
 
     // --- Jupyter kernel output, NotebookBlock.cpp ----------------------
     /// A fenced code block with a language, shown while the notebooks
@@ -504,50 +550,6 @@ struct MarkdownEditor::BlockView {
     /// output goes below it, plus a run control alongside "Copy" in the
     /// header (codeLabelOf, paintCodeChrome, handleBlockClick).
     bool notebookEligible = false;
-    QString notebookKey; ///< "language|tier|source" - m_notebookCache's own key
-    int notebookOrdinal = 0; ///< NotebookRunOptions::duplicateOrdinal, part of that key
-    /// What the run control's click re-runs - exactly the language,
-    /// source, working directory and sandbox tier appendNotebookOutput
-    /// was last called with, whether that came from a fenced block's own
-    /// `#|` options or a runnable `![[x.py]]` embed's file. Kept on the
-    /// view instead of re-derived at click time so both paths share the
-    /// one run() call in runNotebookBlockAt.
-    QString notebookLanguage;
-    QString notebookSource;
-    QString notebookWorkingDir;
-    bool notebookSandboxHost = false;
-    bool notebookSandboxWasm = false;
-    bool notebookCacheOn = true;
-    bool notebookShowOutput = true; ///< `#| output: false` clears it
-    int notebookTimeout = 0;
-    QString notebookKernel;
-    QString notebookImplicit;     ///< the note's `implicit-<lang>` code for this block, "" for none
-    QString notebookImplicitMain; ///< ... and its `-main` wrapper
-    QString notebookBlockID; ///< "f2" (the third fence) or "e<path>": which block this is across edits
-    bool notebookStale = false; ///< showing an earlier run of different source
-    int notebookCount = 0;      ///< the kernel's execution count, 0 for none
-    bool notebookHasRun = false;
-    bool notebookRunning = false;
-    bool notebookOk = true;
-    /// Top of the output area, below the listing (view.textTop + the
-    /// listing's own height + caption); == view.height while there is
-    /// no output to show.
-    qreal notebookOutputTop = 0;
-    /// Where the line edit of a pending input() goes, block-local; empty
-    /// when this block is not the one asking (NotebookInput.cpp).
-    QRectF notebookInputRect;
-    /// One output, in the order the kernel produced it. A Text/Error
-    /// cell draws through its own QTextLayout (monospace, ANSI already
-    /// stripped by the runner); an ImagePng/ImageSvg/Markdown cell
-    /// through `image`, `image` already rendered from raw bytes/SVG/
-    /// markdown by appendNotebookOutput so painting never re-decodes it.
-    struct NotebookOutputCell {
-        NotebookOutput::Kind kind = NotebookOutput::Kind::Text;
-        std::unique_ptr<QTextLayout> layout;
-        QPixmap image;
-        QRectF rect; ///< block-local
-    };
-    std::vector<NotebookOutputCell> notebookOutputs;
     /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
     /// resolved to a QTextCharFormat by layoutInlineHtml - added to
     /// formatsIn's output the way spellcheck underlines are. Source

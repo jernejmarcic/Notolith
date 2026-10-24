@@ -48,7 +48,8 @@ void MarkdownEditor::pruneCodeBlockCache(const QString &keep)
         return;
     QSet<QString> shown;
     for (const BlockView &block : d->m_blocks)
-        shown.insert(block.codeBlockKey);
+        if (block.extras) // most blocks have none: no static-default guard per block
+            shown.insert(block.extras->codeBlockKey);
     for (auto it = d->m_codeBlockCache.begin(); it != d->m_codeBlockCache.end();) {
         if (it.key() != keep && !shown.contains(it.key()))
             it = d->m_codeBlockCache.erase(it);
@@ -104,7 +105,7 @@ bool MarkdownEditor::layoutPluginCode(BlockView &view)
         return false; // nothing drawable came back: the listing shows
 
     view.isPluginBlock = true;
-    view.codeBlockKey = key;
+    view.extrasMut().codeBlockKey = key;
     view.extrasMut().embedLabel = fence->language;
     view.extrasMut().embedPanel = true;
     view.layout.reset();
@@ -144,7 +145,7 @@ void MarkdownEditor::deliverCodeBlock(const QString &key, quint64 generation, Co
 
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (block.codeBlockKey != key)
+        if (!block.extras || block.extras->codeBlockKey != key)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -171,7 +172,7 @@ bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
     for (const BlockView &view : d->m_blocks) {
         if (!view.isPluginBlock || view.x().image.isNull())
             continue;
-        const auto it = d->m_codeBlockCache.constFind(view.codeBlockKey);
+        const auto it = d->m_codeBlockCache.constFind(view.x().codeBlockKey);
         if (it == d->m_codeBlockCache.cend() || it->hotspots.isEmpty() || !it->activate)
             continue;
         const QRectF image = hookedEmbedImageRect(view);
@@ -183,7 +184,7 @@ bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
                 continue;
             // The picture it leads to comes the way any answer does; until then the old one stays, and an
             // answer that is overtaken by another click is dropped (the generation).
-            const QString key = view.codeBlockKey;
+            const QString key = view.x().codeBlockKey;
             const int id = hotspot.id;
             const quint64 generation = ++d->m_codeBlockGeneration;
             auto activate = it->activate;

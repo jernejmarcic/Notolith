@@ -398,7 +398,8 @@ void MarkdownEditor::deliverEpubCover(const QString &key, const QString &path, Q
         return; // the card stays as laid out
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.x().isFileCard || block.x().fileCardPath != path)
+        const BlockExtras &e = block.x(); // once per block, not once per field
+        if (!e.isFileCard || e.fileCardPath != path)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -501,10 +502,10 @@ void MarkdownEditor::deliverFileEmbed(const QString &key, quint64 generation, QI
     const QString path = key.section(QLatin1Char('|'), 0, 0);
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        const bool inlineCell = std::any_of(block.x().embedCells.begin(), block.x().embedCells.end(),
+        const BlockExtras &e = block.x(); // once per block, not once per field
+        const bool inlineCell = std::any_of(e.embedCells.begin(), e.embedCells.end(),
                                             [&](const EmbedCell &cell) { return cell.cacheKey == key; });
-        if (!inlineCell && (block.x().imagePath != path || block.x().isPdfEmbed || block.x().isFileCard
-                            || !block.x().mediaPath.isEmpty()))
+        if (!inlineCell && (e.imagePath != path || e.isPdfEmbed || e.isFileCard || !e.mediaPath.isEmpty()))
             continue;
         block.layout.reset();
         block.laidOut = false;

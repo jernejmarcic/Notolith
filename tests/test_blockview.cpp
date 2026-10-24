@@ -17,7 +17,7 @@ using namespace noteAppC;
 namespace {
 
 // Tightened a slice at a time while the cold fields move off the view; the end is 400.
-constexpr std::size_t kBlockViewBudget = 1088; // after slice 4 (callout style and nested callouts moved off): was 1984
+constexpr std::size_t kBlockViewBudget = 720; // after slice 5 (plugin, reference and notebook payloads moved off): was 1984
 
 /// An editor whose parse has landed (a note over 128 kB parses on the pool and is a
 /// placeholder until it comes back).
@@ -135,6 +135,16 @@ TEST(BlockViewTest, ACalloutOwnsExtrasAndAParagraphDoesNot)
     editor->show();
     (void)editor->grab();
     EXPECT_EQ(editor->blockExtrasCountForTest(), 1);
+}
+
+TEST(BlockViewTest, ACodeBlockAndAListWithoutARunnerHoldNoExtras)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setNoteText(QStringLiteral("```cpp\nint a = 1;\n```\n\n- one\n- two\n  - nested\n\n# Heading\n"));
+    editor->show();
+    (void)editor->grab();
+    EXPECT_EQ(editor->blockExtrasCountForTest(), 0);
 }
 
 int main(int argc, char **argv)

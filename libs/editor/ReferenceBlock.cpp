@@ -331,7 +331,7 @@ void MarkdownEditor::setRemoteReferences(bool on)
     if (!on)
         dropRemoteReferences();
     for (BlockView &block : d->m_blocks) {
-        if (block.referenceTarget.isEmpty())
+        if (!block.extras || block.extras->referenceTarget.isEmpty())
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -454,8 +454,8 @@ bool MarkdownEditor::layoutReference(BlockView &view)
     const auto panel = [&](const QString &label, const QString &body, bool monospace) {
         layoutTextPanel(view, label, body, monospace);
         view.isPluginBlock = true;
-        view.referenceTarget = target;
-        view.referenceKey = key;
+        view.extrasMut().referenceTarget = target;
+        view.extrasMut().referenceKey = key;
         return true;
     };
 
@@ -743,7 +743,7 @@ void MarkdownEditor::relayReferenceBlocks(const QString &key)
 {
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (block.referenceKey != key)
+        if (!block.extras || block.extras->referenceKey != key)
             continue;
         block.layout.reset();
         block.laidOut = false;

@@ -3310,7 +3310,8 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     // now, or the notebooks feature toggled off - does not keep showing a
     // stale run control or a previous run's output.
     view.notebookEligible = false;
-    view.notebookOutputs.clear();
+    if (view.extras)
+        view.extras->notebookOutputs.clear();
 
     const EmbedSpan *embed = soleEmbedOf(view);
     if (!embed)
@@ -4284,6 +4285,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         e->previewRect = QRectF();
         e->cells.clear();
         e->propertyRows.clear();
+        e->codeBlockKey.clear();
+        e->referenceTarget.clear();
+        e->referenceKey.clear();
     }
     view.sideWidth = 0;
     view.callout = nullptr;
@@ -4307,9 +4311,6 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.CSVpath.clear();
     view.isHtml = false;
     view.isPluginBlock = false;
-    view.codeBlockKey.clear();
-    view.referenceTarget.clear();
-    view.referenceKey.clear();
     view.inlineHtmlFormats.clear();
 
     // A tab group shows one of its fences under a strip of tabs, and hides the
@@ -4421,7 +4422,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // Decided under an earlier state (the tab shown with its run control,
         // before the caret came into the group): plain source has none.
         view.notebookEligible = false;
-        view.notebookOutputs.clear();
+        if (view.extras)
+            view.extras->notebookOutputs.clear();
     }
 
     const bool perElement = d->m_mode == Mode::LivePreview && view.active && !revealsWholeBlock(view);
