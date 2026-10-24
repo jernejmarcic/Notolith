@@ -719,7 +719,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 setFolded(view, !view.folded);
                 return true;
             }
-            for (const PropertyRow &row : view.propertyRows) {
+            for (const PropertyRow &row : view.x().propertyRows) {
                 if (!row.control.isNull()) {
                     if (touchable(row.control.translated(left, top), 4).contains(point)) {
                         toggleProperty(row.property);
@@ -772,7 +772,8 @@ qreal MarkdownEditor::propertyRowHeight() const
 
 bool MarkdownEditor::layoutProperties(BlockView &view)
 {
-    view.propertyRows.clear();
+    if (view.extras)
+        view.extras->propertyRows.clear();
     if (d->m_properties.isEmpty())
         return false; // nothing to show: fall back to the hidden YAML
 
@@ -785,7 +786,7 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
         hidden.append(d->m_decorations.syntax.at(i));
     view.map = DisplayMap::build(d->m_text, view.span.range, hidden);
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
 
     const qreal rowHeight = propertyRowHeight();
     view.folded = d->m_folds.value(view.span.range.start, false);
@@ -843,7 +844,7 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
 
         row.rect = QRectF(0, y, contentWidth(), height);
         y += height;
-        view.propertyRows.push_back(row);
+        view.extrasMut().propertyRows.push_back(row);
     }
 
     // Obsidian closes the table with a hairline and a breath of space.
@@ -884,7 +885,7 @@ void MarkdownEditor::paintProperties(QPainter &painter, const BlockView &view, q
     }
 
     const qreal iconSize = qMin<qreal>(15, metrics.height());
-    for (const PropertyRow &row : view.propertyRows) {
+    for (const PropertyRow &row : view.x().propertyRows) {
         const Property &property = d->m_properties.at(row.property);
         const QRectF rect = row.rect.translated(left, top);
         const qreal keyTop = rect.top() + (propertyRowHeight() - metrics.height()) / 2;
@@ -1090,10 +1091,10 @@ bool MarkdownEditor::listIsRewritable(const Property &property) const
 const MarkdownEditor::PropertyRow *MarkdownEditor::propertyRowOf(int index, qreal *top) const
 {
     for (const BlockView &view : d->m_blocks) {
-        if (view.span.kind != BlockSpan::Kind::Frontmatter || view.propertyRows.empty()
+        if (view.span.kind != BlockSpan::Kind::Frontmatter || view.x().propertyRows.empty()
             || view.folded)
             continue;
-        for (const PropertyRow &row : view.propertyRows) {
+        for (const PropertyRow &row : view.x().propertyRows) {
             if (row.property == index) {
                 *top = view.y - verticalScrollBar()->value();
                 return &row;

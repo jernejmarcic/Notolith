@@ -112,7 +112,7 @@ bool MarkdownEditor::layoutTexEmbed(BlockView &view, const EmbedSpan &embed, con
         view.extrasMut().imageCentred = true;
         view.extrasMut().imagePath = path;
         view.layout.reset();
-        view.cells.clear();
+        view.extrasMut().cells.clear();
         view.height = height + 12;
         hideWholeBlockText(view);
         view.laidOut = true;
@@ -172,7 +172,7 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
     view.extrasMut().pdfCounterText.clear();
     view.extrasMut().image = QPixmap();
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.extrasMut().embedLabel = label;
     view.extrasMut().embedPanel = true;
     view.textTop = codeHeaderHeight();

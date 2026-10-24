@@ -3402,7 +3402,7 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
     view.extrasMut().imageSize = QSize(width, height);
     view.extrasMut().imagePath = path;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.height = height;
     hideWholeBlockText(view);
     view.laidOut = true;
@@ -3425,7 +3425,7 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
     view.extrasMut().embedLabel = info.fileName();
     view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = codeHeaderHeight();
 
     QString body;
@@ -3554,7 +3554,7 @@ bool MarkdownEditor::layoutMath(BlockView &view)
     view.extrasMut().imageSize = QSize(width, height);
     view.extrasMut().imageCentred = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.height = height + 12;
     view.laidOut = true;
     return true;
@@ -3709,7 +3709,8 @@ QColor cssColor(const QString &text)
 
 bool MarkdownEditor::layoutTable(BlockView &view)
 {
-    view.cells.clear();
+    if (view.extras)
+        view.extras->cells.clear();
     const TableSpan *table = tableFor(view);
     if (!table || table->columns <= 0 || table->rows.isEmpty())
         return false;
@@ -3900,8 +3901,8 @@ bool MarkdownEditor::layoutTable(BlockView &view)
                            widths.value(cell.column), rowHeights.value(cell.row));
     }
 
-    view.cells = std::move(cells);
-    view.headerRows = table->headerRows;
+    view.extrasMut().cells = std::move(cells);
+    view.extrasMut().headerRows = table->headerRows;
     view.sideScroll = qBound<qreal>(0, view.sideScroll,
                                      qMax<qreal>(0, view.sideWidth - contentWidth()));
     view.layout.reset();
@@ -3939,14 +3940,14 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     // outside a paint event (an export paints the whole table).
     const QRectF exposed = d->m_exposed;
     int painted = 0;
-    for (const Cell &cell : view.cells) {
+    for (const Cell &cell : view.x().cells) {
         const QRectF rect = cell.rect.translated(left + shift, top);
         if (rect.right() < window.left() - 2 || rect.left() > window.right() + 2)
             continue;
         if (!exposed.isNull() && (rect.bottom() < exposed.top() - 2 || rect.top() > exposed.bottom() + 2))
             continue;
         ++painted;
-        if (cell.row < view.headerRows)
+        if (cell.row < view.x().headerRows)
             painter.fillRect(rect, header);
         if (cell.fill.isValid())
             painter.fillRect(rect, cell.fill);
@@ -3998,7 +3999,7 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     d->m_tableCellsPainted = painted;
     if (!picked.isNull()) {
         const auto cellAt = [&](int row, int column) {
-            return view.cells[size_t(row) * size_t(tableFor(view)->columns) + size_t(column)].rect;
+            return view.x().cells[size_t(row) * size_t(tableFor(view)->columns) + size_t(column)].rect;
         };
         const QRectF box = cellAt(picked.top(), picked.left()).united(cellAt(picked.bottom(), picked.right()));
         painter.setBrush(Qt::NoBrush);
@@ -4069,7 +4070,7 @@ bool MarkdownEditor::layoutMedia(BlockView &view, const QString &path, bool vide
     view.extrasMut().embedLabel = QFileInfo(path).fileName();
     view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = codeHeaderHeight();
     view.height = view.textTop + mediaScreenRect(view, 0, 0).height() + kMediaControls;
     hideWholeBlockText(view);
@@ -4251,7 +4252,7 @@ MarkdownEditor::BlockView *MarkdownEditor::sidewaysScrollableAt(const QPoint &vi
         if (view.span.kind == BlockSpan::Kind::Code) {
             if (sideExtent(view) > contentWidth())
                 return &view - view.piece;
-        } else if (!view.cells.empty() && view.sideWidth > contentWidth()) {
+        } else if (!view.x().cells.empty() && view.sideWidth > contentWidth()) {
             return &view;
         }
     }
@@ -4281,12 +4282,12 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         e->previewImage = QPixmap();
         e->previewHint.clear();
         e->previewRect = QRectF();
+        e->cells.clear();
+        e->propertyRows.clear();
     }
-    view.cells.clear();
     view.sideWidth = 0;
     view.callout = nullptr;
     view.options = nullptr;
-    view.propertyRows.clear();
     view.textTop = 0;
     view.folded = false;
     view.inlineMaths.clear();
@@ -5209,11 +5210,11 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             painter.drawPixmap(target.toRect(), GIFframe(painter, view.x().imagePath, target, view.x().image));
             continue;
         }
-        if (view.isBase && !view.cells.empty()) {
+        if (view.isBase && !view.x().cells.empty()) {
             paintBase(painter, view, left, top);
             continue;
         }
-        if (!view.cells.empty()) {
+        if (!view.x().cells.empty()) {
             paintTable(painter, view, left, top);
             continue;
         }
@@ -5429,7 +5430,7 @@ QPointF MarkdownEditor::pointFor(qsizetype offset, qreal *height) const
     if (view.foldHidden)
         return {}; // a caret restored inside a fold has nowhere to be drawn
     const Cell *cell = nullptr;
-    for (const Cell &candidate : view.cells) {
+    for (const Cell &candidate : view.x().cells) {
         if (candidate.source.isValid() && candidate.source.start <= offset && offset <= candidate.source.end)
             cell = &candidate;
     }
@@ -5480,12 +5481,12 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
     for (const BlockView &view : d->m_blocks) {
         if (view.foldHidden)
             continue;
-        if (!view.cells.empty()) {
+        if (!view.x().cells.empty()) {
             if (y < view.y || y > view.y + view.height)
                 continue;
             // Clicking a cell puts the caret on the character under the
             // pointer, and the table is edited where it is drawn.
-            for (const Cell &cell : view.cells) {
+            for (const Cell &cell : view.x().cells) {
                 // A cell with no source - a base's, or one a short row lacks
                 // - has no character to land on; the block's start does.
                 if (!cell.source.isValid() || !cell.rect.translated(-view.sideScroll, view.y).contains(QPointF(x, y)))
@@ -5691,7 +5692,7 @@ void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
             // for a moment, as an edit that rewrites it leaves it) has no
             // cells either, and is the one that must be drawn as a grid now.
             if (block < 0 || block >= qsizetype(d->m_blocks.size())
-                || (d->m_blocks[size_t(block)].cells.empty() && d->m_blocks[size_t(block)].span.kind != BlockSpan::Kind::Table))
+                || (d->m_blocks[size_t(block)].x().cells.empty() && d->m_blocks[size_t(block)].span.kind != BlockSpan::Kind::Table))
                 continue;
             BlockView &view = d->m_blocks[size_t(block)];
             view.laidOut = false;

@@ -304,6 +304,14 @@ struct MarkdownEditor::BlockExtras {
     QString previewHint;
     QRectF previewRect; ///< block-local
 
+    /// Filled instead of `layout` when a table renders as a grid.
+    std::vector<Cell> cells;
+    int headerRows = 0;
+
+    /// Filled instead of `layout` when this is the frontmatter and live
+    /// preview draws it as Obsidian's properties table.
+    std::vector<PropertyRow> propertyRows;
+
 };
 
 struct MarkdownEditor::BlockView {
@@ -359,9 +367,6 @@ struct MarkdownEditor::BlockView {
     int lastStyle = 0;
     int firstSyntax = 0;
     int lastSyntax = 0;
-    /// Filled instead of `layout` when a table renders as a grid.
-    std::vector<Cell> cells;
-    int headerRows = 0;
     /// A wide table's columns, or a listing's longest line, at their natural
     /// width: when the total exceeds the readable column the block scrolls
     /// sideways inside itself, exactly as it does in Obsidian. 0 for a block
@@ -402,9 +407,6 @@ struct MarkdownEditor::BlockView {
     Range caretWord;
     /// Set when this block is a fenced code block carrying `#|` options.
     const CodeOptions *options = nullptr;
-    /// Filled instead of `layout` when this is the frontmatter and live
-    /// preview draws it as Obsidian's properties table.
-    std::vector<PropertyRow> propertyRows;
     /// For each of the block's list items (listItemsIn order): where its
     /// text starts, block-local, and the item it is nested in (-1 for
     /// none). Siblings share one marker column, as wide as their widest

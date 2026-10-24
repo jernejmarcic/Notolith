@@ -78,7 +78,7 @@ void MarkdownEditor::setBaseRunner(
         if (!block.isBase || !block.CSVpath.isEmpty()) // a CSV embed is no base's
             continue;
         block.layout.reset();
-        block.cells.clear();
+        block.extrasMut().cells.clear();
         block.laidOut = false;
         block.heightEstimated = false;
         touched = true;
@@ -102,7 +102,7 @@ void MarkdownEditor::refreshBases()
                 if (!block.isBase || !block.CSVpath.isEmpty()) // a CSV embed is no base's
                     continue;
                 block.layout.reset();
-                block.cells.clear();
+                block.extrasMut().cells.clear();
                 block.laidOut = false;
                 block.heightEstimated = false;
                 touched = true;
@@ -166,7 +166,7 @@ void MarkdownEditor::deliverBaseResults(const QString &yamlText, const QString &
         if (!block.isBase || block.baseYAML != yamlText || block.baseRequestedView != viewName)
             continue;
         block.layout.reset();
-        block.cells.clear();
+        block.extrasMut().cells.clear();
         block.laidOut = false;
         block.heightEstimated = false;
         touched = true;
@@ -231,7 +231,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
 {
     view.isBase = true;
     view.extrasMut().image = QPixmap();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.baseRows.clear();
     view.baseViewName.clear();
     view.baseYAML = yamlText;
@@ -409,8 +409,8 @@ bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data,
             view.baseRows.push_back({cell.rect, data.rows.at(dataIndex).notePath});
     }
 
-    view.cells = std::move(cells);
-    view.headerRows = 1;
+    view.extrasMut().cells = std::move(cells);
+    view.extrasMut().headerRows = 1;
     view.sideScroll =
         qBound<qreal>(0, view.sideScroll, qMax<qreal>(0, view.sideWidth - contentWidth()));
     view.layout.reset();

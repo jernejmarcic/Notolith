@@ -176,7 +176,7 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
 
     view.isQuery = true;
     view.extrasMut().image = QPixmap();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
 
     const QString queryText = d->m_text.mid(fence->content.start, fence->content.length()).trimmed();
     // The header's collapsed/sort-by-name state is remembered by the

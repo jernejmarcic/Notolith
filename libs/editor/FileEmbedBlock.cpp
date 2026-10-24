@@ -45,7 +45,7 @@ bool MarkdownEditor::layoutTextPanel(BlockView &view, const QString &label, cons
     view.extrasMut().embedLabel = label;
     view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = label.isEmpty() ? 0 : codeHeaderHeight();
 
     QString trimmed = body;
@@ -213,7 +213,7 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     view.extrasMut().embedLabel = label;
     view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = label.isEmpty() ? 0 : codeHeaderHeight();
     hideWholeBlockText(view);
     const QPixmap pixmap = QPixmap::fromImage(image);
@@ -306,7 +306,7 @@ bool MarkdownEditor::layoutFileCard(BlockView &view, const EmbedSpan &embed, con
     view.extrasMut().fileCardSize = QLocale().formattedDataSize(info.size());
     view.extrasMut().image = QPixmap();
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.extrasMut().embedPanel = false;
     view.extrasMut().fileCardCover = QPixmap();
     if (path.endsWith(QLatin1String(".epub"), Qt::CaseInsensitive))
@@ -468,7 +468,7 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
     view.extrasMut().embedLabel = QFileInfo(path).fileName();
     view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = codeHeaderHeight();
     view.extrasMut().imagePath = path; // deliverFileEmbed's own way to find this block again
     view.extrasMut().embedSubpath = embed.subpath;
@@ -866,7 +866,7 @@ const MarkdownEditor::EmbedCell *MarkdownEditor::embedCellOf(const BlockView &vi
     if (size_t(cell) < view.x().embedCells.size())
         return &view.x().embedCells[size_t(cell)];
     size_t rest = size_t(cell) - view.x().embedCells.size();
-    for (const Cell &tableCell : view.cells) {
+    for (const Cell &tableCell : view.x().cells) {
         if (rest < tableCell.embeds.size()) {
             origin = cellTextOrigin(view, tableCell);
             return &tableCell.embeds[rest];
@@ -923,7 +923,7 @@ int MarkdownEditor::embedCellCountAt(qsizetype offset) const
         return 0;
     const BlockView &view = d->m_blocks[size_t(index)];
     size_t count = view.x().embedCells.size();
-    for (const Cell &cell : view.cells)
+    for (const Cell &cell : view.x().cells)
         count += cell.embeds.size();
     return int(count);
 }

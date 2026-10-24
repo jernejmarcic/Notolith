@@ -125,7 +125,7 @@ QList<QRect> MarkdownEditor::GIFrectsInView(const QString &path) const
         // scrolled out of it sideways (paintTable).
         const QRectF tableWindow(left, top, contentWidth(), view.height);
         const bool clipped = view.sideWidth > contentWidth();
-        for (const Cell &cell : view.cells) {
+        for (const Cell &cell : view.x().cells) {
             if (clipped) {
                 const QRectF box = cell.rect.translated(left - view.sideScroll, top);
                 if (box.right() < tableWindow.left() - 2 || box.left() > tableWindow.right() + 2)

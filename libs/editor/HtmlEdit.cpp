@@ -1044,7 +1044,7 @@ const Substitution *MarkdownEditor::shownSubstitution(qsizetype offset) const
     const qsizetype index = blockAt(offset);
     if (index >= 0 && index < qsizetype(d->m_blocks.size())) {
         const BlockView &view = d->m_blocks[size_t(index)];
-        if (view.active && view.cells.empty() && revealsWholeBlock(view))
+        if (view.active && view.x().cells.empty() && revealsWholeBlock(view))
             return nullptr;
     }
     if (entityRevealed(*(it - 1)))

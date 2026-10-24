@@ -108,7 +108,7 @@ bool MarkdownEditor::layoutPluginCode(BlockView &view)
     view.extrasMut().embedLabel = fence->language;
     view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = codeHeaderHeight();
     hideWholeBlockText(view);
     if (entry->pending) {

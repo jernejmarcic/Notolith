@@ -17,7 +17,7 @@ using namespace noteAppC;
 namespace {
 
 // Tightened a slice at a time while the cold fields move off the view; the end is 400.
-constexpr std::size_t kBlockViewBudget = 1336; // after slice 2 (embeds, PDF, file cards, previews moved off): was 1984
+constexpr std::size_t kBlockViewBudget = 1280; // after slice 3 (table cells and property rows moved off): was 1984
 
 /// An editor whose parse has landed (a note over 128 kB parses on the pool and is a
 /// placeholder until it comes back).
@@ -106,6 +106,19 @@ TEST(BlockViewTest, AnImageEmbedOwnsExtrasAndItsNeighboursDoNot)
     // The picture is still there for the paint step, not just allocated.
     EXPECT_EQ(editor->embedCellCountAt(0), 0);
     EXPECT_GT(editor->documentHeight(), 100);
+}
+
+TEST(BlockViewTest, ATableOwnsExtrasAndTheParagraphsAroundItDoNot)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setNoteText(QStringLiteral("before\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nafter\n"));
+    editor->show();
+    (void)editor->grab();
+    EXPECT_EQ(editor->blockExtrasCountForTest(), 1);
+    const auto rows = editor->tableCellTextsAt(editor->noteText().indexOf(QLatin1Char('|')));
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(1), (QStringList{QStringLiteral("1"), QStringLiteral("2")}));
 }
 
 int main(int argc, char **argv)

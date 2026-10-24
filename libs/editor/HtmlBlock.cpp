@@ -60,7 +60,7 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
 
     view.isHtml = true;
     view.extrasMut().image = QPixmap();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
 
     // A script never runs (litehtml has no interpreter, and sanitise() strips
     // it anyway); its source is shown in its place instead, red and bold, so

@@ -78,13 +78,13 @@ void MarkdownEditor::setTableHandles(bool on)
 const TableSpan *MarkdownEditor::chromeTable(const BlockView &view) const
 {
     if (!d->m_tableHandles || d->m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden || view.foldHidden
-        || view.piece != 0 || view.isBase || view.cells.empty())
+        || view.piece != 0 || view.isBase || view.x().cells.empty())
         return nullptr;
     const QList<TableSpan> &tables = d->m_decorations.tables;
     const auto it = std::lower_bound(tables.cbegin(), tables.cend(), view.span.range.start,
                                      [](const TableSpan &table, qsizetype start) { return table.range.start < start; });
     if (it == tables.cend() || it->range.start != view.span.range.start || (it->html && !it->simple) || it->columns <= 0
-        || size_t(it->rows.size()) * size_t(it->columns) != view.cells.size())
+        || size_t(it->rows.size()) * size_t(it->columns) != view.x().cells.size())
         return nullptr;
     return &*it;
 }
@@ -107,7 +107,7 @@ int MarkdownEditor::cellRowAt(const BlockView &view, const TableSpan &table, qre
     int high = int(table.rows.size()) - 1;
     while (low < high) { // the last row whose top is not below `local`
         const int mid = (low + high + 1) / 2;
-        if (view.cells[size_t(mid) * size_t(table.columns)].rect.top() <= local)
+        if (view.x().cells[size_t(mid) * size_t(table.columns)].rect.top() <= local)
             low = mid;
         else
             high = mid - 1;
@@ -122,7 +122,7 @@ int MarkdownEditor::cellColumnAt(const BlockView &view, const TableSpan &table, 
     int high = table.columns - 1;
     while (low < high) {
         const int mid = (low + high + 1) / 2;
-        if (view.cells[size_t(mid)].rect.left() <= local)
+        if (view.x().cells[size_t(mid)].rect.left() <= local)
             low = mid;
         else
             high = mid - 1;
@@ -132,7 +132,7 @@ int MarkdownEditor::cellColumnAt(const BlockView &view, const TableSpan &table, 
 
 QRectF MarkdownEditor::rowGripRect(const BlockView &view, const TableSpan &table, int row, bool hit) const
 {
-    const QRectF cell = cellViewRect(view, view.cells[size_t(row) * size_t(table.columns)]);
+    const QRectF cell = cellViewRect(view, view.x().cells[size_t(row) * size_t(table.columns)]);
     const qreal length = qBound<qreal>(12, cell.height() - 8, kGripLength);
     const QRectF grip(contentLeft() - kGripThick / 2, cell.top() + (cell.height() - length) / 2, kGripThick, length);
     return hit ? grip.adjusted(-3, -2, 1, 2) : grip; // not over the cell's own padding
@@ -141,7 +141,7 @@ QRectF MarkdownEditor::rowGripRect(const BlockView &view, const TableSpan &table
 QRectF MarkdownEditor::columnGripRect(const BlockView &view, const TableSpan &table, int column, bool hit) const
 {
     Q_UNUSED(table)
-    const QRectF cell = cellViewRect(view, view.cells[size_t(column)]);
+    const QRectF cell = cellViewRect(view, view.x().cells[size_t(column)]);
     const qreal middle = cell.center().x();
     // A column scrolled out of the table's window has no grip.
     if (middle < contentLeft() || middle > contentLeft() + qMin<qreal>(view.sideWidth, contentWidth()))
@@ -339,12 +339,12 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
         if (d->m_tableDrag.part == TablePart::RowGrip) {
             const qreal y = d->m_tableDrag.to >= rows
                                 ? area.bottom()
-                                : cellViewRect(view, view.cells[size_t(d->m_tableDrag.to) * size_t(table->columns)]).top();
+                                : cellViewRect(view, view.x().cells[size_t(d->m_tableDrag.to) * size_t(table->columns)]).top();
             painter.drawRect(QRectF(area.left(), y - 1, area.width(), 2));
         } else {
             const qreal x = d->m_tableDrag.to >= table->columns
-                                ? cellViewRect(view, view.cells[size_t(table->columns) - 1]).right()
-                                : cellViewRect(view, view.cells[size_t(d->m_tableDrag.to)]).left();
+                                ? cellViewRect(view, view.x().cells[size_t(table->columns) - 1]).right()
+                                : cellViewRect(view, view.x().cells[size_t(d->m_tableDrag.to)]).left();
             painter.drawRect(QRectF(x - 1, area.top(), 2, area.height()));
         }
     }
@@ -426,7 +426,7 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
     const qreal local = column ? point.x() - contentLeft() + view.sideScroll
                                : point.y() + verticalScrollBar()->value() - view.y;
     for (int i = column ? 0 : firstRow; i < to; ++i) {
-        const Cell &cell = view.cells[column ? size_t(i) : size_t(i) * size_t(table->columns)];
+        const Cell &cell = view.x().cells[column ? size_t(i) : size_t(i) * size_t(table->columns)];
         if (local < (column ? cell.rect.center().x() : cell.rect.center().y())) {
             to = i;
             break;
@@ -446,7 +446,7 @@ int MarkdownEditor::addBarCount(const BlockView &view, const TableSpan &table, c
     const bool column = d->m_tableDrag.part == TablePart::AddColumn;
     const qreal local = column ? point.x() - contentLeft() + view.sideScroll
                                : point.y() + verticalScrollBar()->value() - view.y;
-    const Cell &last = view.cells[column ? size_t(table.columns) - 1
+    const Cell &last = view.x().cells[column ? size_t(table.columns) - 1
                                          : (size_t(table.rows.size()) - 1) * size_t(table.columns)];
     const qreal unit = qMax<qreal>(8, column ? last.rect.width() : last.rect.height());
     return qBound(0, int((local - d->m_tableDrag.origin) / unit), 100);
@@ -458,10 +458,10 @@ QRectF MarkdownEditor::addBarGhost(const BlockView &view, const TableSpan &table
         return {};
     const QRectF area = tableViewRect(view);
     if (d->m_tableDrag.part == TablePart::AddColumn) {
-        const QRectF last = cellViewRect(view, view.cells[size_t(table.columns) - 1]);
+        const QRectF last = cellViewRect(view, view.x().cells[size_t(table.columns) - 1]);
         return QRectF(last.right(), area.top(), last.width() * count, area.height());
     }
-    const QRectF last = cellViewRect(view, view.cells[(size_t(table.rows.size()) - 1) * size_t(table.columns)]);
+    const QRectF last = cellViewRect(view, view.x().cells[(size_t(table.rows.size()) - 1) * size_t(table.columns)]);
     return QRectF(area.left(), last.bottom(), area.width(), last.height() * count);
 }
 
@@ -1092,7 +1092,7 @@ QRectF MarkdownEditor::tableCellRect(qsizetype offset, int row, int column) cons
     const TableSpan *table = chromeTable(view);
     if (!table || row < 0 || row >= table->rows.size() || column < 0 || column >= table->columns)
         return {};
-    return cellViewRect(view, view.cells[size_t(row) * size_t(table->columns) + size_t(column)]);
+    return cellViewRect(view, view.x().cells[size_t(row) * size_t(table->columns) + size_t(column)]);
 }
 
 QRectF MarkdownEditor::tableChromeRect(qsizetype offset, TablePart part, int index) const
