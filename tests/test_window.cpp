@@ -6879,6 +6879,58 @@ TEST_F(WindowTest, IdenticalNotebookCellsShowTheirOwnOutputs)
     EXPECT_EQ(editor->notebookInfoAt(second).executionCount, 2);
 }
 
+// Another window (another process, another vault) turns the Notebooks plugin off. This window adopts that
+// on its next settings save, which a note switch triggers; it must apply it (the commands go grey) and, whatever
+// it believes about the plugin, must never write an open notebook as Markdown.
+TEST_F(WindowTest, ANotebookIsNeverOverwrittenWithMarkdownWhenAnotherWindowTurnsThePluginOff)
+{
+    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("Analysis.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    QTest::keyClicks(editor, QStringLiteral("edited "));
+    ASSERT_TRUE(editor->isModified());
+    QAction *newNotebook = window.findChild<QAction *>(QStringLiteral("notebooks:new"));
+    ASSERT_NE(newNotebook, nullptr);
+    ASSERT_TRUE(newNotebook->isEnabled());
+
+    Settings other = Settings::load();
+    other.setValue(Settings::featureKey("notebooks"), false);
+    ASSERT_TRUE(other.save());
+
+    // A second tab and a note switch in it: leaving a note saves this window's settings.
+    write(QStringLiteral("Other.md"), "# Other\n");
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Other.md"))));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    tabs->setCurrentIndex(0);
+    ASSERT_EQ(window.editor(), editor);
+    EXPECT_FALSE(newNotebook->isEnabled()) << "the adopted switch is applied, not just held";
+
+    QString refusal;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&refusal] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            refusal = box->text() + box->informativeText();
+            box->close();
+        }
+    });
+    watch.start(20);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save")); // refused, and says so
+    EXPECT_TRUE(refusal.contains(QStringLiteral("Analysis.ipynb"))) << refusal.toStdString();
+    const QByteArray after = readAll(path(QStringLiteral("Analysis.ipynb")));
+    EXPECT_TRUE(after.contains("\"nbformat\"")) << "still a notebook, not the cells' Markdown";
+    EXPECT_TRUE(after.contains("ZeroDivisionError")) << "with its outputs";
+
+    other.setValue(Settings::featureKey("notebooks"), true);
+    other.save();
+}
+
 // What ran in a notebook and was discarded with its tab must not wait for a file that later takes the name.
 TEST_F(WindowTest, DiscardedNotebookRunsAreForgottenWhenTheTabLeavesTheNotebook)
 {
@@ -11922,56 +11974,3 @@ TEST_F(WindowTest, AnOpenPdfSavesToTheNewPathAfterItsFileOrFolderIsRenamed)
     EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Notes")))) << "the old folder is not recreated";
 }
 #endif
-
-// Another window (another process, another vault) turns the Notebooks plugin off. This window adopts that
-// on its next settings save, which a note switch triggers; it must apply it (the commands go grey) and, whatever
-// it believes about the plugin, must never write an open notebook as Markdown.
-TEST_F(WindowTest, ANotebookIsNeverOverwrittenWithMarkdownWhenAnotherWindowTurnsThePluginOff)
-{
-    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
-    write(QStringLiteral("Analysis.ipynb"), original);
-    MainWindow window;
-    window.show();
-    window.openVault(dir.path());
-    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
-    MarkdownEditor *editor = window.editor();
-    QTest::keyClicks(editor, QStringLiteral("edited "));
-    ASSERT_TRUE(editor->isModified());
-    QAction *newNotebook = window.findChild<QAction *>(QStringLiteral("notebooks:new"));
-    ASSERT_NE(newNotebook, nullptr);
-    ASSERT_TRUE(newNotebook->isEnabled());
-
-    Settings other = Settings::load();
-    other.setValue(Settings::featureKey("notebooks"), false);
-    ASSERT_TRUE(other.save());
-
-    // A second tab and a note switch in it: leaving a note saves this window's settings.
-    write(QStringLiteral("Other.md"), "# Other\n");
-    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
-    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
-    ASSERT_TRUE(window.openNote(path(QStringLiteral("Other.md"))));
-    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
-    ASSERT_NE(tabs, nullptr);
-    tabs->setCurrentIndex(0);
-    ASSERT_EQ(window.editor(), editor);
-    EXPECT_FALSE(newNotebook->isEnabled()) << "the adopted switch is applied, not just held";
-
-    QString refusal;
-    QTimer watch;
-    QObject::connect(&watch, &QTimer::timeout, [&refusal] {
-        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
-            refusal = box->text() + box->informativeText();
-            box->close();
-        }
-    });
-    watch.start(20);
-    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save")); // refused, and says so
-    EXPECT_TRUE(refusal.contains(QStringLiteral("Analysis.ipynb"))) << refusal.toStdString();
-    const QByteArray after = readAll(path(QStringLiteral("Analysis.ipynb")));
-    EXPECT_TRUE(after.contains("\"nbformat\"")) << "still a notebook, not the cells' Markdown";
-    EXPECT_TRUE(after.contains("ZeroDivisionError")) << "with its outputs";
-
-    other.setValue(Settings::featureKey("notebooks"), true);
-    other.save();
-}
-
