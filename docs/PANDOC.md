@@ -74,6 +74,18 @@ Formats: `docx` (`--reference-doc` if set), `odt`, `epub3`, `html5 --standalone 
 (`![](https://...)`) is fetched by pandoc itself when the output has to contain it (docx, odt, epub,
 `--embed-resources` HTML). An import fetches nothing: it runs under `--sandbox` (below).
 
+**Local files.** An image the note names is read by pandoc from wherever the path points, and embedded in
+docx, odt, epub and `--embed-resources` HTML - inside the vault or not, and whatever the file really is (pandoc
+does not check that `![](notes.txt)` is a picture). Notolith resolves `![[...]]` through the vault, but a note's
+own `![](/any/path)` or `![](../outside.png)` is passed on as written, so an export holds whatever its note
+points at: treat an exported file as you would the note, and read a note from someone else before exporting it.
+
+**Where the time goes.** The preparation above (parsing the note, inlining the notes it embeds, resolving links
+and images) runs on the UI thread before pandoc starts; pandoc itself is another process, off the UI thread, with
+a cancel button. For a normal note the preparation is milliseconds; a note that embeds a great many notes, or
+embeds them deeply, can hold the window for a moment. Moving it to a worker needs the index to be read from one,
+and has not been measured as a problem.
+
 **Lossy:** the callout type and folding; `%%` comments and block ids by design; a note embedded in the middle
 of a line becomes a link; links to other notes are relative file links (live in HTML, dead in Word);
 Obsidian's "every newline is a line break" is not applied (a single newline joins lines, as CommonMark has
