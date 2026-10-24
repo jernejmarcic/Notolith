@@ -431,6 +431,14 @@ public:
     /// Turns a link target into an absolute path, or an empty string when it
     /// does not resolve. Supplied by the window, which owns the index.
     void setLinkResolver(std::function<QString(const QString &)> resolver);
+    /// Pictures that live in the note's own document rather than in a file:
+    /// name -> encoded image bytes. `![x](attachment:name)` shows the one
+    /// called `name`, as a notebook's markdown-cell attachments do. Read-only
+    /// and never written anywhere; an empty table (the default) costs nothing.
+    /// `scopeAt`, when given, says for an offset of the text what is put before
+    /// the name to find its picture in the table (a notebook's cells each have
+    /// their own `image.png`: "3/"); empty for none, so a name stays a bare one.
+    void setInlineImages(QHash<QString, QByteArray> images, std::function<QString(qsizetype)> scopeAt = {});
     /// The index changed, so a link drawn as pointing nowhere may point
     /// somewhere now, or the reverse. Relays out only if one did.
     void refreshLinkStatus();
@@ -705,6 +713,10 @@ public:
         /// Which note's kernel: blocks that share it share variables.
         /// Left empty here; the window fills it from the note it is in.
         QString scope;
+        /// Which of the note's identical blocks this is: how many earlier ones
+        /// read the same (0 for the first). Part of the output cache's key
+        /// only - the code that runs is never changed by it.
+        int duplicateOrdinal = 0;
         /// Remove this block's kept output instead of reading or running it.
         bool clear = false;
         /// Set on a real run (never on a lookup): the runner may call it, from
@@ -922,6 +934,9 @@ public:
     /// Every runnable block from the top of the note to `offset`, the block
     /// holding it included (Jupyter's "run all above"); how many were asked for.
     int runNotebookBlocksUpTo(qsizetype offset);
+    /// Every runnable block from the one holding `offset` to the end of the
+    /// note (Jupyter's "run all below"); how many were asked for.
+    int runNotebookBlocksFrom(qsizetype offset);
     /// Forgets every block's output here and in the sidecar (Jupyter's
     /// "clear all outputs"); how many blocks had any.
     int clearNotebookOutputs();
@@ -1590,6 +1605,11 @@ private:
     /// code block or a small card.
     bool layoutEmbed(BlockView &view);
     bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// `attachment:<scope><name>` when setInlineImages holds that picture for
+    /// the embed (the "path" such an embed has), else empty.
+    QString attachmentPathOf(const EmbedSpan &embed) const;
+    /// The picture at `path`: a file, or an `attachment:` one from the table. Null when neither decodes.
+    QPixmap loadEmbedPixmap(const QString &path) const;
     bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
     /// NotebookEmbed.cpp: a runnable `![[script.py]]` embed (stage 13's
     /// rest) - called once layoutSourceFile has already built the panel's
@@ -1742,7 +1762,15 @@ private:
     /// fenced block's own `#| sandbox:` - see NotebookRunOptions.
     void appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
                               const QString &blockID, const QString &workingDir = QString(),
-                              const CodeOptions *options = nullptr);
+                              const CodeOptions *options = nullptr, int duplicateOrdinal = 0);
+    /// How many fences before `fence` read the same (same language, same code):
+    /// NotebookRunOptions::duplicateOrdinal. Counted over the fences that are cells of a notebook (a fence
+    /// that opens at the start of a line: not one quoted or listed inside a markdown cell), in order.
+    int notebookDuplicateOrdinal(const CodeFenceSpan &fence) const;
+    /// Lays out every code block (and runnable embed) that is not yet laid out, so what a command for all of them
+    /// finds is decided for each (notebookEligible, the key, the options) and not just for the ones near the
+    /// view. The view stays where it is.
+    void layOutNotebookBlocks();
     /// The options a run of what `view` last laid out is made with.
     NotebookRunOptions notebookOptionsOf(const BlockView &view) const;
     void deliverNotebookResult(const QString &key, quint64 generation, NotebookRunResult result);
@@ -1757,7 +1785,7 @@ private:
     /// prompt row while the block's code is waiting in input().
     void appendNotebookOutputRows(BlockView &view, const QString &language, const QString &source,
                                   const QString &blockID, const QString &workingDir,
-                                  const CodeOptions *options);
+                                  const CodeOptions *options, int duplicateOrdinal);
     /// The "Running...", or a kernel-level error, single-line message a
     /// block shows below its listing when there is nothing richer yet.
     void appendNotebookMessage(BlockView &view, const QString &text, const QString &colourToken);

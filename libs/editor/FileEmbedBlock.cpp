@@ -621,7 +621,10 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     EmbedCell cell;
     cell.source = embed.range;
 
-    const QString path = m_resolver ? m_resolver(embed.target) : QString();
+    QString path = attachmentPathOf(embed);
+    const bool attached = !path.isEmpty();
+    if (!attached && m_resolver)
+        path = m_resolver(embed.target);
     // An `<img>` whose file is not there says what its author wrote in `alt`,
     // on a card no wider than a caption needs.
     const auto missingCard = [&](const QString &name) {
@@ -644,7 +647,7 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8())) {
         QPixmap pixmap = d->m_images.value(path);
         if (pixmap.isNull()) {
-            pixmap = QPixmap(path);
+            pixmap = loadEmbedPixmap(path);
             if (!pixmap.isNull())
                 d->m_images.insert(path, pixmap);
         }
@@ -659,7 +662,8 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
             const qreal height = size.height();
             cell.image = pixmap;
             cell.rect = QRectF(0, 0, width, height);
-            cell.openPath = path;
+            if (!attached)
+                cell.openPath = path; // an attachment is no file to open
             return cell;
         }
     }

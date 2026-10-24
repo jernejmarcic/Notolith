@@ -486,6 +486,7 @@ struct MarkdownEditor::BlockView {
     /// header (codeLabelOf, paintCodeChrome, handleBlockClick).
     bool notebookEligible = false;
     QString notebookKey; ///< "language|tier|source" - m_notebookCache's own key
+    int notebookOrdinal = 0; ///< NotebookRunOptions::duplicateOrdinal, part of that key
     /// What the run control's click re-runs - exactly the language,
     /// source, working directory and sandbox tier appendNotebookOutput
     /// was last called with, whether that came from a fenced block's own
@@ -1049,6 +1050,10 @@ struct MarkdownEditor::Private {
     AttachmentSaver m_attachmentSaver;
     FileImporter m_fileImporter;
     mutable QHash<QString, QPixmap> m_images;
+    /// setInlineImages: name -> encoded bytes, for `attachment:name` embeds.
+    QHash<QString, QByteArray> m_inlineImages;
+/// setInlineImages' scopeAt: what goes before an `attachment:` name at an offset.
+std::function<QString(qsizetype)> m_inlineScope;
     /// What is known of a GIF file, valid while its mtime is (GIFplayer.cpp).
     struct GIFinfo {
         bool known = false;

@@ -314,6 +314,39 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     d->m_lastEdit.start();
 }
 
+void MarkdownEditor::setInlineImages(QHash<QString, QByteArray> images, std::function<QString(qsizetype)> scopeAt)
+{
+    d->m_inlineScope = std::move(scopeAt);
+    if (images == d->m_inlineImages && !d->m_inlineScope)
+        return;
+    const bool had = !d->m_inlineImages.isEmpty();
+    d->m_inlineImages = std::move(images);
+    if (!had && d->m_inlineImages.isEmpty())
+        return;
+    for (auto it = d->m_images.begin(); it != d->m_images.end();)
+        it = it.key().startsWith(QLatin1String("attachment:")) ? d->m_images.erase(it) : std::next(it);
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+QString MarkdownEditor::attachmentPathOf(const EmbedSpan &embed) const
+{
+    if (d->m_inlineImages.isEmpty() || !embed.target.startsWith(QLatin1String("attachment:")))
+        return {};
+    const QString key = (d->m_inlineScope ? d->m_inlineScope(embed.range.start) : QString()) + embed.target.mid(11);
+    return d->m_inlineImages.contains(key) ? QStringLiteral("attachment:") + key : QString();
+}
+
+QPixmap MarkdownEditor::loadEmbedPixmap(const QString &path) const
+{
+    if (!path.startsWith(QLatin1String("attachment:")))
+        return QPixmap(path);
+    QPixmap pixmap;
+    pixmap.loadFromData(d->m_inlineImages.value(path.mid(11)));
+    return pixmap;
+}
+
 void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> resolver)
 {
     m_resolver = std::move(resolver);
@@ -3261,14 +3294,17 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     view.notebookOutputs.clear();
 
     const EmbedSpan *embed = soleEmbedOf(view);
-    if (!embed || !m_resolver)
+    if (!embed)
         return false;
 
-    const QString path = m_resolver(embed->target);
-    // An embed drawn as its file never asks for its link colour, so remember the answer here:
-    // refreshLinkStatus then notices the file going, or coming back.
-    if (!embed->html) // an <img> has no link span to relay out
-        d->m_unresolved.insert(embed->target, path.isEmpty());
+    QString path = attachmentPathOf(*embed); // a notebook cell's own picture is not a vault link
+    if (path.isEmpty()) {
+        path = m_resolver ? m_resolver(embed->target) : QString();
+        // An embed drawn as its file never asks for its link colour, so remember the answer here:
+        // refreshLinkStatus then notices the file going, or coming back.
+        if (!embed->html) // an <img> has no link span to relay out
+            d->m_unresolved.insert(embed->target, path.isEmpty());
+    }
     if (path.isEmpty())
         return false;
 
@@ -3332,7 +3368,7 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
 {
     QPixmap pixmap = d->m_images.value(path);
     if (pixmap.isNull()) {
-        pixmap = QPixmap(path);
+        pixmap = loadEmbedPixmap(path);
         if (pixmap.isNull())
             return false;
         d->m_images.insert(path, pixmap);
@@ -4660,7 +4696,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             // fences (a block inserted above shifts it, which at worst shows
             // a neighbour's old output marked outdated).
             const QString blockID = QStringLiteral("f%1").arg(fence - d->m_decorations.codeFences.constData());
-            appendNotebookOutput(view, fence->language, source, blockID, QString(), view.options);
+            appendNotebookOutput(view, fence->language, source, blockID, QString(), view.options,
+                                 notebookDuplicateOrdinal(*fence));
         }
     }
     appendPreview(view);

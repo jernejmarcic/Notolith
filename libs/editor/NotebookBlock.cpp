@@ -260,20 +260,21 @@ MarkdownEditor::NotebookRunOptions MarkdownEditor::notebookOptionsOf(const Block
     options.kernel = view.notebookKernel;
     options.implicit = view.notebookImplicit;
     options.implicitMain = view.notebookImplicitMain;
+    options.duplicateOrdinal = view.notebookOrdinal;
     return options;
 }
 
 void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
                                           const QString &blockID, const QString &workingDir,
-                                          const CodeOptions *options)
+                                          const CodeOptions *options, int duplicateOrdinal)
 {
-    appendNotebookOutputRows(view, language, source, blockID, workingDir, options);
+    appendNotebookOutputRows(view, language, source, blockID, workingDir, options, duplicateOrdinal);
     appendNotebookInput(view);
 }
 
 void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &language, const QString &source,
                                               const QString &blockID, const QString &workingDir,
-                                              const CodeOptions *options)
+                                              const CodeOptions *options, int duplicateOrdinal)
 {
     const bool sandboxHost = options && options->sandboxHost;
     const bool sandboxWasm = options && options->sandboxWasm;
@@ -303,6 +304,10 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
     }
     if (!view.notebookImplicit.isEmpty() || !view.notebookImplicitMain.isEmpty())
         key += QLatin1Char('\x1f') + view.notebookImplicit + QLatin1Char('\x1f') + view.notebookImplicitMain;
+    // Two blocks that read the same are two results (a notebook's identical cells); the first keeps the key it had.
+    if (duplicateOrdinal > 0)
+        key += QLatin1Char('\x1e') + QString::number(duplicateOrdinal);
+    view.notebookOrdinal = duplicateOrdinal;
     view.notebookKey = key;
     view.notebookLanguage = language;
     view.notebookSource = source;
@@ -581,8 +586,49 @@ int MarkdownEditor::runAllNotebookBlocks()
     return runNotebookBlocksUpTo(d->m_text.size());
 }
 
+void MarkdownEditor::layOutNotebookBlocks()
+{
+    if (!d->m_features.notebooks || !d->m_notebookRunner)
+        return;
+    // The block at the top of the view, and how far into it the view starts, is what stays put (adoptDecorations
+    // does the same): real heights for the blocks above it move everything below.
+    QScrollBar *bar = verticalScrollBar();
+    qsizetype anchorStart = -1;
+    qreal anchorInset = 0;
+    if (const auto top = std::partition_point(d->m_blocks.cbegin(), d->m_blocks.cend(),
+                                              [scroll = qreal(bar->value())](const BlockView &view) {
+                                                  return view.bottomY() <= scroll;
+                                              });
+        top != d->m_blocks.cend() && !top->foldHidden) {
+        anchorStart = top->span.range.start;
+        anchorInset = bar->value() - top->y;
+    }
+    bool laid = false;
+    for (BlockView &view : d->m_blocks) {
+        if (view.laidOut || view.piece != 0)
+            continue;
+        if (view.span.kind != BlockSpan::Kind::Code && (d->m_decorations.embeds.isEmpty() || !soleEmbedOf(view)))
+            continue;
+        layoutBlock(view);
+        laid = true;
+    }
+    if (!laid)
+        return;
+    updateLayout();
+    for (int pass = 0; pass < 4 && anchorStart >= 0; ++pass) {
+        const BlockView &anchor = d->m_blocks.at(size_t(blockAt(anchorStart)));
+        const int wanted = int(anchor.y + anchorInset);
+        if (anchor.foldHidden || wanted == bar->value())
+            break;
+        bar->setValue(wanted);
+        updateLayout();
+    }
+    viewport()->update();
+}
+
 int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
 {
+    layOutNotebookBlocks();
     // Offsets first: a run can open a dialog (a shared note's block asks), and
     // a remote edit applied in its event loop replaces both lists.
     QList<qsizetype> starts;
@@ -611,8 +657,72 @@ int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
     return count;
 }
 
+int MarkdownEditor::runNotebookBlocksFrom(qsizetype offset)
+{
+    layOutNotebookBlocks();
+    // Offsets first, for the reason runNotebookBlocksUpTo gives.
+    QList<qsizetype> starts;
+    for (const CodeFenceSpan &fence : std::as_const(d->m_decorations.codeFences)) {
+        if (fence.block.end > offset)
+            starts.append(fence.content.start);
+    }
+    for (const BlockView &view : d->m_blocks) {
+        if (view.embedPanel && view.notebookEligible && view.span.range.end > offset)
+            starts.append(view.span.range.start);
+    }
+    const quint64 version = d->m_textVersion;
+    int count = 0;
+    for (const qsizetype start : std::as_const(starts)) {
+        if (d->m_textVersion != version)
+            break;
+        count += runNotebookBlockAt(start) ? 1 : 0;
+    }
+    return count;
+}
+
+int MarkdownEditor::notebookDuplicateOrdinal(const CodeFenceSpan &fence) const
+{
+    // The code as the block runs it: the lines between the fences, minus the blank ones that open them and the
+    // newline that ends them. Compared in place, so a note of thousands of fences allocates nothing here.
+    const auto codeOf = [this](const CodeFenceSpan &of) {
+        QStringView code = of.content.isValid() ? QStringView(d->m_text).mid(of.content.start, of.content.length())
+                                                : QStringView();
+        while (code.startsWith(QLatin1Char('\n')))
+            code = code.mid(1);
+        if (code.endsWith(QLatin1Char('\n')))
+            code.chop(1);
+        return code;
+    };
+    // What counts is what a notebook's own reading (Ipynb.cpp's cellsFromMarkdown) takes for a cell: a fence that
+    // opens at the start of a line, indented by at most three spaces. One quoted or listed inside a markdown
+    // cell stays part of that cell, so the cells' ordinals there and here are the same.
+    const auto isCell = [this](const CodeFenceSpan &of) {
+        if (of.depth > 0)
+            return false;
+        int indent = 0;
+        for (qsizetype at = of.block.start; at > 0 && d->m_text.at(at - 1) != QLatin1Char('\n'); --at) {
+            if (d->m_text.at(at - 1) != QLatin1Char(' ') || ++indent > 3)
+                return false;
+        }
+        return true;
+    };
+    const QStringView mine = codeOf(fence);
+    int count = 0;
+    for (const CodeFenceSpan &other : std::as_const(d->m_decorations.codeFences)) {
+        if (&other == &fence)
+            break;
+        if (other.language.trimmed().compare(fence.language.trimmed(), Qt::CaseInsensitive) == 0 && codeOf(other) == mine
+            && isCell(other))
+            ++count;
+    }
+    return count;
+}
+
 int MarkdownEditor::clearNotebookOutputs()
 {
+    // Every block, not the ones near the view. A block laid out only now has its lookup still in flight, so
+    // the count below is of the outputs this editor knew of.
+    layOutNotebookBlocks();
     int cleared = 0;
     for (BlockView &view : d->m_blocks) {
         if (!view.notebookEligible || !d->m_notebookRunner)
@@ -657,6 +767,13 @@ bool MarkdownEditor::runNotebookBlockAt(qsizetype offset)
     BlockView &view = d->m_blocks[size_t(index)];
     if (!view.notebookEligible || !d->m_notebookRunner)
         return false;
+    // The ordinal is part of the key, and an edit above can change it without this block being laid out again:
+    // laid out afresh, it runs (and delivers) under the key its place in the note gives it now.
+    if (const CodeFenceSpan *fence = codeFenceOf(view); fence && notebookDuplicateOrdinal(*fence) != view.notebookOrdinal) {
+        layoutBlock(view);
+        if (!view.notebookEligible)
+            return false;
+    }
 
     // Exactly what appendNotebookOutput last laid this block out with -
     // a fenced block's own fence/content, or a runnable embed's file - so a

@@ -56,10 +56,12 @@ control (`[*]` while it runs again). Commands (all under "Notebooks:"):
 | Run the code block at the cursor | Ctrl+Shift+Return |
 | Run every code block in this note | top to bottom |
 | Run every code block down to the cursor | "run all above" |
+| Run every code block from the cursor down | "run all below": the cursor's block and every one after it |
 | Interrupt the kernel | the cursor's language, this note only |
 | Restart the kernel | forgets that kernel's variables |
 | Restart the kernel and run every code block | |
 | Clear the output of every code block | also removes what the sidecar kept |
+| Create new notebook | see "Jupyter notebooks" below |
 
 A kernel that dies (the code called `exit()`) tells the running block so, and
 the next run starts a new one.
@@ -247,11 +249,64 @@ nbformat writes JSON (one-space indent, sorted keys, no ASCII escaping, final
 newline), so a notebook in git changes only where it was edited. nbformat 4 only;
 anything else is refused with the reason and never touched.
 
-Ceilings: a run's new output is not written back into the file (it lives in the
-cache like every block's; the notebook keeps the outputs it came with), because
-a block's cache key is its source and two cells with the same code would
-collide. `execution_count` is the file's own. Cell attachments are kept but not
-shown.
+A run is written back. A cell that finishes running (or is cleared) since the
+file was read makes the tab modified, and the window keeps what that run
+produced, under the cell's cache key, in the notebook's own list until it is
+saved (the output cache is shared by every notebook with a cell that reads the
+same, so a save never takes a run from it: another notebook opened meanwhile,
+with an identical cell and its own stored output, cannot put that into this
+file). The next save writes that cell's `outputs` and `execution_count`: stream,
+`execute_result` (the value of the last expression), `display_data` (PNG or
+JPEG as base64 with its plain-text twin, SVG, HTML with its plain-text twin,
+Markdown, text alone) and `error`; the count is the kernel's own `In [n]`, null
+for a run without a kernel behind it and for a cleared cell, whose `outputs` is
+`[]`. Every other cell keeps the file's own bytes, because what the editor holds
+of an output is not all the file said (colour codes, alternative
+representations): a notebook that was only opened, or only had other cells run,
+changes nowhere else. A run that never reached a kernel (no kernel for the
+language, it would not start) writes nothing, and a cell with `#| cache: false`
+keeps no output to write. Cleared outputs that were not there to begin with
+leave the tab as it was. A cell edited after it ran is matched by the code that
+ran, so the file keeps its earlier outputs for it, not the run's. Text longer
+than the output cap is written as capped (`[output truncated]` and all), where
+Jupyter would keep it whole.
+
+"Run all", "Run above", "Run below" and "Clear outputs" act on every code block
+of the note, not on the ones that happen to be laid out: the others are laid out
+first (the view stays where it is). The count "Clear outputs" reports is of the
+outputs the editor knew of.
+
+Two cells with the same code are two results. The output cache's key has always
+been the language, the code and the sandbox tier, so a second copy of a cell
+shared the first one's output; each block now also counts how many blocks with
+the very same code come before it in the note (0 for the first, which leaves
+every existing key as it was) and that count is part of the key, not of what
+runs. The window, the reader of the file and the save all count the same way: over the
+fences that are cells of the notebook (a fence that opens at the start of a line
+with at most three spaces of indent), so a fenced example quoted or listed in a
+markdown cell is not one of them. The count follows the cell's place: a copy
+inserted above makes the one below look itself up under the next number, so its
+output stays on the cell that is now first until it is run again.
+
+"Create new notebook" makes the next free `Untitled.ipynb` where New note puts a
+note, in nbformat 4.5 with one empty code cell (with an `id`) and the kernelspec
+of the installed python kernel, or just `language_info.name = python` when there
+is none, and opens it.
+
+A markdown cell's `attachments` are shown: reading the notebook gives the editor
+the pictures they hold, by the cell they are in and their name (JupyterLab calls
+every pasted screenshot `image.png`, so two cells each have their own), and
+`![x](attachment:name)` draws the one that cell has, as a block or inline in
+text. Which cell a place in the text is follows the pairing a save makes between
+the file's cells and the edited text, so a cell inserted above does not hand its
+neighbour's picture on; a cell that is new shows none. Nothing is written for
+them, and an edited cell keeps its attachments (also when a code cell beside it
+was deleted in the same edit). An attachment without a file extension in its
+name is not drawn.
+
+What is still not there: outputs that arrive while a cell runs are shown when it
+ends, not as they stream; widgets (`application/vnd.jupyter.widget-view+json`)
+show their plain-text twin; nbformat 3 and 2 are refused.
 
 The vault index reads a notebook as the text it opens as (every cell, code in
 its fences), while the notebooks feature is on: search finds its words with
@@ -287,6 +342,5 @@ extensions: py, js, sh, rb, pl, lua, c, cpp, hs, java, rs, go.
 - Rich Jupyter signatures: completion and documentation show only what the
   kernel returns as plain text, and the list is not filtered further as you
   type.
-- Writing a run's output back into an `.ipynb`.
 - A kernel for Haskell or the other languages the system's own tool covers:
   none installed here, so those stay one process per block.
