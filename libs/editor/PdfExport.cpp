@@ -90,12 +90,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     QCoreApplication::processEvents(); // the cached diagrams the layout asked for land, and re-lay-out their blocks
     // The files a ```reference block shows are read (or fetched) off this
     // thread: a printed page waits for them, a few seconds at the most.
-    QElapsedTimer waited;
-    waited.start();
-    while (editor.referencesPending() && waited.elapsed() < 10'000) {
-        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 50); // no input while the page waits
-        QThread::msleep(5);
-    }
+    editor.awaitReferences(10'000);
     for (BlockView &view : editor.d->m_blocks) {
         if (!view.laidOut)
             editor.layoutBlock(view);

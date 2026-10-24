@@ -276,6 +276,7 @@ void MainWindow::exportWithPandoc(const QString &notePath, const QString &format
     }
 
     pandoc::PrepareContext context;
+    context.vaultRoot = m_vault.isValid() ? m_vault.root() : note.absolutePath(); // a stray note: its own folder
     context.resolve = [this](const QString &name, const QString &from) -> QString {
         if (m_vault.isValid()) {
             const QString resolved = m_index.resolve(name, from);
@@ -402,7 +403,11 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
     request.outputName = QStringLiteral("out.md");
 
     runPandoc(program, pandoc::importArguments(request), {}, scratch->path(), tr("Import with pandoc"),
-              [this, scratch, input, folderRelative, reader] {
+              [this, scratch, input, folderRelative, reader, vaultRoot = m_vault.root()] {
+                  if (m_vault.root() != vaultRoot) { // another vault opened while pandoc ran: the note was meant for the first
+                      statusBar()->showMessage(tr("%1 was not imported: the vault changed meanwhile").arg(input.fileName()), 6000);
+                      return;
+                  }
                   QFile result(scratch->filePath(QStringLiteral("out.md")));
                   if (!result.open(QIODevice::ReadOnly)) {
                       QMessageBox::warning(this, tr("Import with pandoc"), tr("pandoc wrote no Markdown."));

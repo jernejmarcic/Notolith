@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <utility>
 
 namespace noteAppC {
 
@@ -965,7 +966,7 @@ void Settings::reset(const QString &key)
     m_user.remove(key);
 }
 
-bool Settings::save(QString *error)
+bool Settings::save(QString *error, int lockWaitMs)
 {
     QDir().mkpath(configDirectory());
     QDir().mkpath(themesDirectory());
@@ -976,7 +977,7 @@ bool Settings::save(QString *error)
     // (a read-only directory fails below anyway) still gets the merge.
     QLockFile lock(QDir(configDirectory()).filePath(QStringLiteral(".save.lock")));
     lock.setStaleLockTime(10000); // a save takes about 0.1 ms: 200 ms is long past a live owner
-    lock.tryLock(200);
+    lock.tryLock(lockWaitMs);
 
     const QVariantMap user = overlay(readKnown(configFile()), m_user, m_baseUser, {});
     const QVariantMap indexMerged = overlay(readKnown(indexFile()), m_index, m_baseIndex, m_touched);
@@ -1013,11 +1014,22 @@ bool Settings::save(QString *error)
     if (!writeINI(indexFile(), index, known, indexHeader, error))
         return false;
 
-    // This object now holds what the files do.
+    // This object now holds what the files do. Whatever that changed under it was another window's write,
+    // and nothing re-applies it to the live editors and features: the window is told (takeAdoptedKeys()).
+    QList<QString> changed = user.keys() + m_user.keys();
+    for (const QString &key : std::as_const(changed)) {
+        if (m_user.value(key) != user.value(key) && !m_adopted.contains(key))
+            m_adopted.append(key);
+    }
     m_user = m_baseUser = user;
     m_index = m_baseIndex = indexMerged;
     m_touched.clear();
     return true;
+}
+
+QStringList Settings::takeAdoptedKeys()
+{
+    return std::exchange(m_adopted, {});
 }
 
 QStringList Settings::recentVaults() const

@@ -12877,6 +12877,25 @@ TEST(ReferenceBlockTest, ShowsTheFileHighlightedUnderItsName)
     EXPECT_EQ(editor->referenceCacheSize(), 1);
 }
 
+// A printed page waits for the excerpt, not only for the file read: the cut is a second worker, started
+// by the layout that follows the read (what exportPdf does between its first pass and the page).
+TEST(ReferenceBlockTest, AwaitingReferencesWaitsForTheExcerptToo)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // long enough that cutting the excerpt (a scan for the start word) outlasts the event that delivers the read
+    QByteArray bytes;
+    for (int i = 0; i < 60000; ++i)
+        bytes += "filler line " + QByteArray::number(i) + "\n";
+    bytes += "needle here\n";
+    const QString path = writeTextFile(dir, QStringLiteral("big.txt"), bytes);
+    auto editor = referenceEditorWith(QStringLiteral("file: big.txt\nstart: needle\n"), path);
+    (void)editor->grab(); // the first layout starts the read
+    editor->awaitReferences(5000);
+    EXPECT_FALSE(editor->referencesPending());
+    EXPECT_EQ(listingOf(*editor), QStringLiteral("needle here")) << "no Loading... on the printed page";
+}
+
 TEST(ReferenceBlockTest, TheLanguageKeyOverridesTheSuffix)
 {
     QTemporaryDir dir;

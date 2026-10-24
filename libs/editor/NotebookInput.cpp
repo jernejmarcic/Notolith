@@ -95,7 +95,7 @@ void MarkdownEditor::showNotebookInput(const QString &key, quint64 generation, c
 
     // The block makes room for the row, then the edit sits in it.
     for (BlockView &block : d->m_blocks) {
-        if (block.x().notebookKey != key)
+        if (!block.notebookEligible || block.x().notebookKey != key)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -123,7 +123,7 @@ void MarkdownEditor::finishNotebookInput(bool ok)
         setFocus();
     }
     for (BlockView &block : d->m_blocks) {
-        if (block.x().notebookKey != done.key)
+        if (!block.notebookEligible || block.x().notebookKey != done.key)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -167,7 +167,7 @@ void MarkdownEditor::positionNotebookInput()
     if (!edit)
         return;
     for (const BlockView &block : d->m_blocks) {
-        if (block.x().notebookKey != d->m_notebookInput.key || !block.laidOut || block.x().notebookInputRect.isEmpty())
+        if (!block.notebookEligible || block.x().notebookKey != d->m_notebookInput.key || !block.laidOut || block.x().notebookInputRect.isEmpty())
             continue;
         const QRectF rect = block.x().notebookInputRect.translated(contentLeft(), block.y - verticalScrollBar()->value());
         edit->setGeometry(rect.toRect());

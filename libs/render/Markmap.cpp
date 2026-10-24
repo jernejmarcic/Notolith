@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QFont>
+#include <QHash>
 #include <QFontMetricsF>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -76,7 +77,8 @@ bool xmlCharacter(const QString &body, qsizetype i)
 
 /// The runs of `segments` of `body`: hidden characters dropped, whitespace collapsed to single spaces and
 /// trimmed at both ends, a run for each stretch of one style.
-QList<MarkmapRun> runsOf(const QString &body, const QByteArray &flags, const QList<Range> &segments)
+QList<MarkmapRun> runsOf(const QString &body, const QByteArray &flags, const QList<Range> &segments,
+                         const QHash<qsizetype, Substitution> &substitutions)
 {
     QString text;
     QByteArray styles;
@@ -95,6 +97,15 @@ QList<MarkmapRun> runsOf(const QString &body, const QByteArray &flags, const QLi
             push(QLatin1Char(' '), 0); // a continuation line joins with a space
         first = false;
         for (qsizetype i = segment.start; i < segment.end; ++i) {
+            // What the note shows in place of source (an escape's backslash, an entity): its text, in the style
+            // of the first character it replaces.
+            if (const auto found = substitutions.constFind(i); found != substitutions.constEnd()
+                && found->range.end <= segment.end && !(quint8(flags.at(i)) & Hidden)) {
+                for (const QChar c : found->text)
+                    push(c, quint8(flags.at(i)));
+                i = found->range.end - 1;
+                continue;
+            }
             if (!(quint8(flags.at(i)) & Hidden) && xmlCharacter(body, i))
                 push(body.at(i), quint8(flags.at(i)));
         }
@@ -133,8 +144,11 @@ MarkmapTree parseMarkmap(const QString &source)
     // The inline Markdown comes from the application's parser, run once over the body: one flag byte per
     // character says which are markers (hidden) and which style the rest has.
     QByteArray flags(body.size(), 0);
+    QHash<qsizetype, Substitution> substitutions; // by where each starts
     {
         const Parser::Result parsed = Parser().parseAll(body);
+        for (const Substitution &substitution : parsed.decorations.substitutions)
+            substitutions.insert(substitution.range.start, substitution);
         const auto fill = [&](const Range &range, quint8 flag) {
             for (qsizetype i = qMax<qsizetype>(range.start, 0); i < qMin<qsizetype>(range.end, body.size()); ++i)
                 flags[i] = char(quint8(flags.at(i)) | flag);
@@ -282,7 +296,7 @@ MarkmapTree parseMarkmap(const QString &source)
     }
 
     for (int i = 1; i < tree.nodes.size(); ++i)
-        tree.nodes[i].runs = runsOf(body, flags, segments.at(i));
+        tree.nodes[i].runs = runsOf(body, flags, segments.at(i), substitutions);
     tree.total = total;
 
     // foldAll: the node and everything below it that has something to fold (nodes are in pre-order, so the

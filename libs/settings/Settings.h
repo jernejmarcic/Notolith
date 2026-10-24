@@ -85,9 +85,14 @@ public:
     /// it loaded (or last saved) on top of what is on disk now: another window's
     /// changes to other settings survive, a vault one window opened joins the recent
     /// vaults another saved, and a note position forgotten stays forgotten. A setting both
-    /// changed takes the later save. The read and the write happen under a lock file (waited for 200 ms at most).
+    /// changed takes the later save. The read and the write happen under a lock file (waited for `lockWaitMs` at most; a save from the UI thread
+    /// on a note switch passes a few ms, not to stall it, and merges unlocked beyond that).
     /// What the file holds afterwards is what this object holds too.
-    bool save(QString *error = nullptr);
+    bool save(QString *error = nullptr, int lockWaitMs = 200);
+
+    /// The settings a save took over from another window's write, since the last call: keys this object had
+    /// not changed that now hold a different value. The window re-applies them; nothing else would.
+    QStringList takeAdoptedKeys();
 
     /// A list of file types as typed ("PNG, .tar.gz *.pdf"): split on commas,
     /// semicolons and spaces, lower-cased, leading "*" and "." dropped,
@@ -174,6 +179,7 @@ private:
     QVariantMap m_index; ///< what the app remembers, written to vaults.ini
     QVariantMap m_baseUser;  ///< m_user as loaded or last saved: what save() tells "changed here" by
     QVariantMap m_baseIndex; ///< m_index likewise
+    QStringList m_adopted;   ///< what save() took over from another window since takeAdoptedKeys()
     QSet<QString> m_touched; ///< remembered lists noteOpened() acted on since the last save
     QVariantMap m_vault; ///< what the vault's Obsidian config says
     QString m_vaultRoot;

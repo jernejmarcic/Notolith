@@ -838,7 +838,7 @@ QWidget *MainWindow::buildSidebar()
         connect(action, &QAction::triggered, this, [this, entry] {
             m_tree->sortByColumn(entry.column, entry.order);
             m_settings.setValue(QStringLiteral("files.sortOrder"), QLatin1String(entry.key));
-            m_settings.save();
+            saveSettings();
         });
     }
     sortButton->setMenu(sortMenu);
@@ -1000,7 +1000,7 @@ QWidget *MainWindow::buildMainArea()
     m_settingsPage = new SettingsPage(m_settingsWindow);
     settingsLayout->addWidget(m_settingsPage);
     connect(m_settingsWindow, &QDialog::finished, this, [this] {
-        m_settings.save();
+        saveSettings();
         if (isVisible())
             activateWindow(); // back to the notes: their shortcuts are this window's
         if (m_active && m_active->editor->isEnabled() && m_active->editor->isVisible())
@@ -1356,12 +1356,15 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             };
         }
         m_notebook->run(request, forceRun, [this, deliver, forceRun, cacheKey, notePath = notePathOf(editor),
+                                            guard = QPointer<MarkdownEditor>(editor),
                                             keep = request.cache](const notebook::NotebookRunResult &result) {
             // A run of a notebook's cell changes what the file would say: the tab is modified, and the save
             // writes that cell's outputs back (a lookup, or a run that never reached a kernel, changes nothing).
+            // The path is the tab's when the result lands: the notebook may have been renamed while it ran.
             if (forceRun && keep && result.hasRun && result.kernelError.isEmpty()) {
-                QMetaObject::invokeMethod(this, [this, notePath, cacheKey, result] {
-                    notebookOutputsChanged(notePath, cacheKey, result);
+                QMetaObject::invokeMethod(this, [this, notePath, guard, cacheKey, result] {
+                    const QString now = guard ? notePathOf(guard) : QString();
+                    notebookOutputsChanged(now.isEmpty() ? notePath : now, cacheKey, result);
                 });
             }
             MarkdownEditor::NotebookRunResult shown;
@@ -1437,8 +1440,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             deliver(result);
         });
     });
-    // A reference block's header: a note opens in a tab, anything else (a source
-    // file, a URL) with whatever the system opens it with.
+    // A reference block's header: a note opens in a tab and a URL in the browser; any other file of the
+    // vault is left alone (the file tree has "Open in default app").
     connect(editor, &MarkdownEditor::referenceActivated, this, [this](const QString &target) {
         if (target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
             || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
@@ -1448,8 +1451,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             return; // the editor only offers vault files; this is the second lock
         else if (Vault::isNote(target))
             openNote(target);
-        else
-            QDesktopServices::openUrl(QUrl::fromLocalFile(target));
+        else // a click on what looks like a title never hands a vault file to xdg-open: that is an explicit command
+            statusBar()->showMessage(tr("%1 is not a note: open it from the file tree").arg(QFileInfo(target).fileName()), 5000);
     });
     connect(editor, &MarkdownEditor::baseRowActivated, this, [this](const QString &relativePath) {
         openRelative(relativePath);
@@ -1708,7 +1711,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
             } else {
                 if (!m_markmapRenderer)
                     m_markmapRenderer = markmapRenderer([this] { return m_theme; });
-                // The text goes to the disk cache publish and PDF export read: not for an encrypted note.
+                // The map is drawn from the fence's text here, in the window; publish and PDF export draw their own.
                 editor->setCodeBlockRenderer(
                     {QStringLiteral("markmap")},
                     [this, editor](const QString &language, const QString &source, int width, const QString &theme,
@@ -4474,10 +4477,15 @@ void MainWindow::startRecording()
 
 void MainWindow::mergeCurrentNote()
 {
-    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath) || !save())
+    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath)
+        || !Vault::isNote(m_active->notePath) || !save()) // never from a notebook: its JSON is not a note's text
         return;
     const QString source = m_active->notePath;
-    QStringList notes = m_index.allPaths();
+    QStringList notes;
+    for (const QString &path : m_index.allPaths()) { // the index lists a notebook too, while the reader is on
+        if (Vault::isNote(path))
+            notes << path;
+    }
     notes.removeOne(m_vault.relative(source));
     auto *picker = new QuickSwitcher(this);
     picker->setObjectName(QStringLiteral("mergePicker"));
@@ -4493,6 +4501,12 @@ void MainWindow::mergeCurrentNote()
 
 bool MainWindow::mergeNote(const QString &source, const QString &target)
 {
+    // Both ends are Markdown notes: appending text to a notebook's JSON, or its JSON to a note, corrupts it.
+    if (!Vault::isNote(source) || !Vault::isNote(target)) {
+        QMessageBox::warning(this, tr("Merge"), tr("Only Markdown notes can be merged: %1")
+                                                    .arg(QFileInfo(Vault::isNote(source) ? target : source).fileName()));
+        return false;
+    }
     // What the target's tabs hold unsaved is its text too.
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath == target && isModified(leaf.get()) && !saveLeaf(leaf.get(), false))
@@ -5514,6 +5528,7 @@ void MainWindow::openVault(const QString &path)
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
     m_settings.save(); // at once: another process's bare launch reopens the vault most recently opened
+    m_settings.takeAdoptedKeys(); // applySettings() follows: nothing left to report
     // Before the scan, by this vault's settings: its notebooks and meta notes
     // are indexed by the first one, and a warm cache is checked against them.
     updateNotebookIndex();
@@ -7155,7 +7170,14 @@ void MainWindow::rememberCurrentPosition()
     m_settings.setNotePosition(m_active->notePath, m_active->editor->cursorOffset(),
                                m_active->editor->verticalScrollBar()->value(),
                                m_active->editor->foldState(), m_active->editor->topOffset());
-    m_settings.save();
+    saveSettings();
+}
+
+void MainWindow::saveSettings()
+{
+    m_settings.save(nullptr, 5); // from the UI thread, often (every note switch): never a 200 ms wait on another window's save
+    if (!m_settings.takeAdoptedKeys().isEmpty())
+        applySettings();
 }
 
 void MainWindow::revealInTree(const QString &path)
@@ -7284,6 +7306,14 @@ void MainWindow::pruneNotebookImages()
                                        [&path](const auto &leaf) { return !leaf->view && leaf->notePath == path; });
         it = shown ? std::next(it) : m_notebookImages.erase(it);
     }
+    // The runs a notebook no tab shows were saved or discarded with it; a key left behind would be written
+    // into whatever file later takes that name.
+    for (auto it = m_notebookDirty.begin(); it != m_notebookDirty.end();) {
+        const QString &path = it.key();
+        const bool shown = std::any_of(m_leaves.cbegin(), m_leaves.cend(),
+                                       [&path](const auto &leaf) { return !leaf->view && leaf->notePath == path; });
+        it = shown ? std::next(it) : m_notebookDirty.erase(it);
+    }
 #endif
 }
 
@@ -7394,6 +7424,13 @@ bool MainWindow::writeNote(const QString &path, const Note &note, QString *error
         return true;
     }
 #endif
+    if (path.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive)) {
+        // Never as Markdown, whatever the notebooks plugin is believed to be doing: that would replace the
+        // notebook's JSON (its outputs, counts and ids) with the cells' text.
+        if (error)
+            *error = tr("a Jupyter notebook is not written as Markdown (the Notebooks plugin is off)");
+        return false;
+    }
     if (!Vault::isEncryptedNote(path))
         return Vault::write(path, note, error);
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
@@ -7717,6 +7754,14 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
     }
     if (target->notePath.isEmpty())
         return true;
+    // An autosave of a notebook the plugin no longer handles would take the background path below, which
+    // writes the encoded text straight to the file: refused here, before either path, and again in writeNote().
+    if (target->notePath.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive) && !isNotebookFile(target->notePath)
+        && !target->view) {
+        reportSaveError(QFileInfo(target->notePath).fileName(),
+                        tr("a Jupyter notebook is not written as Markdown (the Notebooks plugin is off)"), quiet);
+        return false;
+    }
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;
@@ -8293,6 +8338,15 @@ int MainWindow::lostStateForTests(const QString &path) const
 {
     const auto found = m_lostNotes.constFind(path);
     return found == m_lostNotes.constEnd() ? -1 : int(found.value());
+}
+
+qsizetype MainWindow::notebookRunSetsForTests() const
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    return m_notebookDirty.size();
+#else
+    return 0;
+#endif
 }
 
 qsizetype MainWindow::notebookPictureSetsForTests() const

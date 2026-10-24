@@ -167,6 +167,14 @@ void linkEdits(const QString &text, const Link &link, Range range, const QString
     const QString name = link.target.isEmpty() ? QFileInfo(notePath).completeBaseName() : link.target;
 
     QString path = link.target.isEmpty() ? notePath : (context.resolve ? context.resolve(link.target, notePath) : QString());
+    // Only the vault's own files, symlinks resolved: `![[../../.ssh/id_ed25519.pub]]` in a note from elsewhere
+    // is a missing embed, not a file that travels with the export (as the reference block refuses it too).
+    if (!link.target.isEmpty() && !path.isEmpty() && !context.vaultRoot.isEmpty()) {
+        const QString real = QFileInfo(path).canonicalFilePath();
+        const QString root = QDir(context.vaultRoot).canonicalPath();
+        if (real.isEmpty() || !real.startsWith(root + QLatin1Char('/')))
+            path.clear();
+    }
     if (path.isEmpty()) {
         ++walk.result.unresolved;
         edits.append({range.start, range.end, QLatin1Char('*') + escapedText(name) + QLatin1Char('*')});

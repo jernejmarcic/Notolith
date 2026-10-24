@@ -1671,6 +1671,50 @@ TEST_F(WindowTest, AQueuedPandocImportIsDroppedWhenAnotherVaultIsOpened)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// A click on a reference block's header opens a note in Notolith; any other file is not handed to the system.
+TEST_F(WindowTest, AReferenceHeaderOpensNotesAndNeverHandsOtherFilesToTheSystem)
+{
+    write(QStringLiteral("run.sh"), "#!/bin/sh\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    MarkdownEditor *editor = window.editor();
+    write(QStringLiteral("Other.md"), "# Other\n");
+    ASSERT_TRUE(QMetaObject::invokeMethod(editor, "referenceActivated", Q_ARG(QString, path(QStringLiteral("run.sh")))));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("run.sh")));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("not a note")));
+    ASSERT_TRUE(QMetaObject::invokeMethod(editor, "referenceActivated", Q_ARG(QString, path(QStringLiteral("Other.md")))));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Other\n"));
+}
+
+// An import that is already running when another vault opens belongs to the vault it was started for.
+TEST_F(WindowTest, ARunningPandocImportIsDroppedWhenAnotherVaultIsOpened)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    QTemporaryDir other;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "sleep 0.3\nprintf 'imported %s\\n' \"$(basename \"$last\")\" > out.md"));
+    QFile file(inputs.filePath(QStringLiteral("first.docx")));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("x");
+    file.close();
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, file.fileName()), Q_ARG(QString, QString()));
+        window.openVault(other.path()); // pandoc is still running
+        QTest::qWait(2000);
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("first.md"))));
+        EXPECT_FALSE(QFileInfo::exists(other.filePath(QStringLiteral("first.md")))) << "not imported into the vault opened since";
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // Pandoc found (a stand-in executable): the switch is a switch again, and off takes the commands away.
 TEST_F(WindowTest, PandocFoundIsToggleable)
 {
@@ -4766,6 +4810,54 @@ TEST_F(WindowTest, NoteComposerMergesANoteAndItsLinksFollow)
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("Bravo\n\nAlpha\n"));
 }
 
+// A notebook is never a merge target or source: appending Markdown to its JSON, or its JSON to a note, corrupts it.
+TEST_F(WindowTest, NoteComposerNeverMergesIntoOrFromANotebook)
+{
+    const QByteArray notebook = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("A.md"), "Alpha\n");
+    write(QStringLiteral("B.md"), "Bravo\n");
+    write(QStringLiteral("Nb.ipynb"), notebook);
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    WAIT_TRUE(window.index()->allPaths().contains(QStringLiteral("Nb.ipynb")), 5000); // the indexer does list it
+
+    QString refusals;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&refusals] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            refusals += box->text();
+            box->close();
+        }
+    });
+    watch.start(20);
+
+    // As a target: not offered, and refused when named anyway.
+    window.openNote(path(QStringLiteral("A.md")));
+    window.findChild<QAction *>(QStringLiteral("note-composer:merge-file"))->trigger();
+    auto *picker = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("mergePicker"));
+    ASSERT_NE(picker, nullptr);
+    auto *list = picker->findChild<QListWidget *>();
+    ASSERT_NE(list, nullptr);
+    QStringList offered;
+    for (int i = 0; i < list->count(); ++i)
+        offered << list->item(i)->text();
+    EXPECT_TRUE(offered.contains(QStringLiteral("B.md")));
+    EXPECT_FALSE(offered.contains(QStringLiteral("Nb.ipynb")));
+    emit picker->accepted(QStringLiteral("Nb.ipynb"));
+    EXPECT_EQ(readAll(path(QStringLiteral("Nb.ipynb"))), notebook);
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("A.md")))) << "the source is kept";
+
+    // As a source: the command does nothing from a notebook tab.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Nb.ipynb"))));
+    window.findChild<QAction *>(QStringLiteral("note-composer:merge-file"))->trigger();
+    EXPECT_EQ(window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("mergePicker")), nullptr);
+    EXPECT_EQ(readAll(path(QStringLiteral("B.md"))), QByteArray("Bravo\n"));
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Nb.ipynb"))));
+}
+
 TEST_F(WindowTest, NoteComposerMergeKeepsAnUnsavedLinkInAnotherTab)
 {
     write(QStringLiteral("A.md"), "Alpha\n");
@@ -6432,6 +6524,53 @@ TEST_F(WindowTest, ARenamedNotebookStillSavesTheRunsThatWereAwaitingItsSave)
     }
 }
 
+// A run that is still going when its notebook is renamed belongs to the notebook, under its new name.
+TEST_F(WindowTest, ANotebookRunThatFinishesAfterARenameIsSavedUnderTheNewName)
+{
+    if (!notebookCellsCanRun())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    QByteArray slow = threeCellNotebook(marker);
+    slow.replace("print('two')", "import time; time.sleep(3); print('two')");
+    write(QStringLiteral("Slow.ipynb"), slow);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Slow.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(200);
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("time.sleep"));
+    ASSERT_TRUE(editor->notebookInfoAt(second).eligible);
+    ASSERT_TRUE(editor->runNotebookBlockAt(second));
+    ASSERT_TRUE(editor->notebookInfoAt(second).running);
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    ASSERT_NE(model, nullptr);
+    const QModelIndex index = model->index(path(QStringLiteral("Slow.ipynb")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        dialog->setTextValue(QStringLiteral("Renamed"));
+        dialog->accept();
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    ASSERT_TRUE(QFile::exists(path(QStringLiteral("Renamed.ipynb"))));
+    ASSERT_TRUE(editor->notebookInfoAt(second).running) << "the rename came first";
+
+    WAIT_TRUE(editor->notebookInfoAt(second).hasRun && !editor->notebookInfoAt(second).running, 30000);
+    EXPECT_TRUE(editor->isModified()) << "the result lands on the notebook, not on its old name";
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonArray outputs = notebookCells(readAll(path(QStringLiteral("Renamed.ipynb"))))
+                                   .at(1).toObject().value(QStringLiteral("outputs")).toArray();
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(QString::fromUtf8(QJsonDocument(outputs.at(0).toObject()).toJson()).contains(QStringLiteral("two")));
+}
+
 // "Clear outputs" is for the whole notebook, not for the cells a window of it happens to have laid out.
 TEST_F(WindowTest, ClearingALongNotebooksOutputsClearsEveryCellOfIt)
 {
@@ -6786,6 +6925,91 @@ TEST_F(WindowTest, IdenticalNotebookCellsShowTheirOwnOutputs)
     EXPECT_EQ(editor->notebookOutputTextAt(second).constFirst().trimmed(), QStringLiteral("second-output"));
     EXPECT_EQ(editor->notebookInfoAt(first).executionCount, 1);
     EXPECT_EQ(editor->notebookInfoAt(second).executionCount, 2);
+}
+
+// Another window (another process, another vault) turns the Notebooks plugin off. This window adopts that
+// on its next settings save, which a note switch triggers; it must apply it (the commands go grey) and, whatever
+// it believes about the plugin, must never write an open notebook as Markdown.
+TEST_F(WindowTest, ANotebookIsNeverOverwrittenWithMarkdownWhenAnotherWindowTurnsThePluginOff)
+{
+    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("Analysis.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    QTest::keyClicks(editor, QStringLiteral("edited "));
+    ASSERT_TRUE(editor->isModified());
+    QAction *newNotebook = window.findChild<QAction *>(QStringLiteral("notebooks:new"));
+    ASSERT_NE(newNotebook, nullptr);
+    ASSERT_TRUE(newNotebook->isEnabled());
+
+    Settings other = Settings::load();
+    other.setValue(Settings::featureKey("notebooks"), false);
+    ASSERT_TRUE(other.save());
+
+    // A second tab and a note switch in it: leaving a note saves this window's settings.
+    write(QStringLiteral("Other.md"), "# Other\n");
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Other.md"))));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    tabs->setCurrentIndex(0);
+    ASSERT_EQ(window.editor(), editor);
+    EXPECT_FALSE(newNotebook->isEnabled()) << "the adopted switch is applied, not just held";
+
+    QString refusal;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&refusal] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            refusal = box->text() + box->informativeText();
+            box->close();
+        }
+    });
+    watch.start(20);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save")); // refused, and says so
+    EXPECT_TRUE(refusal.contains(QStringLiteral("Analysis.ipynb"))) << refusal.toStdString();
+    const QByteArray after = readAll(path(QStringLiteral("Analysis.ipynb")));
+    EXPECT_TRUE(after.contains("\"nbformat\"")) << "still a notebook, not the cells' Markdown";
+    EXPECT_TRUE(after.contains("ZeroDivisionError")) << "with its outputs";
+
+    other.setValue(Settings::featureKey("notebooks"), true);
+    other.save();
+}
+
+// What ran in a notebook and was discarded with its tab must not wait for a file that later takes the name.
+TEST_F(WindowTest, DiscardedNotebookRunsAreForgottenWhenTheTabLeavesTheNotebook)
+{
+    write(QStringLiteral("Analysis.ipynb"), readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb")));
+    Settings config = Settings::load();
+    config.setValue(QStringLiteral("files.autosave"), false); // nothing saves it behind the test's back
+    ASSERT_TRUE(config.save());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size());
+        const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+        WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+        window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+        ASSERT_TRUE(editor->isModified());
+        ASSERT_EQ(window.notebookRunSetsForTests(), 1);
+
+        QTimer watch;
+        QObject::connect(&watch, &QTimer::timeout, [] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+                box->button(QMessageBox::Discard)->click();
+        });
+        watch.start(20);
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+        EXPECT_EQ(window.notebookRunSetsForTests(), 0);
+    }
+    config.setValue(QStringLiteral("files.autosave"), true);
+    config.save();
 }
 
 TEST_F(WindowTest, ANotebookFileIsNotANoteWithTheNotebooksFeatureOff)

@@ -6,7 +6,9 @@
 #include <thread>
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QLockFile>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include "Hotkeys.h"
@@ -679,6 +681,47 @@ TEST(Settings, TwoWindowsSavingKeepBothChanges)
     EXPECT_EQ(now.integer(QStringLiteral("editor.tabWidth")), 2) << "the first window's change survives the second's save";
     EXPECT_EQ(now.integer(QStringLiteral("appearance.baseFontSize")), 20);
     EXPECT_EQ(second.integer(QStringLiteral("editor.tabWidth")), 2) << "and the saving window now knows it";
+}
+
+// A save adopts what the other window wrote (above); the window must be told which of its settings
+// changed that way, because nothing else re-applies them: the live editors and features still run the old value.
+TEST(Settings, ASaveReportsTheSettingsItAdoptedFromAnotherWindow)
+{
+    SharedConfig config;
+    Settings first = Settings::load();
+    Settings second = Settings::load();
+    const QString notebooks = Settings::featureKey("notebooks");
+    first.setValue(notebooks, false);
+    first.setValue(QStringLiteral("editor.tabWidth"), 2);
+    ASSERT_TRUE(first.save());
+    EXPECT_TRUE(first.takeAdoptedKeys().isEmpty()) << "what a window itself changed is not news to it";
+
+    second.setValue(QStringLiteral("appearance.baseFontSize"), 20);
+    ASSERT_TRUE(second.save());
+    const QStringList adopted = second.takeAdoptedKeys();
+    EXPECT_TRUE(adopted.contains(notebooks));
+    EXPECT_TRUE(adopted.contains(QStringLiteral("editor.tabWidth")));
+    EXPECT_FALSE(adopted.contains(QStringLiteral("appearance.baseFontSize"))) << "second's own change";
+    EXPECT_TRUE(second.takeAdoptedKeys().isEmpty()) << "reported once";
+    ASSERT_TRUE(second.save());
+    EXPECT_TRUE(second.takeAdoptedKeys().isEmpty()) << "nothing new on disk";
+}
+
+// A note switch saves from the UI thread; another window mid-save must cost it a few ms, not the 200 ms of
+// the default wait (the perceived-speed budget is 10 ms).
+TEST(Settings, ASaveThatMustNotStallGivesUpOnTheLockQuickly)
+{
+    SharedConfig config;
+    Settings settings = Settings::load();
+    ASSERT_TRUE(settings.save()); // makes the folder
+    QLockFile held(QDir(Settings::configDirectory()).filePath(QStringLiteral(".save.lock")));
+    ASSERT_TRUE(held.tryLock(0));
+    settings.setValue(QStringLiteral("editor.tabWidth"), 2);
+    QElapsedTimer timer;
+    timer.start();
+    EXPECT_TRUE(settings.save(nullptr, 5)) << "still saved, merged without the lock";
+    EXPECT_LT(timer.elapsed(), 100);
+    EXPECT_EQ(Settings::load().integer(QStringLiteral("editor.tabWidth")), 2);
 }
 
 TEST(Settings, AResetInOneWindowIsNotUndoneByAnothersSave)
