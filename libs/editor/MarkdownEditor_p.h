@@ -919,7 +919,6 @@ struct MarkdownEditor::Private {
     QFileSystemWatcher *m_CSVwatcher = nullptr; ///< made with the first CSV embed
     QTimer *m_CSVrefresh = nullptr;
     QElapsedTimer m_CSVpendingSince; ///< the first unanswered change event, for the debounce's longest wait
-    QSet<QString> m_CSVgone; ///< cached files that were deleted: refreshCSVfiles looks for them coming back
     QString m_CSVdelivering; ///< the path whose read has just landed: its failure is shown, not retried, by the relayout
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level

@@ -364,6 +364,17 @@ MainWindow::MainWindow(QWidget *parent)
     // shows: the file's own watch dies with the file.
     connect(m_noteWatcher, &QFileSystemWatcher::directoryChanged, this, [this] { m_noteChanges.start(); });
     connect(&m_noteChanges, &QTimer::timeout, this, &MainWindow::reloadChangedNotes);
+    // The vault's own watcher (the Indexer's, so no second set of inotify watches): a file that is no
+    // note appearing or going changes no index row, yet an open note's link to it must change look.
+    // The refresh waits for the Indexer's scan of the same event (a bare-name link resolves through
+    // the index it updates), and Index::changed then does it, so one save is one refresh.
+    m_vaultFiles.setSingleShot(true);
+    m_vaultFiles.setInterval(300); // a sync or a trash emptying is a storm of events
+    connect(&m_vaultFiles, &QTimer::timeout, this, [this] {
+        m_vaultPendingSince.invalidate();
+        if (!m_indexer->isRunning())
+            refreshOpenVaultFiles();
+    });
     m_lostRetry.setSingleShot(true);
     m_lostRetry.setInterval(1000);
     connect(&m_lostRetry, &QTimer::timeout, this, [this] { followLostNotes(true); });
@@ -550,6 +561,15 @@ MainWindow::MainWindow(QWidget *parent)
         // open() for a vault that was up to date and from the batch for one
         // that was not. Both ran it, 210 ms apiece on 20 000 notes.
     });
+    connect(m_indexer, &Indexer::vaultFilesChanged, this, [this] {
+        m_vaultDirty = true;
+        // A debounce, but a sync that raises an event every 100 ms must still show: past 2 s the running timer is left to fire.
+        if (!m_vaultPendingSince.isValid())
+            m_vaultPendingSince.start();
+        if (!m_vaultFiles.isActive() || m_vaultPendingSince.elapsed() < 2000)
+            m_vaultFiles.start();
+    });
+    connect(m_indexer, &Indexer::finished, this, [this] { refreshOpenVaultFiles(); }); // a scan that changed nothing says nothing itself
     connect(m_indexer, &Indexer::watchesFailed, this, [this](int folders) {
         statusBar()->showMessage(tr("%n folder(s) cannot be watched (fs.inotify.max_user_watches?): changes made "
                                     "outside Notolith there are found every 30 seconds",
@@ -870,26 +890,28 @@ QWidget *MainWindow::buildSidebar()
     return m_sidebar;
 }
 
+QString MainWindow::resolveLinkFrom(const QString &target, const QString &notePath) const
+{
+    if (!m_vault.isValid())
+        return {};
+    // An attachment may not be in the index (it only holds notes), so fall
+    // back on the path the note actually wrote.
+    const QString resolved = m_index.resolve(target, notePath);
+    if (!resolved.isEmpty())
+        return m_vault.absolute(resolved);
+    const QString beside = QFileInfo(notePath).absolutePath() + QLatin1Char('/') + target;
+    if (QFileInfo::exists(beside))
+        return beside;
+    const QString fromRoot = m_vault.absolute(target);
+    return QFileInfo::exists(fromRoot) ? fromRoot : QString();
+}
+
 QWidget *MainWindow::buildMainArea()
 {
     auto *notesPage = new QWidget(this);
     notesPage->setObjectName(QStringLiteral("mainArea"));
 
-    const auto resolver = [this](const QString &target) -> QString {
-        if (!m_vault.isValid())
-            return {};
-        // An attachment may not be in the index (it only holds notes), so fall
-        // back on the path the note actually wrote.
-        const QString resolved = m_index.resolve(target, m_active->notePath);
-        if (!resolved.isEmpty())
-            return m_vault.absolute(resolved);
-        const QString beside =
-            QFileInfo(m_active->notePath).absolutePath() + QLatin1Char('/') + target;
-        if (QFileInfo::exists(beside))
-            return beside;
-        const QString fromRoot = m_vault.absolute(target);
-        return QFileInfo::exists(fromRoot) ? fromRoot : QString();
-    };
+    const auto resolver = [this](const QString &target) { return resolveLinkFrom(target, m_active->notePath); };
     m_resolveLink = resolver;
 
     m_previewDelay.setSingleShot(true);
@@ -1077,8 +1099,17 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         if (leaf == m_active)
             updateModeButton();
     });
-    editor->setLinkResolver(m_resolveLink);
+    // Looked up by editor, never by the Leaf pointer: dropLeaf frees the Leaf at once and the editor (and the
+    // nested editors that copy this resolver) a moment later, and a posted completion may ask in between.
+    editor->setLinkResolver([this, editor = QPointer<MarkdownEditor>(editor)](const QString &target) -> QString {
+        for (const auto &owned : m_leaves) {
+            if (owned->editor == editor)
+                return resolveLinkFrom(target, owned->notePath);
+        }
+        return {};
+    });
     connect(editor, &MarkdownEditor::linkActivated, this, &MainWindow::followLink);
+    connect(editor, &MarkdownEditor::noticeRaised, this, [this](const QString &message) { statusBar()->showMessage(message, 6000); });
     connect(editor, &MarkdownEditor::linkHovered, this,
             [this](const QString &target, const QPoint &globalPos) {
                 if (!featureOn("page-preview"))
@@ -4032,8 +4063,17 @@ void MainWindow::openRelativeInNewTab(const QString &relativePath)
     openNote(m_vault.absolute(relativePath));
 }
 
+void MainWindow::refreshOpenVaultFiles()
+{
+    if (!std::exchange(m_vaultDirty, false))
+        return;
+    for (const auto &leaf : m_leaves)
+        leaf->editor->refreshVaultFiles();
+}
+
 void MainWindow::onIndexChanged()
 {
+    const bool files = std::exchange(m_vaultDirty, false); // this refresh is the vault timer's as well
     const QStringList targets = m_index.linkTargets();
     const auto aliases = m_index.aliases();
     for (const auto &leaf : m_leaves) {
@@ -4041,7 +4081,10 @@ void MainWindow::onIndexChanged()
         leaf->editor->setLinkAliases(aliases);
         // Before this, a note opened while the vault was first indexed showed
         // every link as missing until it was next edited.
-        leaf->editor->refreshLinkStatus();
+        if (files)
+            leaf->editor->refreshVaultFiles();
+        else
+            leaf->editor->refreshLinkStatus();
     }
     // The backlinks, tags and outgoing-links panes listen to Index::changed
     // themselves; refreshing them here as well did each one twice per save.
@@ -7165,8 +7208,10 @@ template<typename Leaves>
 void retarget(Leaves &leaves, const QString &from, const QString &to)
 {
     for (const auto &leaf : leaves) {
-        if (leaf->notePath == from)
+        if (leaf->notePath == from) {
             leaf->notePath = to;
+            leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
+        }
     }
 }
 
@@ -7705,6 +7750,7 @@ void MainWindow::followLostNotes(bool final)
             for (const auto &leaf : m_leaves) {
                 if (!leaf->view && leaf->notePath == path) {
                     leaf->notePath = moved;
+                    leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
                     leaf->inlineTitle->setText(QFileInfo(moved).completeBaseName());
                 }
             }
@@ -8464,6 +8510,7 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
             leaf->notePath.replace(0, oldPath.size(), newPath);
         }
         if (leaf->notePath != before) { // a module's view keeps its own path: it must save to the new one
+            leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
             if (auto *module = qobject_cast<ModuleView *>(leaf->view))
                 module->setFilePath(leaf->notePath);
         }

@@ -59,6 +59,30 @@ QByteArray imageBytes(const QMimeData *mime)
     return bytes;
 }
 
+/// The schemes a link in a note is followed for (MainWindow::followLink): any other URL is dropped as plain text.
+bool isLinkScheme(const QUrl &url)
+{
+    const QString scheme = url.scheme().toLower();
+    return scheme == QLatin1String("http") || scheme == QLatin1String("https") || scheme == QLatin1String("mailto");
+}
+
+/// A browser's dropped link as Markdown. Firefox puts "URL\ntitle" pairs (UTF-16) in text/x-moz-url;
+/// Chrome puts the page title in text/plain beside the URL on some platforms. Failing both, the host
+/// (the address for mailto:), never the whole URL.
+QString browserLink(const QUrl &url, const QHash<QString, QString> &mozTitles, const QString &plain, bool alone)
+{
+    QString title = mozTitles.value(url.toString());
+    if (title.isEmpty() && alone && !plain.isEmpty() && !plain.contains(QLatin1Char('\n')) && QUrl(plain) != url)
+        title = plain;
+    if (title.isEmpty())
+        title = url.scheme().toLower() == QLatin1String("mailto") ? url.path() : url.host();
+    title.replace(QLatin1Char('\\'), QStringLiteral("\\\\")).replace(QLatin1Char('['), QStringLiteral("\\["))
+        .replace(QLatin1Char(']'), QStringLiteral("\\]"));
+    QString target = QString::fromLatin1(url.toEncoded());
+    target.replace(QLatin1Char('('), QStringLiteral("%28")).replace(QLatin1Char(')'), QStringLiteral("%29"));
+    return QLatin1Char('[') + title + QStringLiteral("](") + target + QLatin1Char(')');
+}
+
 } // namespace
 
 void MarkdownEditor::setAttachmentSaver(AttachmentSaver saver)
@@ -71,7 +95,7 @@ void MarkdownEditor::setFileImporter(FileImporter importer)
     d->m_fileImporter = std::move(importer);
 }
 
-void MarkdownEditor::insertMimeData(const QMimeData *mime)
+void MarkdownEditor::insertMimeData(const QMimeData *mime, bool dropped)
 {
     if (!mime)
         return;
@@ -92,9 +116,28 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
 
     if (mime->hasUrls()) {
         QStringList parts;
-        for (const QUrl &url : mime->urls()) {
-            if (!url.isLocalFile())
+        QHash<QString, QString> mozTitles;
+        if (const QByteArray moz = mime->data(QStringLiteral("text/x-moz-url")); !moz.isEmpty()) {
+            QString text = QString::fromUtf16(reinterpret_cast<const char16_t *>(moz.constData()), moz.size() / 2);
+            text.remove(QChar(0)).remove(QChar(0xFEFF)); // a NUL-terminated buffer, a byte-order mark
+            const QStringList lines = text.split(QLatin1Char('\n'));
+            for (qsizetype i = 0; i + 1 < lines.size(); i += 2)
+                mozTitles.insert(QUrl(lines.at(i).trimmed()).toString(), lines.at(i + 1).trimmed());
+        }
+        const QList<QUrl> urls = mime->urls();
+        const QString plain = mime->text().trimmed();
+        for (const QUrl &url : urls) {
+            if (!url.isLocalFile()) {
+                if (dropped && url.isValid() && isLinkScheme(url)) {
+                    parts << browserLink(url, mozTitles, plain, urls.size() == 1);
+                } else if (url.isValid() && (dropped || selection().length() == 0)) {
+                    // A paste is the URL as copied; a drop of javascript:, data: ... is text, never a link.
+                    parts << url.toString();
+                    if (url.toString().size() > 2000)
+                        emit noticeRaised(tr("A %n character URL was inserted as plain text", nullptr, int(url.toString().size())));
+                }
                 continue;
+            }
             const QString path = url.toLocalFile();
             if (d->m_fileImporter) {
                 const QString link = d->m_fileImporter(path);
@@ -152,7 +195,7 @@ void MarkdownEditor::dropEvent(QDropEvent *event)
     }
     const TypingScope typed(d->m_typing);
     moveCursor(offsetAt(event->position().toPoint()), false);
-    insertMimeData(event->mimeData());
+    insertMimeData(event->mimeData(), true);
     event->acceptProposedAction();
 }
 

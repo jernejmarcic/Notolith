@@ -419,6 +419,10 @@ public:
     /// The index changed, so a link drawn as pointing nowhere may point
     /// somewhere now, or the reverse. Relays out only if one did.
     void refreshLinkStatus();
+    /// Files came or went in the vault without the index saying so (an image, a
+    /// PDF, a CSV, a whole folder): looks at the cached tables on disk again,
+    /// then at every link's status.
+    void refreshVaultFiles();
 
     // --- paste and drop --------------------------------------------------
     // The editor never links libs/vault, so saving an attachment or
@@ -1106,6 +1110,8 @@ signals:
     void lookupRequested(const QString &text, const QPoint &globalPos);
     /// It left that link, or let go of it by leaving the editor.
     void linkHoverEnded();
+    /// Something the user should be told that is no error: the window shows it in the status bar.
+    void noticeRaised(const QString &message);
     /// A result in a rendered ```query``` block was clicked: `relativePath`
     /// is the note it matched, `offset` the first match inside it.
     void queryResultActivated(const QString &relativePath, qsizetype offset);
@@ -2076,8 +2082,10 @@ private:
     /// The insertFromMimeData logic shared by Ctrl+V and a drop: an image
     /// goes through m_attachmentSaver, local file URLs through
     /// m_fileImporter (or the path as text with neither set), else plain
-    /// text - cellSafe()'d either way. Inserts at the caret.
-    void insertMimeData(const QMimeData *mime);
+    /// text - cellSafe()'d either way. Inserts at the caret. A remote URL
+    /// is [title](url) when `dropped`, the bare URL (nothing, over a
+    /// selection) when pasted, as in Obsidian.
+    void insertMimeData(const QMimeData *mime, bool dropped = false);
     void removeSelectionOrChar(int direction);
     /// Where a word key takes a caret at `from`, grouped as CodeMirror 6 does
     /// (Obsidian's editor): grapheme clusters sorted into space, word

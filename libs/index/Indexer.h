@@ -102,6 +102,10 @@ signals:
     void finished(int indexed, qint64 milliseconds);
     /// Once, when pollsForChanges() turns on; `folders` could not be watched.
     void watchesFailed(int folders);
+    /// Something came or went under a watched folder (any file, not only notes), or
+    /// events were lost. Raw, a burst raises many: the window debounces it and
+    /// asks its open notes whether their links and tables are still there.
+    void vaultFilesChanged();
 
 private:
     struct Parsed {

@@ -253,7 +253,7 @@ void MarkdownEditor::watchCSV(const QString &path)
         d->m_CSVrefresh->setInterval(200); // a write in place can come in more than one go
         connect(d->m_CSVwatcher, &QFileSystemWatcher::fileChanged, this, &MarkdownEditor::CSVfileEvent);
         connect(d->m_CSVwatcher, &QFileSystemWatcher::directoryChanged, this, &MarkdownEditor::CSVfileEvent);
-        connect(d->m_CSVrefresh, &QTimer::timeout, this, &MarkdownEditor::refreshCSVfiles);
+        connect(d->m_CSVrefresh, &QTimer::timeout, this, &MarkdownEditor::refreshVaultFiles);
     }
     // The file, and its folder: a program that saves by writing a new file
     // and renaming it over the old one makes inotify drop the file's watch.
@@ -287,7 +287,6 @@ void MarkdownEditor::refreshCSVfiles()
             // happened. The block lays out again as whatever the resolver
             // now makes of the link.
             d->m_CSVcache.remove(path);
-            d->m_CSVgone.insert(path);
             relayCSVblocks(path);
             continue;
         }
@@ -299,32 +298,11 @@ void MarkdownEditor::refreshCSVfiles()
             || !cached->table.error.isEmpty())
             relayCSVblocks(path);
     }
-    // A file that went and is back: the index watches notes, not attachments,
-    // so it says nothing, and the blocks that fell back to the plain link do
-    // not know. Lay out the embeds the resolver now sends to it.
-    QSet<QString> back;
-    for (auto it = d->m_CSVgone.begin(); it != d->m_CSVgone.end();) {
-        if (QFileInfo(*it).isFile()) {
-            back.insert(*it);
-            it = d->m_CSVgone.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    if (back.isEmpty() || !m_resolver)
-        return;
-    for (const EmbedSpan &embed : std::as_const(d->m_decorations.embeds)) {
-        if (!embed.html && back.contains(m_resolver(embed.target)))
-            invalidateBlock(blockAt(embed.range.start));
-    }
-    updateLayout();
-    viewport()->update();
 }
 
 void MarkdownEditor::dropCSVcache()
 {
     d->m_CSVcache.clear();
-    d->m_CSVgone.clear();
     if (d->m_CSVwatcher) {
         d->m_CSVwatcher->removePaths(d->m_CSVwatcher->files());
         d->m_CSVwatcher->removePaths(d->m_CSVwatcher->directories());

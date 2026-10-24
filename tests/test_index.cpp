@@ -1792,6 +1792,29 @@ TEST_F(WatchedVaultTest, ANoteChangedOutsideTheAppIsReindexedWithoutAWholeWalk)
     EXPECT_EQ(indexer->wholeScans(), walks);
 }
 
+// The window refreshes its open notes' links on this, and the index says nothing
+// for a file it does not keep as a note: an image, a CSV, a PDF.
+TEST_F(WatchedVaultTest, AFileThatIsNoNoteComingAndGoingIsSignalled)
+{
+    QSignalSpy spy(indexer.get(), &Indexer::vaultFilesChanged);
+    write(QStringLiteral("a/b/pic.png"), "not really a picture");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return spy.count() >= 1; }, 5000));
+    spy.clear();
+    ASSERT_TRUE(QFile::remove(dir.filePath(QStringLiteral("a/b/pic.png"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return spy.count() >= 1; }, 5000));
+    spy.clear();
+    ASSERT_TRUE(QDir(dir.filePath(QStringLiteral("a"))).removeRecursively()); // a whole folder, as a trash empties
+    ASSERT_TRUE(QTest::qWaitFor([&] { return spy.count() >= 1; }, 5000));
+}
+
+TEST_F(WatchedVaultTest, ADeletedAttachmentStopsResolving)
+{
+    write(QStringLiteral("a/b/pic.png"), "not really a picture");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return found(QStringLiteral("pic.png")); }, 5000));
+    ASSERT_TRUE(QFile::remove(dir.filePath(QStringLiteral("a/b/pic.png"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !found(QStringLiteral("pic.png")); }, 5000));
+}
+
 // Another program that opens a note, writes and closes it (no temp file, no
 // rename) raises no folder entry event: inotify's IN_CLOSE_WRITE does.
 TEST_F(WatchedVaultTest, ANoteWrittenInPlaceAndAppendedToIsReindexedWithoutAWholeWalk)

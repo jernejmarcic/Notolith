@@ -1989,6 +1989,12 @@ void MarkdownEditor::refreshLinkStatus()
     viewport()->update();
 }
 
+void MarkdownEditor::refreshVaultFiles()
+{
+    refreshCSVfiles(); // first: a table whose file went is a plain link by the time the links are looked at
+    refreshLinkStatus();
+}
+
 qsizetype MarkdownEditor::blockAt(qsizetype sourceOffset) const
 {
     if (d->m_blocks.empty())
@@ -3223,6 +3229,10 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
         return false;
 
     const QString path = m_resolver(embed->target);
+    // An embed drawn as its file never asks for its link colour, so remember the answer here:
+    // refreshLinkStatus then notices the file going, or coming back.
+    if (!embed->html) // an <img> has no link span to relay out
+        d->m_unresolved.insert(embed->target, path.isEmpty());
     if (path.isEmpty())
         return false;
 

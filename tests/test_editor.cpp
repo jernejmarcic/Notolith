@@ -10205,6 +10205,34 @@ TEST(PasteDropTest, NoSaverSetDoesNothingForAnImagePaste)
     EXPECT_EQ(editor->noteText(), QStringLiteral("hello\n"));
 }
 
+// Obsidian: a drop makes [title](url), a paste of the same URL is the URL as typed.
+TEST(PasteDropTest, PasteOfABrowserLinkIsTheBareUrl)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->setCursorOffset(5);
+    auto *mime = new QMimeData;
+    mime->setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+    mime->setText(QStringLiteral("A title"));
+    QGuiApplication::clipboard()->setMimeData(mime);
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hellohttps://example.com/a\n"));
+}
+
+TEST(PasteDropTest, PasteOfABrowserLinkOverASelectionStaysAsItWas)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->selectRange({0, 5});
+    auto *mime = new QMimeData;
+    mime->setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+    QGuiApplication::clipboard()->setMimeData(mime);
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hello\n")); // main inserted nothing for a remote URL list
+}
+
 TEST(PasteDropTest, DropOfAnOutsideFileImportsAndInsertsTheEmbedAtTheDropPoint)
 {
     const QString note = QStringLiteral("above\nbelow\n");
@@ -10257,6 +10285,131 @@ TEST(PasteDropTest, DropWithNoImporterInsertsThePathAsText)
     ASSERT_TRUE(dropOnto(*editor, point, mime));
 
     EXPECT_EQ(editor->noteText(), QStringLiteral("above\n/outside/photo.pngbelow\n"));
+}
+
+TEST(PasteDropTest, DropOfABrowserLinkInsertsAMarkdownLinkTitledByTheMozUrl)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    ASSERT_FALSE(point.isNull());
+
+    bool imported = false;
+    editor->setFileImporter([&](const QString &) {
+        imported = true;
+        return QString();
+    });
+    // Firefox: text/x-moz-url is "URL\ntitle" in UTF-16.
+    const QString pair = QStringLiteral("https://example.com/page\nExample [page]");
+    QByteArray moz(reinterpret_cast<const char *>(pair.utf16()), pair.size() * 2);
+    QMimeData mime;
+    mime.setUrls({QUrl(QStringLiteral("https://example.com/page"))});
+    mime.setData(QStringLiteral("text/x-moz-url"), moz);
+    mime.setText(QStringLiteral("https://example.com/page"));
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+
+    EXPECT_FALSE(imported);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[Example \\[page\\]](https://example.com/page)below\n"));
+}
+
+TEST(PasteDropTest, DropOfABrowserLinkFallsBackToPlainTextThenTheHost)
+{
+    {
+        auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+        editor->show();
+        const QPoint point = clickInto(*editor, {5, 7});
+        QMimeData mime; // Chrome: the page title as text, beside the URL
+        mime.setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+        mime.setText(QStringLiteral("A title"));
+        ASSERT_TRUE(dropOnto(*editor, point, mime));
+        EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[A title](https://example.com/a)below\n"));
+    }
+    {
+        auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+        editor->show();
+        const QPoint point = clickInto(*editor, {5, 7});
+        QMimeData mime; // the text is the URL itself: nothing better than the host
+        mime.setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+        mime.setText(QStringLiteral("https://example.com/a"));
+        ASSERT_TRUE(dropOnto(*editor, point, mime));
+        EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[example.com](https://example.com/a)below\n"));
+    }
+}
+
+TEST(PasteDropTest, DropOfAScriptOrDataLinkIsPlainTextNeverALink)
+{
+    for (const QString &raw : {QStringLiteral("javascript:alert(1)"), QStringLiteral("data:text/html;base64,PGI+")}) {
+        auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+        editor->show();
+        const QPoint point = clickInto(*editor, {5, 7});
+        bool imported = false;
+        editor->setFileImporter([&](const QString &) {
+            imported = true;
+            return QString();
+        });
+        QMimeData mime;
+        mime.setUrls({QUrl(raw)});
+        ASSERT_TRUE(dropOnto(*editor, point, mime));
+        EXPECT_FALSE(imported);
+        EXPECT_EQ(editor->noteText(), QStringLiteral("above\n") + raw + QStringLiteral("below\n"));
+    }
+}
+
+TEST(PasteDropTest, ADroppedNonLinkUrlOverTwoThousandCharactersIsTextAndSaysSo)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    QSignalSpy notice(editor.get(), &MarkdownEditor::noticeRaised);
+    const QString raw = QStringLiteral("data:text/plain,") + QString(3000, QLatin1Char('a'));
+    QMimeData mime;
+    mime.setUrls({QUrl(raw)});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n") + raw + QStringLiteral("below\n"));
+    EXPECT_EQ(notice.count(), 1);
+}
+
+TEST(PasteDropTest, DropOfAMailLinkTitlesItByTheAddressNotTheWholeUrl)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    QMimeData mime;
+    mime.setUrls({QUrl(QStringLiteral("mailto:a@example.com"))});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[a@example.com](mailto:a@example.com)below\n"));
+}
+
+TEST(PasteDropTest, DropOfALocalFileAndABrowserLinkKeepsOrderAndImportsOnlyTheFile)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    QStringList imported;
+    editor->setFileImporter([&](const QString &path) {
+        imported << path;
+        return QStringLiteral("![[photo.png]]");
+    });
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(QStringLiteral("/outside/photo.png")), QUrl(QStringLiteral("https://example.com/a"))});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(imported, QStringList{QStringLiteral("/outside/photo.png")});
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n![[photo.png]]\n[example.com](https://example.com/a)below\n"));
+}
+
+TEST(PasteDropTest, ABrowserTitleWithBackslashAndAMozUrlWithBomAndNulStillMakeAWorkingLink)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    const QString pair = QStringLiteral("\uFEFFhttps://example.com/p\nC:\\dir\\");
+    QByteArray moz(reinterpret_cast<const char *>(pair.utf16()), pair.size() * 2);
+    moz.append(QByteArray(2, '\0')); // NUL-terminated
+    QMimeData mime;
+    mime.setUrls({QUrl(QStringLiteral("https://example.com/p"))});
+    mime.setData(QStringLiteral("text/x-moz-url"), moz);
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[C:\\\\dir\\\\](https://example.com/p)below\n"));
 }
 
 TEST(PasteDropTest, DroppedTextIsInsertedAtThePoint)
