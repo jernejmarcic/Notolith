@@ -1451,6 +1451,11 @@ int MarkdownEditor::blockExtrasCountForTest() const
     return int(std::count_if(d->m_blocks.cbegin(), d->m_blocks.cend(), [](const BlockView &view) { return view.extras != nullptr; }));
 }
 
+int MarkdownEditor::blockCountForTest() const
+{
+    return int(d->m_blocks.size());
+}
+
 int MarkdownEditor::untouchedBlockExtrasCountForTest() const
 {
     return int(std::count_if(d->m_blocks.cbegin(), d->m_blocks.cend(),

@@ -966,6 +966,7 @@ public:
     /// How many block views hold a BlockExtras (the rarely used fields), and how many
     /// of those were never laid out - always 0, an untouched view is a bare one. For the tests.
     int blockExtrasCountForTest() const;
+    int blockCountForTest() const;
     int untouchedBlockExtrasCountForTest() const;
     /// How many diagrams the fence cache holds (drawn, pending or failed).
     int codeBlockCacheSizeForTest() const;

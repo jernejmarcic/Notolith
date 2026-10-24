@@ -61,6 +61,7 @@ TEST(BlockViewTest, ANoteNothingHasLaidOutHoldsNoExtras)
     ASSERT_TRUE(editor);
     editor->show();
     (void)editor->grab(); // the top of the note is laid out, the rest is not
+    EXPECT_GT(editor->blockCountForTest(), 1000);
     EXPECT_EQ(editor->untouchedBlockExtrasCountForTest(), 0);
     // Only the views that were drawn can have any, and a screenful is a few dozen of 8 000.
     EXPECT_LT(editor->blockExtrasCountForTest(), 100);
