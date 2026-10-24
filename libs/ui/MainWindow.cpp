@@ -428,11 +428,6 @@ MainWindow::MainWindow(QWidget *parent)
     m_savePool.setExpiryTimeout(-1);
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
-#ifdef NOTEAPPC_HAVE_HISTORY
-    // libgit2's one-time init is 5 ms; the window is built meanwhile.
-    if (featureOn("note-history"))
-        m_historyPool.start([] { NoteHistory::warmUp(); });
-#endif
     m_theme = themeFromSettings();
     m_modules = new ModuleRegistry(this);
     m_modules->setEnabledCheck([this](const QString &featureID) { return featureOn(featureID.toUtf8().constData()); });
@@ -6396,11 +6391,8 @@ void MainWindow::updateNoteHistory()
     m_noteHistoryRoot = root;
     if (!wanted)
         return;
+    // Nothing is opened here: libgit2 (OpenSSL, +6 MB) is set up by the first save, on the pool.
     m_noteHistory = std::make_shared<NoteHistory>(root);
-    if (!m_noteHistory->isOpen()) {
-        statusBar()->showMessage(tr("Note history is off: %1").arg(m_noteHistory->error()), 6000);
-        m_noteHistory.reset();
-    }
 #endif
 }
 
@@ -6833,7 +6825,17 @@ void MainWindow::recordHistory(const QString &absolutePath, const QString &text)
     // version as a delta: never on a save's own path, and only once there
     // are enough to be worth it.
     const bool maybePack = ++m_historyRecords % 256 == 0;
-    m_historyPool.start([history, relative, text, maybePack] {
+    m_historyPool.start([this, history, relative, text, maybePack] {
+        if (!history->isOpen()) { // an existing repository that would not open: say so once, and stop recording
+            const QString error = history->error();
+            QMetaObject::invokeMethod(this, [this, history, error] {
+                if (m_noteHistory != history)
+                    return;
+                statusBar()->showMessage(tr("Note history is off: %1").arg(error), 6000);
+                m_noteHistory.reset();
+            });
+            return;
+        }
         history->record(relative, text);
         if (maybePack && history->looseObjects() > 4000)
             history->pack();
