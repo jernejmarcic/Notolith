@@ -759,6 +759,9 @@ void MarkdownEditor::setNoteText(const QString &text)
         d->m_media->stop();
     d->m_text = text;
     ++d->m_textVersion;
+    // A drawing kept under another note's block at the same offset is not this note's.
+    d->m_previewStale = d->m_previewMathGood = QPixmap();
+    d->m_previewStaleBlock = d->m_previewMathGoodBlock = -1;
     d->m_cursor = d->m_anchor = 0;
     d->m_activeBlock = -1;
     d->m_tableEdited = false;
@@ -1144,6 +1147,17 @@ QList<Range> MarkdownEditor::revealedSyntax(const BlockView &view) const
     // An entity the caret touches shows as written (it is not syntax the
     // parser lists, so the markers below never find it).
     revealed = revealedEntities();
+    // A display formula opens whole: both `$$` lines show with the caret on
+    // any of its lines, not only the line the caret is on.
+    for (const MathSpan &math : d->m_decorations.maths) {
+        if (!math.display || !math.range.overlaps(view.span.range) || caret < math.range.start || caret > math.range.end)
+            continue;
+        for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
+            const Range &marker = d->m_decorations.syntax.at(i);
+            if (marker.start >= math.range.start && marker.end <= math.range.end && !revealed.contains(marker))
+                revealed.append(marker);
+        }
+    }
     // So do the tags of an inline HTML element the caret touches,
     // `H<sub>2</sub>O`'s pair as a whole, as Obsidian shows them.
     for (const InlineHTMLpair &pair : inlineHTMLpairs(view)) {
@@ -4212,6 +4226,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.embedPanel = false;
     view.embedLabel.clear();
     view.inlineHtmlFormats.clear();
+    view.previewImage = QPixmap();
+    view.previewHint.clear();
+    view.previewRect = QRectF();
 
     // A tab group shows one of its fences under a strip of tabs, and hides the
     // rest along with the blank lines between them. With the caret anywhere
@@ -4620,6 +4637,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             appendNotebookOutput(view, fence->language, source, blockID, QString(), view.options);
         }
     }
+    appendPreview(view);
     view.laidOut = true;
 }
 
@@ -5044,6 +5062,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
 
         if (view.folded)
             continue; // the header is all a folded block shows
+        paintPreview(painter, view, left, top);
 
         QList<QTextLayout::FormatRange> selectionRanges;
         // Vim's block selection is several column strips, not one span.

@@ -843,6 +843,12 @@ public:
         int outputCellCount = 0; ///< outputs laid out under the block
     };
     NotebookBlockInfo notebookInfoAt(qsizetype offset) const;
+    /// The size of the formula or diagram drawn under the source of the block
+    /// holding `offset` while the caret is in it, or an empty size when there
+    /// is none. For the tests.
+    QSize previewSizeAt(qsizetype offset) const;
+    /// The dim line shown where that drawing would be when it cannot be made.
+    QString previewHintAt(qsizetype offset) const;
     /// The text of each output cell under the block at `offset`, line breaks
     /// as typed (an image or other cell with no text gives an empty string).
     /// For the tests.
@@ -883,6 +889,8 @@ public:
     /// How many parses have run on this editor, on the calling thread or the
     /// pool. For the tests.
     int parseCountForTest() const;
+    /// How many diagrams the fence cache holds (drawn, pending or failed).
+    int codeBlockCacheSizeForTest() const;
     /// Pretends the last parse took this long, which is what decides whether
     /// the next newline is parsed on the spot (applyEdit). For the tests.
     void setLastParseTimeForTest(qint64 nanoseconds);
@@ -1640,6 +1648,20 @@ private:
     bool applyFileEmbedInput(qsizetype blockIndex, const FileEmbedInputEvent &event);
     /// CodeBlockHook.cpp: a fence in a language setCodeBlockRenderer has.
     bool layoutPluginCode(BlockView &view);
+    /// The cache entry for a fence's drawing, asked of its renderer on the
+    /// first call (and never twice); null when no renderer has the language.
+    /// `key` is what deliverCodeBlock finds its blocks by.
+    /// What a fence's drawing is cached under, and found again by.
+    QString codeBlockKeyFor(const QString &language, const QString &source, int width) const;
+    /// Drops what the editor no longer shows: the preview's earlier drawing
+    /// once a newer one is asked for, and, past a cap, anything no block points at.
+    void pruneCodeBlockCache(const QString &keep);
+    const CodeBlockCacheEntry *requestCodeBlock(const QString &language, const QString &source,
+                                                int width, QString *key);
+    /// PreviewBelow.cpp: the formula or diagram of the block the caret is in,
+    /// kept visible under its source, as Obsidian does.
+    void appendPreview(BlockView &view);
+    void paintPreview(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void deliverCodeBlock(const QString &key, quint64 generation, CodeBlockResult result);
     /// NotebookBlock.cpp: a fenced code block's output, shown below its own
     /// listing rather than in place of it - the one difference from

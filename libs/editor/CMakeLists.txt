@@ -32,6 +32,7 @@ add_library(noteAppC_editor STATIC
     PasteDrop.cpp
     PasteHTML.cpp
     PasteHTML.h
+    PreviewBelow.cpp
     TableCells.cpp
     TableHandles.cpp
     TouchInput.cpp

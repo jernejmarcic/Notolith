@@ -263,6 +263,12 @@ target_link_libraries(test_diagrams PRIVATE noteAppC_ui noteAppC_sandbox Qt6::Te
 add_test(NAME diagrams COMMAND test_diagrams)
 set_tests_properties(diagrams PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Display maths sharing a paragraph, backslash escapes, the formula previewed under its source.
+add_executable(test_math test_math.cpp)
+target_link_libraries(test_math PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
+add_test(NAME math COMMAND test_math)
+set_tests_properties(math PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_demo test_demo.cpp)
 target_link_libraries(test_demo PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 target_compile_definitions(test_demo PRIVATE NOTEAPPC_DEMO_VAULT_PATH="${CMAKE_SOURCE_DIR}/demo"

@@ -231,7 +231,48 @@ with no `;`, an unknown name, a number
 that is no character and a control character (`&#10;`) show as written. Entities
 inside a Markdown link's text are left as written.
 
-Tests: `tests/test_html_edit.cpp` (`ctest -R html_edit`).
+Backslash escapes: a backslash before ASCII punctuation (`\(`, `\*`, `\\`, `\$`,
+`\#`...) is CommonMark's escape and Obsidian does not show it, so neither does
+live preview: `\(A=26\)` reads "(A=26)", `\*not italic\*` reads "*not italic*",
+`\\` is one backslash. They are substitutions like entities (`scanEscapes` in
+`Parser.cpp`, opened by the caret touching one through the same
+`revealedEntities()`), with the same exclusions: code, maths, HTML, links,
+wikilinks, `%%` comments and the frontmatter keep their backslashes, as does
+Source mode. A backslash before anything else (`C:\Users`, a line-end `\`) is
+text. Obsidian renders only `$...$` and `$$...$$` as maths, so `\(...\)` and
+`\[...\]` are not.
+
+Tests: `tests/test_html_edit.cpp` (`ctest -R html_edit`); escapes in
+`tests/test_math.cpp` (`ctest -R math`).
+
+## Display maths
+
+A `$$ ... $$` that owns its lines is a block of its own even inside a paragraph:
+md4qt does not end a paragraph where a formula starts, so `Parser.cpp`'s
+`splitParagraphsAtDisplayMath` cuts the paragraph into the text before, the
+formula and the text after (`\(A=26\) (a-z):` on the line above `$$` used to
+keep the whole thing as source in a code-looking box). A formula that shares a
+line with other text stays in its paragraph.
+
+MicroTeX draws it; a formula it refuses is retried as MathJax would read it
+(`align*` and the other starred environments unstarred, an `&` outside any
+environment inside an `array`). One that still fails shows its source with a
+dim "Math: <reason>" line under it, never an empty gap. While the caret is in
+the formula and what is typed does not parse yet (`\begin{array}{c} a \end{array} &`),
+the last drawing stays up and no reason shows, so nothing below moves. Display
+maths md4qt did not parse (a blank line inside) keeps its backslashes, as do
+autolinks.
+
+**With the caret in a formula** (or a diagram fence: mermaid, tikz, plantuml,
+dot) the source shows, both `$$` lines included, and what it draws stays
+visible under it, following what is typed (`PreviewBelow.cpp`). A formula is
+drawn on the spot, one kept at a time. A diagram is made by its external tool,
+so it is asked for only once typing has paused for half a second, and the
+last drawing stays up meanwhile; the request is the fence renderer's own, so
+the drawing is already cached when the caret leaves. A drawing the next one
+replaces is dropped from the fence cache, which is also capped at 64 entries. Source mode shows
+neither. The diagram sits under the listing, above the closing fence line.
+Tests: `tests/test_math.cpp`.
 
 ## Lists
 

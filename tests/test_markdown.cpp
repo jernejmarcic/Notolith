@@ -2052,6 +2052,9 @@ TEST(EntityTest, ReferencesInTextAreSubstitutions)
     const Decorations decorations = Parser().parseAll(text).decorations;
     QStringList seen;
     for (const Substitution &substitution : decorations.substitutions) {
+        // A backslash escape (`\&`) is a substitution too, and not an entity.
+        if (sliceOf(text, substitution.range).startsWith(QLatin1Char('\\')))
+            continue;
         // Byte-exact: each range is the reference as written.
         EXPECT_TRUE(sliceOf(text, substitution.range).startsWith(QLatin1Char('&')));
         EXPECT_TRUE(sliceOf(text, substitution.range).endsWith(QLatin1Char(';')));

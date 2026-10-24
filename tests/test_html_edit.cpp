@@ -696,12 +696,12 @@ TEST(MarkdownEntityTest, AReferenceShowsAsItsCharacterAndIsOneStep)
     const QString note = QStringLiteral("a &amp; b &copy; c `&amp;` \\&amp;\n\nend\n");
     auto editor = editorWith(note);
     editor->enterBlockAt(note.indexOf(QStringLiteral("end")));
-    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a & b \u00A9 c &amp; \\&amp;\n")))
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a & b \u00A9 c &amp; &amp;\n")))
         << editor->displayText().toStdString();
 
     const qsizetype amp = note.indexOf(QStringLiteral("&amp;"));
     editor->enterBlockAt(amp);
-    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a &amp; b \u00A9 c &amp; \\&amp;\n")))
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a &amp; b \u00A9 c &amp; &amp;\n")))
         << "the caret on it opens it: " << editor->displayText().toStdString();
     QTest::keyClick(editor.get(), Qt::Key_Right);
     EXPECT_EQ(editor->cursorOffset(), amp + 1);
