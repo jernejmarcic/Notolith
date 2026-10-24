@@ -1356,12 +1356,15 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             };
         }
         m_notebook->run(request, forceRun, [this, deliver, forceRun, cacheKey, notePath = notePathOf(editor),
+                                            guard = QPointer<MarkdownEditor>(editor),
                                             keep = request.cache](const notebook::NotebookRunResult &result) {
             // A run of a notebook's cell changes what the file would say: the tab is modified, and the save
             // writes that cell's outputs back (a lookup, or a run that never reached a kernel, changes nothing).
+            // The path is the tab's when the result lands: the notebook may have been renamed while it ran.
             if (forceRun && keep && result.hasRun && result.kernelError.isEmpty()) {
-                QMetaObject::invokeMethod(this, [this, notePath, cacheKey, result] {
-                    notebookOutputsChanged(notePath, cacheKey, result);
+                QMetaObject::invokeMethod(this, [this, notePath, guard, cacheKey, result] {
+                    const QString now = guard ? notePathOf(guard) : QString();
+                    notebookOutputsChanged(now.isEmpty() ? notePath : now, cacheKey, result);
                 });
             }
             MarkdownEditor::NotebookRunResult shown;

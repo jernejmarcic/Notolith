@@ -6432,6 +6432,53 @@ TEST_F(WindowTest, ARenamedNotebookStillSavesTheRunsThatWereAwaitingItsSave)
     }
 }
 
+// A run that is still going when its notebook is renamed belongs to the notebook, under its new name.
+TEST_F(WindowTest, ANotebookRunThatFinishesAfterARenameIsSavedUnderTheNewName)
+{
+    if (!notebookCellsCanRun())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    QByteArray slow = threeCellNotebook(marker);
+    slow.replace("print('two')", "import time; time.sleep(3); print('two')");
+    write(QStringLiteral("Slow.ipynb"), slow);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Slow.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(200);
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("time.sleep"));
+    ASSERT_TRUE(editor->notebookInfoAt(second).eligible);
+    ASSERT_TRUE(editor->runNotebookBlockAt(second));
+    ASSERT_TRUE(editor->notebookInfoAt(second).running);
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    ASSERT_NE(model, nullptr);
+    const QModelIndex index = model->index(path(QStringLiteral("Slow.ipynb")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        dialog->setTextValue(QStringLiteral("Renamed"));
+        dialog->accept();
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    ASSERT_TRUE(QFile::exists(path(QStringLiteral("Renamed.ipynb"))));
+    ASSERT_TRUE(editor->notebookInfoAt(second).running) << "the rename came first";
+
+    WAIT_TRUE(editor->notebookInfoAt(second).hasRun && !editor->notebookInfoAt(second).running, 30000);
+    EXPECT_TRUE(editor->isModified()) << "the result lands on the notebook, not on its old name";
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonArray outputs = notebookCells(readAll(path(QStringLiteral("Renamed.ipynb"))))
+                                   .at(1).toObject().value(QStringLiteral("outputs")).toArray();
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(QString::fromUtf8(QJsonDocument(outputs.at(0).toObject()).toJson()).contains(QStringLiteral("two")));
+}
+
 // "Clear outputs" is for the whole notebook, not for the cells a window of it happens to have laid out.
 TEST_F(WindowTest, ClearingALongNotebooksOutputsClearsEveryCellOfIt)
 {
