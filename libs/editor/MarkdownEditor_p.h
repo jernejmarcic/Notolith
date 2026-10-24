@@ -746,6 +746,7 @@ struct MarkdownEditor::BaseCacheEntry {
 /// header and kCSVmaxRows rows.
 struct MarkdownEditor::CSVcacheEntry {
     qint64 mtime = 0;
+    qint64 ctime = 0; ///< metadata change: a chmod moves this and neither of the others
     qint64 size = 0;
     bool pending = true;
     quint64 generation = 0;
@@ -986,7 +987,6 @@ struct MarkdownEditor::Private {
     QFileSystemWatcher *m_CSVwatcher = nullptr; ///< made with the first CSV embed
     QTimer *m_CSVrefresh = nullptr;
     QElapsedTimer m_CSVpendingSince; ///< the first unanswered change event, for the debounce's longest wait
-    QString m_CSVdelivering; ///< the path whose read has just landed: its failure is shown, not retried, by the relayout
     QHash<QString, ReferenceCacheEntry> m_referenceCache; ///< resolved path or URL -> its last read
     quint64 m_referenceGeneration = 0;
     QFileSystemWatcher *m_referenceWatcher = nullptr; ///< made with the first local reference
