@@ -1829,13 +1829,20 @@ void MarkdownEditor::rebuildBlocks()
     // valid when the old piece covered exactly the same text.
     // A fence, table or CSV embed scrolled sideways keeps its offset (the first piece
     // holds it), or typing in a wide listing would snap it back every parse.
-    const auto oldBlockAt = [this](qsizetype at) {
-        auto it = std::upper_bound(d->m_blocks.cbegin(), d->m_blocks.cend(), at,
-                                   [](qsizetype offset, const BlockView &old) {
-                                       return offset < old.span.range.start;
-                                   });
-        return it == d->m_blocks.cbegin() ? d->m_blocks.cend() : it - 1;
+    // Views are made in document order and so are the old blocks: each lookup is
+    // a forward cursor (what upper_bound per view cost 0.6 ms of a 20k note's
+    // landing). One cursor for the starts asked, one for the ends.
+    struct OldCursor {
+        std::size_t next = 0;
+        auto at(const std::vector<BlockView> &blocks, qsizetype offset)
+        {
+            while (next < blocks.size() && blocks[next].span.range.start <= offset)
+                ++next;
+            return next == 0 ? blocks.cend() : blocks.cbegin() + (next - 1);
+        }
     };
+    OldCursor startCursor, endCursor;
+    const auto oldBlockAt = [this](OldCursor &cursor, qsizetype at) { return cursor.at(d->m_blocks, at); };
     const auto fillView = [&](BlockView &view, const Part &part) {
         view.span = part.span;
         view.piece = part.piece;
@@ -1843,7 +1850,7 @@ void MarkdownEditor::rebuildBlocks()
         view.bleedAbove = panelBleed(view, false);
         view.bleedBelow = panelBleed(view, true);
         if (view.piece == 0) {
-            const auto old = oldBlockAt(view.span.range.start);
+            const auto old = oldBlockAt(startCursor, view.span.range.start);
             // a CSV embed is a paragraph by kind: what it was laid out as (isBase) says it is a table
             const bool scrolls = view.span.kind == BlockSpan::Kind::Code || view.span.kind == BlockSpan::Kind::Table
                                  || (old != d->m_blocks.cend() && old->isBase && !old->CSVpath.isEmpty());
@@ -1851,7 +1858,7 @@ void MarkdownEditor::rebuildBlocks()
                 view.sideScroll = old->sideScroll;
         }
         if (view.pieces > 1) {
-            auto it = oldBlockAt(view.span.range.end - 1);
+            auto it = oldBlockAt(endCursor, view.span.range.end - 1);
             if (it != d->m_blocks.cend() && it->pieces > 1 && it->span.range.end == view.span.range.end) {
                 view.codeEnd = it->codeEnd;
                 view.codeEndValid = it->codeEndValid && it->piece == view.piece
