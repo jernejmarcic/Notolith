@@ -447,8 +447,8 @@ MainWindow::MainWindow(QWidget *parent)
         Settings::registerDefaults({{row.key, row.defaultValue}});
         m_moduleSettingRows << row; // loadModule() adopts the stored values and refreshes the page once, after attach()
     };
-    m_moduleHost.registerIndexReader = nullptr;   // seam 6: S1 Task 17
-    m_moduleHost.registerTabletHandler = nullptr; // seam 2: Spec 3
+    m_moduleHost.registerIndexReader = nullptr;   // seam 6
+    m_moduleHost.registerTabletHandler = nullptr; // seam 2
     m_moduleHost.showTab = [this](ModuleView *view, const QString &title) { showModuleTab(view, title); };
     m_moduleHost.showStatus = [this](const QString &text, int timeoutMs) { statusBar()->showMessage(text, timeoutMs); };
     m_moduleHost.openFile = [this](const QString &absolutePath) { return openNote(absolutePath); };
@@ -3354,7 +3354,7 @@ void MainWindow::updateNotebookIndex()
                                        })
                                      : Indexer::NotebookReader());
 #endif
-    // R1: a .ink file is a note whose text is its text boxes, indexed whether or not the ink module is installed, on
+    // A .ink file is a note whose text is its text boxes, indexed whether or not the ink module is installed, on
     // or off: the host reads the JSON itself (QJsonDocument), so indexing never loads the module.
     m_indexer->setForeignReader({QStringLiteral("ink")}, noteAppC::inkTextBoxes, noteAppC::kInkIndexMaxBytes);
 }
@@ -7741,7 +7741,7 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
                         tr("the file is gone from disk (deleted or moved outside the app)"), quiet);
         return false;
     }
-    if (auto *module = qobject_cast<ModuleView *>(target->view)) { // a file-less view too: R6
+    if (auto *module = qobject_cast<ModuleView *>(target->view)) { // a file-less view too
         const QString shown = target->notePath.isEmpty() ? target->viewTitle : QFileInfo(target->notePath).fileName();
         QString error;
         if (!module->save(&error)) {
@@ -8412,7 +8412,7 @@ void MainWindow::waitForModuleLoad(Leaf *leaf)
 bool MainWindow::maybeSave()
 {
     waitForModuleLoad(m_active); // a reload in flight is not a failed save: let it land, then see what is left to keep
-    // A file-less module tab (the glyph studio) has no path but keeps the save contract (R6).
+    // A file-less module tab (the glyph studio) has no path but keeps the save contract.
     const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
     if ((m_active->notePath.isEmpty() && !fileLess) || !isModified(m_active))
         return true;
@@ -8465,7 +8465,7 @@ void MainWindow::onModificationChanged(bool)
 
 void MainWindow::updateTitle()
 {
-    // A file-less module tab (the glyph studio, R6) shows the mark too: the host saves it like a note.
+    // A file-less module tab (the glyph studio) shows the mark too: the host saves it like a note.
     const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
     const bool modified = (!m_active->notePath.isEmpty() || fileLess) && isModified(m_active);
     QString title;

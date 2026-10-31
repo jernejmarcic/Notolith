@@ -33,7 +33,7 @@ QByteArray readAll(const QString &path)
 
 } // namespace
 
-// Non-negotiable 1: an untouched note must survive open-save byte for byte.
+// Invariant: an untouched note must survive open-save byte for byte.
 TEST(VaultRoundTrip, PlainLfIsByteIdentical)
 {
     const QByteArray bytes = "# Title\n\nBody with [[a wikilink]].\n";

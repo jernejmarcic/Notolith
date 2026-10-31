@@ -10,7 +10,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(INK_STROKE_MODELER_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(INK_STROKE_MODELER_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 # Abseil is the system one (20260817 on Arch) and required: the root CMakeLists
-# checked find_package(absl) before adding this directory (R3). The modeler is
+# checked find_package(absl) before adding this directory. The modeler is
 # told to use it and brings none of its own. If the modeler does not build
 # against the system Abseil, the ink core stays off until the modeler pin is
 # moved (spec section 14).

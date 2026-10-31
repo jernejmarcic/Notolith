@@ -1,13 +1,10 @@
 # Ink core and loadable modules: design (Spec 1 and 1b)
 
-Date: 2026-10-21. Status: approved. Jernej approved the design in
-conversation, section by section, on 2026-10-21; the review rulings of
-2026-10-22 (R1-R15, in `sessions/2026-10-21_handwritten-notes/REVIEW-ASSESSMENT.md`)
-and the PADD pen spike results are folded in below.
+Status: approved design, with the results of the pen input test (section 11) folded in.
 
 Notolith gets handwriting: pen input, whole handwritten notes, sketch sections
 inside Markdown notes, pen markup over Markdown text, PDF, images and EPUB,
-local handwriting recognition, and a handwriting font made from his own
+local handwriting recognition, and a handwriting font made from the user's own
 writing. This spec covers the first two cycles:
 
 - **Spec 1**: the loadable-module mechanism, the editor seams, the `.ink`
@@ -18,17 +15,9 @@ writing. This spec covers the first two cycles:
 Every later piece has its own spec. The decisions they inherit are fixed in
 section 2, so nothing here has to be re-decided later.
 
-Research and decision records, all in the second brain session
-`sessions/2026-10-21_handwritten-notes/`:
-- NOTES.md: Jernej's decisions, verbatim.
-- DESIGN-DRAFT.md: the planner draft this spec is built from.
-- rnote-study.md, sol-ink-qt.md, sol-ink-modeler.md, sol-hwr.md and
-  sol-hwfont.md: research.
-- code-map.md and plugin-map.md: maps of the code this builds on.
-
 ## 1. Intent
 
-What Jernej asked for:
+The requirements:
 
 - Two equal uses: fully handwritten notes, and handwritten sections inside
   normal Markdown notes. Plus circling and scribbling on Markdown, PDF "and
@@ -40,8 +29,8 @@ What Jernej asked for:
   plugin that "shouldn't even need to be installed".
 - The handwriting font is a separate plugin. It is "kind of trained", with
   several variants of each letter so the text looks handwritten. A glyph
-  studio, where you write a letter and it is saved, comes early so he can
-  test it.
+  studio, where you write a letter and it is saved, comes early so it can
+  be tested early.
 
 Success criteria:
 
@@ -50,22 +39,21 @@ Success criteria:
 2. **Installed but unused**: cold start to first paint, and a keystroke on
    the 1 MB note, are unchanged within noise.
 3. **Pen to pixel**: well inside one frame. Handling one pen event costs
-   under 1 ms of CPU at 200 Hz on shuttlepod-1 and PADD.
+   under 1 ms of CPU at 200 Hz on a Radeon 780M 2-in-1 laptop and on a FydeTab Duo (RK3588S).
 4. **Large pages**: a page of 10 000 strokes scrolls at the display rate.
 5. **Open format**: `.ink` is plain and documented. A second program could
    read it from section 5 alone.
 
 ## 2. Decisions for the whole roadmap
 
-All decisions were approved by Jernej on 2026-10-21. Later specs build on
-them without re-asking.
+Later specs build on these decisions without re-asking.
 
 ### Input
 
 | Topic | Decision |
 |---|---|
-| Pen | Draws. The eraser end erases. The lower barrel button is a held eraser and the upper one a held lasso (Rnote's defaults). These are a bonus, not the way in: PADD's pen has no eraser end and no working buttons (spike, 2026-10-22), so every tool (pen, eraser, lasso, shapes, text, and the highlighter when it arrives) is reachable from the toolbar and by a keyboard shortcut with no pen hardware at all. |
-| Pressure | Normalised per device by a learned maximum (setting `ink.pressureMax`, default 1.0, stored per device name): PADD's pen never reports above 0.657, so raw pressure would make every line thin. |
+| Pen | Draws. The eraser end erases. The lower barrel button is a held eraser and the upper one a held lasso (Rnote's defaults). These are a bonus, not the way in: some pens (e.g. the FydeTab Duo's) have no eraser end and no working buttons (pen input test, section 11), so every tool (pen, eraser, lasso, shapes, text, and the highlighter when it arrives) is reachable from the toolbar and by a keyboard shortcut with no pen hardware at all. |
+| Pressure | Normalised per device by a learned maximum (setting `ink.pressureMax`, default 1.0, stored per device name): one pen (the FydeTab Duo's) never reports above 0.657, so raw pressure would make every line thin. |
 | Touch | Scrolls and pinch-zooms. It never draws. |
 | Mouse | Draws only while mouse inking is explicitly on. Otherwise it behaves as it does now, inside ink areas too. |
 | Smoothing | ink-stroke-modeler is a required dependency of the ink module, and smoothing is on by default. Raw input is a setting at most. |
@@ -80,7 +68,7 @@ them without re-asking.
 | Typed text box | It is the real Markdown editor (canvas text-card pattern), so links, tags and formatting work in it. |
 | Search | Text boxes are indexed now. Recognised handwriting is indexed later, by Spec 6. |
 | `.rnote` | Opened, edited and saved as `.rnote`, with lossless pass-through of anything the model does not know. "Save as .ink" and "Export as .rnote" are commands. |
-| Companion files | One hidden companion file per host file under a tidy folder, `Sketches/` by default, mirroring the vault path:<br>- `Uni/SCC222/Lecture 3.md` uses `Sketches/Uni/SCC222/Lecture 3.ink`.<br>- `paper.pdf` uses `Sketches/paper.pdf.ink`.<br>It holds the sketch sections and the markup. It follows the host file on rename, move and delete. |
+| Companion files | One hidden companion file per host file under a tidy folder, `Sketches/` by default, mirroring the vault path:<br>- `Uni/Networks/Lecture 3.md` uses `Sketches/Uni/Networks/Lecture 3.ink`.<br>- `paper.pdf` uses `Sketches/paper.pdf.ink`.<br>It holds the sketch sections and the markup. It follows the host file on rename, move and delete. |
 | PDF ink | Stored in the companion file, with pressure, plus a "Flatten into PDF" command. |
 | EPUB | Pen highlights use the existing EPUB highlights. Pen marks are anchored to EPUB locators. |
 | Images | Keep their existing `annotations.md` companion, with pressure added. |
@@ -97,9 +85,9 @@ them without re-asking.
 
 | Topic | Decision |
 |---|---|
-| Recognition | Local only, and confirm before creating a link: nothing is created from recognised handwriting without a confirmation. The engine is chosen in Spec 6 by a benchmark on Jernej's own samples; PP-OCRv6 is a candidate and Tesseract the fallback, neither is a decision. Results are stored inside the `.ink` file. Hand-written `[[link]]`, `#tag`, headings and checkboxes are detected. The model weights are an optional data download, not a module. |
-| Font | Version 1 (Spec 7) is captured studio samples: several variants per letter, cycled with an OpenType `calt` feature, built with fontTools. A style model (SDT, DeepVecFont v2) is added only if Jernej judges v1 not hand-written enough. Jernej approves every glyph by eye. This default was taken overnight on 2026-10-22 because he did not answer; he may overrule it. |
-| Glyph samples | Stored in the vault under `Handwriting/<font>/`, so Syncthing brings them to starbase-1 for training. |
+| Recognition | Local only, and confirm before creating a link: nothing is created from recognised handwriting without a confirmation. The engine is chosen in Spec 6 by a benchmark on real handwriting samples; PP-OCRv6 is a candidate and Tesseract the fallback, neither is a decision. Results are stored inside the `.ink` file. Hand-written `[[link]]`, `#tag`, headings and checkboxes are detected. The model weights are an optional data download, not a module. |
+| Font | Version 1 (Spec 7) is captured studio samples: several variants per letter, cycled with an OpenType `calt` feature, built with fontTools. A style model (SDT, DeepVecFont v2) is added only if v1 is judged not hand-written enough. Every glyph is approved by eye. This default may be overruled. |
+| Glyph samples | Stored in the vault under `Handwriting/<font>/`, so they can be synced to a training machine. |
 
 ### Delivery
 
@@ -234,7 +222,7 @@ a process and `attach()` runs once per registry, so a real module is
 stateless or keeps its state per host.
 
 **Executable cost.** Modules need host symbols, so the base binary links with
-`ENABLE_EXPORTS`. Task 18 of the plan measures cold start and executable size
+`ENABLE_EXPORTS`. Cold start and executable size are measured
 against `main`. If cold start regresses by more than 5 % or size by more than
 10 %, the fix is `-fvisibility=hidden` plus an export macro on the host
 classes modules use. Measure first; nothing changes before that.
@@ -349,18 +337,18 @@ events carrying position, pressure, timestamp, pointer type and buttons.
   - **Pen**: `QTabletEvent` accepted on the canvas widget, with
     `setTabletTracking(true)` for hover. Pointer type `Eraser` erases. The
     middle button (BTN_STYLUS) is a held eraser and the right button
-    (BTN_STYLUS2) a held lasso. These are defaults and a bonus: the PADD
-    pen reports a tip only, no eraser end and no working buttons, so every
+    (BTN_STYLUS2) a held lasso. These are defaults and a bonus: some pens (e.g. the FydeTab Duo's)
+    report a tip only, no eraser end and no working buttons, so every
     tool is also reachable from the toolbar and by keyboard shortcut.
   - **Rate and timestamps**: the pen reports at 120 Hz in contact
     (`kInputRateHz = 120`). Equal timestamps are coalesced and backwards
-    ones skipped; the PADD spike saw 128 equal pairs and no backwards ones.
+    ones skipped; the pen input test saw 128 equal pairs and no backwards ones.
     The fractional-scale offset stays `{0, 0}` (device pixel ratio 2 showed
     none).
   - **Pressure**: raw pressure is divided by a per-device learned maximum
     (setting `ink.pressureMax`, default 1.0, stored per device name) and
     capped at 1. The maximum is learned from the largest pressure seen; the
-    PADD pen tops out at 0.657 with a median of 0.21.
+    FydeTab Duo pen tops out at 0.657 with a median of 0.21.
   - **Touch**: `QTouchEvent` with `WA_AcceptTouchEvents`, used for pan and
     pinch only.
   - **Mouse**: strokes at pressure 0.5, only while the "Draw with mouse"
@@ -406,7 +394,7 @@ image, and `update(segmentRect)` repaints just that segment.
 after the gesture settles, off-thread.
 
 **Backgrounds.** One pattern tile per period via `drawTiledPixmap`. The
-seven page styles of Jernej's Rnote fork are ported with attribution.
+seven page styles of a Rnote fork (branch `jernej/features`) are ported with attribution.
 
 ### Tools in Spec 1
 
@@ -504,9 +492,9 @@ A0 contains:
 
 A0 leaves out layouts, the tile cache, lasso, shapes and text boxes.
 
-## 11. Pen spike (done 2026-10-22)
+## 11. Pen input test
 
-**Results on PADD** (himax-stylus, GNOME/mutter), from the session NOTES.md:
+**Results on a FydeTab Duo** (himax-stylus, GNOME/mutter):
 - tip only: no eraser end is reported;
 - the barrel buttons do not work;
 - 120 Hz while in contact;
@@ -516,17 +504,15 @@ A0 leaves out layouts, the tile cache, lasso, shapes and text boxes.
 
 These fixed `kInputRateHz = 120`, the learned pressure maximum, the rule that
 every tool is reachable without pen buttons, coalescing of equal timestamps,
-and `kFractionalScaleOffset = {0, 0}`. shuttlepod-1 (Wacom) was not run and is
+and `kFractionalScaleOffset = {0, 0}`. A Wacom pen on Hyprland was not run and is
 a follow-up check on the same tool.
 
 `tools/inkspike`, about 150 lines.
 - **What it is.** A Qt window that logs, per tablet event, the device type,
   pointer type, capabilities, pressure, tilt, buttons, timestamp, and the
   event rate per second. It also has a scribble area.
-- **Who runs it.** Jernej, by hand, on PADD (FydeTab, GNOME/mutter) and
-  shuttlepod-1 (Wacom, Hyprland). runabout is deferred, since it is in
-  storage.
-- **Where the results go.** The session NOTES.md.
+- **Who runs it.** By hand, on a FydeTab Duo (GNOME/mutter) and a Wacom
+  2-in-1 (Hyprland).
 - **What it settles before A0 code is written:**
   - whether the eraser end is detected;
   - the barrel-button mapping;
@@ -618,7 +604,7 @@ Out of Spec 1, built in later specs:
   in the parser and against Obsidian's behaviour;
 - moving PDF, image and EPUB onto the ink core (Spec 5);
 - recognition (Spec 6), whose engine is chosen there by a benchmark on
-  Jernej's own samples;
+  real handwriting samples;
 - font training and build (Spec 7).
 
 Generating letter variants for the font is not stroke synthesis in the
@@ -629,13 +615,13 @@ sense cut above. It stays, in Spec 7.
 - **The cost-when-absent claim depends on `QPluginLoader::metaData()` not
   loading the library.** The first module test and bench verify it before
   anything else builds on it.
-- **Pen behaviour differs per compositor.** The spike decides the mapping
-  before code depends on it. The test matrix is GNOME on PADD and Hyprland
-  on shuttlepod-1.
+- **Pen behaviour differs per compositor.** The pen input test decides the
+  mapping before code depends on it. The test matrix is GNOME on a FydeTab
+  Duo and Hyprland on a Wacom 2-in-1.
 - **ink-stroke-modeler pins Abseil 20250512.** The system has
   20260817. System Abseil is required; if it does not build the modeler, the
   ink core stays off until the modeler pin is moved. There is no bundled
   Abseil.
 - **SDT's coverage of Latin letters and `čšž` is unverified.** This does not
   affect this spec, and font v1 does not use SDT. Spec 7 tests it on real
-  studio samples only if Jernej judges v1 not hand-written enough.
+  studio samples only if v1 is judged not hand-written enough.

@@ -43,7 +43,7 @@ public:
         host.registerSetting({QStringLiteral("ink.tileCacheMB"), 64, QObject::tr("Handwriting tile cache (MB)"),
                               QObject::tr("Memory for the rendered tiles of a handwritten note; the least recently shown are dropped past it."),
                               {}, 8, 1024, 8, 0});
-        // No row (R14): what the pens taught the view, and what the view remembers about the tools. Registered here so that
+        // No row: what the pens taught the view, and what the view remembers about the tools. Registered here so that
         // the single adoptStored() after attach() reads their stored lines.
         noteAppC::Settings::registerDefaults({{QStringLiteral("ink.pressureMax"), 1.0},          // the seed for a pen with no stored maximum; 1.0: learn it
                                               {QStringLiteral("ink.pressureByDevice"), QString()}, // {"<device name>": <learned maximum>}

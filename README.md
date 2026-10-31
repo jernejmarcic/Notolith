@@ -1,94 +1,142 @@
 # Notolith
 
-Code name noteAppC: the repository, the targets, the C++ namespace and the
-directories it keeps settings and caches in still carry it. The product, its
-window, its binary (`notolith`) and its app id (`io.github.jernejmarcic.Notolith`) are
-Notolith.
+A fast, native Markdown notes app for Linux that opens Obsidian vaults as they
+are. C++20 and Qt 6 Widgets: no JavaScript, no browser engine, no Electron.
 
-A Linux-native alternative to Obsidian, written in C++ with Qt 6 Widgets.
-No JavaScript, no browser engine, no Electron.
+(Code name noteAppC: the repository's targets, the C++ namespace and the
+directories where it keeps settings and caches still carry it. The binary is
+`notolith` and the app id is `io.github.jernejmarcic.Notolith`.)
 
-Plan and feature inventory:
-`~/Documents/AI/sessions/2026-09-22_011551_obsidian-clone-cpp-plan/`.
+## Features
 
-## Status
-
-Usable for reading and editing a vault, and most of Obsidian is here,
-the command palette (Ctrl+P) included; `TODO.md` has what is left.
-
-- **Vault** - open, file tree, byte-exact atomic save (CRLF and BOM preserved),
-  file recovery snapshots with a diff. An open note changed on disk (sync, a
-  plugin, a link update, another editor) shows the change in every tab; if
-  it was being edited, the edits win and the other version goes to file
-  recovery. A note deleted and recreated outside is read again; one moved or
-  renamed outside (found by its unchanged content, exactly one match in the
-  vault) is followed, caret and unsaved edits kept; if it cannot be found the
-  tab stays on the old name and says so.
+- **Vault** - open any folder of Markdown files, with a file tree and
+  byte-exact atomic saves (CRLF and BOM preserved). File recovery keeps
+  snapshots with a diff. A note changed on disk (sync, another editor, a link
+  update) shows the change in every tab; if you were editing it, your edits
+  win and the other version goes to file recovery. A note moved or renamed
+  outside the app is followed, caret and unsaved edits kept.
 - **Index** - SQLite with FTS5, parallel cold build, incremental rescan,
-  Obsidian's link resolution order. 20 000 notes cold-indexed in about 1 s.
+  Obsidian's link resolution order. 20 000 notes cold-index in about 1 s.
 - **Editor** - one engine, three modes: live preview, source and reading.
-  Viewport-only layout, incremental edits, parse off the UI thread. 0.2 ms
-  per keystroke on a 200 kB note, against an 8 ms budget.
-- **Rendered** - Obsidian's element-by-element syntax reveal, callouts,
-  tables, maths, embeds of notes, images, PDFs, audio and video, editable
-  properties, `query` blocks, raw HTML (litehtml), Mermaid, PlantUML, TikZ and Graphviz diagrams (through
-  `mmdr`, `plantuml`, `latex` + `dvisvgm` and `dot`, sandboxed, off the UI thread, optional), syntax-highlighted code.
-- **Vim mode** - optional (Settings > Editor): normal, insert and visual
-  modes, counts, operators and motions, `.`, `/` search, `:w` and `:q`.
-  `docs/EDITOR.md`.
+  Viewport-only layout, incremental edits, parsing off the UI thread; 0.2 ms
+  per keystroke on a 200 kB note.
+- **Rendered Markdown** - Obsidian's element-by-element syntax reveal,
+  callouts, tables, maths, embeds of notes, images, PDFs, audio and video,
+  editable properties, `query` blocks, raw HTML (litehtml), Mermaid, PlantUML,
+  TikZ and Graphviz diagrams, and syntax-highlighted code.
+- **Vim mode** - optional: normal, insert and visual modes, counts, operators
+  and motions, `.`, `/` search, `:w` and `:q`.
 - **Workspace** - tabs and nested splits, each tab with its own history; the
-  layout comes back with the vault, and named layouts save and load.
+  layout comes back with the vault, and named layouts can be saved and loaded.
 - **Core plugins** - search with Obsidian's grammar, backlinks and unlinked
-  mentions, outgoing links, tags, outline, bookmarks, daily notes,
-  templates, page preview, PDF export, hotkeys, and a right-click menu
-  with word lookup (definitions from a DICT server).
-- **Modules** - spellcheck, graph view (global and local; header button or
-  Ctrl+G, Obsidian's filters/groups/display/forces controls), canvas (JSON
-  Canvas), bases (`.base` views), each optional at build time.
+  mentions, outgoing links, tags, outline, bookmarks, daily notes, templates,
+  page preview, PDF export, pandoc export and import, hotkeys, a command
+  palette (Ctrl+P), and a right-click menu with word lookup (definitions from
+  a DICT server).
+- **Modules** - spellcheck, graph view (global and local), canvas (JSON
+  Canvas), bases (`.base` views), a PDF viewer with annotation, image
+  annotation, handwritten notes with pen input, encrypted notes, code blocks
+  run through a Jupyter kernel, Git-backed note history, end-to-end encrypted
+  sync to an optional server, peer-to-peer note sharing, and static-site
+  publishing. Each can be switched off at build time.
+- **Plugins** - out-of-process plugins, sandboxed with bubblewrap.
 - **Themes** - dark by default, Obsidian's token names and values, custom
   colour schemes, an importer for any Obsidian theme in the vault, and
-  per-kind formatting colours in Settings (headings, bold, links, ...; display
-  only, nothing is written to a note).
-- **Touch** - momentum scrolling and long-press selection on a touchscreen;
-  sidebars fold on a narrow window. An Android build is in progress.
+  per-kind formatting colours (headings, bold, links, ...; display only,
+  nothing is written to a note).
+- **Touch** - momentum scrolling and long-press selection; sidebars fold on a
+  narrow window.
 
-Never: plugins in JavaScript, Sync, Publish.
+## Install
 
-## Build
-
-Build under `/tmp`, not in the project: `~/Documents` is synced to every
-machine, and a build directory is gigabytes nobody needs copied.
+### Arch Linux and CachyOS
 
 ```sh
-sh tools/check.sh                         # everything: both configurations, every suite
-cmake -B /tmp/noteAppC-build -G Ninja     # once, and again only if CMakeLists changes
-cmake --build /tmp/noteAppC-build         # after every edit - this is the one you repeat
-ctest --test-dir /tmp/noteAppC-build      # all 35 suites
-/tmp/noteAppC-build/apps/noteAppC/notolith            # opens the last vault
-/tmp/noteAppC-build/apps/noteAppC/notolith ~/notes    # a vault
-/tmp/noteAppC-build/apps/noteAppC/notolith note.md    # one file, no vault, no dotfile
+git clone https://github.com/jernejmarcic/Notolith
+cd Notolith/packaging/arch
+makepkg -si --nocheck
 ```
 
-`cmake --build /tmp/noteAppC-build` is incremental and takes a second or two when little
-changed, so run it before every launch. Running an old binary looks exactly
-like a feature not working.
+This builds and installs five packages together: `notolith`, `notolith-ink`,
+`notolith-hwfont`, `notolith-pdfview` and `notolith-share`. The first build
+needs network access (see the header of `packaging/arch/PKGBUILD`).
 
-Requires `qt6-base`, `qt6-svg`, `yaml-cpp`, `cmake`, `ninja`, a C++20
-compiler, and `gtest` for the tests. Optional, each switched off cleanly when
-missing: `qt6-multimedia`, `hunspell`, `poppler-qt6`, `syntax-highlighting`,
-`litehtml`. At run time only, never needed to build: `mmdr`
-(`cargo install mermaid-rs-renderer`) for Mermaid diagrams, `plantuml`, TeX Live and `graphviz` for the others, see `docs/EDITOR.md`.
-md4qt, MicroTeX and tinyxml2 are fetched at configure time.
-Packaging recipes (Arch, Flatpak, AppImage) are in `packaging/`.
+Update: `git pull`, then `makepkg -sif --nocheck` in `packaging/arch`.
 
-Render the window to a PNG without a display, which is how the look is
-reviewed:
+Uninstall:
 
 ```sh
-/tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 1180 760
+sudo pacman -Rns notolith notolith-ink notolith-hwfont notolith-pdfview notolith-share
 ```
 
-## Licence
+### Other Linux: build from source
 
-GPL-3.0-or-later, see `LICENSE`. Bundled: md4qt and MicroTeX (MIT),
-tinyxml2 (zlib), Lucide icons (ISC).
+Needs Qt 6.5 or newer (`qt6-base`, `qt6-svg`, `qt6-multimedia`), a C++20
+compiler, CMake 3.28 or newer, Ninja, and Rust 1.95 or newer (cargo builds the
+note-sharing backend). The list below uses Arch package names; most are
+optional and switched off cleanly when missing.
+
+- Always: `qt6-base` `qt6-svg` `yaml-cpp` `cmake` `ninja` `git`
+- Optional modules: `qt6-multimedia` `hunspell` `syntax-highlighting`
+  `litehtml` `libgit2` `libarchive` `curl` `libsodium` `qtkeychain-qt6`
+  `zeromq` `libseccomp` `abseil-cpp` `poppler-qt6` `protobuf`
+  `libdatachannel` `avahi` `nlohmann-json` `rust`
+- At run time: `bubblewrap` (sandboxes code blocks, TeX and plugins)
+- Tests: `gtest`
+
+md4qt, MicroTeX, tinyxml2 and ink-stroke-modeler are fetched at configure time.
+
+```sh
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+sudo cmake --install build
+```
+
+Flatpak and AppImage recipes are in `packaging/` (untested).
+
+## Running
+
+```sh
+notolith                 # opens the last vault
+notolith ~/notes         # a vault
+notolith note.md         # one file, no vault
+```
+
+Optional tools, used only when present, for rendering diagrams and export:
+`mmdr` (`cargo install mermaid-rs-renderer`) for Mermaid, `plantuml`, TeX Live
+(`latex` and `dvisvgm`) for TikZ, `graphviz` for Graphviz, and `pandoc`. They
+run sandboxed with bubblewrap, off the UI thread. See `docs/EDITOR.md` and
+`docs/PANDOC.md`.
+
+## Development
+
+```sh
+cmake -B build -G Ninja
+cmake --build build
+QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+```
+
+`sh tools/check.sh` builds and tests both the full configuration and one with
+every optional module off.
+
+Documentation, in `docs/`:
+
+- `EDITOR.md` - the editor, HTML editing, vim mode, diagram rendering
+- `SEARCH.md` - the search grammar
+- `STYLING.md` - callout and code-block styles
+- `GRAPH.md`, `CANVAS.md` - graph view and JSON Canvas
+- `ANNOTATIONS.md` - image annotation
+- `INK.md`, `INK-DESIGN.md` - handwritten notes: usage and design
+- `NOTEBOOKS.md` - running code blocks
+- `ENCRYPTION.md` - encrypted notes
+- `SYNC.md` - end-to-end encrypted sync
+- `SHARE.md` - peer-to-peer note sharing
+- `PLUGINS.md` - the plugin system
+- `PANDOC.md` - pandoc export and import
+- `PERFORMANCE.md` - measurements and what was tried
+- `PLATFORMS.md` - supported platforms and what portability requires
+
+## License
+
+GPL-3.0-or-later, see `LICENSE`. Bundled: md4qt and MicroTeX (MIT), tinyxml2
+(zlib), Lucide icons (ISC).

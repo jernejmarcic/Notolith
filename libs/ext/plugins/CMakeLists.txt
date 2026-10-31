@@ -1,7 +1,7 @@
 # Tier 2 (docs/PLUGINS.md): runtime plugins, loaded only inside a separate
 # `noteAppC-plugin-host` process, never in the app. Split into two targets so
 # the host tool can link "only Qt6::Core and a small protocol library"
-# (HANDOFF's own words for this lane) rather than the app-side QProcess
+# rather than the app-side QProcess
 # orchestration it has no use for.
 
 # The framing (PluginProtocol) and plugin.ini parsing (PluginManifest) that

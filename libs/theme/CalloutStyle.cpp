@@ -84,8 +84,7 @@ void CalloutStyle::apply(const QMap<QString, QString> &attributes)
             font = value;
         else if (key == QLatin1String("size"))
             size = value.toInt();
-        // `color` is the body text, as agreed with Jernej when the format was
-        // chosen. It once also meant the rail, which painted a callout's rail
+        // `color` is the body text, by the format's design. It once also meant the rail, which painted a callout's rail
         // in the colour meant for its words.
         else if (key == QLatin1String("color") || key == QLatin1String("text-color")
                  || key == QLatin1String("fg"))

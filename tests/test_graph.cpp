@@ -507,8 +507,8 @@ TEST(GraphViewTest, RebuildKeepsSurvivingNodesInPlace)
 TEST(GraphViewTest, TheSameGraphInAnotherOrderLeavesTheLayoutAlone)
 {
     // The index hands the graph over in hash order, which shifts from one
-    // update to the next. Jernej 2026-10-19: "the nodes now girrate, and move
-    // by themselves" - every autosave reheated a settled graph because the
+    // update to the next. The symptom was the nodes visibly gyrating and moving
+    // by themselves: every autosave reheated a settled graph because the
     // same notes came in another order and looked like a different graph.
     QStringList ids;
     QList<GraphEdge> edges;
@@ -1042,7 +1042,7 @@ TEST_F(GraphDataTest, AHiddenLocalGraphShowsTheCurrentNotesNeighbourhoodWhenShow
 }
 
 // ---------------------------------------------------------------------------
-// Performance guard: the plan's budget is 5 000 nodes / ~10 000 edges at 60 fps.
+// Performance guard: the budget is 5 000 nodes / ~10 000 edges at 60 fps.
 
 namespace {
 

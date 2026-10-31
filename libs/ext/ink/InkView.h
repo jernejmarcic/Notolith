@@ -30,7 +30,7 @@ namespace noteAppC::ink {
 /// The handwritten-note tab: a scroll area over the canvas and a toolbar: the five tools (pen, eraser with its
 /// whole/parts toggle, select with a lasso or a rectangle, shape with its four kinds, text), Draw with mouse, the pen
 /// (width, six colours, pressure curve), undo and redo, the zoom and the Page menu (format, layout, pattern, page
-/// colour, add a page). R14: every tool is on the toolbar and on its key, because PADD's pen has no eraser end and no
+/// colour, add a page). Every tool is on the toolbar and on its key, because some pens (e.g. the FydeTab Duo's) have no eraser end and no
 /// working buttons. The eraser mode, the select shape and the shape kind are remembered in the settings (ink.*), and so
 /// is what a pen's pressure range was learned to be. A notice (read-only, loading, could not be read) is a banner above
 /// the canvas, never in the toolbar, where a narrow window would hide it in the overflow menu. Load and

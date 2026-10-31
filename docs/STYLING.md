@@ -536,8 +536,8 @@ use the same spelling, `-decoration-color` meaning the line.
 
 ## The file explorer
 
-Jernej, 2026-10-17: "Improve look and feel of the sidebar please ... especially
-the gap on the left being lit up."
+The sidebar needed a better look and feel, especially the gap on the left
+being lit up.
 
 - **One pill per row.** `QTreeView` paints an item's background over the indent
   columns left of the row as well, and `show-decoration-selected: 0` only picks
@@ -611,7 +611,7 @@ What counts as a bracket and a note is in [EDITOR.md](EDITOR.md#bare-brackets).
 
 ## Popups, the status bar and the inline title
 
-Jernej, 2026-10-16: "the general design is fine, I just want refinements".
+The general design is fine; these are refinements.
 
 - **Rounded popups.** A QSS `border-radius` on a menu, a tooltip or the `[[`
   suggester only rounds the frame; the popup window is still a rectangle.

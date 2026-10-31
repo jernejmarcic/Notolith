@@ -8,10 +8,9 @@
 // - chosen for the same reason and not the vault: XDG_CACHE_HOME is
 // explicitly "safe to delete", which output the kernel can always
 // regenerate is, and it keeps binary/PNG cache files out of a vault
-// directory that Syncthing or git may also be watching (see
-// feedback_build_output_in_tmp.md - the same argument against putting
-// scratch state somewhere that syncs applies to a regenerable cache, not
-// only to a build).
+// directory that a file-sync tool or git may also be watching (the same
+// argument against putting scratch state somewhere that syncs applies to a
+// regenerable cache, not only to a build).
 
 #include "NotebookSandbox.h"
 
@@ -107,7 +106,7 @@ void seedNotebookCache(const QString &key, std::function<NotebookRunResult()> re
 
 /// `$XDG_CACHE_HOME/noteAppC/notebook`, or `~/.cache/noteAppC/notebook` when
 /// unset - exposed for the tests, which redirect XDG_CACHE_HOME rather than
-/// touching Jernej's own cache.
+/// touching the user's own cache.
 QString notebookCacheRoot();
 
 } // namespace noteAppC::notebook

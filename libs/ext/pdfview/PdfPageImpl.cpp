@@ -62,8 +62,8 @@ Poppler::Document *openCached(const QString &path)
 /// threads (this file's own `openCached` guarantees separate Documents, not
 /// separate processes) can race on writing the same shared_ptr, tearing its
 /// internal pointer and crashing later on a garbage address deep in
-/// `GfxXYZ2DisplayTransforms` - see TODO.md's "test_demo crashed once in
-/// poppler". One tiny render runs, alone, the first time any thread
+/// `GfxXYZ2DisplayTransforms` - seen once as a crash of test_demo
+/// in poppler. One tiny render runs, alone, the first time any thread
 /// reaches here; every later render, on any thread, concurrent or
 /// not, then finds both statics already set and never written to again, so
 /// reading them is safe without any lock of our own.

@@ -6,11 +6,7 @@ tags: [demo, bases]
 
 What to look for: a ` ```base ``` ` block holds the same YAML a `.base`
 file does (see `Library/Library.base` for a standalone file using the same
-grammar) and should render as a table right in the note. Per `TODO.md`
-("Wave 3": "` ```base ``` ` blocks inside notes, on `BaseView`" is still
-unchecked as of 2026-09-23), this is not wired up yet - expect this block to
-render as a plain unstyled code block rather than a table; say so in the
-report.
+grammar) and should render as a table right in the note.
 
 ## Filters, a formula, and a table view
 

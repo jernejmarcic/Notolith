@@ -21,8 +21,8 @@ class QPushButton;
 namespace noteAppC::hwfont {
 
 /// The glyph studio (spec section 9): write a letter, save it, move on to the next. A file-less tab
-/// (R6): not opened from a path, it saves its cell through save() when the host closes it or quits.
-/// Every action is on a key and on a button (R14: PADD's pen is tip-only); the pen's barrel click
+/// not opened from a path, it saves its cell through save() when the host closes it or quits.
+/// Every action is on a key and on a button (some pens, such as the FydeTab Duo's, are tip-only); the pen's barrel click
 /// saves too, detected on an event filter over the canvas so inkcore needs no signal for it.
 class GlyphStudio : public ModuleView {
     Q_OBJECT
@@ -31,9 +31,9 @@ public:
     ~GlyphStudio() override;
 
     bool load(const QString &, QString *) override { return true; } ///< not file-backed: opened by the command
-    /// R6: writes the current cell as saveCurrentAndAdvance does, without moving on; an empty cell is nothing to write.
+    /// Writes the current cell as saveCurrentAndAdvance does, without moving on; an empty cell is nothing to write.
     bool save(QString *error) override;
-    /// R6: the cell holds strokes that are neither saved nor discarded.
+    /// The cell holds strokes that are neither saved nor discarded.
     bool isModified() const override { return !m_canvas->document().items().empty(); }
     void setTheme(const Theme &theme) override;
 

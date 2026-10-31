@@ -3,8 +3,7 @@
 Live co-editing of one note between people, peer to peer. This page covers the
 parts that exist: the text CRDT, the link layer, the engine and the session
 that ties a note's editors to it. The dialogs (invitation, who has access), the
-tab marker and the status badge come in a later lane (the plan is in the
-project TODO).
+tab marker and the status badge come later.
 
 ## CrdtDoc
 
@@ -104,7 +103,7 @@ the top of `CrdtDocNative.cpp`.
 - **Untrusted input.** Every count and length is checked against the bytes
   left before anything is allocated, every integer overflow is rejected, and
   an update that does not decode changes nothing. An edit that depends on text
-  not seen yet waits in a queue capped at 32 M units-plus-run-costs (a
+  not seen yet waits in a queue capped at 32 M units-plus-run-costs (set it to
   megabyte-class note is about 1 M); an update that would exceed the cap, or
   is that large itself, is refused whole (`ok` false). The queue wakes edits
   through an index, so a hostile chain of dependencies costs O(n log n), not
@@ -225,9 +224,9 @@ Hearth's link layer, vendored. No Qt.
 - **The rule: fix in Hearth first, never patch `libs/ext/link/{core,net,proto}`.**
   `sh tools/vendor_link.sh --check <hearth checkout>` diffs the copy (and its file
   set) against the commit in `LINK_SOURCE` and exits 1 on any drift; ctest
-  `link_vendor_check` runs it against `NOTEAPPC_HEARTH_DIR` (default
-  `~/Documents/AI/projects/hearth`) and skips when there is no checkout there.
-- **What Notolith will pass** (wired by the engine lane): `Node::Config`
+  `link_vendor_check` runs it against `NOTEAPPC_HEARTH_DIR` (set it to
+  a Hearth checkout to run the check) and skips when it is not set.
+- **What Notolith will pass** (wired by the engine): `Node::Config`
   `signatureDomain = "notolith"` and `serviceType = "_notolith._tcp"`, so a Notolith
   node and a Hearth node never see or accept each other, and its own debug log via
   `setDebugLogPath()` (left alone, it logs into Hearth's directory).

@@ -1,4 +1,4 @@
-// Regression test for TODO.md's "test_demo crashed once in poppler": a
+// Regression test for a crash seen once in test_demo, in poppler: a
 // SIGSEGV, jumping to a garbage address inside poppler's own
 // GfxXYZ2DisplayTransforms, that showed up once under a parallel ctest run
 // and never under a single-threaded one.

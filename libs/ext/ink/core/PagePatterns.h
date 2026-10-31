@@ -3,7 +3,7 @@
 // Ported from Rnote (crates/rnote-engine/src/document/background.rs, the gen_*_pattern
 // functions and Background::page_overlay_lines), copyright the Rnote contributors,
 // GPL-3.0-or-later, https://github.com/flxzt/rnote. The page styles beyond the stock
-// six are from Jernej's fork, branch jernej/features.
+// six are from the `jernej/features` branch of a Rnote fork.
 #include <QRectF>
 
 #include "InkTypes.h"

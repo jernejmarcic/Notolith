@@ -115,7 +115,7 @@ QStringList PluginHost::sandboxArguments(QString *program) const
 
     // An installed noteAppC-plugin-host lives under /usr and is already
     // covered by the /usr bind below; a build-tree one (every dev/test run,
-    // since HANDOFF.md requires building under /tmp) does not, so its own
+    // since builds go under /tmp) does not, so its own
     // directory is bound read-only too - the same reasoning as the plugin's
     // own directory, and for the same reason it must come *after* the tmpfs
     // mount on /tmp: bwrap applies mounts in argument order, and a bind

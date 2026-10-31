@@ -34,8 +34,7 @@ QString mergeAnnotationsMarkdown(const QString &existingText, const QString &gen
 /// Where the command writes absent any vault attachment-folder override:
 /// right beside the PDF, `<pdf base name> annotations.md`. Resolving the
 /// vault's actual attachment-folder rule needs Settings/Vault, which this
-/// module does not own (see the report this lane sent back) - the wiring
-/// snippet passes that resolved path in explicitly instead of this default
+/// module does not own - the caller passes that resolved path in explicitly instead of this default
 /// when the vault has one configured.
 QString defaultAnnotationsNotePath(const QString &pdfPath);
 

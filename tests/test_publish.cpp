@@ -250,7 +250,7 @@ TEST(PublishTest, ANestedHeadingLinkPointsAtTheHeadingUnderItsParent)
 }
 
 // ---------------------------------------------------------------------------
-// Privacy: the property this whole lane exists for.
+// Privacy: the property this whole module exists for.
 
 TEST(PublishTest, UnpublishedNoteLeaksNowhereInDefaultMode)
 {

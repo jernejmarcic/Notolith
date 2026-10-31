@@ -2,14 +2,14 @@
 """Generates a synthetic vault for timing the indexer.
 
     python3 tools/gen_bench_vault.py /tmp/bench-vault 20000
-    /tmp/noteAppC-build/tools/noteAppC-index --fresh /tmp/bench-vault
+    build/tools/noteAppC-index --fresh /tmp/bench-vault
 
 Notes are spread over five folders with a realistic link density (two to eight
 wikilinks each, so the name table and resolution do real work) and carry
 frontmatter, tags, a list, a task, a table and a fenced code block. The seed is
 fixed, so two runs produce the same vault and two timings compare.
 
-The plan's budget is 20 000 notes in under 5 s. That was 39.8 s until the
+The budget is 20 000 notes in under 5 s. That was 39.8 s until the
 full-text table stopped being scanned per note; see the commit that says so.
 """
 

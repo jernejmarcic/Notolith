@@ -455,7 +455,7 @@ QByteArray writeInk(const InkDocument &document)
     for (const Item &item : document.items())
         items.append(itemToJSON(item));
     top.insert(QStringLiteral("items"), items);
-    // R4: no hand-rolled emitter. QJsonDocument writes keys sorted and each number in its shortest form.
+    // No hand-rolled emitter. QJsonDocument writes keys sorted and each number in its shortest form.
     return QJsonDocument(top).toJson(QJsonDocument::Compact);
 }
 

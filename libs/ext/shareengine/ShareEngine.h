@@ -34,7 +34,7 @@ namespace noteAppC {
 /// Sharing notes peer to peer (docs/SHARE.md "The engine"): invitations,
 /// membership, and the CRDT updates of every shared note of one vault, over
 /// the vendored link layer. No editor and no window in here - ShareSession
-/// (a later lane) wires a note's editor to doc() and broadcast().
+/// (a later layer) wires a note's editor to doc() and broadcast().
 ///
 /// Lives on the UI thread, like every CrdtDoc it owns. The link's callbacks
 /// arrive on its own threads and are queued here, so a test needs an event

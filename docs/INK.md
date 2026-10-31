@@ -2,7 +2,7 @@
 
 Notolith opens `.ink` files as pages you write and draw on with a pen: pressure-sensitive strokes, an eraser,
 shapes, a selection you can move and resize, typed text boxes that are real Markdown, undo and autosave. The
-design is in `docs/superpowers/specs/2026-10-21-ink-core-design.md`; this file is what a user, a packager and the next
+design is in `docs/INK-DESIGN.md`; this file is what a user, a packager and the next
 person to touch the code need to know.
 
 The handwriting code is a pair of **loadable modules**, not part of the base program. Switched off, or not installed,
@@ -210,7 +210,7 @@ it is the creation order and the item's identity; the writer only ever produces 
 ## Tools, keys and the pen
 
 Every tool is on the toolbar and on a key, so everything works with no pen hardware at all. That matters: the
-FydeTab (PADD) pen the spike used has a tip only, no eraser end and no working barrel buttons. The keys need the
+FydeTab Duo's pen (used for the pen input test) has a tip only, no eraser end and no working barrel buttons. The keys need the
 drawing surface focused (click it once).
 
 | tool | key | what it does |
@@ -248,8 +248,8 @@ that size cannot be pasted back; there is no cap on the copy side. Plain text do
   `Qt::RightButton` (`BTN_STYLUS2`), **selects while held** (with the Pen tool, for that one stroke; the selection then
   stays for the Select tool). In the glyph studio, a click of the upper button saves the sample instead (below).
   `kHeldEraserButton`, `kHeldLassoButton` and `kTrustEraserPointerType` ("an eraser end is an eraser") keep these
-  defaults because Task 0's spike measured nothing else: the spike pen's buttons were broken and its pen has no eraser
-  end, so the mapping is **not yet verified on a pen that has them** (the Wacom of shuttlepod-1 is the test). If a
+  defaults because the pen input test measured nothing else: the test pen's buttons were broken and it has no eraser
+  end, so the mapping is **not yet verified on a pen that has them** (a Wacom pen is the test). If a
   pen reports other buttons, those constants are the one place to change.
 - **Mouse.** With "Draw with the mouse" off (the default) a left drag scrolls the page (a hand cursor), and
   `Ctrl`+drag selects in any tool; the Text tool still takes a click. On, the mouse draws like a pen at pressure 0.5.
@@ -292,7 +292,7 @@ A document is at most 100 000 pages (`kMaxPages`) on a side.
 | `cornell` | the Cornell note-taking layout |
 | `hexGrid` | a hexagonal grid |
 
-The first four are Rnote's stock styles; the other seven are from Jernej's Rnote fork (see "Attribution"). The pattern
+The first four are Rnote's stock styles; the other seven are from a Rnote fork (see "Attribution"). The pattern
 is drawn straight from the geometry, only for the lines that are on screen, and it is anchored to the page (to the
 document origin on a sheet), so a sheet that grows up or left never moves the pattern under the ink.
 
@@ -375,28 +375,28 @@ The full account, with the numbers, is in `docs/PERFORMANCE.md` under "Handwriti
 - **Big files.** A file over 256 KiB is parsed off the UI thread; the editor opens files up to 64 MiB. The index reads up
   to 16 MiB (see above). The undo history is 100 steps and a document is at most 100 000 pages.
 - **Clipboard.** A paste over 16 MiB is refused up front; below that it is parsed on the UI thread (about 12 ms a MiB).
-- **Executable cost (the R8 measurement).** The base program is linked with `ENABLE_EXPORTS` so modules can resolve
+- **Executable cost.** The base program is linked with `ENABLE_EXPORTS` so modules can resolve
   host classes from it. Measured against `main`: start-up unchanged (the dynamic loader 17.28 versus 17.27 million cycles,
   cold start within -2.2 to +2.1 percent), the file +1.3 percent, but the text segment +10.6 percent (the dynamic
   symbol tables are +1.19 MB of that). The size gate was written on file size and passes. If size is judged on the text segment, the
   fix is the `-fvisibility=hidden` plus an export macro rework the spec describes.
 - **The bench rows are provisional.** Every Handwriting row in `docs/PERFORMANCE.md` (`noteAppC-bench --phase ink`
-  and `--phase inkcarry`, taken 2026-10-22) was measured on a loaded machine, with a Wine game running and CCD1 about 75
+  and `--phase inkcarry`) was measured on a loaded machine, with a Wine game running and one core complex about 75
   percent idle, so the pool-side rows are pessimistic and noisy. They are provisional until a rerun on an idle machine,
   which is owed; the rows say so themselves.
 
 ## Not verified offscreen
 
 Everything above was tested with the offscreen platform, which cannot show a popup, a cursor, a real pen or a real
-window width. These are the checks left for a person with the hardware (the FydeTab and its pen, and shuttlepod-1's
-Wacom for the buttons):
+window width. These are the checks left for a person with the hardware (a FydeTab Duo and its pen, and a Wacom
+pen for the buttons):
 
-- **Barrel buttons and the eraser end.** The defaults are Rnote's. The spike pen's buttons were broken and it has no
+- **Barrel buttons and the eraser end.** The defaults are Rnote's. The test pen's buttons were broken and it has no
   eraser end, so held erase, held select and the glyph studio's barrel click have only been exercised with synthetic
   events.
 - **Pen proximity and pressure tail.** What happens when the pen leaves proximity mid-stroke
   (`TabletLeaveProximity`), and the pressure tail at pen-up, have not been seen on the device. A fractional display
-  scale (the spike ran at scale 2) is also untested; `kFractionalScaleOffset` is 0, 0.
+  scale (the pen input test ran at scale 2) is also untested; `kFractionalScaleOffset` is 0, 0.
 - **A pen tap in an open text box** should place the caret (the window system turns the ignored tablet event into a
   mouse click; a lost pen release makes a tap behave as it did before that fix).
 - **Text box editor against the rendered box.** The editor has a 1 px frame, so the text shifts about 1 px when editing
@@ -435,10 +435,9 @@ The stroke engine is a port of Rnote's, and Notolith, like Rnote, is GPL-3.0-or-
   `crates/rnote-engine/src/document/background.rs` (`PagePatterns.cpp`).
 
 The page styles beyond Rnote's stock ones (`linesMargin`, `gridMajor`, `musicStaff`, `calligraphy`, `seyes`, `cornell`,
-`hexGrid`) are from Jernej's fork of Rnote, branch `jernej/features`: commit
+`hexGrid`) are from a fork of Rnote, branch `jernej/features`: commit
 `974b1f8dbf3ff0b5bdde76b956b2545a390817db` (lines with margin, graph, staff, guide, Seyes, Cornell) and
-`b27e87b193ebd974bc1ee4e42d37d5732e2418b8` (hex grid). The fork has no public remote yet; those commits are in
-Jernej's local checkout of it (`origin` of that checkout is upstream Rnote).
+`b27e87b193ebd974bc1ee4e42d37d5732e2418b8` (hex grid). The fork is not public yet; its `origin` is upstream Rnote.
 
 ## Glyph studio
 

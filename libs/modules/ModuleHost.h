@@ -67,7 +67,7 @@ signals:
 struct ModuleHost {
     using ViewFactory = std::function<ModuleView *(const QString &path, QWidget *parent)>;
     using IndexReader = std::function<std::optional<QString>(const QByteArray &bytes)>;
-    /// Seam 2: declared for the host struct's shape; wired by Spec 3.
+    /// Seam 2: declared for the host struct's shape; not wired yet.
     using TabletHandler = std::function<bool(QTabletEvent *event, const QString &path)>;
 
     /// A settings row: a toggle when `defaultValue` is a bool, a combo when

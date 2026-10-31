@@ -9,7 +9,7 @@ What to look for: two different, related features.
 ## Git-backed note history
 
 Every save of a note is committed as a git diff outside the vault (no
-dotfile inside it - HANDOFF.md's "history and switches" entry, 0.093 ms a
+dotfile inside it; 0.093 ms a
 save). To see it on this note:
 
 1. Edit this paragraph - add a sentence, save.
@@ -31,4 +31,4 @@ note, kept for 7 days, under `$XDG_DATA_HOME/noteAppC/recovery`. To see it:
    against the note as it stands now, or restore it outright.
 
 Both features are switchable off independently in Settings > Core plugins
-(`note-history`, `file-recovery`), per HANDOFF.md's per-feature switches.
+(`note-history`, `file-recovery`).

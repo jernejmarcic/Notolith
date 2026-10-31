@@ -1,6 +1,6 @@
-// Headless performance harness for noteAppC. Jernej's requirement is that
-// this app measurably beats Obsidian while staying CPU-only, and "nothing
-// can be tuned before it is measured" - this tool only measures, on the
+// Headless performance harness for noteAppC. The requirement is that this app
+// measurably beats Obsidian while staying CPU-only, and that nothing can be
+// tuned before it is measured - this tool only measures, on the
 // offscreen QPA platform, the same way tools/shot.cpp does.
 //
 //   noteAppC-bench [--json] [--notes N] [--phase NAME] [vault]
@@ -243,8 +243,7 @@ double percentileOf(std::vector<double> samples, double fraction)
 
 /// One measured metric: `runs` independent samples of a timed operation,
 /// reduced to the numbers worth reporting. A median rather than one sample,
-/// because the plan's own performance section already learned that lesson
-/// on the index.
+/// because the same lesson was already learned on the index.
 struct Timing {
     QString metric;
     QString detail;
@@ -1224,8 +1223,8 @@ Timing benchPdfViewSave(const QString &pdfPath, const QString &scratchDir, int r
 /// readback, not the drawing. So this shows the widget, drives the scrollbar,
 /// and waits for a real paint event on the viewport each time. Vsync is off,
 /// or every measurement would come back as one refresh interval.
-/// --note: a real note to scroll instead of the generated one (Jernej's
-/// coursework on PADD scrolled worse than any generated note).
+/// --note: a real note to scroll instead of the generated one (a long
+/// real note scrolled worse on a FydeTab Duo than any generated note).
 QString gScrollNote;
 
 QString scrollNoteText(int lines)
@@ -1664,8 +1663,8 @@ qint64 benchMemory(const QString &vaultPath, const QString &largeNotePath)
 
 #ifdef NOTEAPPC_HAVE_INK
 // --- handwriting (phase `ink`) -------------------------------------------
-// Measurements 1-7 of the handwriting plan's Task 18. The gates are checked in
-// --json by whoever runs the bench (rows are named after the plan's list), not
+// Measurements 1-7 of the handwriting benchmark list. The gates are checked in
+// --json by whoever runs the bench (rows are named after that list), not
 // asserted here. Only the ink core and the host's own windows are used; nothing
 // reads or writes outside the temporary XDG homes main() sets up.
 
@@ -1716,7 +1715,7 @@ void sendPen(QWidget *widget, QEvent::Type type, QPointF pos, double pressure, q
     QApplication::sendEvent(widget, &event);
 }
 
-/// A Fixed-layout page of cols x rows cells, each holding one 30-point squiggle: the synthetic page of the plan
+/// A Fixed-layout page of cols x rows cells, each holding one 30-point squiggle: the synthetic page of the benchmark
 /// (10 000 strokes = 100 x 100).
 void fillInkDocument(ink::InkDocument &document, int cols, int rows, double cellWidth, double cellHeight)
 {
@@ -2052,7 +2051,7 @@ std::vector<Timing> benchKeystrokeModuleDirs(const QString &vaultPath, const QSt
             reduce(QStringLiteral("Keystroke through the window, 1 MB"), QStringLiteral("module dir empty"), without), ratio};
 }
 
-/// The file of the plan's open row: `strokes` short strokes in a grid, above kOffThreadParseBytes at 3 000.
+/// The file of the open row: `strokes` short strokes in a grid, above kOffThreadParseBytes at 3 000.
 QByteArray inkFileBody(int strokes)
 {
     QByteArray body = "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n";
@@ -2130,7 +2129,7 @@ void runInkPhase(QList<Timing> &timings, const QString &vaultPath, const QString
 }
 
 // --- handwriting carry items (phase `inkcarry`) -----------------------------
-// Costs the earlier tasks of the plan flagged for the bench (carry.md, "Task 18 bench"). Reported, not gated.
+// Costs flagged for the bench during the ink work. Reported, not gated.
 
 /// A closed path of `vertices` points on an ellipse round the rect: the lasso of an 800-vertex hand-drawn loop.
 QPainterPath lassoAround(const QRectF &rect, int vertices)
@@ -2428,7 +2427,7 @@ Timing benchInkPasteParse(int megabytes, int runs)
 }
 
 /// Fast scroll over a 50 000-stroke page: 20 viewport steps without waiting, then the time until the last screen is
-/// sharp and the number of tile jobs that ran (N1: jobs for cells that left the wanted set).
+/// sharp and the number of tile jobs that ran (jobs for cells that left the wanted set).
 std::pair<Timing, Timing> benchInkFastScroll(int runs)
 {
     std::vector<double> latency, jobs;
@@ -2558,16 +2557,16 @@ int main(int argc, char *argv[])
         }
         return false;
     }();
-    // --padd: the FydeTab Duo's panel, 2560x1600 at GNOME's 1.67, so a change
+    // --fydetab: the FydeTab Duo's panel, 2560x1600 at GNOME's 1.67, so a change
     // is measured at the scale and size that tablet scrolls at.
-    const bool wantsPADD = [argc, argv] {
+    const bool wantsFydeTab = [argc, argv] {
         for (int i = 1; i < argc; ++i) {
-            if (qstrcmp(argv[i], "--padd") == 0)
+            if (qstrcmp(argv[i], "--fydetab") == 0)
                 return true;
         }
         return false;
     }();
-    if (wantsPADD && !qEnvironmentVariableIsSet("QT_SCALE_FACTOR"))
+    if (wantsFydeTab && !qEnvironmentVariableIsSet("QT_SCALE_FACTOR"))
         qputenv("QT_SCALE_FACTOR", "1.67");
     if (!wantsGPU) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -2668,18 +2667,18 @@ int main(int argc, char *argv[])
                                                   "(the first table layout of a process, so never in a full run)."),
                                    QStringLiteral("name"));
     parser.addOption(phaseOption);
-    QCommandLineOption paddOption(QStringLiteral("padd"),
-                                  QStringLiteral("Only the scroll rows at PADD's panel (FydeTab Duo, "
+    QCommandLineOption fydetabOption(QStringLiteral("fydetab"),
+                                  QStringLiteral("Only the scroll rows at the FydeTab Duo's panel ("
                                                  "2560x1600 at scale 1.67): a finger drag, a wheel "
                                                  "notch and a page, through the real repaint path."));
-    parser.addOption(paddOption);
+    parser.addOption(fydetabOption);
     QCommandLineOption noteOption(QStringLiteral("note"),
-                                  QStringLiteral("With --padd or the scroll rows: scroll this note instead "
+                                  QStringLiteral("With --fydetab or the scroll rows: scroll this note instead "
                                                  "of a generated one."),
                                   QStringLiteral("file"));
     parser.addOption(noteOption);
     QCommandLineOption sizeOption(QStringLiteral("size"),
-                                  QStringLiteral("With --padd: the editor's size, e.g. 685x1278 (PADD in "
+                                  QStringLiteral("With --fydetab: the editor's size, e.g. 685x1278 (the FydeTab Duo in "
                                                  "portrait with the sidebar open)."),
                                   QStringLiteral("WxH"));
     parser.addOption(sizeOption);
@@ -2750,7 +2749,7 @@ int main(int argc, char *argv[])
 
     QList<Timing> timings;
 
-    if (parser.isSet(paddOption)) {
+    if (parser.isSet(fydetabOption)) {
         // The app's style and stylesheet: its scrollbars repaint with every
         // scroll step, and a bare Fusion one costs something else entirely.
         QApplication::setStyle(new noteAppC::PopupStyle);
@@ -2763,7 +2762,7 @@ int main(int argc, char *argv[])
         timings << benchScrollOnScreen(5000, false, 20, 300, panel); // a finger dragging
         timings << benchScrollOnScreen(5000, false, 72, 300, panel); // a wheel notch
         timings << benchScrollOnScreen(5000, false, 0, 400, panel);  // a page
-        printTable(timings, 0, QStringLiteral("not measured in a --padd run"));
+        printTable(timings, 0, QStringLiteral("not measured in a --fydetab run"));
         return 0;
     }
 

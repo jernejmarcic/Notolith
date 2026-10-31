@@ -1,4 +1,4 @@
-// The ink core (docs/superpowers/specs/2026-10-21-ink-core-design.md section 7
+// The ink core (docs/INK-DESIGN.md section 7
 // and 12): model and history, the .ink format, the outline composer, input,
 // the canvas. Pure functions and widgets on the offscreen platform.
 #include <gtest/gtest.h>
@@ -66,7 +66,7 @@ std::shared_ptr<const Stroke> line(double x0, double y0, double x1, double y1, d
     return stroke;
 }
 
-/// The canvas never renders in paintEvent (Task 11): a grab shows the page background until its tiles arrive from the
+/// The canvas never renders in paintEvent: a grab shows the page background until its tiles arrive from the
 /// pool. This grabs until a grab asks for nothing (every tile it painted is fresh at the current zoom, nothing is in
 /// flight: a request is only ever made during a paint, and finishes in the event loop) and returns that frame.
 /// Stale tiles outside what is painted may remain: a cache keeps them until they are evicted.
@@ -654,7 +654,7 @@ TEST(InkFormatTest, GzipIsCappedWhenUnpackedAndRefusesLeftovers)
     EXPECT_TRUE(read.error.contains(QStringLiteral("huge.ink")) && read.error.contains(QStringLiteral("too large"))) << read.error.toStdString();
 }
 
-// Task 8: the cap guards the bytes the parser sees, plain JSON included, not only what gzip inflates to
+// The cap guards the bytes the parser sees, plain JSON included, not only what gzip inflates to
 // (readers other than loadInkFile hand readInk bytes without a size check of their own).
 TEST(InkFormatTest, PlainJSONIsCappedLikeGzip)
 {
@@ -853,7 +853,7 @@ TEST(InkFormatTest, SavesAndLoadsThroughAnAtomicReplace)
     EXPECT_TRUE(read.error.contains(QStringLiteral("missing.ink")));
 }
 
-// ---- Task 5: the outline composer ----
+// ---- The outline composer ----
 
 namespace {
 
@@ -1184,7 +1184,7 @@ TEST(StrokeOutlineTest, MatchesTheGoldenImagesAtTwoZoomsAndThreeRatios)
 
 namespace {
 
-/// A straight pen line from (0,100) to (200,100), `n` samples at `hz` (a 200 Hz pen is faster than PADD's 120), rising pressure.
+/// A straight pen line from (0,100) to (200,100), `n` samples at `hz` (a 200 Hz pen is faster than the FydeTab Duo's 120), rising pressure.
 std::vector<InkSample> syntheticLine(int n, double hz = 200.0)
 {
     std::vector<InkSample> out;
@@ -1224,8 +1224,8 @@ TEST(InkInputTest, TheInputRateIsPaddsMeasured120Hz)
     EXPECT_EQ(kFractionalScaleOffset, QPointF(0.0, 0.0));
 }
 
-// R14: the spike saw 128 pairs of equal timestamps and none backwards at 120 Hz.
-TEST(InkInputTest, APaddFeedAt120HzWithEqualTimestampPairsCoalescesWithoutDrops)
+// The pen input test saw 128 pairs of equal timestamps and none backwards at 120 Hz.
+TEST(InkInputTest, AFydeTabFeedAt120HzWithEqualTimestampPairsCoalescesWithoutDrops)
 {
     InkInput input;
     const double dt = 1.0 / kInputRateHz;
@@ -1354,7 +1354,7 @@ TEST(InkInputTest, SamplesSharingATimestampCoalesceTheNewerReplacesTheOlder)
     EXPECT_NEAR(smoothed->points.back().x, 30.0, 1.0);
 }
 
-// R14: PADD's pen peaks at 0.657 with a median of 0.21. A synthetic device with that range.
+// A FydeTab Duo's pen peaks at 0.657 with a median of 0.21. A synthetic device with that range.
 TEST(PressureNormaliserTest, BeforeCalibrationPressureIsUntouchedAndNothingIsReportedChanged)
 {
     PressureNormaliser normaliser;
@@ -1492,7 +1492,7 @@ TEST(InkInputTest, NonFiniteSamplesNeverReachTheModelerOrTheStroke)
     EXPECT_FALSE(bad.finish());
 }
 
-// Carry (Task 4 re-review): a tap must become a stroke the reader accepts and the renderer draws.
+// A tap must become a stroke the reader accepts and the renderer draws.
 TEST(InkInputTest, ATapIsAValidDotStrokeThatRoundTripsThroughTheFile)
 {
     for (const bool rawMode : {false, true}) {
@@ -1520,7 +1520,7 @@ TEST(InkInputTest, ATapIsAValidDotStrokeThatRoundTripsThroughTheFile)
     }
 }
 
-// R14 end to end: a pen that tops out at 0.657 draws full-pressure lines once calibrated.
+// End to end: a pen that tops out at 0.657 draws full-pressure lines once calibrated.
 TEST(InkInputTest, ACalibratedPaddPenReachesFullPressureThroughTheModeler)
 {
     PressureNormaliser normaliser;
@@ -1536,7 +1536,7 @@ TEST(InkInputTest, ACalibratedPaddPenReachesFullPressureThroughTheModeler)
 }
 
 
-// Fix round 1, Important 1: the modeler refuses an input gap of about 1.67 s (max_outputs_per_call
+// The modeler refuses an input gap of about 1.67 s (max_outputs_per_call
 // 200 at 120 outputs/s) and used to stay failing for the rest of the stroke. A pen resting still
 // on the page for any time must not end the smoothing.
 TEST(InkInputTest, SmoothingContinuesAfterAPauseInContact)
@@ -1569,7 +1569,7 @@ TEST(InkInputTest, SmoothingContinuesAfterAPauseInContact)
     }
 }
 
-// Fix round 1, Important 2: a stray or stored out-of-range number must not ruin a device for good.
+// A stray or stored out-of-range number must not ruin a device for good.
 TEST(PressureNormaliserTest, OutOfRangeAndNonFiniteSamplesNeverPoisonTheLearnedMaximum)
 {
     const double inf = std::numeric_limits<double>::infinity();
@@ -1601,7 +1601,7 @@ TEST(PressureNormaliserTest, ABadStoredMaximumIsClampedOrRejectedAndTheDeviceSti
     }
 }
 
-// Fix round 1, Important 1 (second half): whatever the modeler refuses - here a coordinate so large the
+// Whatever the modeler refuses - here a coordinate so large the
 // spring state overflows - it is restarted from that sample, never left failing for the rest of the stroke.
 TEST(InkInputTest, AModelerFailureRestartsTheModelerAndTheStrokeStaysSmoothed)
 {
@@ -1697,7 +1697,7 @@ TEST(InkCanvasTest, TheEraserRemovesWholeStrokesItTouches)
     EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.front().y, 200.0, 1.0);
     f.canvas.setTool(InkCanvas::Tool::Pen);
     // The pen's eraser end erases while the pen tool is selected (kTrustEraserPointerType stays
-    // true: PADD has no eraser end, other pens do). The plain tip with the Eraser tool, above,
+    // true: the FydeTab Duo's pen has no eraser end, other pens do). The plain tip with the Eraser tool, above,
     // is the way in that needs no hardware; this branch only keeps the test honest if the
     // constant is ever flipped.
     if (kTrustEraserPointerType) {
@@ -1797,7 +1797,7 @@ TEST(InkCanvasTest, TouchPanFollowsTheFingerWhileTheScrollAreaMovesTheCanvas)
     EXPECT_TRUE(f.canvas.document().items().empty());
 }
 
-// R14: the PADD pen never reports above 0.657. After the calibration samples the strokes reach full pressure.
+// The FydeTab Duo's pen never reports above 0.657. After the calibration samples the strokes reach full pressure.
 TEST(InkCanvasTest, PressureIsNormalisedByTheLearnedMaximumOfTheDevice)
 {
     CanvasFixture f;
@@ -1838,7 +1838,7 @@ TEST(InkCanvasTest, AStoredMaximumOrTheSeedAppliesFromTheFirstStroke)
         EXPECT_DOUBLE_EQ(p.pressure, 0.5);
 }
 
-// R14: PADD's pen has no eraser end and no working buttons, so nothing may need them.
+// The FydeTab Duo's pen has no eraser end and no working buttons, so nothing may need them.
 TEST(InkCanvasTest, EveryToolIsReachableFromTheKeyboardAndATipAloneDrawsAndErases)
 {
     CanvasFixture f;
@@ -1880,7 +1880,7 @@ TEST(InkCanvasTest, LiveStrokeRepaintsOnlyTheNewSegment)
     ASSERT_FALSE(paints.rects.isEmpty());
     EXPECT_LT(paints.united().width(), f.canvas.width() / 2) << "a 10 px segment never repaints the canvas";
     EXPECT_LT(paints.united().height(), f.canvas.height() / 2);
-    // The real invariant lives in the bench (Track S1 Task 18): a 200 Hz feed costs under 1 ms per sample.
+    // The real invariant lives in the bench: a 200 Hz feed costs under 1 ms per sample.
 }
 
 TEST(InkCanvasTest, PenUpRepaintsWhereThePredictedTailWas)
@@ -1932,13 +1932,13 @@ TEST(InkCanvasTest, AReadOnlyCanvasIgnoresThePenAndTheKeysButStillPans)
     EXPECT_GE(pans.count(), 1);
 }
 
-// R14 (ruling): a pen that reports no buttons and pointer type Pen still erases once the tool is switched from outside.
+// A pen that reports no buttons and pointer type Pen still erases once the tool is switched from outside.
 TEST(InkCanvasTest, SwitchingTheToolWithSetToolMakesTheNextButtonlessPenStrokeErase)
 {
     CanvasFixture f;
     penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000, Qt::LeftButton, QPointingDevice::PointerType::Pen);
     ASSERT_EQ(f.canvas.document().items().size(), 1u);
-    f.canvas.setTool(InkCanvas::Tool::Eraser); // what the toolbar does (Task 16)
+    f.canvas.setTool(InkCanvas::Tool::Eraser); // what the toolbar does
     penStroke(&f.canvas, QPointF(100, 30), QPointF(100, 70), 2000, Qt::NoButton, QPointingDevice::PointerType::Pen);
     EXPECT_TRUE(f.canvas.document().items().empty());
     f.canvas.setTool(InkCanvas::Tool::Pen);
@@ -1962,7 +1962,7 @@ TEST(InkCanvasTest, UndoAndRedoWaitForThePenToLiftSoNoLiveStrokeIsOrphaned)
     EXPECT_EQ(f.canvas.document().items().size(), 1u);
 }
 
-// --- fix round 1: interruptions, eraser sweep, release pressure, overlay size ---
+// --- Interruptions, eraser sweep, release pressure, overlay size ---
 
 namespace {
 
@@ -2296,7 +2296,7 @@ TEST(InkCanvasTest, ReplacingTheSameDocumentMidEraseBringsTheUncommittedRemovalB
     EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.front().y, 50.0, 1.0);
 }
 
-// --- Task 9: page layouts -------------------------------------------------------
+// --- Page layouts -------------------------------------------------------
 
 namespace {
 
@@ -2660,7 +2660,7 @@ TEST(InkLayoutTest, OriginShiftFollowsEveryExtentOriginChangeIncludingUndoAndRed
     EXPECT_EQ(shifted.count(), 3);
 }
 
-// --- page patterns (Task 10) ---------------------------------------------------
+// --- page patterns ---------------------------------------------------
 
 namespace {
 
@@ -3037,7 +3037,7 @@ TEST(PagePatternTest, ARangeOnAPageWithANegativeOriginCountsFromThePageTop)
     EXPECT_TRUE(visibleLineRange(QRectF(-500, -900, 50, 100), page, 32.0).isEmpty()) << "above the page";
 }
 
-// --- the tile cache (Task 11, R5) ------------------------------------------------------------------
+// --- the tile cache ------------------------------------------------------------------
 
 namespace {
 
@@ -3066,7 +3066,7 @@ struct PoolOfOne {
 
 } // namespace
 
-// Review I3: keepOnly cancels the renders queued for cells the view left; a cell that is wanted again must not wait for the
+// KeepOnly cancels the renders queued for cells the view left; a cell that is wanted again must not wait for the
 // pool to drain the queue ahead of its cancelled job before it is asked for anew.
 TEST(TileCacheTest, ACellWantedAgainAfterKeepOnlyIsRequestedAtOnceNotAfterTheQueue)
 {
@@ -3164,7 +3164,7 @@ TEST(TileCacheTest, AnInvalidateEndingOnATileEdgeLeavesTheNextTileFresh)
 
 TEST(TileCacheTest, AResultFinishedAfterAnInvalidateIsKeptButStale)
 {
-    // I4: the render started before the content changed again, but it holds everything before that. It is shown
+    // The render started before the content changed again, but it holds everything before that. It is shown
     // (blurry stand-in) and asked for again; throwing it away would starve a tile a continuous eraser sweep keeps hitting.
     QSemaphore gate;
     TileCache cache;
@@ -3323,7 +3323,7 @@ TEST(TileCacheTest, TheDestructorWaitsForAJobThatHasStarted)
 
 TEST(TileCacheTest, TheDestructorDoesNotWaitBehindJobsThatNeverStarted)
 {
-    // I3: the pool is shared and first-in first-out; closing a tab after a fast scroll must not wait for its whole queue.
+    // The pool is shared and first-in first-out; closing a tab after a fast scroll must not wait for its whole queue.
     QThreadPool *pool = QThreadPool::globalInstance();
     const int threads = pool->maxThreadCount();
     pool->setMaxThreadCount(1);
@@ -3357,7 +3357,7 @@ TEST(TileCacheTest, TheDestructorDoesNotWaitBehindJobsThatNeverStarted)
 TEST(InkCanvasTest, TheTileCacheFollowsTheSettingInMB)
 {
     InkCanvas canvas;
-    EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(64) * 1024 * 1024) << "the default, R5";
+    EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(64) * 1024 * 1024) << "the default";
     canvas.setTileCacheMB(16);
     EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(16) * 1024 * 1024);
     canvas.setTileCacheMB(0);
@@ -3485,7 +3485,7 @@ TEST(InkCanvasTest, ErasingInvalidatesTheErasedStrokesTiles)
 
 TEST(InkCanvasTest, ABudgetSmallerThanTheWorkingSetSettlesInsteadOfThrashing)
 {
-    // I1: 16 visible tiles against an 8 MB budget used to evict wanted tiles, request them again, for ever.
+    // 16 visible tiles against an 8 MB budget used to evict wanted tiles, request them again, for ever.
     std::atomic<int> jobs{0};
     InkCanvas canvas;
     DocumentSettings settings;
@@ -3511,7 +3511,7 @@ TEST(InkCanvasTest, ABudgetSmallerThanTheWorkingSetSettlesInsteadOfThrashing)
     EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(8) * 1024 * 1024) << "the setting is reported as set; the room for the visible tiles is on top";
 }
 
-// Task 18, N1: the pool is first-in first-out and a render queued for a cell the view has since left would run before
+// The pool is first-in first-out and a render queued for a cell the view has since left would run before
 // the ones the user is looking at. A paint now cancels the queued renders outside what it wants.
 TEST(InkCanvasTest, AFastScrollDoesNotRenderTheTilesItLeftBehind)
 {
@@ -3658,7 +3658,7 @@ void expectTilesMatchADirectRender()
 TEST(InkCanvasTest, TilesJoinWithoutASeamAndMatchADirectRender) { expectTilesMatchADirectRender(); }
 
 // Runs in the ink_dpr2 ctest entry too (QT_SCALE_FACTOR=2): a cell is 256 logical px there.
-// A text box's picture is rendered for the settled zoom and the screen's pixel ratio (I1): a 1 px line of the box shows
+// A text box's picture is rendered for the settled zoom and the screen's pixel ratio: a 1 px line of the box shows
 // as exactly zoom x ratio device px, hard-edged, not as an upscaled smear. Runs in ink_dpr2 and ink_dpr15 too.
 TEST(InkCanvasDprTest, ATextBoxPictureIsRenderedForTheZoomAndTheScreenAndStaysSharp)
 {
@@ -3935,7 +3935,7 @@ TEST(InkCanvasTest, TheEraserModeHasAKeyAndASignalAndReadOnlyIgnoresIt)
 }
 
 
-// --- Task 13: lasso and rectangle selection -------------------------------------------------------------
+// --- Lasso and rectangle selection -------------------------------------------------------------
 
 namespace {
 
@@ -4069,7 +4069,7 @@ TEST(InkToolsTest, ClipboardRoundTripKeepsStyleAndRaw)
     }
 }
 
-// Task 18 (carry): paste() parses the clipboard on the UI thread, about 12 ms a MiB, and a payload may be another
+// paste() parses the clipboard on the UI thread, about 12 ms a MiB, and a payload may be another
 // program's. 64 MiB took about 0.8 s; the cap is 16 MiB (a heavy note is about 2 MB), checked before any parse.
 TEST(InkToolsTest, AClipboardPayloadOverSixteenMiBIsRefusedBeforeItIsParsed)
 {
@@ -4241,7 +4241,7 @@ TEST(InkCanvasTest, CopyPutsTheTextBoxContentsOnTheClipboardAsPlainText)
     EXPECT_EQ(QApplication::clipboard()->mimeData()->text(), QStringLiteral("hello **there**"));
 }
 
-// Review I6: paste refuses what is over kMaxClipboardBytes, so copy must not put it there: the clipboard keeps what it
+// Paste refuses what is over kMaxClipboardBytes, so copy must not put it there: the clipboard keeps what it
 // held and the owner is told why. The 17 MiB is one text box (the JSON is its markdown plus a little).
 TEST(InkCanvasTest, CopyOverTheClipboardCapRefusesLeavesTheClipboardAloneAndSaysWhy)
 {
@@ -4563,7 +4563,7 @@ TEST(InkCanvasTest, AnEdgeHandleResizesOneAxisOnly)
     EXPECT_NEAR(now.height(), box.height(), 2.0) << "only x was stretched (the width grows a little with it)";
 }
 
-// --- Task 14: shapes ----------------------------------------------------------------------------------------
+// --- Shapes ----------------------------------------------------------------------------------------
 
 namespace {
 
@@ -4901,7 +4901,7 @@ TEST(InkCanvasTest, ASelectedShapeMovesWithItsPoints)
     EXPECT_EQ(f.canvas.selection().size(), 1u);
 }
 
-// --- Task 15: text boxes ----------------------------------------------------------------------------------------
+// --- Text boxes ----------------------------------------------------------------------------------------
 
 namespace {
 
@@ -5111,7 +5111,7 @@ TEST(InkCanvasTest, TextRendersThroughTheInstalledRenderer)
     f.canvas.grab();
     EXPECT_EQ(stub.calls, 1) << "mid-pinch: the old picture is stretched until the zoom settles, as the tiles are";
     settledGrab(f.canvas);
-    EXPECT_EQ(stub.calls, 2) << "settled at 2: a picture with the pixels for it, not the old one blown up (I1)";
+    EXPECT_EQ(stub.calls, 2) << "settled at 2: a picture with the pixels for it, not the old one blown up";
     EXPECT_GE(stub.lastScale, 2.0 * dpr - 1e-6);
     EXPECT_EQ(stub.lastSize, QSizeF(200, 60)) << "the layout is still the box's size in document px";
     EXPECT_EQ(stub.lastPixmapSize, QSize(qRound(200 * stub.lastScale), qRound(60 * stub.lastScale)));
@@ -5150,7 +5150,7 @@ TEST(InkCanvasTest, ANewTextBoxIsNotRenderedWhileThePenIsMoving)
     EXPECT_EQ(stub.calls, 1);
 }
 
-// R5: a QPixmap, a grab and widget fonts belong to the GUI thread: the pool only ever sees strokes and shapes.
+// A QPixmap, a grab and widget fonts belong to the GUI thread: the pool only ever sees strokes and shapes.
 TEST(InkCanvasTest, TextBoxesAreRenderedOnTheUIThreadOnly)
 {
     CanvasFixture f;
@@ -5265,7 +5265,7 @@ TEST(InkCanvasTest, BeginEditingTextRefusesAnItemThatIsNotATextBox)
     EXPECT_FALSE(f.canvas.isEditingText());
 }
 
-// Fix round 2 (R1): a pen press inside the open editor is the editor's, not a new Text-tool press.
+// A pen press inside the open editor is the editor's, not a new Text-tool press.
 TEST(InkCanvasTest, APenPressInsideTheOpenEditorLeavesItOpenAndTheBoxInPlace)
 {
     CanvasFixture f;
@@ -5286,7 +5286,7 @@ TEST(InkCanvasTest, APenPressInsideTheOpenEditorLeavesItOpenAndTheBoxInPlace)
     EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, QStringLiteral("old!"));
 }
 
-// Fix round 1 (I4b): real key events, through the event path, while an editor is open.
+// Real key events, through the event path, while an editor is open.
 TEST(InkCanvasTest, KeysSentWhileAnEditorIsOpenReachNeitherTheToolsNorTheDocument)
 {
     CanvasFixture f;
@@ -5352,7 +5352,7 @@ TEST(InkCanvasTest, AnUntouchedBoxWithCRLFOrNBSPIsNotDirtyAndCommitsNothing)
     EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, markdown);
 }
 
-// A box larger than the device limit is rendered at a lower scale, not at a size that would eat the memory (I1).
+// A box larger than the device limit is rendered at a lower scale, not at a size that would eat the memory.
 TEST(InkCanvasTest, ABigBoxIsRenderedWithinTheDeviceSideLimit)
 {
     CanvasFixture f;
@@ -5366,7 +5366,7 @@ TEST(InkCanvasTest, ABigBoxIsRenderedWithinTheDeviceSideLimit)
     EXPECT_GT(stub.lastScale, 0.0);
 }
 
-// I4: the renderer is only ever given a bounded text; the stored text is whole.
+// The renderer is only ever given a bounded text; the stored text is whole.
 TEST(InkCanvasTest, AHostileBoxIsRenderedTruncatedAtALineEndAndStoredWhole)
 {
     CanvasFixture f;
@@ -5396,7 +5396,7 @@ TEST(InkCanvasTest, AHostileBoxIsRenderedTruncatedAtALineEndAndStoredWhole)
     EXPECT_EQ(stub.lastMarkdown, QStringLiteral("short"));
 }
 
-// I4: the pictures of boxes are cached up to a byte budget, the least recently painted going first.
+// The pictures of boxes are cached up to a byte budget, the least recently painted going first.
 TEST(InkCanvasTest, TheTextPicturesStayWithinTheirBudgetAndTheLeastRecentlyPaintedGoFirst)
 {
     CanvasFixture f;
@@ -5431,7 +5431,7 @@ TEST(InkCanvasTest, TheTextPicturesStayWithinTheirBudgetAndTheLeastRecentlyPaint
     EXPECT_EQ(stub.calls, boxes + 1) << "the first painted was evicted";
 }
 
-// Task 18, P1: the pictures a paint uses are exempt from the eviction above, so a file with many large boxes in view
+// The pictures a paint uses are exempt from the eviction above, so a file with many large boxes in view
 // held every one of them (each up to 64 MB). A paint that has used the budget draws the rest as placeholders.
 TEST(InkCanvasTest, OnePaintOfManyLargeBoxesStaysNearTheTextPictureBudget)
 {
@@ -5459,7 +5459,7 @@ TEST(InkCanvasTest, OnePaintOfManyLargeBoxesStaysNearTheTextPictureBudget)
     EXPECT_GT(stub.calls, 0);
 }
 
-// Review I4: the budget is spent by what a paint renders, not by what it reuses, so the boxes past it are rendered by the
+// The budget is spent by what a paint renders, not by what it reuses, so the boxes past it are rendered by the
 // next paints (the canvas asks for them with a queued update): 30 ordinary boxes at zoom 4 (1.3 MB each, 39 MB in all,
 // over the 32 MB budget) all get a picture within a few paints, the last ones in paint order included. The canvas is not
 // shown: a real paint would evict the boxes out of view, which is right but not what this counts.
@@ -5500,7 +5500,7 @@ TEST(InkCanvasTest, BoxesPastTheBudgetOfOnePaintGetTheirPicturesInTheNextPaints)
     EXPECT_EQ(stub.calls, boxes) << "none was rendered twice";
 }
 
-// Review N1: what a paint uses is exempt from the eviction, so the 32 MB budget limits the work of a paint, not what a
+// What a paint uses is exempt from the eviction, so the 32 MB budget limits the work of a paint, not what a
 // view holds: 100 large boxes on top of each other would end up as 100 pictures. The hard ceiling (4 x the budget)
 // bounds it, and a box over it keeps what it has and asks for no further paint, so the follow-ups stop.
 TEST(InkCanvasTest, ManyLargeBoxesInViewNeverHoldMoreThanTheCeilingAndTheFollowUpPaintsStop)
@@ -5589,7 +5589,7 @@ QLineEdit *lineEditOf(InkCanvas &canvas)
 }
 } // namespace
 
-// I3: the canvas does not know the host's editor; it is handed one.
+// The canvas does not know the host's editor; it is handed one.
 TEST(InkCanvasTest, AnInstalledEditorFactoryProvidesTheEditorAndItsTextIsWhatCommits)
 {
     CanvasFixture f;

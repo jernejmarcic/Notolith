@@ -279,8 +279,8 @@ public:
     /// scale: a scroll step there moves the note by a fraction of a device
     /// pixel, which a raster backing store cannot shift (QBackingStore::scroll
     /// refuses, and so does Qt Wayland's shm store at any fractional scale),
-    /// so raster repaints the whole viewport every frame. Measured on PADD at
-    /// 1.67 and shuttlepod-1 at 1: docs/PERFORMANCE.md, "GPU acceleration".
+    /// so raster repaints the whole viewport every frame. Measured on a FydeTab Duo at
+    /// 1.67 and a Radeon 780M 2-in-1 laptop at 1: docs/PERFORMANCE.md, "GPU acceleration".
     static bool GPUaccelerationWanted(const QString &setting, qreal devicePixelRatio);
 
     /// Called, on the UI thread, once when the parse of a note over 128 kB first
@@ -544,10 +544,9 @@ public:
     void refreshBases();
 
     // --- feature switches ---------------------------------------------------
-    // Jernej: "Everything but the core features, should be decoupled enough
-    // that they can be turned off ... IF the features existing decreases
-    // [performance]". Every optional block renderer is gated by one of these;
-    // off means the block shows as source (or, for a file embed, a plain
+    // Everything but the core features should be decoupled enough that it can
+    // be turned off, if its existing decreases performance. Every optional
+    // block renderer is gated by one of these; off means the block shows as source (or, for a file embed, a plain
     // link) and none of that feature's code runs or allocates - no cache, no
     // worker thread, no bytes read that would not be read anyway.
     struct Features {

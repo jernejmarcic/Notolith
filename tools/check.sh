@@ -1,5 +1,5 @@
 #!/bin/sh
-# Everything a CI would run, run here instead (there is no remote):
+# Everything a CI would run, run locally:
 #
 #   1. the release build and every suite - the performance guards and the
 #      round-trip fuzz are tests, so they run with them;
@@ -9,7 +9,7 @@
 #
 #   sh tools/check.sh [--bench]
 #
-# Builds go to /tmp: ~/Documents is synced to other machines. Each step runs
+# Builds go to /tmp, outside the source tree. Each step runs
 # in a memory-capped scope where systemd is there, so a runaway test is
 # killed alone instead of taking the session with it. CFLAGS and CXXFLAGS are
 # dropped for the configure: a distribution's -march=native must not leak in.
@@ -29,7 +29,7 @@ jobs=$((cores > 8 ? 8 : cores))
 
 cap() {
     # A cgroup where systemd will make one. A user manager can refuse a
-    # transient scope - starbase-1's did, on and off, for an afternoon - and
+    # transient scope, on and off, and
     # systemd-run then exits 1 without running anything; an address-space
     # limit per process still stops one runaway. A build that really failed
     # exits 1 too, and running it again once changes nothing.

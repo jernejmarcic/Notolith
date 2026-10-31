@@ -481,7 +481,7 @@ TEST(LanguageStyle, MissingFileIsNormal)
 
 TEST(CalloutStyle, ColorIsTheBodyTextNotTheRail)
 {
-    // The format Jernej chose: `color` is the text, `bar` is the rail. The two
+    // By the format's design, `color` is the text, `bar` is the rail. The two
     // were once crossed, so a rail came out in the colour meant for words.
     CalloutStyle style;
     style.bar = QColor(0x11, 0x22, 0x33);

@@ -57,8 +57,7 @@ styling via `callouts.ini`/`codeblocks.ini`, documented in
 ### Embeds
 - [[Note Embeds]], [[Image Embeds]], [[PDF Embeds]], [[Media Embeds]],
   [[Source Embeds]], [[Tex Embeds]], [[Other Embeds]] - one note per embed
-  kind; each says which forms render today (see `TODO.md`'s "afternoon:
-  embeds" - the lane is still at work).
+  kind;.
 
 ### Query, bases and raw blocks
 - [[Query Blocks]] - ` ```query ` embedded search.

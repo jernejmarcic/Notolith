@@ -31,10 +31,10 @@ table should get a horizontal scrollbar rather than squeezing the window.
 
 | ID | Name | Category | Owner | Status | Priority | Created | Updated | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Vault open | Core | lane-lead | done | high | 2026-09-22 | 2026-09-23 | atomic save |
-| 2 | Live preview | Editor | lane-lead | done | high | 2026-09-22 | 2026-09-23 | viewport-only layout |
-| 3 | Callouts | Rendering | lane-B | done | medium | 2026-09-22 | 2026-09-22 | 13 built-in types |
-| 4 | Graph view | Optional | lane-C | done | medium | 2026-09-23 | 2026-09-23 | Barnes-Hut |
-| 5 | Canvas | Optional | lane-D | done | medium | 2026-09-23 | 2026-09-23 | JSON Canvas |
-| 6 | Bases | Optional | lane-E | done | medium | 2026-09-23 | 2026-09-23 | table + card views |
-| 7 | Embeds | Editor | lane-I | in progress | high | 2026-09-23 | 2026-09-23 | this vault documents the gaps |
+| 1 | Vault open | Core | alice | done | high | 2026-09-22 | 2026-09-23 | atomic save |
+| 2 | Live preview | Editor | alice | done | high | 2026-09-22 | 2026-09-23 | viewport-only layout |
+| 3 | Callouts | Rendering | bob | done | medium | 2026-09-22 | 2026-09-22 | 13 built-in types |
+| 4 | Graph view | Optional | carol | done | medium | 2026-09-23 | 2026-09-23 | Barnes-Hut |
+| 5 | Canvas | Optional | dave | done | medium | 2026-09-23 | 2026-09-23 | JSON Canvas |
+| 6 | Bases | Optional | erin | done | medium | 2026-09-23 | 2026-09-23 | table + card views |
+| 7 | Embeds | Editor | frank | in progress | high | 2026-09-23 | 2026-09-23 | embed kinds |

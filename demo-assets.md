@@ -18,8 +18,7 @@ not apply to them - see the note at the end of this file.
 Sizes (`ls -la`): nvim-logo.png 5.9 KB, kdoctools-banner.jpg 486 B,
 graphviz-dot-manual.pdf 57.9 KB (9 pages - used for every PDF page-argument
 test), bell.oga 8.3 KB, example-movie.mp4 194.6 KB, color-profile.icc 416 B.
-Total assets 269 KB; the whole `demo/` vault is well under the 5 MB cap (see
-the report for the exact `du -sb`).
+Total assets 269 KB; the whole `demo/` vault is well under 5 MB.
 
 Picked for size and a permissive-enough licence over the first match found:
 `graphviz-dot-manual.pdf` because it is a real 9-page document, small enough

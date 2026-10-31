@@ -1,10 +1,9 @@
-# Flatpak build of the working tree two levels up. Not yet built: this
-# machine has no flatpak-builder. To try it (from packaging/flatpak, build
-# directories under /tmp because ~/Documents is synced):
+# Flatpak build of the source tree two levels up. Untested: it needs
+# flatpak-builder. To try it, from packaging/flatpak:
 #
 #   flatpak install --user flathub org.kde.Sdk//6.9 org.kde.Platform//6.9 org.flatpak.Builder
 #   flatpak run org.flatpak.Builder --user --install --force-clean \
-#       --state-dir=/tmp/noteAppC-flatpak-state /tmp/noteAppC-flatpak io.github.jernejmarcic.Notolith.yml
+#       --state-dir=/tmp/notolith-flatpak-state /tmp/notolith-flatpak io.github.jernejmarcic.Notolith.yml
 #
 # Flatpak builds offline, so the three dependencies CMake would fetch are
 # sources here instead, pinned to the same commits as the root CMakeLists.txt,

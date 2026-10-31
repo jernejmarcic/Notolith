@@ -10,8 +10,8 @@ namespace noteAppC {
 ///
 /// The line matcher is a small, separate copy of the LCS diff already in
 /// libs/ui/RecoveryDialog.cpp (lineDiff), extended to run twice (base-vs-
-/// local, base-vs-remote) and reconciled. libs/ui is out of this lane's
-/// file ownership, so this is a copy rather than a shared extraction -
+/// local, base-vs-remote) and reconciled. libs/ui cannot be depended on from
+/// here, so this is a copy rather than a shared extraction -
 /// worth moving to somewhere both can include if a third user of line
 /// diffing turns up, not before.
 class SyncMerge {

@@ -82,9 +82,9 @@ public:
     QSize sizeHint() const override;
     bool isDrawing() const { return m_drawing != Drawing::None; }
     bool isSelectGesture() const { return m_drawing == Drawing::Select || m_drawing == Drawing::Move || m_drawing == Drawing::Scale; }
-    QSize liveOverlaySize() const { return m_live.size(); } ///< device px; a test hook for the overlay bound (I4)
+    QSize liveOverlaySize() const { return m_live.size(); } ///< device px; a test hook for the overlay bound
 
-    /// The tile cache budget in MB (the setting `ink.tileCacheMB`, R5), clamped to kMinTileCacheMB..kMaxTileCacheMB.
+    /// The tile cache budget in MB (the setting `ink.tileCacheMB`), clamped to kMinTileCacheMB..kMaxTileCacheMB.
     static constexpr int kMinTileCacheMB = 8;
     static constexpr int kMaxTileCacheMB = 1024;
     void setTileCacheMB(int mb);
@@ -111,7 +111,7 @@ public:
     /// box under it, or starts a new one there; the editor is a plain-text child (objectName inkTextEditor) over the
     /// box. Escape, a press elsewhere, a tool change, undo, hiding and losing focus end it and commit it as one history
     /// step (an unchanged text commits nothing, an emptied box is deleted, a new box with no text is never added).
-    /// The box is drawn through `renderer` from its Markdown: on the UI thread in paintEvent, never in a tile job (R5),
+    /// The box is drawn through `renderer` from its Markdown: on the UI thread in paintEvent, never in a tile job,
     /// never during a pen gesture, and cached per item (setTextRenderer; InkView builds the host's MarkdownEditor).
     /// `size` is the box's size in document px: the layout is the same at every zoom. `scale` is device px per
     /// document px: the settled zoom (rounded up to a step, so a zoom-out reuses the picture) times the pixel ratio,
@@ -159,7 +159,7 @@ public:
     void setReadOnly(bool on); ///< true first ends a stroke in flight (kept)
     bool isReadOnly() const { return m_readOnly; }
 
-    /// R14: pressure is divided by a learned maximum per QPointingDevice::name()
+    /// Pressure is divided by a learned maximum per QPointingDevice::name()
     /// (PressureNormaliser, InkInput.h). Tablet pressure only: a mouse stroke stays 0.5.
     double learnedPressure(const QString &device) const;
     void setLearnedPressure(const QString &device, double max);
@@ -215,7 +215,7 @@ private:
     QString closeTextEditor(); ///< tears the editor down, committing nothing; returns what it held
     void layoutTextEditor();
     const QPixmap *textPixmap(const Item &item); ///< the cached picture of a text box, rendered now if it is missing and the pen is idle
-    void paintUIItems(QPainter &painter, const QRect &area); ///< text boxes and the image placeholder: UI thread, over the tiles (R5)
+    void paintUIItems(QPainter &painter, const QRect &area); ///< text boxes and the image placeholder: UI thread, over the tiles
     void pressSelect(const QPointF &widgetPos);
     void finishSelect(Drawing mode, bool keep);
     void dragSelection(const QPointF &documentPos);

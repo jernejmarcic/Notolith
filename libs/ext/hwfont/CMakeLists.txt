@@ -1,7 +1,7 @@
 # The handwriting-font glyph studio: the data layer (GlyphSet, GlyphStore), the studio view
 # (GlyphStudio) as a static library, and the notolith-hwfont module that registers it.
 # Links notolith-inkcore only, never noteAppC_ink: notolith-hwfont depends on
-# the .ink format and the host, not on the notolith-ink module (spec section 9, R2).
+# the .ink format and the host, not on the notolith-ink module (spec section 9).
 # Headers only from the host's static libraries; their symbols resolve from the
 # executable that loads this (Vault, Settings and Theme are the host's, as in noteAppC_ink).
 add_library(noteAppC_hwfont STATIC GlyphSet.cpp GlyphSet.h GlyphStore.cpp GlyphStore.h)
@@ -15,7 +15,7 @@ target_link_libraries(noteAppC_hwfont PUBLIC notolith-inkcore noteAppC_modules_h
 
 # The module itself, built like notolith-ink (libs/ext/ink/CMakeLists.txt): its own install unit that
 # links the core library the package notolith-ink installs next to it. No manifest "dependencies" key
-# (R2): with notolith-ink missing, the load fails with the dynamic linker's message.
+# (a dependency check would only repeat the loader): with notolith-ink missing, the load fails with the dynamic linker's message.
 configure_file(manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/manifest.json @ONLY)
 if(NOTEAPPC_STATIC_MODULES)
     noteappc_add_static_module(notolith-hwfont-static HwfontModule.cpp noteAppC_hwfont)

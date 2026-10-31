@@ -67,7 +67,7 @@ noteKey (32 B, random, one per entity)
 
 `crypto_pwhash` with `crypto_pwhash_ALG_ARGON2ID13`, `opslimit = 5`,
 `memlimit = 64 * 1024 * 1024` (64 MiB), output 32 bytes. libsodium's Argon2id
-is single-lane by construction, so "5 ops, 64 MiB, 1 lane" (Standard Notes'
+is single-threaded (one lane) by construction, so "5 ops, 64 MiB, 1 lane" (Standard Notes'
 004 parameters) is exactly `crypto_pwhash`'s own defaults for those two
 knobs - nothing to configure for the lane count. The salt is 16 bytes
 (`crypto_pwhash_SALTBYTES`), generated once at account creation and fetched
@@ -462,7 +462,7 @@ way - diff `base` against `local` and `base` against `remote`, then walk both
 edit scripts together, taking a hunk from whichever side touched it and
 flagging a **true conflict** only where both sides edited the same base lines
 differently (edits on neighbouring lines count as the same region).
-`libs/ui` is out of this lane's file ownership, so the LCS
+`libs/ui` has its own line matcher, so the LCS
 matcher is a small, separate copy in `libs/ext/sync/SyncMerge.cpp` rather than
 a shared extraction - worth moving to somewhere both can include if a third
 user of line-diffing turns up, not before (YAGNI).

@@ -541,7 +541,7 @@ TEST(EpubViewTest, OpensABookAndScrollingSchedulesNoUseAfterFree)
     // If the guard were broken (a raw `this` captured instead of the
     // QPointer, so the lambda still calls renderedChapter() on the freed
     // object) this either crashes or trips ASAN; under a plain build it is
-    // silent either way, which is why HANDOFF.md calls for an ASAN pass on
+    // silent either way, which is why an ASAN pass is needed on
     // any lifetime change - this test's only job is to give that pass
     // something to run.
     QCoreApplication::processEvents();

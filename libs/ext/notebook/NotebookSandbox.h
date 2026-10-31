@@ -35,9 +35,8 @@ struct SandboxRequest {
 struct SandboxAvailability {
     bool bubblewrap = false;
     /// A container tier (gVisor/Firecracker/a container runtime) is
-    /// documented, not built: neither podman nor docker is installed on the
-    /// machine this lane was built on, and the requirement says leave what
-    /// is missing for Jernej rather than install anything. True here would
+    /// documented, not built: this build never installs a container runtime,
+    /// it only reports whether the host has one. True here would
     /// mean such a tier could actually run, not that this build implements
     /// one.
     bool containerRuntime = false;

@@ -17,7 +17,7 @@ endif()
 # The performance harness: the numbers every optimisation has to beat.
 add_subdirectory(bench)
 
-# The pen spike (spec section 11): a hand-run logger, never installed.
+# The pen input test (spec section 11): a hand-run logger, never installed.
 add_subdirectory(inkspike)
 
 # The out-of-process plugin host (docs/PLUGINS.md, Tier 2).

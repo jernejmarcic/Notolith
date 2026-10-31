@@ -41,12 +41,12 @@ The password is not stored anywhere. Forget it and the notes are gone.
 
 The whole header is the associated data, so changing any byte of the file,
 header included, makes it refuse to open. New files use libsodium's
-MODERATE Argon2id (3 passes, 256 MiB): 155 ms on starbase-1, once per
+MODERATE Argon2id (3 passes, 256 MiB): 155 ms on a Ryzen 9 9900X desktop, once per
 unlock, since every note of a vault shares one salt and so one key. The
 params are in each file, so they can be raised without breaking old notes.
 
 Chosen over Meld Encrypt's `.mdenc` (PBKDF2-SHA512, AES-256-GCM, readable in
-Obsidian with that plugin) by Jernej on 2026-09-24: Argon2id resists GPU
+Obsidian with that plugin) because Argon2id resists GPU
 password guessing far better than PBKDF2. The price is that only noteAppC
 opens these files.
 

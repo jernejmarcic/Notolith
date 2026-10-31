@@ -8,8 +8,8 @@ shows the last result without running anything. `libs/ext/notebook`, the
 ## How a block runs
 
 With the system's own interpreter or compiler, one short process per run,
-no kernel to install or keep running (Jernej, 2026-09-24: "Not jupyter
-kernel, should use system itself, or in a docker, most efficient way").
+no Jupyter kernel to install or keep running: the system itself (or a
+container) is the most efficient way.
 
 | language (fence) | tool | how |
 |---|---|---|
@@ -220,7 +220,7 @@ and has no network and 1 GiB of memory. The limits:
 - A wasm block never uses a Jupyter kernel.
 
 Docker (or Podman) would be the next tier, for languages not installed on
-the machine; neither is installed on starbase-1, so it is not built.
+the machine; neither was installed on the development machine, so it is not built.
 
 ## Jupyter notebooks (.ipynb)
 

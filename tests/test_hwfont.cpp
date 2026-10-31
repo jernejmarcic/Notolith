@@ -397,7 +397,7 @@ TEST_F(GlyphStudioTest, EnterSavesBackspaceDiscardsAndCtrlZUndoesAStroke)
     EXPECT_FALSE(QFile::exists(sampleFile(QStringLiteral("0062"))));
 }
 
-// R14: PADD's pen is tip-only, so every action is on a button too.
+// Some pens (e.g. the FydeTab Duo's) are tip-only, so every action is on a button too.
 TEST_F(GlyphStudioTest, TheButtonsDoWhatTheKeysDo)
 {
     noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
@@ -424,7 +424,7 @@ TEST_F(GlyphStudioTest, TheButtonsDoWhatTheKeysDo)
     EXPECT_FALSE(QFile::exists(sampleFile(QStringLiteral("0062"))));
 }
 
-// Task 18: the teardown crash of InkView (a focus-out or a hide from ~QWidget finishing a stroke or committing a box
+// The teardown crash of InkView (a focus-out or a hide from ~QWidget finishing a stroke or committing a box
 // into the half-destroyed owner) applies to the studio, which hosts an InkCanvas the same way.
 TEST_F(GlyphStudioTest, DeletingTheStudioMidStrokeIsSafe)
 {
@@ -485,7 +485,7 @@ TEST_F(GlyphStudioTest, TheBarrelClickSavesAndNeverDraws)
 }
 
 
-// Fix round 1: the cell is a drawing surface, so it draws with the mouse whatever ink.drawWithMouse says.
+// The cell is a drawing surface, so it draws with the mouse whatever ink.drawWithMouse says.
 TEST_F(GlyphStudioTest, TheCellDrawsWithTheMouseWhateverTheInkSettingSays)
 {
     noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
@@ -500,7 +500,7 @@ TEST_F(GlyphStudioTest, TheCellDrawsWithTheMouseWhateverTheInkSettingSays)
 }
 
 
-// Fix round 1: a first-time user starts another font from the studio (SettingRow has no free-text kind).
+// A first-time user starts another font from the studio (SettingRow has no free-text kind).
 TEST_F(GlyphStudioTest, NewFontSwitchesTheStudioAndRefusesAnUnsafeName)
 {
     noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
@@ -533,7 +533,7 @@ TEST_F(GlyphStudioTest, NewFontSwitchesTheStudioAndRefusesAnUnsafeName)
     EXPECT_EQ(rowFor(studio, U'z')->text(), QStringLiteral("z 0/3")) << "the list follows the new font";
 }
 
-// R6: the studio is a file-less tab; the host saves it through save().
+// The studio is a file-less tab; the host saves it through save().
 TEST_F(GlyphStudioTest, AnUnsavedCellIsModifiedAndSaveWritesIt)
 {
     noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
@@ -618,7 +618,7 @@ TEST_F(HwfontWindowTest, TheCommandOpensTheStudioTabAndSavesIntoTheVault)
 }
 
 
-// Fix round 1: the keys reach the cell without a click on it: the tab shown by the host takes the focus,
+// The keys reach the cell without a click on it: the tab shown by the host takes the focus,
 // and a button click (the buttons never take focus) leaves it there.
 TEST_F(HwfontWindowTest, TheShownStudioHasTheKeysAndKeepsThemAfterAButtonClick)
 {
@@ -670,7 +670,7 @@ TEST_F(HwfontWindowTest, NewFontWritesTheSettingAndSavesIntoTheNewFolder)
     EXPECT_TRUE(QFile::exists(dir.filePath(QStringLiteral("Handwriting/Second font/0061/1.ink"))));
 }
 
-// R6 and its carry item: the tab and the window title both show the mark; closing saves the cell.
+// The tab and the window title both show the mark; closing saves the cell.
 TEST_F(HwfontWindowTest, TheStudioTabShowsTheModifiedMarkAndCloseSavesTheCell)
 {
     QTemporaryDir config;
