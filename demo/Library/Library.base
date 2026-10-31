@@ -1,15 +1,15 @@
 filters:
   and:
-    - 'file.inFolder("Library/Books")'
-    - 'status != "shelved"'
+    - file.inFolder("Library/Books")
+    - status != "shelved"
 formulas:
-  ppu: "(price / pages).toFixed(3)"
-  expensive: "price > 25"
+  ppu: (price / pages).toFixed(3)
+  expensive: price > 25
 properties:
   status:
     displayName: Status
   formula.ppu:
-    displayName: "Price per page"
+    displayName: Price per page
 views:
   - type: table
     name: All (minus shelved)
@@ -25,35 +25,32 @@ views:
     summaries:
       rating: Average
       file.name: Filled
-
   - type: table
     name: By category, grouped
     filters:
       and:
-        - "rating >= 4"
+        - rating >= 4
+    groupBy:
+      property: category
+      direction: ASC
     order:
       - file.name
       - category
       - pages
       - formula.ppu
-    groupBy:
-      property: category
-      direction: ASC
     sort:
       - property: formula.ppu
         direction: ASC
-
   - type: table
     name: Reading now
     filters:
       and:
-        - 'status = "reading"'
+        - status = "reading"
     order:
       - file.name
       - author
       - pages
     limit: 10
-
   - type: cards
     name: Everything, as cards
     order:

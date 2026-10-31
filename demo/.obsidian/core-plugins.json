@@ -14,5 +14,19 @@
   "tag-pane": true,
   "templates": true,
   "word-count": true,
-  "workspaces": true
+  "workspaces": true,
+  "file-explorer": true,
+  "footnotes": false,
+  "properties": true,
+  "note-composer": true,
+  "command-palette": true,
+  "slash-command": false,
+  "editor-status": true,
+  "zk-prefixer": false,
+  "random-note": false,
+  "slides": false,
+  "audio-recorder": false,
+  "publish": false,
+  "sync": true,
+  "webviewer": false
 }

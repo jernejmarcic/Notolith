@@ -2,43 +2,210 @@
   "main": {
     "id": "main-split",
     "type": "split",
-    "direction": "vertical",
     "children": [
       {
         "id": "group-left",
         "type": "tabs",
-        "currentTab": 0,
         "children": [
           {
             "id": "leaf-welcome",
             "type": "leaf",
-            "state": { "type": "markdown", "state": { "file": "Welcome.md", "mode": "source" } }
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Code/Code Blocks.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Code Blocks"
+            }
           },
           {
             "id": "leaf-callouts",
             "type": "leaf",
-            "state": { "type": "markdown", "state": { "file": "Callouts/Callouts.md" } }
-          }
-        ]
-      },
-      {
-        "id": "group-right",
-        "type": "tabs",
-        "currentTab": 0,
-        "children": [
-          {
-            "id": "leaf-library",
-            "type": "leaf",
-            "state": { "type": "bases", "state": { "file": "Library/Library.base" } }
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Callouts/Callouts.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Callouts"
+            }
           }
         ]
       }
-    ]
+    ],
+    "direction": "vertical"
   },
-  "left": { "collapsed": false },
-  "right": { "collapsed": false },
+  "left": {
+    "id": "76f74d9d0cce57b7",
+    "type": "split",
+    "children": [
+      {
+        "id": "0bdcdcf5f51eeb1d",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "c12dc5b55874a435",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "ac0875d60fc71776",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "2fd135c71d9241f1",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 200
+  },
+  "right": {
+    "id": "39fbcd99779fc1a9",
+    "type": "split",
+    "children": [
+      {
+        "id": "56a0c373c4a57f0b",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "ae0907f65ff42535",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "Code/Code Blocks.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks"
+            }
+          },
+          {
+            "id": "3d61a48c5691f9ca",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "Code/Code Blocks.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links"
+            }
+          },
+          {
+            "id": "6c7ecf636adec9dc",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "5f90658f170d810a",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "8433903e05020e30",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "Code/Code Blocks.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "workspaces:Manage workspace layouts": false,
+      "bases:Create new base": false
+    }
+  },
   "active": "leaf-welcome",
   "lastOpenFiles": [
+    "Math/Maths.md",
     "Welcome.md",
     "Callouts/Callouts.md",
     "Library/Library.base"

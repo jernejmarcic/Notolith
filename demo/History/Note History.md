@@ -17,7 +17,7 @@ save). To see it on this note:
 3. Right-click the note (or its tab) and choose "Note history: Show this
    note's history".
 4. The history window should list both saves, each showing a diff against
-   the version before it, and offer to restore an older one.
+   the version before it, and offer to restore an older one
 
 ## File recovery snapshots
 

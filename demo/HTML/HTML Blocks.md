@@ -22,9 +22,9 @@ report.
 ## A table
 
 <table>
-  <tr><th>Column A</th><th>Column B</th></tr>
-  <tr><td>1</td><td>one</td></tr>
-  <tr><td>2</td><td>two</td></tr>
+  <tr><th>Column A</th><th>Column B</th><th></th></tr>
+  <tr><td>1</td><td>one</td><td></td></tr>
+  <tr><td>2</td><td>two</td><td></td></tr>
 </table>
 
 ## Details and summary

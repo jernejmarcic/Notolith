@@ -26,6 +26,7 @@ explicitly that a feature is noteAppC's own extension (callout/code-block
 styling via `callouts.ini`/`codeblocks.ini`, documented in
 `docs/STYLING.md`).
 
+Okay so 
 ## Map of contents
 
 ### Text and structure
@@ -95,3 +96,6 @@ styling via `callouts.ini`/`codeblocks.ini`, documented in
 filters matching this vault's tags), `daily-notes.json`, `templates.json`,
 `bookmarks.json`, `workspace.json` and `workspaces.json` (two named
 layouts), and `hotkeys.json` (a couple of rebinds).
+Ok imma try typing something
+seems pretty smooth now. pretty GOATED
+Yes that is IT, its going great for n
