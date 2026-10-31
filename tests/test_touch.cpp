@@ -198,8 +198,7 @@ void finger(MarkdownEditor &editor, const QList<QPoint> &path, int holdMs = 0, b
 
 TEST(TouchTest, AFingerDraggedUpTheNoteScrollsItAndSelectsNothing)
 {
-    // Jernej on PADD 2026-10-19: "u should add finger scrolling rn it selects
-    // stuff". Real touch events, as the compositor sends them, not mouse
+    // A finger drag used to select text instead of scrolling. Real touch events, as the compositor sends them, not mouse
     // events that merely name a touch screen.
     QString text;
     for (int i = 0; i < 200; ++i)
@@ -223,8 +222,8 @@ TEST(TouchTest, AFingerDraggedUpTheNoteScrollsItAndSelectsNothing)
 
 TEST(GPUaccelerationTest, AutomaticIsOnOnlyAtAFractionalScale)
 {
-    // Jernej on PADD at 1.67: raster scrolling "very very choppy", OpenGL
-    // "much much better"; shuttlepod-1 at 1 scrolls faster raster.
+    // On a FydeTab Duo at 1.67 raster scrolling is very choppy and OpenGL much
+    // better; a Radeon 780M 2-in-1 laptop at 1 scrolls faster with raster.
     EXPECT_TRUE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("auto"), 1.6667));
     EXPECT_TRUE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("auto"), 1.25));
     EXPECT_FALSE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("auto"), 1.0));

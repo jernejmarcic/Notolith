@@ -9,7 +9,7 @@ namespace noteAppC {
 
 /// A note as it sits in memory: text normalised to LF, plus the byte-level
 /// details of the file it came from so that saving restores them exactly.
-/// Non-negotiable 1 of the plan: APP never rewrites bytes it did not edit.
+/// Invariant: the app never rewrites bytes it did not edit.
 struct Note {
     QString text;      ///< LF line endings, no byte-order mark
     bool crlf = false; ///< the file on disk used CRLF

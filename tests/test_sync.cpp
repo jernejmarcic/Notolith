@@ -269,7 +269,7 @@ protected:
     std::unique_ptr<ServerStore> store;
     std::unique_ptr<SyncServer> server;
     QString serverURL;
-    const QString email = QStringLiteral("jernej@example.test");
+    const QString email = QStringLiteral("user@example.test");
     const QString password = QStringLiteral("correct horse battery staple");
 };
 

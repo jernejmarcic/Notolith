@@ -188,7 +188,7 @@ Geometry geometryOf(const InkDocument &document, double zoom) { return {document
 
 /// What a tile job paints, copied on the UI thread: shared stroke payloads and the bounds of the rest, never the document.
 struct TileItem {
-    std::shared_ptr<const Stroke> stroke; ///< exactly one of the two: both are pure data, painted in the job (R5: geometry only)
+    std::shared_ptr<const Stroke> stroke; ///< exactly one of the two: both are pure data, painted in the job (geometry only)
     std::shared_ptr<const Shape> shape;   ///< text boxes and images are not here: they need the GUI thread (paintUIItems)
 };
 
@@ -199,7 +199,7 @@ struct TileSpec {
     std::map<int, std::vector<TileItem>> items; ///< by page, in paint order
 };
 
-/// Runs on a pool thread: QImage + QPainter only (R5). Page background, pattern and items, transparent in the gaps of
+/// Runs on a pool thread: QImage + QPainter only. Page background, pattern and items, transparent in the gaps of
 /// ContinuousVertical; the shadows, borders, the prediction tail and the live stroke are the canvas's own.
 QImage renderTile(const TileSpec &spec)
 {
@@ -447,7 +447,7 @@ void InkCanvas::tabletEvent(QTabletEvent *event)
         return;
     const double seconds = event->timestamp() / 1000.0;
     const QPointF pos = event->position() - kFractionalScaleOffset;
-    // R14: this device's learned maximum turns raw pressure into 0..1 (PADD never exceeds 0.657). Only
+    // This device's learned maximum turns raw pressure into 0..1 (a FydeTab Duo's pen never exceeds 0.657). Only
     // pressed samples teach it: the release carries the lifted 0, and the stroke ends with the last real pressure.
     const QString device = event->pointingDevice() ? event->pointingDevice()->name() : QString();
     PressureNormaliser *normaliser = nullptr;
@@ -488,7 +488,7 @@ void InkCanvas::mousePressEvent(QMouseEvent *event)
 {
     if (m_tabletActive || event->button() != Qt::LeftButton || (m_textEdit && m_textEdit->geometry().contains(event->position().toPoint())))
         return QWidget::mousePressEvent(event); // (a press the open editor did not take is still not an edit-ender)
-    // Ctrl+drag selects in any tool, drawWithMouse or not: the mouse user needs no tool switch (R14). The select tool
+    // Ctrl+drag selects in any tool, drawWithMouse or not: the mouse user needs no tool switch. The select tool
     // takes the mouse when it draws at all. The Text tool takes a click from a mouse too.
     const bool select = event->modifiers().testFlag(Qt::ControlModifier) || (m_drawWithMouse && m_tool == Tool::Lasso);
     if (m_readOnly || (!m_drawWithMouse && !select && m_tool != Tool::Text)) { // a drag is no drawing: it scrolls
@@ -627,18 +627,18 @@ void InkCanvas::keyPressEvent(QKeyEvent *event)
         else
             clearSelection();
     } else if (event->key() == Qt::Key_L && event->modifiers() == Qt::ShiftModifier) {
-        setTool(Tool::Lasso); // R14: lasso or rectangle without a toolbar or a pen button
+        setTool(Tool::Lasso); // lasso or rectangle without a toolbar or a pen button
         setSelectShape(m_selectShape == SelectShape::Rect ? SelectShape::Lasso : SelectShape::Rect);
     } else if (event->key() == Qt::Key_S && event->modifiers() == Qt::ShiftModifier) {
-        setTool(Tool::Shape); // R14: line, arrow, rectangle, ellipse without a toolbar or a pen button
+        setTool(Tool::Shape); // line, arrow, rectangle, ellipse without a toolbar or a pen button
         static constexpr ShapeKind kinds[] = {ShapeKind::Line, ShapeKind::Arrow, ShapeKind::Rect, ShapeKind::Ellipse};
         const auto at = std::find(std::begin(kinds), std::end(kinds), m_shapeKind);
         setShapeKind(kinds[(at - std::begin(kinds) + 1) % std::size(kinds)]);
     } else if (event->key() == Qt::Key_E && event->modifiers() == Qt::ShiftModifier) {
-        setTool(Tool::Eraser); // R14: the whole/parts switch without a toolbar or a pen button
+        setTool(Tool::Eraser); // the whole/parts switch without a toolbar or a pen button
         setEraserMode(m_eraserMode == EraserMode::Split ? EraserMode::Stroke : EraserMode::Split);
     } else if (event->modifiers() == Qt::NoModifier && toolForKey(event->key(), &keyTool)) {
-        setTool(keyTool); // R14: every tool without pen hardware (PADD's pen has no eraser end and dead buttons)
+        setTool(keyTool); // every tool without pen hardware (a FydeTab Duo's pen has no eraser end and dead buttons)
     } else {
         QWidget::keyPressEvent(event);
     }
@@ -790,7 +790,7 @@ void InkCanvas::finishStroke(bool keep)
     const std::shared_ptr<const Stroke> stroke = m_input.finish();
     // A one-point dot is a stroke the reader accepts; only a stroke with no point at all is not committed.
     if (keep && stroke && !stroke->points.empty()) {
-        // Pen strokes are always Layer::User; Layer::Highlighter is only read from .rnote (Spec 2).
+        // Pen strokes are always Layer::User; Layer::Highlighter is only read from .rnote.
         // A highlighter tool does nothing over handwriting (spec section 2), so none exists here.
         m_document.addStroke(stroke, Layer::User);
         const bool grew = m_document.growToContain(stroke->bounds());
@@ -1097,7 +1097,7 @@ double InkCanvas::textScale(const QSizeF &logical) const
     return std::max(kTextScaleMin, std::min(wanted, std::floor(cap * 1000) / 1000));
 }
 
-/// The picture of a text box. Rendered here, on the UI thread (a QPixmap and a widget grab: R5), the first time a paint
+/// The picture of a text box. Rendered here, on the UI thread (a QPixmap and a widget grab), the first time a paint
 /// needs it and whenever its text, size, page colour or the scale it needs changed; never while a gesture is in flight
 /// (a resize drag would build an editor per sample): the stale picture, if any, is stretched into the new rect until
 /// the next quiet paint. The layout is the box's size in document px at every zoom, so the text wraps the same however
@@ -1373,7 +1373,7 @@ void InkCanvas::onTileReady(int tx, int ty)
     }
 }
 
-/// Everything a tile job paints, copied here on the UI thread. The job itself is pure data (R5).
+/// Everything a tile job paints, copied here on the UI thread. The job itself is pure data.
 std::function<QImage()> InkCanvas::tileJob(int tx, int ty) const
 {
     const double side = TileCache::kTileSize / m_tiles.devicePixelRatio();
@@ -1385,7 +1385,7 @@ std::function<QImage()> InkCanvas::tileJob(int tx, int ty) const
                 items.push_back({item->stroke, nullptr});
             else if (item->type == Item::Type::Shape)
                 items.push_back({nullptr, item->shape});
-            // a text box or an image is painted over the tiles by the canvas itself, on the UI thread (R5)
+            // a text box or an image is painted over the tiles by the canvas itself, on the UI thread
         }
     }
     return [spec = std::move(spec), hook = m_tileJobHook] {
@@ -1395,7 +1395,7 @@ std::function<QImage()> InkCanvas::tileJob(int tx, int ty) const
     };
 }
 
-/// Paints the tiles over `area` and asks the pool for the missing and stale ones; never renders (R5).
+/// Paints the tiles over `area` and asks the pool for the missing and stale ones; never renders.
 /// A tile (tx, ty) is a cell of the grid at the tiles' zoom; during a pinch the widget is at m_zoom and the cells are
 /// drawn scaled by m_zoom / m_tilesZoom. After a settle the old images still sit in their old grid's cells (they say
 /// at what zoom they were rendered): those are painted scaled underneath until the new tiles replace them.
@@ -1448,11 +1448,11 @@ void InkCanvas::drawTiles(QPainter &painter, const QRect &area)
     const QRect ringCells = cellsTouching(seen.adjusted(-side, -side, side, side), side, size());
     const auto count = [](const QRect &r) { return qint64(std::max(0, r.width())) * std::max(0, r.height()); };
     constexpr qsizetype tileBytes = qsizetype(TileCache::kTileSize) * TileCache::kTileSize * 4;
-    // A budget under what is on screen would evict wanted tiles and render them again for ever (I1): the visible
+    // A budget under what is on screen would evict wanted tiles and render them again for ever: the visible
     // tiles always have room (plus one), the ring only when the user's budget holds it too.
     m_tiles.setMaxBytes(std::max(m_userCacheBytes, qsizetype(count(visibleCells) + 1) * tileBytes));
     const bool ringFits = count(ringCells) * tileBytes <= m_userCacheBytes;
-    m_tiles.keepOnly(ringFits ? ringCells : visibleCells); // a fast scroll must not leave renders queued for the cells it passed (N1)
+    m_tiles.keepOnly(ringFits ? ringCells : visibleCells); // a fast scroll must not leave renders queued for the cells it passed
     const auto wanted = [&](const QRect &cells, bool paintedRecently) {
         for (int ty = cells.top(); ty <= cells.bottom(); ++ty)
             for (int tx = cells.left(); tx <= cells.right(); ++tx) {
@@ -1480,7 +1480,7 @@ void InkCanvas::paintEvent(QPaintEvent *event)
         for (int i = firstPage; i <= lastPage; ++i)
             painter.fillRect(pageWidgetRect(i) & event->rect(), background);
     drawTiles(painter, event->rect()); // the page pattern and the committed strokes and shapes
-    paintUIItems(painter, event->rect()); // text boxes and image placeholders: not tile content (R5)
+    paintUIItems(painter, event->rect()); // text boxes and image placeholders: not tile content
     if (m_drawing == Drawing::Pen) {
         const auto &prediction = m_input.prediction();
         if (!prediction.empty()) {

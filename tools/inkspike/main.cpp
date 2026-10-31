@@ -1,7 +1,7 @@
-// Pen spike: logs every tablet event (device, pointer type, capabilities,
+// Pen input test: logs every tablet event (device, pointer type, capabilities,
 // pressure, tilt, buttons, timestamp, rate) and scribbles raw polylines.
-// Run by hand on PADD (GNOME) and shuttlepod-1 (Hyprland); results go to the
-// session NOTES.md. No ink code depends on this file.
+// Run by hand on a FydeTab Duo (GNOME) and a Radeon 780M 2-in-1 laptop (Hyprland);
+// the results are the constants in libs/ext/ink/core/InkInput.h. No ink code depends on this file.
 #include <QApplication>
 #include <QCursor>
 #include <QElapsedTimer>

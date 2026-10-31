@@ -12,7 +12,7 @@
 #include "InkTools.h"
 
 // The select tool's half of InkCanvas: the selection state, the lasso, the move and resize drags, delete, copy and
-// paste. Split out of InkCanvas.cpp as it was (Task 14); the state lives in the class (InkCanvas.h).
+// paste. Split out of InkCanvas.cpp as it was; the state lives in the class (InkCanvas.h).
 
 namespace noteAppC::ink {
 
@@ -285,7 +285,7 @@ bool InkCanvas::paste()
     }
     std::vector<Item> items = itemsFromClipboardJSON(payload, &ok);
     // Another program may have put this on the clipboard: nothing that cannot be drawn is pasted (the reader is as open
-    // to these, carry N1, but a paste is where they would arrive by accident).
+    // to these, but a paste is where they would arrive by accident).
     std::erase_if(items, [](const Item &item) {
         if (item.type == Item::Type::Group || item.type == Item::Type::Unknown || (item.type == Item::Type::Stroke && item.stroke->points.empty()))
             return true;

@@ -178,7 +178,7 @@ InkView::InkView(Settings *settings, QWidget *parent)
     connect(m_canvas, &InkCanvas::documentEdited, this, &InkView::onEdited);
     connect(m_canvas, &InkCanvas::notice, this, [this](const QString &message) { emit statusMessage(message, 6000); });
     connect(m_canvas, &InkCanvas::textEditChanged, this, &InkView::onEdited); // typing lights the modified mark, not only the commit
-    connect(m_canvas, &InkCanvas::toolChanged, this, [this](InkCanvas::Tool tool) { // the keys P E L S T (R14) move the toolbar too
+    connect(m_canvas, &InkCanvas::toolChanged, this, [this](InkCanvas::Tool tool) { // the keys P E L S T move the toolbar too
         m_penAction->setChecked(tool == InkCanvas::Tool::Pen);
         m_textAction->setChecked(tool == InkCanvas::Tool::Text);
         m_eraserAction->setChecked(tool == InkCanvas::Tool::Eraser);
@@ -220,7 +220,7 @@ InkView::InkView(Settings *settings, QWidget *parent)
         m_area->verticalScrollBar()->setValue(m_area->verticalScrollBar()->value() + delta.y());
     });
     if (m_settings) {
-        // R14: what each pen's pressure range was learned to be, from the first sample of this session.
+        // What each pen's pressure range was learned to be, from the first sample of this session.
         const QVariant seed = m_settings->value(QStringLiteral("ink.pressureMax")); // 1.0: nothing known, learn it
         if (seed.isValid() && seed.toDouble() > 0)
             m_canvas->setPressureSeed(seed.toDouble());
@@ -717,7 +717,7 @@ void InkView::applySettings(const Settings &settings)
     m_canvas->setDrawWithMouse(mouse);
     m_mouseAction->setChecked(mouse); // the Settings row and the toolbar toggle are one setting
     m_canvas->setRawInput(settings.value(QStringLiteral("ink.rawInput")).toBool());
-    const QVariant mb = settings.value(QStringLiteral("ink.tileCacheMB")); // R5; unregistered (a bare test) keeps the default
+    const QVariant mb = settings.value(QStringLiteral("ink.tileCacheMB")); // unregistered (a bare test) keeps the default
     m_canvas->setTileCacheMB(mb.isValid() ? mb.toInt() : TileCache::kDefaultMaxBytes / (1024 * 1024));
     if (const int eraser = settings.value(QStringLiteral("ink.eraserWidth")).toInt(); eraser > 0)
         m_canvas->setEraserWidth(eraser);
@@ -767,7 +767,7 @@ InkView::DiskStamp InkView::stampOf(const QString &path)
 bool InkView::load(const QString &path, QString *error)
 {
     if (m_settings)
-        applySettings(*m_settings); // R5: the tile budget is read when a file opens
+        applySettings(*m_settings); // the tile budget is read when a file opens
     if (m_loadWatcher) { // a parse of an older load is still running: its result is not wanted
         m_loadWatcher->disconnect(this);
         m_loadWatcher->deleteLater();
@@ -987,7 +987,7 @@ Theme InkView::paperTheme(bool clear) const
 /// makeContentEditor): Reading mode, no scroll bars, the Markdown parsed before the grab, no padding and no readable
 /// line length (a 700 px column would centre the text of a wide box). The widget is laid out at the box's size in
 /// document px and painted onto a pixmap of size * scale device px, so the text is vector-sharp at any zoom.
-/// Runs on the UI thread only (R5): a widget grab.
+/// Runs on the UI thread only: a widget grab.
 QPixmap InkView::renderText(const QString &markdown, const QSizeF &size, qreal scale) const
 {
     const QSize box(std::max(1, qRound(size.width())), std::max(1, qRound(size.height())));

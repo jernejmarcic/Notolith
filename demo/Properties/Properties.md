@@ -8,7 +8,7 @@ published: true
 started: 2026-09-01
 reviewed: 2026-09-23T14:30:00
 authors:
-  - Jernej
+  - Ada
   - The noteAppC project
 tags:
   - demo

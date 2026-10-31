@@ -1,4 +1,4 @@
-// The loadable-module tier (docs/superpowers/specs/2026-10-21-ink-core-design.md
+// The loadable-module tier (docs/INK-DESIGN.md
 // section 4): discovery by metadata does not load the library; a module loads
 // on first use; a wrong ABI tag, a duplicate suffix claim, a manifest without
 // an id, a library that is not a module and an unresolvable library are each
@@ -217,7 +217,7 @@ TEST(ModuleRegistryTest, ALibraryThatIsNotAModuleIsReportedAndStaysUnattached)
     EXPECT_EQ(registry.loadFailure(module->id), error);
 }
 
-// R2: no dependency check. A module whose library cannot resolve a symbol (an absent
+// No dependency check. A module whose library cannot resolve a symbol (an absent
 // inkcore, in life) fails with the loader's message, which Settings shows.
 TEST(ModuleRegistryTest, AnUnresolvedSymbolFailsTheLoadWithTheLoadersMessage)
 {
@@ -267,7 +267,7 @@ TEST(ModuleRegistryTest, DisabledFeatureUnregistersTheSuffixAndCommand)
     EXPECT_FALSE(registry.moduleForCommand(QStringLiteral("fake:hello")).has_value());
 }
 
-// R7: the tag is version, a random token made once per build directory, and the Qt version.
+// The tag is version, a random token made once per build directory, and the Qt version.
 TEST(ModuleRegistryTest, ABItagIsVersionTokenAndQtVersion)
 {
     const QStringList parts = ModuleRegistry::ABItag().split(QLatin1Char('-'));
@@ -278,7 +278,7 @@ TEST(ModuleRegistryTest, ABItagIsVersionTokenAndQtVersion)
 }
 
 #ifdef NOTEAPPC_INK_MODULE_PATH
-// R2: no dependency check in the manifest. An ink module copied to where libnotolith-inkcore.so is
+// No dependency check in the manifest. An ink module copied to where libnotolith-inkcore.so is
 // not (RUNPATH $ORIGIN is its own directory) fails to load with the loader's message, which Settings
 // shows, instead of crashing. This process never loads the core library, so nothing satisfies the
 // NEEDED entry by soname.
@@ -335,7 +335,7 @@ TEST(ModuleRegistryTest, AModuleFoundInADirectoryIsNotStaticAndHasAPath)
 }
 
 #ifdef NOTEAPPC_STATIC_FAKE
-// R12: a module linked into the executable (Qt static plugin, Android has no directory to scan) is
+// A module linked into the executable (Qt static plugin, Android has no directory to scan) is
 // listed from QPluginLoader::staticPlugins() by the same IID check, with no path, and loaded only when used.
 TEST(ModuleStaticTest, AStaticModuleIsListedWithoutADirectoryAndWithoutBeingInstantiated)
 {

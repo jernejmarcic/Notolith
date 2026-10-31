@@ -11,7 +11,7 @@ it takes input: [HTML edited in place](#html-edited-in-place),
 
 ## Scripts never run
 
-Jernej, 2026-10-16: "javascript should never be ran"; only HTML and CSS
+JavaScript is never run; only HTML and CSS
 formatting is followed, even where a page relied on a script. There is no
 script engine anywhere in the app: litehtml has none, and `sanitise()`
 (libs/render/HtmlRenderer.cpp) strips `<script>` and every `on*=` attribute
@@ -24,10 +24,9 @@ plugin manifest's QuickJS engine kind is a seam with no engine behind it.
 
 ## HTML edited in place
 
-Jernej, 2026-10-02: "For HTML I want rendering of it like in obsidian, but
-unlike obsidian I want it inline editable just like the markdown", and "if its
-a HTML table it should be editable like an actual table element (like in excel
-for example, clicking on cells, etc.)".
+HTML renders as in Obsidian, but unlike Obsidian it is edited inline, just
+like Markdown; an HTML table is edited like an actual table element (like in a
+spreadsheet, clicking on cells, etc.).
 
 `libs/editor/HtmlEdit.cpp`. After every parse, each top-level HTML block is
 read with gumbo (litehtml's own parser, so no new dependency). A block whose
@@ -276,11 +275,10 @@ Tests: `tests/test_math.cpp`.
 
 ## Lists
 
-Jernej, 2026-10-16, testing the app: "Pressing return after a counter does not
-spawn another like it should", "Numbers should continue logically", "I also
-want different ones (-,*,=) to render differently", and a hierarchical number
-"first number.second number so this would be 1.2.", toggleable, ending in "a ."
-or ":" or literally anything.
+Requirements: pressing Return after a counter starts the next one, numbers
+continue logically, different markers (-, *, =) render differently, and there
+is a hierarchical number ("first number.second number", so 1.2), toggleable,
+ending in a "." or ":" or anything else.
 
 **Why Enter did not continue a list.** It did, but only for a bare list: the
 list-line pattern (`EditingCommands.cpp`, `parseListLine`) did not know a quote
@@ -336,8 +334,8 @@ and the timing.
 
 ## The `</>` edit button on rendered blocks
 
-Jernej, 2026-10-16: "when hovering over rendered elements the code icon should
-appear to edit the code". Behaviour is Obsidian's "Edit this block"; the code
+When hovering over rendered elements the code icon appears, to edit the code.
+Behaviour is Obsidian's "Edit this block"; the code
 is `libs/editor/HoverEdit.cpp`.
 
 Pointer over a rendered callout (`> [!x]` and `:::`), block formula, HTML
@@ -367,9 +365,9 @@ Tests: `HoverEditTest.*` in `tests/test_editor.cpp`.
 
 ### Slides layout: forgiving Previous / Next
 
-Jernej, 2026-10-19: the box to click "Next" should be larger around it, so a
-slightly-off pointer does not open the embed by accident (like Apple's
-keyboard). Code: `PdfEmbedBlock.cpp` (`pdfNavHit`).
+The box to click "Next" is larger around it, so a
+slightly-off pointer does not open the embed by accident (like a phone
+keyboard's keys). Code: `PdfEmbedBlock.cpp` (`pdfNavHit`).
 
 - The row under the slide (nav strip plus the 6 px gap above it, the full width
   of the slide) is the buttons: its left half is Previous, its right half is
@@ -389,7 +387,7 @@ Tests: `PdfEmbedTest.*` in `tests/test_editor.cpp` (the clock is injected with
 
 ### Zooming a page
 
-Jernej, 2026-10-19: allow zooming in on PDFs when in embedded mode. Code:
+PDFs can be zoomed in embedded mode. Code:
 `PdfEmbedBlock.cpp` (`zoomPdfAt`, `wheelPdfCell`, `pressPdfCell`,
 `doubleClickPdfCell`, `requestPdfZoomRenders`).
 
@@ -435,9 +433,7 @@ Tests: `PdfEmbedTest.*Zoom*`, `Wheel*`, `Drag*`, `DoubleClick*` in
 
 ## Checkbox states
 
-Jernej, 2026-10-19: "for tasks there should be custom stuff inside other than
-just ticking, like a line, or a straight up red X. Think about useful additions
-and add them".
+Tasks can show more than a tick: a line, a red X, and other useful states.
 
 Obsidian reads any one character in a task's box as a task and leaves the
 look to a theme. With the **Checkbox states** core plugin on (default; Settings
@@ -1491,7 +1487,7 @@ bwrap hidden from `PATH`, as the fake keeps its books outside its directory;
 the sandbox tests put it back: the tool gets its input there, cannot read the
 home or write outside its directory, and still draws without bwrap), plus
 one test against the installed tool, run in the sandbox (skipped when absent, a failure under
-`NOTEAPPC_REQUIRE_TOOLS=1`, which the lane check sets); the publish test is in
+`NOTEAPPC_REQUIRE_TOOLS=1`, which the full check run sets); the publish test is in
 `tests/test_publish.cpp`.
 
 ### PlantUML, TikZ and Graphviz

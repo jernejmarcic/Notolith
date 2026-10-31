@@ -52,7 +52,7 @@ PluginManifest PluginManifest::load(const QString &directory)
     // file has no round-trip-preserving-comments requirement - nothing in
     // the app ever rewrites a plugin's own plugin.ini): QSettings already
     // does section/key parsing correctly and this is the only place in the
-    // plugin lane that needs it.
+    // plugin code that needs it.
     const QSettings ini(iniPath, QSettings::IniFormat);
 
     manifest.m_id = ini.value(QStringLiteral("plugin/id")).toString();

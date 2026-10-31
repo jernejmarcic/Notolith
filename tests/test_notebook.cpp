@@ -303,7 +303,7 @@ TEST(NotebookSandboxTest, Tier1FiltersTheSyscallsThatLeaveANamespace)
         GTEST_SKIP() << "built without libseccomp";
     EXPECT_EQ(plain, 0) << "the filter must not stop an ordinary program";
     // Without the filter a nested user namespace works inside bwrap (checked
-    // by hand on starbase-1), and with it every capability comes back.
+    // by hand on a Ryzen 9 9900X desktop), and with it every capability comes back.
     EXPECT_NE(run({QStringLiteral("/usr/bin/unshare"), QStringLiteral("-U"),
                    QStringLiteral("/usr/bin/true")}),
               0);
@@ -782,7 +782,7 @@ TEST(DirectRunnerTest, HaskellExpressionsPrintTheirValue)
 {
     if (!DirectRunner::canRun(QStringLiteral("haskell")))
         GTEST_SKIP() << "ghci is not installed";
-    // Jernej's own block, and a definition used by a later line.
+    // A block as a user would write it, and a definition used by a later line.
     const auto result = runDirect(QStringLiteral("haskell"), QStringLiteral("sum[1..10]\n\nsquare x =\n  x * x\nsquare 7\n"));
     ASSERT_TRUE(result.has_value());
     EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
@@ -1419,7 +1419,7 @@ TEST(NotebookKernelFeatureTest, CompletionAndDocumentationComeFromTheNotesRunnin
 
 namespace {
 
-/// A missing kernel skips the test, unless the lane check says tools are required.
+/// A missing kernel skips the test, unless the check script says tools are required.
 #define REQUIRE_PYTHON_KERNEL()                                                                          \
     if (!pythonKernelAvailable()) {                                                                      \
         ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1"))                    \

@@ -3,7 +3,7 @@
 // The documented seam for `engine = quickjs` (docs/PLUGINS.md, Tier 2 /
 // Tier 3's Lua alternative). NOT BUILT: quickjs-ng is not installed on any
 // machine this project builds on, and this codebase never fetches a
-// dependency on its own initiative (HANDOFF.md) - only Jernej adding it to
+// dependency on its own initiative - only adding it to
 // the root CMakeLists.txt's FetchContent block, the way md4qt/tinyxml2/
 // MicroTeX/yaml-cpp are already pinned there, would change that.
 //

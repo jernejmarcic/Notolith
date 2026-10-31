@@ -9,8 +9,7 @@ What to look for: raw HTML below renders through litehtml
 `<script>` block must never execute - there is no way for this note to
 prove that visually except that nothing bad happens, so check the console/log
 for any sign it ran. Without `NOTEAPPC_WITH_HTML` built, expect these blocks
-to show as plain unrendered HTML text instead - say which happened in the
-report.
+to show as plain unrendered HTML text instead.
 
 ## A styled div
 

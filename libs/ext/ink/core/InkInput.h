@@ -10,14 +10,13 @@
 
 namespace noteAppC::ink {
 
-// Spike results (tools/inkspike on PADD, 2026-10-22; the measured values are in
-// the session's NOTES.md). Change only from a new measurement, never the names
-// or shapes. PADD's pen has a tip only and its buttons do not work, so the held
-// buttons are a bonus: every tool is also on the toolbar and on a key (Task 7).
+// Pen input test results (tools/inkspike on a FydeTab Duo). Change only from a
+// new measurement, never the names or shapes. The FydeTab Duo's pen has a tip only
+// and its buttons do not work, so the held buttons are a bonus: every tool is also on the toolbar and on a key.
 inline constexpr Qt::MouseButton kHeldEraserButton = Qt::MiddleButton; ///< BTN_STYLUS
 inline constexpr Qt::MouseButton kHeldLassoButton = Qt::RightButton;   ///< BTN_STYLUS2
-inline constexpr bool kTrustEraserPointerType = true;                  ///< no eraser end seen on PADD; harmless where one exists
-inline constexpr double kInputRateHz = 120.0;                          ///< PADD in contact; feeds only the modeler's min_output_rate
+inline constexpr bool kTrustEraserPointerType = true;                  ///< no eraser end seen on the FydeTab Duo; harmless where one exists
+inline constexpr double kInputRateHz = 120.0;                          ///< FydeTab Duo in contact; feeds only the modeler's min_output_rate
 inline constexpr QPointF kFractionalScaleOffset{0.0, 0.0};             ///< device pixel ratio 2 showed no offset; subtracted from tablet widget positions by InkCanvas
 
 /// The longest gap between two samples the modeler is shown, in seconds. It refuses a gap that needs
@@ -32,9 +31,9 @@ struct InkSample {
     double timeSeconds = 0; ///< QInputEvent::timestamp() / 1000.0
 };
 
-/// R14 (the PADD spike: pressure never exceeds 0.657, median 0.21). Divides raw
+/// (A FydeTab Duo's pen: pressure never exceeds 0.657, median 0.21.) Divides raw
 /// pressure by a per-device learned maximum, so a pen that tops out low still
-/// draws full-width lines. The canvas keeps one per device name (Task 7).
+/// draws full-width lines. The canvas keeps one per device name.
 /// - Starts at 1.0: no change.
 /// - After kCalibrationSamples samples above kStrongFraction of the current
 ///   maximum it takes the peak seen as the maximum. That can LOWER it from the
@@ -49,7 +48,7 @@ public:
 
     double normalise(double raw); ///< min(1, raw / learnedMax()); learns as a side effect
     double learnedMax() const { return m_learnedMax; }
-    /// A stored value (setting ink.pressureByDevice, Task 16). Below 1.0 it counts as
+    /// A stored value (setting ink.pressureByDevice). Below 1.0 it counts as
     /// already calibrated; it is not reported by takeChanged().
     void setLearnedMax(double max);
     bool takeChanged(); ///< true once after learning changed the maximum: the canvas persists it

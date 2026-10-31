@@ -1,4 +1,4 @@
-// What a start maps, and what a module costs until it is wanted (lane F): poppler and the share stack live in
+// What a start maps, and what a module costs until it is wanted: poppler and the share stack live in
 // loadable modules (libs/ext/pdfview, libs/ext/shareengine), so a session that never meets a PDF, and one that never
 // shares, maps none of their libraries. Each test is its own ctest entry (tests/CMakeLists.txt): what is mapped is a
 // fact about the whole process, and an earlier test in it would already have mapped what a later one asserts absent.

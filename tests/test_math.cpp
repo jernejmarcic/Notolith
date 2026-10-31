@@ -26,7 +26,7 @@ std::unique_ptr<MarkdownEditor> editorWith(const QString &text)
     return editor;
 }
 
-/// The lines Jernej's SCC.252 coursework note holds around its alphabet table.
+/// The lines a real note holds around its alphabet table.
 const QString kAlphabets = QString::fromUtf8(
     "Examples of common alphabet assumptions:\n\n"
     "\\(A=26\\) (a\xe2\x80\x93z):\n"
@@ -307,7 +307,7 @@ TEST(EscapeTest, TheCaretOnAnEscapeShowsItsBackslashAndOnlyThatOne)
     EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("(a) and *b*")));
 }
 
-// --- review round: what is written stays what is shown ----------------------
+// --- what is written stays what is shown ----------------------
 
 TEST(EscapeTest, AFormulaMdFourQtDidNotParseKeepsItsBackslashes)
 {

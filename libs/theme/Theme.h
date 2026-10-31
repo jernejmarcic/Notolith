@@ -25,7 +25,7 @@ public:
     /// dark scheme everywhere else - `isDark()` is true for it.
     enum class Mode { Dark, Light, Oled };
 
-    /// Dark is the default, as in Obsidian and as Jernej asked.
+    /// Dark is the default, as in Obsidian.
     static Theme builtin(Mode mode = Mode::Dark);
 
     Mode mode() const { return m_mode; }

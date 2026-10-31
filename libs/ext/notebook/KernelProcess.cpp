@@ -52,12 +52,11 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
 
     // Never a fixed shared path (two notes running blocks at once must get
     // two kernels, two runtime dirs) and never under the vault or
-    // ~/Documents (nothing here is a durable artifact - see
-    // feedback_build_output_in_tmp.md's reasoning, which applies just as
-    // much to a kernel's live sockets as to a build). `JUPYTER_RUNTIME_DIR`
+    // the home directory (nothing here is a durable artifact: a kernel's
+    // live sockets belong in a runtime dir). `JUPYTER_RUNTIME_DIR`
     // is honoured when set, the same variable jupyter_client itself reads,
     // which is also how the tests point this at a temp dir without loading
-    // any of Jernej's own jupyter runtime state.
+    // any of the user's own jupyter runtime state.
     QString root = qEnvironmentVariable("JUPYTER_RUNTIME_DIR");
     if (root.isEmpty())
         root = QDir::tempPath();

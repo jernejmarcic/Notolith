@@ -16,7 +16,7 @@ class Theme;
 /// Obsidian gives a callout only two knobs, both CSS-only: `--callout-color`
 /// as an `R, G, B` triplet and `--callout-icon`. This is noteAppC's own, and
 /// it reaches the fonts, the sizes, the effects and both colours separately,
-/// because that is what Jernej asked for.
+/// because callouts need that much control.
 ///
 /// A field left unset defers: the colours fall back to the type's accent, the
 /// fonts and sizes to the theme's own. Resolution is three layers, each

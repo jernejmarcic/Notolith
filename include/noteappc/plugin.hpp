@@ -1,7 +1,7 @@
 /* Header-only C++ convenience wrapper over plugin.h (docs/PLUGINS.md, Tier
  * 2). Optional: examples/plugins/word-stats is plain C and does not include
- * this. It exists for a future first-party plugin (the AI integration
- * Jernej's plan mentions) that will want RAII and std::function instead of
+ * this. It exists for a future first-party plugin (an AI integration,
+ * say) that will want RAII and std::function instead of
  * writing the noteappc_plugin table by hand.
  *
  * Usage - define once, at file scope, in the plugin's single translation

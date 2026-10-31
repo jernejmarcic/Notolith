@@ -18,7 +18,7 @@ TEST(Tailnet, ParsesStatus)
         "Peer": {
             "a": {"DNSName": "friend.tail0001.ts.net.", "TailscaleIPs": ["fd7a::1", "100.64.0.2"], "Online": true},
             "b": {"DNSName": "phone.tail0000.ts.net.", "TailscaleIPs": [], "Online": true},
-            "c": {"DNSName": "off.tail0000.ts.net.", "TailscaleIPs": ["100.1.2.3"], "Online": false}
+            "c": {"DNSName": "off.tail0000.ts.net.", "TailscaleIPs": ["100.64.0.3"], "Online": false}
         }})");
     ASSERT_TRUE(s);
     EXPECT_EQ(s->selfDNSname, "laptop.tail0000.ts.net");

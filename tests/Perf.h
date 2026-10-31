@@ -2,7 +2,7 @@
 
 // Helpers for the tests that guard a wall-clock budget.
 //
-// A busy machine (parallel builds, a lane-check next door) only ever adds
+// A busy machine (parallel builds, another test run next door) only ever adds
 // time, so the fastest of a few runs is the cost of the code, not of its
 // neighbours: take that, and keep the budget itself unchanged so a real
 // regression still fails. Under a sanitizer every access is instrumented and

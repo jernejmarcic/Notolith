@@ -18,7 +18,7 @@
 /// a wrong-typed scalar there takes its default, and a settings block that is unusable as a whole is refused.
 /// Non-finite numbers are written as 0, never as null.
 /// A text box item is `{"type":"textbox","t":<int>,"layer":"user","rect":[x,y,width,height],"markdown":"<text>"}`
-/// (document px; `rect` is four numbers or absent). The host's own reader of .ink files for indexing (Task 17)
+/// (document px; `rect` is four numbers or absent). The host's own reader of .ink files for indexing
 /// duplicates the keys "format", "version", "items", "type", "textbox" and "markdown" as string literals (it ignores "rect"): change them here and there together.
 /// Documented for users in docs/INK.md.
 namespace noteAppC::ink {
@@ -30,7 +30,7 @@ struct InkReadResult {
     QString error;
 };
 
-/// Files above this parse off the UI thread (InkView, Track S1 Task 11).
+/// Files above this parse off the UI thread (InkView).
 constexpr qint64 kOffThreadParseBytes = 256 * 1024;
 
 /// The most a file may unpack to (and the most a file on disk or a plain JSON buffer may be): a heavy

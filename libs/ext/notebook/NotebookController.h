@@ -5,7 +5,7 @@
 // "no kernel starts before the user runs something"). This is the type the
 // window (libs/ui) actually talks to; MarkdownEditor::setNotebookRunner's
 // callback is a thin adapter over run() below (see docs on that seam in
-// MarkdownEditor.h and the wiring snippet in the lane's own report).
+// MarkdownEditor.h).
 
 #include "DirectRunner.h"
 #include "KernelClient.h"
@@ -135,7 +135,7 @@ public:
                     const DeliverIntrospection &deliver);
 
 signals:
-    /// A settings/status row can use this later; nothing in this lane reads
+    /// A settings/status row can use this later; nothing in this module reads
     /// it, but it costs nothing idle and is the natural place kernel health
     /// would be surfaced from.
     void kernelStateChanged(QString language, bool running);

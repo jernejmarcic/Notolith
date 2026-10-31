@@ -144,7 +144,7 @@ TEST(DisplayMapTest, EmptyBlock)
     EXPECT_EQ(map.toDisplay(0), 0);
 }
 
-// The plan's Phase 2 gate: a million random maps must never break the
+// The gate: a million random maps must never break the
 // round trip, because every cursor move in live preview goes through it.
 TEST(DisplayMapTest, FuzzRoundTrip)
 {
@@ -741,7 +741,7 @@ TEST(SlashCommandTest, NullSourceMeansSlashIsPlainText)
     EXPECT_FALSE(editor->slashPopupVisible());
 }
 
-// The plan's budget applies here too: fuzzy-filtering a few hundred commands
+// The keystroke budget applies here too: fuzzy-filtering a few hundred commands
 // on every keystroke must stay well under it.
 TEST(SlashCommandTest, FilteringCostStaysInsideTheKeystrokeBudget)
 {
@@ -792,7 +792,7 @@ QString generateNote(int kilobytes)
 
 } // namespace
 
-// The plan's budget: keystroke to paint under 8 ms on a 200 kB note. This
+// The budget: keystroke to paint under 8 ms on a 200 kB note. This
 // asserts the parse-and-relayout half, which is the part that can blow it.
 TEST(MarkdownEditorTest, KeystrokeStaysInsideTheBudget)
 {
@@ -899,7 +899,7 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
                 sizeRatio, timeRatio);
 
     // Five times the text may cost up to about five times the wait, never more:
-    // what is left is linear (about 7 ms for 1 MB on starbase-1, a 3.7-4.3x
+    // what is left is linear (about 7 ms for 1 MB on a Ryzen 9 9900X desktop, a 3.7-4.3x
     // ratio), and the bug this guards against was quadratic. The headroom is
     // for the 2 ms small open, where a single scheduler hiccup moves the ratio.
     EXPECT_LT(timeRatio, sizeRatio * 1.25);
@@ -2668,7 +2668,7 @@ TEST(FindTest, SteppingThroughALongNoteStaysInsideTheKeystrokeBudget)
     EXPECT_LT(perStep, 8.0);
 }
 
-// --- block spacing (HANDOFF 4) --------------------------------------------
+// --- block spacing --------------------------------------------
 
 TEST(BlockSpacingTest, SourceModeGivesEveryLineTheSameHeight)
 {
@@ -2710,7 +2710,7 @@ TEST(BlockSpacingTest, ALineIsTheFontSizeTimesItsLineHeight)
                      Theme::builtin().textFont().pixelSize() * 1.5 * 3);
 }
 
-// --- the properties table (HANDOFF 3) -------------------------------------
+// --- the properties table -------------------------------------
 
 namespace {
 
@@ -2809,7 +2809,7 @@ TEST(PropertiesTest, TheTableFolds)
     EXPECT_DOUBLE_EQ(editor->documentHeight(), open);
 }
 
-// --- folding callouts, containers and code blocks (HANDOFF 3) -------------
+// --- folding callouts, containers and code blocks -------------
 
 TEST(FoldTest, ADetailsContainerStartsFoldedAndShowsItsSummary)
 {
@@ -3662,7 +3662,7 @@ TEST(BlockOverlapTest, AnythingRightAfterAFenceStartsClearOfIt)
     }
 }
 
-// --- `#|` code block options (HANDOFF 3) ----------------------------------
+// --- `#|` code block options ----------------------------------
 
 TEST(CodeHeaderTest, ABlockWithALanguageIsTitledByItsName)
 {
@@ -7533,7 +7533,7 @@ struct EditedListing {
 
 TEST(CodeTabTest, ACaretInASingleListingKeepsItsPanelAndShowsItsFencesOnIt)
 {
-    // Jernej's screenshot: the panel and its header strip were drawn over
+    // The panel and its header strip were drawn over
     // the opened fence lines, half hiding "```python" above the listing. The
     // panel now reaches out over both fence lines instead, with no strip.
     EditedListing listing;
@@ -11645,7 +11645,7 @@ TEST(HoverEditTest, EveryRenderedKindSelectsItsWholeSource)
     EXPECT_GE(clicked, 2); // the table and the callout, whatever the build draws
 }
 
-// --- editor3 lane: fences, callout menu, nested embeds, block refs -------------
+// --- fences, callout menu, nested embeds, block refs -------------
 
 TEST(CodeFenceRevealTest, TheCaretAnywhereInTheListingShowsBothFences)
 {

@@ -101,7 +101,7 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
                 }
             }
         } else if (item->type == Item::Type::TextBox || item->type == Item::Type::Image) {
-            // The box itself (carry N5): the region holds its centre, or crosses its edge. A region wholly inside the box
+            // The box itself: the region holds its centre, or crosses its edge. A region wholly inside the box
             // (ink drawn over a text box) takes the ink and not the box.
             const QRectF box = item->bounds();
             hit = region.contains(box.center()) || (region.intersects(box) && !box.contains(region.boundingRect()));

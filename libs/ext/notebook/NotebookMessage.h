@@ -60,7 +60,7 @@ KernelMessage buildMessage(const QJsonObject &header, const QJsonObject &parentH
 
 /// HMAC-SHA256 over rawHeader+rawParentHeader+rawMetadata+rawContent, in
 /// that order, hex-encoded lower-case - QMessageAuthenticationCode is the
-/// whole implementation (RTK.md/CLAUDE.md: stdlib before hand-rolling).
+/// whole implementation.
 /// Empty `key` is never used by this app (every kernel it launches gets a
 /// random one) but is handled the documented way regardless: no signature.
 QByteArray signMessage(const KernelMessage &message, const QByteArray &key);

@@ -1164,7 +1164,7 @@ CalloutSpan calloutOf(const FenceSpec &spec, const Range &range, const Range &ma
 }
 
 /// Two or more adjacent depth-0 fences that each carry a `tab` attribute join
-/// into one tabbed block (TODO.md, "Code block tabs"). "Adjacent" is read the
+/// into one tabbed block. "Adjacent" is read the
 /// same way `scanColonFences` reads an unclosed container running to the end
 /// of the note: nothing but whitespace may sit between them, so one stray
 /// line of text or a fence with no `tab` ends the run right there. Called

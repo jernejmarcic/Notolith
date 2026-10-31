@@ -94,7 +94,7 @@ noteappc_fake_module(fake_twin fake-twin "${NOTEAPPC_ABI_TAG}" fake FakeModule.c
 noteappc_fake_module(fake_noid "" "${NOTEAPPC_ABI_TAG}" fakenoid FakeModule.cpp)
 noteappc_fake_module(fake_notmodule fake-notmodule "${NOTEAPPC_ABI_TAG}" fakenotmod NotAModule.cpp)
 noteappc_fake_module(fake_unresolved fake-unresolved "${NOTEAPPC_ABI_TAG}" fakeunres FakeModule.cpp FAKE_UNRESOLVED)
-# NOTEAPPC_STATIC_MODULES (R12, Android): the same discovery for a module linked into the executable. The test
+# NOTEAPPC_STATIC_MODULES (Android): the same discovery for a module linked into the executable. The test
 # module is a Qt static plugin in test_modules itself, imported there (Q_IMPORT_PLUGIN) like main.cpp imports ink.
 if(NOTEAPPC_STATIC_MODULES)
     set(FAKE_ID fake-static)
@@ -118,7 +118,7 @@ if(NOTEAPPC_STATIC_MODULES)
     target_link_libraries(test_modules PRIVATE fake_static)
     target_compile_definitions(test_modules PRIVATE NOTEAPPC_STATIC_FAKE)
 endif()
-if(TARGET notolith-ink) # the R2 case: the real module, copied away from its core library
+if(TARGET notolith-ink) # the case of the real module, copied away from its core library
     target_compile_definitions(test_modules PRIVATE NOTEAPPC_INK_MODULE_PATH="$<TARGET_FILE:notolith-ink>")
     add_dependencies(test_modules notolith-ink)
 endif()
@@ -152,7 +152,7 @@ endif()
 add_test(NAME window_modules_adopt COMMAND test_window --gtest_filter=${noteappc_window_adopt})
 set_tests_properties(window_modules_adopt PROPERTIES ENVIRONMENT "NOTEAPPC_WINDOW_ADOPT_ENTRY=1")
 # Modules load into the test's process: export the host symbols, and point the
-# registry at the build's modules (the fake ones; Task 8 adds the real ones).
+# registry at the build's modules (the fake ones; the real ones are added below).
 set_target_properties(test_window PROPERTIES ENABLE_EXPORTS ON)
 add_dependencies(test_window ${NOTEAPPC_FAKE_MODULE_TARGETS})
 # The real ink module sits behind the fake ones: ${CMAKE_BINARY_DIR}/modules holds notolith-ink.so
@@ -176,7 +176,7 @@ if(TARGET notolith-pdfview)
     add_dependencies(test_window notolith-pdfview)
     target_compile_definitions(test_window PRIVATE NOTEAPPC_HAVE_PDFVIEW_MODULE)
 endif()
-# What a start maps (lane F): poppler and the share stack are modules, so the executable lists none of their
+# What a start maps: poppler and the share stack are modules, so the executable lists none of their
 # libraries and a session that never uses them maps none. One process per test: see test_lazymodules.cpp.
 add_executable(test_lazymodules test_lazymodules.cpp)
 target_link_libraries(test_lazymodules PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
@@ -241,8 +241,7 @@ if(noteappc_exe_forbidden)
         ${noteappc_exe_forbidden})
 endif()
 
-# Track S1b's glyph studio (libs/ext/hwfont): S1b creates the directory and
-# tests/test_hwfont.cpp; until noteAppC_hwfont exists this block does nothing.
+# The glyph studio (libs/ext/hwfont): until noteAppC_hwfont exists this block does nothing.
 # test_hwfont drives the studio view and the module through the registry, so it
 # links the host (noteAppC_ui) and the static hwfont library only: the module
 # is loaded from ${CMAKE_BINARY_DIR}/modules, never linked. IsolatedHome.cpp is
@@ -442,12 +441,15 @@ if(TARGET noteAppC_link)
     add_test(NAME link COMMAND test_link)
     set_tests_properties(link PROPERTIES TIMEOUT 600
         ENVIRONMENT "XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/link-state")
-    # The copy must still be a Hearth commit; skipped (77) without a checkout.
-    set(NOTEAPPC_HEARTH_DIR "$ENV{HOME}/Documents/AI/projects/hearth" CACHE PATH
+    # The copy must still be a Hearth commit. Only registered when a Hearth checkout is
+    # given (-DNOTEAPPC_HEARTH_DIR=...); skipped (77) if that path is not a git checkout.
+    set(NOTEAPPC_HEARTH_DIR "" CACHE PATH
         "Hearth checkout that tools/vendor_link.sh --check compares libs/ext/link with")
-    add_test(NAME link_vendor_check
-        COMMAND sh ${CMAKE_SOURCE_DIR}/tools/vendor_link.sh --check ${NOTEAPPC_HEARTH_DIR})
-    set_tests_properties(link_vendor_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+    if(NOTEAPPC_HEARTH_DIR)
+        add_test(NAME link_vendor_check
+            COMMAND sh ${CMAKE_SOURCE_DIR}/tools/vendor_link.sh --check ${NOTEAPPC_HEARTH_DIR})
+        set_tests_properties(link_vendor_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+    endif()
 endif()
 
 # The sharing engine (docs/SHARE.md "The engine") over loopback: engines and bare
@@ -607,7 +609,7 @@ if(TARGET notolith-inkcore)
     set_target_properties(test_ink PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
     add_test(NAME ink COMMAND test_ink)
     set_tests_properties(ink PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    # The position and overlay maths again at device pixel ratio 2 (PADD): the offscreen platform honours QT_SCALE_FACTOR.
+    # The position and overlay maths again at device pixel ratio 2 (the FydeTab Duo's scale is fractional, 1.67): the offscreen platform honours QT_SCALE_FACTOR.
     add_test(NAME ink_dpr2 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
     set_tests_properties(ink_dpr2 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
     # A fractional ratio: a cell is 341.33 logical px wide, still a whole 512 device px.
@@ -625,7 +627,7 @@ if(TARGET notolith-inkcore)
     endif()
 endif()
 
-# The host-side .ink text-box reader (R1): JSON only, no module, no inkcore.
+# The host-side .ink text-box reader: JSON only, no module, no inkcore.
 find_package(ZLIB REQUIRED)
 add_executable(test_inktextboxes test_inktextboxes.cpp)
 target_link_libraries(test_inktextboxes PRIVATE noteAppC_ui Qt6::Test GTest::gtest_main ZLIB::ZLIB)
@@ -644,7 +646,7 @@ endif()
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
 # settings.ini, so without this a test's result depended on how the person
 # running it had set up their own copy of the app - Settings.defaultsAreCompiledIn
-# failed the day Jernej switched his theme to OLED. Set once here so every test,
+# failed once a user switched to the OLED theme. Set once here so every test,
 # including ones not written yet, starts from a clean home. Register every
 # test above this block: a test added below it runs against the real home.
 get_property(noteappc_tests DIRECTORY PROPERTY TESTS)

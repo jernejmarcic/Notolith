@@ -13,8 +13,7 @@ class SyncJournal;
 /// (docs/SYNC.md). mtime and size are checked first - the same cheap-skip
 /// technique Index::isCurrent uses, kept as a separate table here rather
 /// than sharing Index's (coupling this engine's lifecycle to the UI-owned
-/// Index would mean touching libs/index or libs/ui, both out of this
-/// lane's file ownership) - so a no-change pass over a large vault costs
+/// Index would mean depending on libs/index or libs/ui) - so a no-change pass over a large vault costs
 /// one stat() per file and no content hashing at all.
 class SyncScanner {
 public:

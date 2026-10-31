@@ -1,6 +1,6 @@
 // A frozen copy of libs/ext/shareengine/share.proto as of 305aed9 (before Presence gained anchor_pos and
-// head_pos), compiled as package notolith.share.v0 into test_share only: it stands for the build that
-// shuttlepod-1 runs, so the tests can read a new Presence the way that build does. Never edit it.
+// head_pos), compiled as package notolith.share.v0 into test_share only: it stands for the older build
+// of the app, so the tests can read a new Presence the way that build does. Never edit it.
 // The wire format of a shared note between Notolith devices (docs/SHARE.md
 // "The engine"): invitation, membership and the CRDT updates. Every message
 // travels inside the identity-authenticated link (libs/ext/link) and a

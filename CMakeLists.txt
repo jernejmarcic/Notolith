@@ -114,7 +114,7 @@ option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 # draw on and note, the marks kept in a sidecar note beside it. Qt Widgets
 # only - no new dependency - so it has no tool to look for, just this switch.
 option(NOTEAPPC_WITH_IMAGEVIEW "Highlight, draw on and annotate images, in a sidecar note" ON)
-# Handwriting (docs/INK.md, spec docs/superpowers/specs/2026-10-21-ink-core-design.md):
+# Handwriting (docs/INK.md, spec docs/INK-DESIGN.md):
 # the ink core as a shared library and the handwritten-note tab as a loadable
 # module (libs/ext/ink), the glyph studio as another (libs/ext/hwfont). Off,
 # nothing ink is built and the app has no ink symbol; on, the modules are
@@ -232,7 +232,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # md4qt is not packaged on Arch; pin the KDE repository by commit.
-# 5.x dropped the text-plugin hook the plan assumed, so Obsidian's own syntax
+# 5.x dropped the text-plugin hook the design assumed, so Obsidian's own syntax
 # is a post-pass over the tree instead (libs/markdown/ObsidianSyntax).
 include(FetchContent)
 set(BUILD_MD4QT_TESTS OFF CACHE BOOL "" FORCE)
@@ -275,8 +275,8 @@ FetchContent_Declare(microtex
 FetchContent_MakeAvailable(microtex)
 
 # The metainfo checked as it is in the tree, every run (ECM's appstreamtest
-# checked only what an install had listed). No homepage yet (Jernej
-# 2026-10-19), so that one warning is information.
+# checked only what an install had listed). No homepage yet,
+# so that one warning is information.
 find_program(APPSTREAMCLI appstreamcli)
 if(APPSTREAMCLI)
     add_test(NAME appstreamtest
@@ -368,7 +368,7 @@ if(NOTEAPPC_WITH_IMAGEVIEW)
     add_subdirectory(libs/ext/imageview)
 endif()
 if(NOTEAPPC_WITH_INK AND NOT ANDROID)
-    # System Abseil is required (R3): there is no bundled copy. Without it the ink
+    # System Abseil is required: there is no bundled copy. Without it the ink
     # core and the note module are not built, and the rest of the app is unchanged.
     find_package(absl QUIET)
     if(absl_FOUND)
@@ -378,7 +378,7 @@ if(NOTEAPPC_WITH_INK AND NOT ANDROID)
         set(NOTEAPPC_WITH_INK OFF)
     endif()
 endif()
-# Track S1b creates this directory after milestone A0; until then there is nothing to add.
+# Added only when the directory exists.
 if(NOTEAPPC_WITH_HWFONT AND TARGET notolith-inkcore AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libs/ext/hwfont)
     add_subdirectory(libs/ext/hwfont)
 endif()

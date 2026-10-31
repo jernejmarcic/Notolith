@@ -29,7 +29,7 @@ extern "C" {
  * against a different value than the host implements is refused before
  * init() runs (checked against noteappc_plugin::api by the host).
  *
- * 2 (2026-09-23, the AI plugin lane): added noteappc_host::active_selection_text
+ * 2 (2026-09-23): added noteappc_host::active_selection_text
  * (needed to read what the user selected before sending it to a language
  * model - MarkdownEditor::selectedText() already existed, this just exposes
  * it the way active_note_text() exposes the whole note). The field lands

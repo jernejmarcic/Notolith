@@ -13,7 +13,7 @@
 
 namespace noteAppC::ink {
 
-/// The tiles of the canvas (spec section 7, Rendering; R5): 512 x 512 device px images, rendered off the
+/// The tiles of the canvas (spec section 7, Rendering): 512 x 512 device px images, rendered off the
 /// UI thread, kept under a byte budget (the setting `ink.tileCacheMB`) by evicting the least recently
 /// painted. A tile (tx, ty) is the cell of a grid laid over the canvas in "tile space": logical widget px
 /// at the zoom the cache was last given by setScale (a cell is kTileSize / devicePixelRatio of them wide).
@@ -23,7 +23,7 @@ class TileCache : public QObject {
     Q_OBJECT
 public:
     static constexpr int kTileSize = 512; // device px
-    static constexpr qsizetype kDefaultMaxBytes = 64 * 1024 * 1024; // R5: the setting `ink.tileCacheMB`, default 64
+    static constexpr qsizetype kDefaultMaxBytes = 64 * 1024 * 1024; // the setting `ink.tileCacheMB`, default 64
     explicit TileCache(qsizetype maxBytes = kDefaultMaxBytes, QObject *parent = nullptr);
     ~TileCache() override; ///< waits for the jobs in flight: they hold nothing of the cache, but their result must not outlive it
 
@@ -42,7 +42,7 @@ public:
     void invalidateAll();
     /// Renders in flight for cells outside `cells` (tile-space cell indices, inclusive) are cancelled if they have not
     /// started and their result dropped if they have: the pool is first-in first-out, and a render queued for a cell the
-    /// view has left would run before the ones it is looking at (N1). The cell stays pending until the pool reaches it.
+    /// view has left would run before the ones it is looking at. The cell stays pending until the pool reaches it.
     void keepOnly(const QRect &cells);
 
     struct Lookup {
@@ -52,7 +52,7 @@ public:
     };
     /// UI thread. Never renders. `image` is null when the tile was never rendered; `fresh` is false when it is stale:
     /// the canvas then paints it scaled (blurry, instant) or the page background, and calls request().
-    /// Non-const on purpose (R5): a hit moves the tile to the most-recently-painted end of the LRU list.
+    /// Non-const on purpose: a hit moves the tile to the most-recently-painted end of the LRU list.
     Lookup find(int tx, int ty);
     bool isFresh(int tx, int ty) const;
     /// UI thread. Starts `job` on the thread pool unless this tile already has a render in flight (false then).
@@ -87,7 +87,7 @@ private:
     struct Pending {
         QFutureWatcher<QImage> *watcher = nullptr;
         bool discard = false; ///< the zoom or the cell size changed, or the cell left the wanted set: the result is dropped
-        bool stale = false;   ///< the content changed while it rendered: the result still holds everything before that, kept stale (I4)
+        bool stale = false;   ///< the content changed while it rendered: the result still holds everything before that, kept stale
         double scale = 1.0;   ///< the zoom it renders for
     };
     void retire(Pending *pending); ///< a discarded render a new request replaces: it finishes on its own and stores nothing

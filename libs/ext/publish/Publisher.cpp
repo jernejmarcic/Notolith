@@ -139,7 +139,7 @@ QString rootRelativePrefix(const QString &outputPath)
 /// at all, not merely hidden by CSS. Without this, every page's sidebar
 /// carries a link to every published note in the vault: fine at a few
 /// hundred notes, a genuine correctness problem past a few thousand - the
-/// first 20 000-note benchmark of this lane wrote pages that averaged
+/// first 20 000-note benchmark of this module wrote pages that averaged
 /// 1.5 MB each (30 GB for the whole site) purely from this one tree
 /// appearing, fully expanded, on every single page. `expandAll` bypasses
 /// the collapsing entirely for the one page that is supposed to list

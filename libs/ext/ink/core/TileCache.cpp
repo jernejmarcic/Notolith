@@ -13,7 +13,7 @@ TileCache::~TileCache()
     all.append(QList<Pending *>(m_retired.begin(), m_retired.end()));
     for (Pending *p : std::as_const(all)) {
         p->watcher->disconnect(this);
-        p->watcher->cancel(); // a job still queued is skipped: the pool is shared and first-in first-out, so waiting for the queue would freeze the UI (I3)
+        p->watcher->cancel(); // a job still queued is skipped: the pool is shared and first-in first-out, so waiting for the queue would freeze the UI
     }
     for (Pending *p : std::as_const(all)) { // all cancelled first: the one that runs must not hand its thread to a queued sibling
         p->watcher->waitForFinished(); // one that runs may use things its owner is about to destroy

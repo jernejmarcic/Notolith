@@ -2,11 +2,11 @@
 
 What noteAppC costs, how that was measured, every fix that changed it, and the
 things that were tried and not adopted. Every number here was measured on
-starbase-1 (Ryzen 9 9900X, 12 cores / 24 threads, RTX 5080, CachyOS) with the
+a Ryzen 9 9900X desktop (12 cores / 24 threads, RTX 5080, CachyOS; "the development machine" below) with the
 default RelWithDebInfo build (`-O2 -g`) unless it says otherwise, and every one
 can be reproduced with the commands in [Measuring](#measuring).
 
-The standing requirement is Jernej's: noteAppC must be faster than Obsidian in
+The standing requirement: noteAppC must be faster than Obsidian in
 every way, being native C++, and stay fast on a machine with no GPU at all.
 
 ## The rules this work follows
@@ -20,7 +20,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 3. **Guard with ratios, not wall-clock numbers.** Five times the text must
    cost about five times the work. A quadratic cannot hide inside a ratio
    however fast the machine is; it hides easily inside a generous timeout.
-4. **Perceived speed never costs more than 10 ms of real speed.** Jernej's
+4. **Perceived speed never costs more than 10 ms of real speed.** That is the
    limit. A trade of real time for apparent speed has to be measured A/B.
 5. **Nothing optional runs before the first paint or on the keystroke path.**
    Preloading is fine once the visually important parts are on screen.
@@ -30,7 +30,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 ### Handwriting
 
 The `ink` bench phase (`noteAppC-bench --phase ink --json`; `Bench.cpp`, "handwriting (phase `ink`)") measures the
-handwriting tab (libs/ext/ink, Spec: docs/superpowers/specs/2026-10-21-ink-core-design.md). The design that the rows
+handwriting tab (libs/ext/ink, Spec: docs/INK-DESIGN.md). The design that the rows
 test: the live stroke is rasterised per segment into an overlay image, committed items come from 512 px tiles rendered
 on the thread pool (a paint never renders: it paints the tiles it has, blurry or the page colour where it has none, and
 asks the pool for the rest), a file above 256 KB is parsed off the UI thread, and the module scan runs after the first
@@ -72,9 +72,9 @@ Three fixes came out of those rows, each with its test:
 |---|---|---|
 | a fast scroll over 50 000 strokes (20 viewport steps without waiting): time until the last screen is sharp, tile jobs that ran | 229.6 ms, 90 jobs | 70.0 ms, 28 jobs (`TileCache::keepOnly`: a paint cancels the queued renders for cells it no longer wants, N1; a cell wanted again after being cancelled gets a new job at once and the abandoned result is dropped, review I3) |
 | a clipboard payload of 62 MiB pasted | parsed on the UI thread, about 0.75 s (11.9 ms a MiB from the 7.5 and 15.2 MiB rows) | refused by its size at once; the cap is 16 MiB (`kMaxClipboardBytes`) |
-| one paint of 8 text boxes of 8 MB each (P1) | all 8 rendered and held, 64 MB | rendering stops once the pictures this paint rendered fill the 32 MB budget (a test: at most the budget plus one picture); pictures already cached do not count against it, and a paint that skipped boxes schedules one more, so every box gets its picture within a few paints (review I4); all cached pictures together are held under a hard ceiling of 4 x the budget, 128 MB (`kTextCacheCeilingBytes`, review N1): over it a box keeps its stale picture or the placeholder and asks for no more paints (a test: 100 boxes of 8 MB in view, painted 12 times, never above the ceiling plus one picture, and the paints stop) |
+| one paint of 8 text boxes of 8 MB each | all 8 rendered and held, 64 MB | rendering stops once the pictures this paint rendered fill the 32 MB budget (a test: at most the budget plus one picture); pictures already cached do not count against it, and a paint that skipped boxes schedules one more, so every box gets its picture within a few paints (found in review); all cached pictures together are held under a hard ceiling of 4 x the budget, 128 MB (`kTextCacheCeilingBytes`): over it a box keeps its stale picture or the placeholder and asks for no more paints (a test: 100 boxes of 8 MB in view, painted 12 times, never above the ceiling plus one picture, and the paints stop) |
 
-Cold start and executable size, this branch against `main` (R8): `ENABLE_EXPORTS` makes the executables carry their
+Cold start and executable size, this branch against `main`: `ENABLE_EXPORTS` makes the executables carry their
 whole dynamic symbol table so modules can resolve host classes (`.dynsym` 2.9 k symbols on `main`, 15.5 k here).
 `noteAppC-bench` from both builds, `--phase start`, three times alternately, `NOTEAPPC_MODULE_DIRS` an empty
 directory: cold start to first painted frame (later windows) 45.08 ms on `main`, 46.01 ms here (+2.1 %), the first
@@ -85,7 +85,7 @@ window 102.5 and 100.3 ms (-2.2 %); an earlier set with the module variable unse
 (`size`) 12.56 MB to 13.89 MB (+10.6 %, +1 330 331 bytes). The `stat` figure is not the one that shows this cost: it
 is dominated by DWARF, which the export table does not touch. Stripped, the executable grows 12 725 920 to 14 053 376
 bytes (+10.4 %); `.gnu.hash` + `.dynsym` + `.dynstr` grow from 0.37 MB to 1.56 MB (+1 193 117 bytes, +9.5 % of the base
-text), and everything else in the text segment grows 137 214 bytes (+1.1 %). The gate passes as the brief words it (on
+text), and everything else in the text segment grows 137 214 bytes (+1.1 %). The gate passes as the requirement is worded (on
 `stat` size, +1.3 % against +10 %), and the export table alone sits just under the 10 % line when the same gate is
 read on the stripped executable or the text segment: a further 0.5 % of exported symbols would cross it. No
 visibility rework was done; if the line is ever read that way, that is the place to cut (export only what modules
@@ -126,7 +126,7 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
-| scroll by finger on PADD (RK3588S, GNOME at 1.67, OpenGL by default there), coursework note, in its own session | 60 fps: frame gap 16.6 ms median, paint 3.8 ms (2026-10-19, frame log) | 16.7 ms |
+| scroll by finger on a FydeTab Duo (RK3588S, GNOME at 1.67, OpenGL by default there), a real note, in its own session | 60 fps: frame gap 16.6 ms median, paint 3.8 ms (2026-10-19, frame log) | 16.7 ms |
 | Settings, first open in a window (bench) | 30 ms (2026-10-19; 252 ms before) | - |
 | cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine); 1.04 s on 2026-10-16 with the tag-heavy note | 5 s |
 | peak RSS, vault plus a 1 MB note | 228 MB (2026-10-16) | 250 MB (this pass) |
@@ -136,8 +136,8 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | ink zoom settle to sharp (bench), the re-render after the tiles switch | 20.8 ms (2026-10-22, busy machine, rerun owed; runs 20.7-22.2; plus kZoomSettleMs = 400 ms, 403.9 ms in all) | 100 ms |
 | cold start, module directory present vs empty | 0.09 ms paired median difference (2026-10-22, busy machine, rerun owed; three runs of 61 alternated pairs: medians 0.09, -0.03, -0.03; quartiles about -0.5 .. +0.55 each; the earlier 21-pair runs of 0.47, -0.37, 1.37 were noise of this size, which is why the count went to 61) | 1 ms |
 | window keystroke on the 1 MB note, module directory present vs empty (after the scan), ratio | 1.00x pooled (2026-10-22, busy machine, rerun owed; three runs of 9 rounds: 0.58 / 0.57 ms; the rounds' own ratios range 0.90-1.16, 0.94-1.16, 0.97-1.04) | 1.10x |
-| cold start, this branch vs main (ENABLE_EXPORTS cost, R8) | +2.1 % later windows, -2.2 % the first window (2026-10-22, busy machine, rerun owed); the loader's own time equal | +5 % |
-| `noteAppC` executable size, this branch vs main (R8) | +1.3 % file (292 070 216 vs 288 271 616 bytes, the gate); +10.4 % stripped, +10.6 % text segment, of which the dynamic tables are +9.5 % of the base text (13.89 vs 12.56 MB; just under the line on those readings) | +10 % |
+| cold start, this branch vs main (ENABLE_EXPORTS cost) | +2.1 % later windows, -2.2 % the first window (2026-10-22, busy machine, rerun owed); the loader's own time equal | +5 % |
+| `noteAppC` executable size, this branch vs main | +1.3 % file (292 070 216 vs 288 271 616 bytes, the gate); +10.4 % stripped, +10.6 % text segment, of which the dynamic tables are +9.5 % of the base text (13.89 vs 12.56 MB; just under the line on those readings) | +10 % |
 
 "Readable" is deliberate wording: above 128 kB a note is shown as plain
 paragraphs at once and styled when its parse comes back from the thread pool.
@@ -145,14 +145,14 @@ See [the async parse](#8-a-big-note-is-shown-before-it-is-parsed).
 
 ## Against Obsidian
 
-First head-to-head, 2026-10-16, starbase-1, Obsidian 1.14.4 (Electron 43, no
+First head-to-head, 2026-10-16, on the development machine, Obsidian 1.14.4 (Electron 43, no
 plugins, never signed in) against noteAppC at `c3e13ea` (Release). Both ran in
 the same headless `cage` (1280x720, real RTX 5080 through GL, so Obsidian was
 GPU-accelerated), in a throwaway `HOME`/XDG tree, pinned to CCD1 (cores
 6-11,18-23) at `nice 19`, one app at a time, interleaved (noteAppC cold, noteAppC
 warm, Obsidian cold, Obsidian warm, then the next round). Every cell is the
 **median of 5**, and the machine was not quiet (load average 2 to 5, other
-lanes building at idle priority), so read ratios, not milliseconds.
+builds running at idle priority), so read ratios, not milliseconds.
 
 Vaults are `tools/gen_bench_vault.py` output (5 000 and 20 000 notes, seed
 fixed). "Cold" is a fresh profile with no cache (Obsidian's IndexedDB metadata
@@ -233,19 +233,19 @@ pieces and the vault generator.
 ## Measuring
 
 ```sh
-cmake --build /tmp/noteAppC-build
-/tmp/noteAppC-build/tools/bench/noteAppC-bench                     # the table, headless
-/tmp/noteAppC-build/tools/bench/noteAppC-bench --json              # also JSON, for diffing
-/tmp/noteAppC-build/tools/bench/noteAppC-bench --phase open        # one phase: memory, start, open, keystroke, save, relayout, scroll, pdfview
-/tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 3440x1440
-QT_SCALE_FACTOR=2 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 2560x1440
+cmake --build build
+build/tools/bench/noteAppC-bench                     # the table, headless
+build/tools/bench/noteAppC-bench --json              # also JSON, for diffing
+build/tools/bench/noteAppC-bench --phase open        # one phase: memory, start, open, keystroke, save, relayout, scroll, pdfview
+build/tools/bench/noteAppC-bench --viewport 3440x1440
+QT_SCALE_FACTOR=2 build/tools/bench/noteAppC-bench --viewport 2560x1440
 env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
-    cage -- /tmp/noteAppC-build/tools/bench/noteAppC-bench --gpu    # raster vs OpenGL, headless
-/tmp/noteAppC-build/tools/bench/noteAppC-bench --padd              # PADD's scroll: scale 1.67, finger/wheel/page steps
-/tmp/noteAppC-build/tools/bench/noteAppC-bench --padd --note my.md --size 685x1278  # a real note, PADD's portrait editor
+    cage -- build/tools/bench/noteAppC-bench --gpu    # raster vs OpenGL, headless
+build/tools/bench/noteAppC-bench --fydetab              # the FydeTab Duo's scroll: scale 1.67, finger/wheel/page steps
+build/tools/bench/noteAppC-bench --fydetab --note my.md --size 685x1278  # a real note, the FydeTab Duo's portrait editor
 ```
 
-`--padd` styles the window as the app does (PopupStyle and the theme's sheet,
+`--fydetab` (the FydeTab Duo's setup) styles the window as the app does (PopupStyle and the theme's sheet,
 so the scrollbar costs what it costs there) and scrolls at 20 px (a finger),
 72 px (a wheel notch) and page steps. It sets `QT_SCALE_FACTOR=1.67` unless
 one is set; set 2 to see what an integer scale does to the same note.
@@ -257,7 +257,7 @@ For a device's own session, where the compositor and the input are real,
 since the last paint, paint time, exposed and viewport size, device pixel
 ratio, scroll steps since the last paint, the time spent handling them, and
 the wait from the first of them to the paint. A frame bound by the handler,
-the paint or the wait each needs a different fix; the 2026-10-19 PADD work
+the paint or the wait each needs a different fix; the FydeTab Duo scroll work
 read them in that order ([fix 33](#33-a-fractional-scale-repainted-the-whole-note-on-every-scroll-step)).
 
 `--gpu` needs a real window and a real GPU context, but never a real monitor:
@@ -273,19 +273,19 @@ The `save` phase times `MainWindow::save()` (the path an autosave and Ctrl+S
 share: `QSaveFile` commit with `fdatasync`, the recovery snapshot, the history
 record) after one typed character, on a 200 kB and a 1 MB note in a small
 vault of their own, 15 saves each. Run it with `TMPDIR` on a real disk: `/tmp`
-is tmpfs on starbase-1 and `fdatasync` there costs nothing (0.14 / 0.48 ms
+is tmpfs on the development machine and `fdatasync` there costs nothing (0.14 / 0.48 ms
 median, which says nothing about a disk). The bench also points
 `XDG_DATA_HOME` at a private directory, so the snapshots stay out of the real
 `~/.local/share/noteAppC/recovery`.
 
 ```sh
 mkdir ~/.cache/bench-tmp && TMPDIR=~/.cache/bench-tmp \
-    /tmp/noteAppC-build/tools/bench/noteAppC-bench --phase save
+    build/tools/bench/noteAppC-bench --phase save
 ```
 
 | save | median | p95 / worst | where |
 |---|---|---|---|
-| 200 kB note | 5.7 ms | 15.7 ms | starbase-1, NVMe (btrfs on LUKS), 2026-10-17, three runs |
+| 200 kB note | 5.7 ms | 15.7 ms | development machine, NVMe (btrfs on LUKS), 2026-10-17, three runs |
 | 1 MB note | 6.0 ms | 17.4 ms | as above |
 
 The cost is the disk's flush, not the note's size: 200 kB and 1 MB are within
@@ -299,7 +299,7 @@ To find where time goes, `perf` works on the real binaries:
 
 ```sh
 QT_QPA_PLATFORM=offscreen perf record -g --call-graph=dwarf -F 299 \
-    /tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 900 600
+    build/tools/noteAppC_shot <vault> <note> out.png dark 900 600
 perf report --stdio --no-children -g none --percent-limit 1.5
 ```
 
@@ -337,10 +337,10 @@ batches drifted by more than the changes being measured.
 
 ## Note sharing: two text CRDT backends
 
-Jernej asked to try both a Rust (yrs) and a native C++ text CRDT behind one
+Both a Rust (yrs) and a native C++ text CRDT were tried behind one
 interface ([SHARE.md](SHARE.md)) and compare them. One suite runs over both;
 `test_share_crdt --gtest_filter='*Megabyte*:*SizesAndMemory*'` prints these
-numbers (starbase-1, RelWithDebInfo, quiet machine, load average 0.9; three runs
+numbers (development machine, RelWithDebInfo, quiet machine, load average 0.9; three runs
 agreed to 2%). Every edit is one character into a note of generated markdown.
 
 | what | yrs | Native |
@@ -398,7 +398,7 @@ tombstones; neither is tested for a history of millions of edits.
 | `CrdtDocTest.AHostileDependencyChainIsLinear` | 100 000 Native runs each waiting on the next are placed in under 3 s (one pass per run would be quadratic) |
 
 Every wall-clock guard above keeps the best of three runs (`tests/Perf.h`,
-`perf::bestOf`), because a loaded machine - a parallel build, a lane-check next
+`perf::bestOf`), because a loaded machine - a parallel build, another test run next
 door - only ever adds time, so the fastest run is the cost of the code. The
 budgets themselves are unchanged, so a real regression still fails all three.
 Under ASan or TSan the guards skip (`SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER`):
@@ -1079,7 +1079,7 @@ folder watched the poll timer never starts.
 
 ### 33. A fractional scale repainted the whole note on every scroll step
 
-Jernej on PADD (FydeTab Duo, RK3588S, Mali-G610, 2560x1600 at GNOME's 1.67):
+Reported on a FydeTab Duo (RK3588S, Mali-G610, 2560x1600 at GNOME's 1.67):
 "Scrolling is slow and choppy", by finger and by mouse, "very very choppy, def
 not 30FPS". Opening notes was instant; only scrolling was slow.
 
@@ -1088,23 +1088,23 @@ cannot: a step of n logical pixels is 1.67 n device pixels, `QBackingStore::scro
 refuses a non-integer native delta, and Qt Wayland's shm backing store refuses
 any scroll at a fractional scale ("With fractional scaling we cannot easily
 scroll the existing pixels", qwaylandshmbackingstore.cpp, Qt 6.12). So every
-frame repainted the whole viewport, about 16.5 ms at 1533x958 on PADD's A76
+frame repainted the whole viewport, about 16.5 ms at 1533x958 on the FydeTab Duo's A76
 cores. Rendering at 2 (`QT_SCALE_FACTOR_ROUNDING_POLICY=Round`) brought the
 blit back (0.7 ms paints) but not the frame rate: the frames still came about
 31 ms apart, which pointed at the full-size shm upload rather than the paint.
 
-The OpenGL viewport has no shm upload. Jernej switched it on: "much much
-better", then "still doe snot feel very smooth" / "just a small delay between
-scorlling". What followed, in its frame log (coursework note, his session):
+The OpenGL viewport has no shm upload. Switching it on made it "much much
+better", but still not very smooth, with "just a small delay between
+scrolling". What followed, in its frame log (a real note, in the device's own session):
 
-| PADD, OpenGL, scale 1.67 | paint median | frame gap median / p90 | fps |
+| FydeTab Duo, OpenGL, scale 1.67 | paint median | frame gap median / p90 | fps |
 |---|---|---|---|
 | before 4cebb61, 685x1278 viewport | 6.9 ms | 25.4 / 33 ms | 39 |
 | after 0f7e792, 905x572 viewport (the tablet turned) | 3.8 ms | 16.6 / 27.4 ms | 60 |
 
 The second row's viewport is about half the pixels, so part of its paint gain
 is the smaller window. The scroll steps themselves dropped to 0.01 ms a frame
-in the log, and Jernej: "smooth now". What changed:
+in the log, and it felt smooth. What changed:
 
 - `scrollContentsBy` ran `updateLayout()` on every step, and its first loop
   walks every block of the note. Scrolling changes nothing that loop settles,
@@ -1122,18 +1122,18 @@ in the log, and Jernej: "smooth now". What changed:
 And the default: `editor.gpuAcceleration` is now `auto`, `true` or `false`, and
 `auto` takes OpenGL exactly where raster cannot blit, a fractional device
 pixel ratio (`MarkdownEditor::GPUaccelerationWanted`). Where it can, raster is
-faster: shuttlepod-1 (Radeon 780M, scale 1, headless cage) scrolls a 72 px
+faster: a Radeon 780M 2-in-1 laptop (scale 1, headless cage) scrolls a 72 px
 step in 0.96 ms raster against 2.37 ms OpenGL, a page in 2.24 against 3.34 ms.
 A settings file from before keeps its `true` or `false`.
 `GPUaccelerationTest.AutomaticIsOnOnlyAtAFractionalScale` pins the rule.
 
-Measured with `--padd --note` on starbase-1 the same note (eight copies) at
+Measured with `--fydetab --note` on the development machine the same note (eight copies) at
 685x1278 went 0.79 to 0.69 ms a 20 px step at scale 2; the device's own log
 above is the number that matters.
 
 ### 34. Settings built seven pages, then restyled them, on every open
 
-Jernej on PADD: "settings need like 3 seconds to launch". The page is rebuilt
+Reported on the FydeTab Duo: "settings need like 3 seconds to launch". The page is rebuilt
 on each show (so a theme added meanwhile is listed); the rebuild built all
 seven pages and only then set the page's style sheet, which repolished every
 row it had just made. A profile of the open: 59% building pages, 36% the
@@ -1148,7 +1148,7 @@ widgets first.
 
 | Settings first open, fresh window (bench) | before | after |
 |---|---|---|
-| starbase-1 | 252 ms | 30 ms |
+| development machine | 252 ms | 30 ms |
 
 Settings also did not scroll by finger ("scorlring does not work in the
 settings"): only the editor had grabbed the touch gesture. `PopupStyle::polish`
@@ -1280,7 +1280,7 @@ So the order is:
 
 Each of these produced a wrong number at least once in this project.
 
-- **Contention.** The subagent that built the bench measured a 1 MB keystroke
+- **Contention.** The first bench run measured a 1 MB keystroke
   at 13.7 ms, over budget, while two other builds were running. On a quiet
   machine it was 0.78 ms.
 - **Rendering a GL widget into a `QImage`** reads its framebuffer back over the
@@ -1361,9 +1361,9 @@ Each of these produced a wrong number at least once in this project.
 - A keystroke on the 1 MB note is mostly text shaping of the edited block;
   nothing cheap was left in it.
 
-## 2026-10-16 wave A/B: before the overnight wave (6dd2608) vs after (all lanes merged)
+## 2026-10-16 wave A/B: before the wave (6dd2608) vs after (all changes merged)
 
-Best of three interleaved runs, 20 000 notes, starbase-1 CCD1, load 7-9. No
+Best of three interleaved runs, 20 000 notes, one core complex of the development machine, load 7-9. No
 row is more than 15% worse. Cold start to first painted frame 35.1 -> 18.8 ms,
 1 MB open 12.65 -> 10.57 ms, settings pass 1.41 -> 0.68 ms, keystroke on the
 1 MB note 0.50 -> 0.53 ms (budget 0.6), peak RSS 229.5 -> 226.3 MB; cold index
@@ -1373,7 +1373,7 @@ before value.
 
 ## 2026-10-18 index8: saves, renames and the link list
 
-20 000 notes (`tools/gen_bench_vault.py`), starbase-1 CCD1 under load, scan-thread
+20 000 notes (`tools/gen_bench_vault.py`), one core complex of the development machine under load, scan-thread
 times as the indexer's own clock reports them.
 
 - An in-app save used to cause two scans: the note's own, then, 300 ms later, the
@@ -1426,8 +1426,8 @@ What it costs, by the rules above:
   upgrade is one cold index.
 
 Measured with `noteAppC-bench` (Release, offscreen) against the commit this was
-branched from, built the same way, interleaved. **Indicative only: other lanes
-were building on the machine (load average 10-15), so read the ratios.** The
+branched from, built the same way, interleaved. **Indicative only: other builds
+were running on the machine (load average 10-15), so read the ratios.** The
 standalone-editor rows run with `ParseOptions` default (feature off); the window
 rows go through `MainWindow::parseOptions()` (feature on).
 
@@ -1447,10 +1447,10 @@ passed ten of ten, alongside the old build, once the load fell.
 
 ## 2026-10-23 the October performance pass
 
-Seven lanes (A window and start, B index, C editor and bench, D build and process, E panes, F poppler and the share stack as
-modules, G big-note memory) against main `6404d9d`, measured on the merged tree `686c7db` with interleaved A/B runs
+Seven areas (window and start, index, editor and bench, build and process, panes, poppler and the share stack as
+modules, big-note memory) against main `6404d9d`, measured on the merged tree `686c7db` with interleaved A/B runs
 (order reversed per round, load under 4 and CPU pressure under 0.3 where the box allowed, offscreen, own XDG; medians
-of the runs' medians). `ctest` 73 of 73. Full table with spreads and the real-process rows: the session's `perf/CLOSING.md`.
+of the runs' medians). `ctest` 73 of 73.
 
 | what | before | after | why |
 |---|---|---|---|
@@ -1463,7 +1463,7 @@ of the runs' medians). `ctest` 73 of 73. Full table with spreads and the real-pr
 | fold / media arrival / resize width kept, 1 MB | 0.71 / 0.74 / 0.57 ms | 0.47 / 0.49 / 0.42 ms | `blockGap` read the note's text and two cache lines of every view per relayout; it reads two fields beside `y` now |
 | parse landing to painted, 1 MB | 13-15 ms | 3.9 ms | a view nothing laid out is reset, not rebuilt |
 | autosave, UI thread blocked, 200 kB / 1 MB | the whole save, 5.7 / 6.7 ms | 0.20 / 1.3 ms | the commit and the recovery copies run on a thread of their own; durable time unchanged |
-| index every note stale (`noteAppC-index`, 20 000 notes) | 255-272 s | 2 s | the eight child tables had no index on `file`: each delete scanned them (lane B, not re-run for the closing table) |
+| index every note stale (`noteAppC-index`, 20 000 notes) | 255-272 s | 2 s | the eight child tables had no index on `file`: each delete scanned them (not re-run for the closing table) |
 | cold index, 20 000 notes | 1 038 ms | 990 ms | the child indexes are made at the end of an empty build, not up front |
 
 What got slower, and why. The bench rows "keystroke through the whole window, 200 kB" (0.23 to 0.32 ms) and "scroll

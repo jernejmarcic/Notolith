@@ -1,4 +1,4 @@
-// An .ink note in the index (R1): its body is its text boxes, also after a rename rewrote the links inside it.
+// An .ink note in the index: its body is its text boxes, also after a rename rewrote the links inside it.
 // Links the host (Indexer, Index, InkTextBoxes) with the inkcore reader, to check the file still opens.
 #include <gtest/gtest.h>
 

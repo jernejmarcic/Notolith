@@ -14,9 +14,8 @@ target_link_libraries(noteAppC-plugin-host PRIVATE noteAppC_plugin_protocol Qt6:
 
 # The documented seam (QuickJSEngine.h), not an implementation: turning this
 # on always fails the configure step right now, with a message that says
-# why, rather than a confusing link error deep into the build. Jernej's
-# call, and this codebase never fetches a dependency on its own - see
-# HANDOFF.md and QuickJSEngine.h.
+# why, rather than a confusing link error deep into the build. This
+# codebase never fetches a dependency on its own - see QuickJSEngine.h.
 option(NOTEAPPC_WITH_QUICKJS "Load Tier 2 plugins written in JS via quickjs-ng (not implemented yet)" OFF)
 if(NOTEAPPC_WITH_QUICKJS)
     find_package(PkgConfig QUIET)
@@ -26,7 +25,7 @@ if(NOTEAPPC_WITH_QUICKJS)
     if(NOT TARGET PkgConfig::QUICKJS)
         message(FATAL_ERROR
             "NOTEAPPC_WITH_QUICKJS is ON but quickjs-ng was not found via pkg-config. "
-            "noteAppC never fetches a dependency on its own initiative (HANDOFF.md) - "
+            "noteAppC never fetches a dependency on its own initiative - "
             "install quickjs-ng yourself first, or turn this option back OFF.")
     endif()
     message(FATAL_ERROR

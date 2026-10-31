@@ -1,13 +1,13 @@
 #!/bin/sh
-# Builds Notolith-<arch>.AppImage from this working tree with linuxdeploy and
-# its Qt plugin. Not yet run: it downloads both tools from
+# Builds Notolith-<arch>.AppImage from this source tree with linuxdeploy and
+# its Qt plugin. Untested: it downloads both tools from
 # github.com/linuxdeploy.
 #
 #   sh packaging/appimage/build-appimage.sh
 #
-# Everything happens under /tmp, because ~/Documents is synced. CFLAGS and
-# CXXFLAGS are dropped so a distribution's -march=native cannot leak into an
-# image meant for other machines.
+# Everything happens under /tmp. CFLAGS and CXXFLAGS are dropped so a
+# distribution's -march=native cannot leak into an image meant for other
+# machines.
 set -eu
 
 src=$(cd "$(dirname "$0")/../.." && pwd)

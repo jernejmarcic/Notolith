@@ -2,6 +2,8 @@
 name = "notolith-yrs-ffi"
 version = "0.1.0"
 edition = "2021"
+# yrs 0.28 uses `if let` guards, stabilized in Rust 1.95.
+rust-version = "1.95"
 license = "GPL-3.0-or-later"
 publish = false
 

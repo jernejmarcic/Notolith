@@ -1,5 +1,5 @@
-// InkView without dlopen (the static noteAppC_ink linked in, as Track S1's tests do): what the tab does
-// about a file that changes under it (the vault is Syncthing-synced) and about a newer file's read-only
+// InkView without dlopen (the static noteAppC_ink linked in, as the other ink tests do): what the tab does
+// about a file that changes under it (a vault may be synced between machines) and about a newer file's read-only
 // state. The window-level behaviour of the same view is in test_window.cpp.
 #include <gtest/gtest.h>
 
@@ -364,7 +364,7 @@ void writeFile(const QString &path, const QByteArray &bytes)
 
 TEST_F(InkViewFileTest, ACorruptBigFileLeavesAReadOnlyTabWithAPersistentError)
 {
-    // I2a: load() returned true before the parse failed; the tab must not be a blank, drawable, unsavable canvas.
+    // Load() returned true before the parse failed; the tab must not be a blank, drawable, unsavable canvas.
     writeFile(path, corruptBigFile());
     InkView view(nullptr);
     QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
@@ -393,7 +393,7 @@ TEST_F(InkViewFileTest, ACorruptBigFileLeavesAReadOnlyTabWithAPersistentError)
 
 TEST_F(InkViewFileTest, AFailedReloadIsLookedAtOnceNotAtEveryAutosave)
 {
-    // I2b: the stamp of the unreadable file is taken, or every autosave sees "changed on disk" and writes another conflict file.
+    // The stamp of the unreadable file is taken, or every autosave sees "changed on disk" and writes another conflict file.
     writeFile(path, bigDocument());
     InkView view(nullptr);
     QString error;
@@ -713,7 +713,7 @@ TEST_F(InkViewFileTest, TextStillBeingTypedCountsAsUnsavedAndIsSavedWithTheTab)
     view.canvas()->setTool(InkCanvas::Tool::Text);
     QTest::mouseClick(view.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(60, 400));
     auto *edit = view.canvas()->findChild<noteAppC::MarkdownEditor *>(QStringLiteral("inkTextEditor"));
-    ASSERT_NE(edit, nullptr) << "the host's note editor (I3), not a plain-text one";
+    ASSERT_NE(edit, nullptr) << "the host's note editor, not a plain-text one";
     EXPECT_EQ(view.canvas()->findChild<QPlainTextEdit *>(QStringLiteral("inkTextEditor")), nullptr);
     EXPECT_FALSE(view.isModified()) << "an editor with nothing typed is not an edit";
     QTest::keyClicks(edit, QStringLiteral("unsaved thought"));
@@ -723,7 +723,7 @@ TEST_F(InkViewFileTest, TextStillBeingTypedCountsAsUnsavedAndIsSavedWithTheTab)
     EXPECT_TRUE(readAll(path).contains("unsaved thought")) << "save() committed the box first";
 }
 
-// Task 18: closing a tab with "Don't save" deletes the view while a box is open with typed text and the focus. The
+// Closing a tab with "Don't save" deletes the view while a box is open with typed text and the focus. The
 // editor's focus-out (sent from ~QWidget, after ~InkView has run) used to commit the box and call back into the
 // half-destroyed view: SIGSEGV. A teardown ends the edit without a word, and writes nothing.
 TEST_F(InkViewFileTest, DeletingTheViewWithATypedFocusedTextBoxOpenIsSafeAndWritesNothing)
@@ -781,7 +781,7 @@ TEST(InkViewToolbarTest, TheTextToolIsOnTheToolbarAndOnItsKeyAndIsNotThePenInDis
     EXPECT_TRUE(pen->isChecked());
     EXPECT_FALSE(text->isChecked());
     QTest::keyClick(view.canvas(), Qt::Key_T);
-    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Text) << "the T key picks it without pen hardware (R14)";
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Text) << "the T key picks it without pen hardware";
     EXPECT_TRUE(text->isChecked());
     EXPECT_FALSE(pen->isChecked());
 }
@@ -843,7 +843,7 @@ int firstInkOffset(const QImage &shot, const QRectF &box)
 
 } // namespace
 
-// Fix round 1 (I2): the editor's readable line length (a 700 px column, centred) must not apply to a text box.
+// The editor's readable line length (a 700 px column, centred) must not apply to a text box.
 TEST(InkViewTextTest, AWideBoxStartsItsTextAtTheSameEdgeAsANarrowOne)
 {
     const QRectF narrow(20, 20, 300, 80);
@@ -859,7 +859,7 @@ TEST(InkViewTextTest, AWideBoxStartsItsTextAtTheSameEdgeAsANarrowOne)
     EXPECT_NEAR(a, b, 4);
 }
 
-// Fix round 1 (I4): a hostile file with a huge box must not freeze the paint.
+// A hostile file with a huge box must not freeze the paint.
 TEST(InkViewTextTest, ATwoMegabyteBoxRendersTruncatedAndFast)
 {
     QString huge;
@@ -872,7 +872,7 @@ TEST(InkViewTextTest, ATwoMegabyteBoxRendersTruncatedAndFast)
     EXPECT_GE(firstInkOffset(shot, QRectF(20, 20, 400, 300)), 0) << "and still draws the start of the text";
 }
 
-// I3: the box is edited in the host's editor: Markdown typed into it is committed as the box's text, keys typed into it
+// The box is edited in the host's editor: Markdown typed into it is committed as the box's text, keys typed into it
 // are not tool keys, and its text sits where the rendered picture's does.
 TEST(InkViewTextTest, TheEditorOverABoxIsTheNoteEditorAndWhatIsTypedIsCommitted)
 {
@@ -907,7 +907,7 @@ noteAppC::MarkdownEditor *liveEditor(InkCanvas *canvas)
 }
 } // namespace
 
-// Fix round 2 (R1): the pen's tap inside the open editor belongs to the editor. Qt hands a tablet event the canvas
+// The pen's tap inside the open editor belongs to the editor. Qt hands a tablet event the canvas
 // ignored to the widget under the pen as mouse events; before the fix the canvas took it, committed the box and opened a
 // new editor with the caret at the end.
 TEST(InkViewTextTest, APenTapInsideTheOpenEditorKeepsTheEditorAndPlacesTheCaret)
@@ -1122,7 +1122,7 @@ QJsonObject storedPressures(const noteAppC::Settings &settings)
 
 } // namespace
 
-// Review I6: the canvas's reason for refusing a copy reaches the status bar, not only a signal nobody listens to.
+// The canvas's reason for refusing a copy reaches the status bar, not only a signal nobody listens to.
 TEST(InkViewToolbarTest, ACopyThatIsTooLargeIsExplainedInTheStatusBar)
 {
     InkView view(nullptr);
@@ -1142,7 +1142,7 @@ TEST(InkViewToolbarTest, ACopyThatIsTooLargeIsExplainedInTheStatusBar)
     EXPECT_TRUE(status.first().first().toString().contains(QStringLiteral("too large"))) << status.first().first().toString().toStdString();
 }
 
-// R14 on a keyboardless tablet: what Delete, Ctrl+C and Ctrl+V do for a selection has a toolbar button too.
+// On a keyboardless tablet: what Delete, Ctrl+C and Ctrl+V do for a selection has a toolbar button too.
 TEST(InkViewToolbarTest, DeleteCopyAndPasteAreOnTheToolbarForATabletWithNoKeyboard)
 {
     QGuiApplication::clipboard()->clear();

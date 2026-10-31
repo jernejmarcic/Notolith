@@ -1,7 +1,7 @@
 # Extending noteAppC
 
 **Status: Tier 0 and Tier 1 are proposal only (nothing to build - Tier 1 is
-already how `libs/ext/` works, see HANDOFF.md); Tier 2 is built, 2026-09-23**
+already how `libs/ext/` works); Tier 2 is built**
 (`libs/ext/plugins/`, `tools/plugin_host/`, `include/noteappc/`, its own
 section below). Tier 3 remains a proposal. This file exists so that each
 extra goes in at the lowest tier that can do the job, keeping the core small
@@ -9,7 +9,7 @@ and fast.
 
 ## What it has to satisfy
 
-Jernej's constraints, in his words where he gave them:
+The constraints:
 
 - "Simplicity first, and all other extras slot in nicely and stay super fast."
   The core stays small. An extra that is not in use costs **nothing** - not a
@@ -47,7 +47,7 @@ graph view's controls, settings file and threading are in docs/GRAPH.md, the
 canvas's controls and snapping in docs/CANVAS.md):
 
 ```sh
-cmake -B /tmp/noteAppC-build -DNOTEAPPC_WITH_SPELLCHECK=ON -DNOTEAPPC_WITH_GRAPH=ON
+cmake -B build -DNOTEAPPC_WITH_SPELLCHECK=ON -DNOTEAPPC_WITH_GRAPH=ON
 ```
 
 This is not new. It is the pattern the codebase already uses twice: PDF embeds
@@ -81,7 +81,7 @@ ink and hwfont modules are Qt static plugins linked into the executable instead,
 `QPluginLoader::staticPlugins()` with the same manifest and loaded on first use all the same
 ([PLATFORMS.md](PLATFORMS.md), "Mobile"). The mechanism is in `libs/modules/`; the first two
 modules are documented in [INK.md](INK.md). Spec:
-`superpowers/specs/2026-10-21-ink-core-design.md` section 4.
+`docs/INK-DESIGN.md` section 4.
 
 ### Tier 2: runtime plugins - out-of-process, over a C ABI
 
@@ -167,7 +167,7 @@ block. A header-only C++ convenience wrapper is `include/noteappc/plugin.hpp`
 the bare header instead, on purpose, as the shortest proof the ABI itself
 works.
 
-`NOTEAPPC_PLUGIN_API` is `2` as of the AI plugin lane (2026-09-23): it was `1`
+`NOTEAPPC_PLUGIN_API` is `2` with the AI plugin: it was `1`
 until `active_selection_text` landed in the host table, needed so a plugin can
 read what the user selected (`MarkdownEditor::selectedText()` already
 existed; this just exposes it the way `active_note_text()` exposes the whole
@@ -245,7 +245,7 @@ slow (the AI plugin waiting on a language model, seconds to minutes).
 `command.run` and `codeBlock.render`, clamped to `[1000, 300000]`
 (`PluginManifest::requestTimeoutMs`, `PluginHost`'s constructor) - a plugin
 cannot declare an unbounded hang. This alone does not make a slow command
-safe: the app side was already asynchronous before this lane (`PluginHost`'s
+safe: the app side was already asynchronous before the AI plugin (`PluginHost`'s
 requests are callback-based over `QProcess`'s signals, never a blocking wait
 on the UI thread) and the host process blocks on exactly one request at a
 time by design (`tools/plugin_host/HostIO.cpp`), so a plugin's own blocking
@@ -259,9 +259,8 @@ slow case is a clean error result, not a `SIGKILL`.
 (`PluginManifest::commandTitle`, surfaced on `PluginCommand::title`) gives a
 command a human title instead of showing `pluginName: commandID` in the
 palette. `MainWindow::syncPlugins` builds that `QAction` label itself
-(`libs/ui`, outside this tier's ownership), so the one-line change that reads
-the new field is not in this file - it is handed to the lead as a diff
-instead of applied here.
+(`libs/ui`), so the one-line change that reads
+the new field lives there, not in the plugin code.
 
 **Few extension points, each typed** - v1 has three:
 
@@ -274,10 +273,9 @@ instead of applied here.
 A plugin never gets the widget tree, the raw parser, or a hook inside a
 keystroke - the code-block path is exactly the machinery maths and file
 embeds already use (`MarkdownEditor::setFileEmbedRenderer`'s shape), which is
-also why the editor-side hook this lane could not build itself
+also why the editor-side hook that does not exist yet
 (`setCodeBlockRenderer`) is designed to slot in next to it rather than beside
-it. See "For the lead" in this section's companion report for the exact
-snippet.
+it.
 
 **Budgets that are enforced, not hoped for.** Every command and every render
 is timed; a command over 100 ms or a render over 1000 ms flags the plugin
@@ -304,7 +302,7 @@ Small automation without a compiler: "insert today's date in this format",
 through the same command point as Tier 2 and nothing else.
 
 It is listed last because it is the one tier that bends the "C and C++ only"
-rule - the interpreter is C, but the scripts are not. It is Jernej's call.
+rule - the interpreter is C, but the scripts are not. It is an open decision.
 
 ## What belongs in the core
 
@@ -385,7 +383,7 @@ Everything a note-taking app is for, and nothing it is not:
    file. The tests (`tests/test_ai_plugin.cpp`) answer the dialog with a stand-in
    and the model with the in-process fake server.
 
-## Decisions that are Jernej's
+## Open decisions
 
 1. Scripts (Tier 3): yes with Lua, or never?
 2. May a plugin add a pane to the sidebar? Doing that through a C ABI means the

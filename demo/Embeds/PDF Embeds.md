@@ -6,16 +6,14 @@ tags: [demo, embeds, pdf]
 
 Target file: `assets/graphviz-dot-manual.pdf`, a real 9-page manual page
 (source and licence in `demo-assets.md`), chosen specifically so every page
-argument below has real, different pages to show. See `TODO.md`'s
-"afternoon: embeds" entry - page lists, ranges, `all`, `#height=` and the
-slide/column/grid layouts were requested together; note in your report which
-of these actually render as of this build versus fall back to page one or a
-plain link.
+argument below has real, different pages to show.
+Page lists, ranges, `all`, `#height=` and the slide/column/grid layouts are
+all shown below; any that do not render fall back to page one or a plain link.
 
 ## No arguments: the whole document
 
-Obsidian scrolls a plain PDF embed page by page; Jernej asked for this to be
-presentable as slides instead of a scrolling column - see the layout
+Obsidian scrolls a plain PDF embed page by page; here it can also be
+presented as slides instead of a scrolling column - see the layout
 arguments further down.
 
 ![[graphviz-dot-manual.pdf]]

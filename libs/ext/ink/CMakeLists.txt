@@ -1,7 +1,7 @@
 # Handwriting: the core library (core/) that the ink and hwfont modules link.
 add_subdirectory(core)
 
-# The tab (InkView) as a static library the module links; Track S1's bench and
+# The tab (InkView) as a static library the module links; the bench and
 # index tests link it too, without dlopen.
 # Headers only from the host's static libraries: a second copy of Settings
 # inside the .so would consult its own defaults() map, not the one the host

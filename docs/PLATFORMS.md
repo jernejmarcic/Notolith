@@ -28,7 +28,7 @@ code, what has been checked, and what has not.
 
 ## One core, measured
 
-The whole process pinned to one core of starbase-1 with `taskset -c 0`, which
+The whole process pinned to one core of that desktop with `taskset -c 0`, which
 takes away everything the thread pool gives. This is a floor, not a target, and
 it is still a fast core - a genuinely old CPU would be slower again.
 
@@ -47,26 +47,13 @@ dual-core laptop will see. Every tail is still inside the 8 ms budget.
 
 ## Measuring on another machine
 
-Only starbase-1 has been measured. The session directory
-`sessions/2026-09-22_163000_noteappc-callouts-and-perf/` in the second brain
-holds `noteAppC.bundle` and `bench-here.sh`. On any CachyOS or Arch machine:
-
-```sh
-sh ~/Documents/AI/sessions/2026-09-22_163000_noteappc-callouts-and-perf/bench-here.sh
-```
-
-It installs nothing - a missing dependency gets the `pacman` line printed - and
-builds with `CFLAGS` and `CXXFLAGS` cleared, so the binary is the one another
-machine would really run. Results land beside the script as `bench-<host>.*`
-and sync back. It also measures scrolling at that machine's largest panel size
-(offscreen), and raster against OpenGL inside a headless `cage` compositor, so
-no window ever appears on a monitor.
-
-Worth running on, in this order: shuttlepod-1 (the 2-in-1, likely the weakest
-x86 machine and the one most likely to have an Intel iGPU), then runabout.
-torpedo is a Raspberry Pi 5 running Debian, which would be the best stand-in
-for a phone's CPU, but the script is Arch-only and torpedo is a server - it
-would need its own dependency list and a decision to install build tools there.
+Only one desktop (a Ryzen 9 9900X, RTX 5080, CachyOS) has been measured.
+Bench reports from other hardware - a weak laptop, an Intel iGPU, an ARM board -
+are welcome: build with `CFLAGS` and `CXXFLAGS` cleared, so the binary is the one
+another machine would really run, then run `noteAppC-bench` (see
+[PERFORMANCE.md](PERFORMANCE.md#measuring)). Scrolling at the machine's largest
+panel size (offscreen), and raster against OpenGL inside a headless `cage`
+compositor, can be measured without a window appearing on a monitor.
 
 ## Launching: one process per vault
 
@@ -191,8 +178,8 @@ add bars and long-press cell selection already work by finger, docs/EDITOR.md
 for a narrow screen with no sidebars. The shell (`libs/ui`) would be largely
 new.
 
-**The Qt version.** The Android kit on starbase-1, in
-`~/Documents/AI/.toolchains/`, is Qt 6.7.3; the desktop is 6.11. Anything
+**The Qt version.** The Android kit used here (`$QT_ANDROID`, see
+"Build it" below) is Qt 6.7.3; the desktop is 6.11. Anything
 noteAppC uses from Qt 6.8 or later will not compile for Android. Nothing has
 checked this yet.
 
@@ -214,9 +201,9 @@ formats, and code blocks still render, monospaced and uncoloured. The two
 (`GTEST_SKIP`) when `isAvailable()` is false rather than failing.
 
 Built with `CMAKE_PREFIX_PATH` pointed at the Android kit's `gcc_64` sibling
-build (`~/Documents/AI/.toolchains/Qt/6.7.3/gcc_64`, a desktop Qt 6.7.3 build
+build (`$QT_HOST`, a desktop Qt 6.7.3 build
 matching the `android_arm64_v8a` one) and both new options `OFF`, in a
-separate `/tmp/noteAppC-qt673/` directory. No Qt module the root `CMakeLists.txt`
+separate `build-qt673/` directory. No Qt module the root `CMakeLists.txt`
 asks for (`Widgets Svg Sql Concurrent Network`, optional `OpenGLWidgets` and
 `Test`) is missing from the kit - configure succeeds cleanly.
 
@@ -230,8 +217,7 @@ under 6.7.3, in its own vendored sources, before noteAppC's code that depends
 on it (`libs/markdown`, and everything downstream: `libs/index`,
 `libs/editor`, `libs/ui`, the app, and their tests) is ever reached. Two Qt
 6.8+ APIs, both inside md4qt's own tree (fetched to
-`_deps/md4qt-src/src/`, not part of this repository - not edited, per this
-session's file ownership):
+`_deps/md4qt-src/src/`, not part of this repository - not edited here):
 
 | file:line | API (Qt 6.8+) | 6.7-compatible replacement |
 |---|---|---|
@@ -246,12 +232,11 @@ built from a view in 6.8.
 **Re-checked 2026-09-23, after search, graph, canvas, bases, tabs/splits,
 workspaces and query/HTML blocks all landed.** Same build, same patch, no
 new failures: the desktop build of the Android kit's Qt 6.7.3
-(`/tmp/noteAppC-android-qt673`, both options off) compiles clean and passes
+(`build-android-qt673`, both options off) compiles clean and passes
 all 16 suites, and the ordinary desktop build (system Qt 6.11) passes 16/16
 full and 12/12 with every optional module off
-(`/tmp/noteAppC-android-desktop-build`, `/tmp/noteAppC-android-desktop-minimal`
-- `tools/check.sh`'s own two configurations, run from dedicated `/tmp` dirs
-since another lane was using its usual ones). So the code written since the
+(`build-android-desktop-build`, `build-android-desktop-minimal`
+- `tools/check.sh`'s own two configurations, run from dedicated build dirs). So the code written since the
 first check still uses nothing from Qt 6.8+; md4qt's four conversions above
 remain the only blocker, and nothing needed replacing this time.
 
@@ -269,11 +254,11 @@ build chose.
 To repeat the check:
 
 ```sh
-env -u CFLAGS -u CXXFLAGS cmake -B /tmp/noteAppC-qt673 -G Ninja \
-    -DCMAKE_PREFIX_PATH=$HOME/Documents/AI/.toolchains/Qt/6.7.3/gcc_64 \
+env -u CFLAGS -u CXXFLAGS cmake -B build-qt673 -G Ninja \
+    -DCMAKE_PREFIX_PATH=$QT_HOST \
     -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDFVIEW=OFF
-cmake --build /tmp/noteAppC-qt673
-QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/noteAppC-qt673
+cmake --build build-qt673
+QT_QPA_PLATFORM=offscreen ctest --test-dir build-qt673
 ```
 
 That desktop build of the Android kit's Qt proves the API surface, not that
@@ -375,42 +360,44 @@ dependency list rather than adding to it - every transitive Qt library the
 plugin itself needs (Core, Gui, Network, Multimedia) has to be listed by
 hand or packaging fails outright, which is what happened on the one attempt:
 `No platform plugin included in the deployment`, a broken APK. None of that
-is worth carrying for a lane that does not touch the editor or the embed
+is worth carrying for a change that does not touch the editor or the embed
 code; an audio/video embed on Android falls back to "open the file",
 exactly as it already does on a desktop build without Qt Multimedia.
 
-**Build it:**
+**Build it.** The placeholders are `$QT_ANDROID` (the Qt 6.7.3
+`android_arm64_v8a` kit), `$QT_HOST` (the matching desktop Qt 6.7.3, `gcc_64`),
+`$ANDROID_SDK_ROOT`, `$ANDROID_NDK_ROOT` (NDK 26.1.10909125) and `$JAVA_HOME`
+(JDK 17); those versions are the ones used here.
 
 ```sh
-JAVA_HOME=$HOME/Documents/AI/.toolchains/jdk/jdk-17.0.20+8 \
-ANDROID_SDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk \
-ANDROID_NDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk/ndk/26.1.10909125 \
-$HOME/Documents/AI/.toolchains/Qt/6.7.3/android_arm64_v8a/bin/qt-cmake \
-    -S . -B /tmp/noteAppC-android-build -G Ninja \
+JAVA_HOME=$JAVA_HOME \
+ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
+ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
+$QT_ANDROID/bin/qt-cmake \
+    -S . -B build-android -G Ninja \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DANDROID_SDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk \
-    -DANDROID_NDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk/ndk/26.1.10909125 \
-    -DQT_HOST_PATH=$HOME/Documents/AI/.toolchains/Qt/6.7.3/gcc_64 \
+    -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
+    -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
+    -DQT_HOST_PATH=$QT_HOST \
     -DBUILD_TESTING=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDFVIEW=OFF \
     -DNOTEAPPC_WITH_SPELLCHECK=OFF -DNOTEAPPC_WITH_HTML=OFF -DNOTEAPPC_WITH_MEDIA=OFF
 
-JAVA_HOME=$HOME/Documents/AI/.toolchains/jdk/jdk-17.0.20+8 \
-ANDROID_SDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk \
-ANDROID_NDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk/ndk/26.1.10909125 \
+JAVA_HOME=$JAVA_HOME \
+ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
+ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
 GRADLE_USER_HOME=/tmp/noteAppC-gradle \
-cmake --build /tmp/noteAppC-android-build --target apk --parallel 6
+cmake --build build-android --target apk --parallel 6
 ```
 
-`GRADLE_USER_HOME` is pointed at `/tmp` on purpose: left at its default it
-would grow a Gradle cache inside `~/Documents`, which Syncthing replicates to
-every machine. `BUILD_TESTING=OFF` skips `tools/` and `tests/` - the
+`GRADLE_USER_HOME` is pointed at a scratch directory on purpose, to keep the
+Gradle cache out of the home directory. `BUILD_TESTING=OFF` skips `tools/` and `tests/` - the
 screenshot tool, the index CLI and the bench harness are desktop developer
 tools with nothing to gain from Android packaging, and GTest is not part of
 this toolchain either.
 
 Artifact:
-`/tmp/noteAppC-android-build/apps/noteAppC/android-build/build/outputs/apk/debug/android-build-debug.apk`,
+`build-android/apps/noteAppC/android-build/build/outputs/apk/debug/android-build-debug.apk`,
 18 MB, signed with the `Android Debug` certificate (`apksigner verify
 --print-certs`). `aapt2 dump badging` confirms `package:
 io.github.jernejmarcic.noteAppC`, `sdkVersion:'26'`, `targetSdkVersion:'34'`,

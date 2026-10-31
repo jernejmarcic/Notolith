@@ -1841,8 +1841,7 @@ TEST(ParserPerfTest, ParsingStaysLinearInFileSize)
     EXPECT_LT(timeRatio, sizeRatio * 2.0);
 }
 
-// --- code fence attributes and tab groups (TODO.md, "Code blocks use the
-// callout style format" and "Code block tabs") -----------------------------
+// --- code fence attributes and tab groups ---------------------------------
 
 TEST(CodeFenceTest, AttributesParsedFromTheInfoString)
 {

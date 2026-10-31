@@ -10031,7 +10031,7 @@ TEST_F(WindowTest, AModuleAsksTheWindowForTheCurrentFolder)
         << "no note: the vault root";
 }
 
-// R1: indexing never counts as use. A vault file with a module's suffix leaves the module
+// Indexing never counts as use. A vault file with a module's suffix leaves the module
 // unloaded until the file is opened. (No fixed wait: the index pass is awaited, then the
 // absence is asserted.)
 TEST_F(WindowTest, AVaultFileOfAModuleSuffixDoesNotLoadTheModuleUntilItIsOpened)
@@ -10047,7 +10047,7 @@ TEST_F(WindowTest, AVaultFileOfAModuleSuffixDoesNotLoadTheModuleUntilItIsOpened)
     EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("fake")));
 }
 
-// M4: a command the scan adds reaches a pop-out window that already exists. The main window
+// A command the scan adds reaches a pop-out window that already exists. The main window
 // is not shown, so no first paint starts the automatic scan before the explicit one.
 TEST_F(WindowTest, AModuleCommandAppearsInAnAlreadyOpenPopoutWindow)
 {
@@ -10112,7 +10112,7 @@ TEST_F(WindowTest, AModuleSettingChangedInSettingsIsSavedWhenTheWindowCloses)
     EXPECT_FALSE(noteAppC::Settings::load().boolean(QStringLiteral("fake.greeting")));
 }
 
-// R2: no dependency check; a library that cannot resolve a symbol fails to load and the
+// No dependency check; a library that cannot resolve a symbol fails to load and the
 // loader's message is what Settings shows.
 TEST_F(WindowTest, AModuleThatFailsToLoadIsReportedInSettingsWithTheLoadersMessage)
 {
@@ -10217,7 +10217,7 @@ QByteArray bigInkBody(int strokes)
 }
 
 } // namespace
-// The handwritten-note module (spec section 4, Task 8): the real notolith-ink.so from
+// The handwritten-note module (spec section 4): the real notolith-ink.so from
 // ${CMAKE_BINARY_DIR}/modules, found through NOTEAPPC_MODULE_DIRS.
 TEST_F(InkWindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
 {
@@ -10258,10 +10258,10 @@ TEST_F(InkWindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
     ASSERT_TRUE(saved.open(QIODevice::ReadOnly));
     const QByteArray bytes = saved.readAll();
     EXPECT_EQ(bytes.count("\"type\":\"stroke\""), 2) << "the old stroke and the new one";
-    EXPECT_TRUE(bytes.contains("\"format\":\"notolith-ink\"")) << "written by writeInk, compact JSON (R4)";
+    EXPECT_TRUE(bytes.contains("\"format\":\"notolith-ink\"")) << "written by writeInk, compact JSON";
 }
 
-// Task 11: a file above kOffThreadParseBytes (256 KB) is parsed on a pool thread; the tab says so meanwhile and
+// A file above kOffThreadParseBytes (256 KB) is parsed on a pool thread; the tab says so meanwhile and
 // refuses to save, so a half-loaded document is never written over the file.
 TEST_F(InkWindowTest, ABigInkFileParsesOffTheUIThreadAndSavesAfter)
 {
@@ -10405,7 +10405,7 @@ TEST_F(InkWindowTest, AnInkFileThatCannotBeReadIsReportedAndNoViewOpens)
 }
 #endif
 
-// R6: a file-less module tab shows the modified mark, the save command calls its save(), and
+// A file-less module tab shows the modified mark, the save command calls its save(), and
 // closing it saves it like a note (autosave is on by default) without asking.
 TEST_F(WindowTest, AFileLessModuleTabShowsTheModifiedMarkAndIsSavedByTheSaveCommandAndOnClose)
 {
@@ -10490,7 +10490,7 @@ TEST_F(WindowTest, AFileLessModuleTabAsksBeforeClosingWhenAutosaveIsOffAndSavesO
     EXPECT_EQ(file.readAll().count("saved"), 1) << "Save called the view's save()";
 }
 
-// R6, quit: two modified file-less tabs are two documents (maybeSaveAll keys them apart): quitting asks
+// Two modified file-less tabs are two documents (maybeSaveAll keys them apart): quitting asks
 // about each, and Save reaches each view's save().
 TEST_F(WindowTest, QuittingAsksAboutEveryModifiedFileLessModuleTabAndSavesEach)
 {
@@ -10534,7 +10534,7 @@ TEST_F(WindowTest, QuittingAsksAboutEveryModifiedFileLessModuleTabAndSavesEach)
 }
 
 #ifdef NOTEAPPC_HAVE_INK_MODULE
-// Jernej's decision: the mouse draws only when inking with it is explicitly on (a pen always draws).
+// The mouse draws only when inking with it is explicitly on (a pen always draws).
 // The row is registered by the module and reaches an already open view through applySettings.
 TEST_F(InkWindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSettings)
 {
@@ -10569,7 +10569,7 @@ TEST_F(InkWindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnI
     EXPECT_TRUE(view->isModified()) << "on: the live view took the setting without being reopened";
 }
 
-// Task 15: a text box is drawn by the host's own note editor (InkView builds it), so what the box says is
+// A text box is drawn by the host's own note editor (InkView builds it), so what the box says is
 // rendered like a note: [[Welcome]] shows as a link, in the link colour, on the page.
 TEST_F(InkWindowTest, AnInkTextBoxRendersMarkdownLikeANote)
 {
@@ -10608,11 +10608,11 @@ TEST_F(InkWindowTest, AnInkTextBoxRendersMarkdownLikeANote)
     EXPECT_EQ(shot.pixelColor(int(330 * dpr), int(60 * dpr)), QColor(0xf0, 0xe6, 0xc8)) << "the box is clear: the page shows through, not a card";
     EXPECT_EQ(shot.pixelColor(int(45 * dpr), int(75 * dpr)), QColor(0xf0, 0xe6, 0xc8)) << "also at the box's left edge";
 }
-// --- Task 16: the toolbar, the page menu, the plugin settings rows, the pen pressure and the save contract ---
+// --- The toolbar, the page menu, the plugin settings rows, the pen pressure and the save contract ---
 
 
 
-// R14: without pen hardware every tool is one click away, and the keys move the toolbar.
+// Without pen hardware every tool is one click away, and the keys move the toolbar.
 TEST_F(InkWindowTest, EveryInkToolIsOnTheToolbarAndTheKeysMoveIt)
 {
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
@@ -10646,7 +10646,7 @@ TEST_F(InkWindowTest, EveryInkToolIsOnTheToolbarAndTheKeysMoveIt)
     EXPECT_FALSE(view->findChild<QAction *>(QStringLiteral("inkTool_pen"))->isChecked());
 }
 
-// R14: the learned pressure maximum of a device is stored per device name and applies at once after a restart.
+// The learned pressure maximum of a device is stored per device name and applies at once after a restart.
 TEST_F(InkWindowTest, ALearnedPenPressureIsPersistedPerDeviceAndRestoredOnTheNextOpen)
 {
     write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");
@@ -10686,7 +10686,7 @@ TEST_F(InkWindowTest, ALearnedPenPressureIsPersistedPerDeviceAndRestoredOnTheNex
     EXPECT_DOUBLE_EQ(canvas->learnedPressure(QStringLiteral("another pen")), 1.0);
 }
 
-// R5: the tile cache budget is the setting in MB and follows it live.
+// The tile cache budget is the setting in MB and follows it live.
 TEST_F(InkWindowTest, TheInkTileCacheBudgetFollowsTheSettingInMB)
 {
     write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");
@@ -10877,7 +10877,7 @@ TEST_F(InkWindowTest, InkSettingsRowsAppearUnderThePluginAndChangeNewNotes)
     eraser->setValue(30);
     EXPECT_DOUBLE_EQ(canvas->eraserWidth(), 30.0) << "an open note follows the row";
     EXPECT_NE(settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_ink.rawInput")), nullptr);
-    // The two hidden keys have no row (R14).
+    // The two hidden keys have no row.
     EXPECT_EQ(settingsWidget<QWidget>(window, QStringLiteral("settingsSpin_ink.pressureMax")), nullptr);
     EXPECT_EQ(settingsWidget<QWidget>(window, QStringLiteral("settingsLineEdit_ink.pressureByDevice")), nullptr);
     window.closeSettings();
@@ -10980,7 +10980,7 @@ TEST_F(InkWindowTest, TheInkEraserSelectAndShapeChoicesAreRememberedAndShownOnTh
     EXPECT_EQ(second->findChild<QAction *>(QStringLiteral("inkTool_shape"))->text(), QStringLiteral("Arrow"));
 }
 
-// Task 18: "Don't save" on a tab whose text box is open with typed text and the focus deletes the view; the editor's
+// "Don't save" on a tab whose text box is open with typed text and the focus deletes the view; the editor's
 // focus-out during that teardown used to commit the box into the half-destroyed view (SIGSEGV). The file stays as it was.
 TEST_F(InkWindowTest, ClosingAnInkTabWithATypedTextBoxAndDontSaveIsSafeAndLeavesTheFileAlone)
 {
@@ -11134,7 +11134,7 @@ static void aModifiedBigInkTabReloading(MainWindow &window, const QString &vault
     EXPECT_TRUE(error.contains(QStringLiteral("still loading")));
 }
 
-// M4 / R6: a reload in flight cannot be saved; closing the tab then waits for it instead of reporting a failure.
+// A reload in flight cannot be saved; closing the tab then waits for it instead of reporting a failure.
 TEST_F(InkWindowTest, ClosingAnInkTabWhileItsReloadIsStillParsingWaitsForTheLoadAndAsksNothing)
 {
     write(QStringLiteral("Big.ink"), bigInkBody(3000));
@@ -11176,7 +11176,7 @@ TEST_F(InkWindowTest, QuittingWhileAnInkTabIsStillReloadingWaitsForTheLoadAndAsk
     EXPECT_FALSE(asked) << "still loading is retry-after-load, not a save failure";
     EXPECT_FALSE(window.isVisible()) << "the window closed";
 }
-// I1: a pen pressed harder than ever raises the learned maximum at every sample of the press; the view keeps it in memory and
+// A pen pressed harder than ever raises the learned maximum at every sample of the press; the view keeps it in memory and
 // writes the file once, after the pen has been still for a moment, not once per sample in the middle of a stroke.
 TEST_F(InkWindowTest, ARampOfRaisedPressuresIsSavedOnceAfterAMomentNotOnEverySample)
 {
@@ -11208,7 +11208,7 @@ TEST_F(InkWindowTest, ARampOfRaisedPressuresIsSavedOnceAfterAMomentNotOnEverySam
         << "flushed when the view was destroyed";
 }
 
-// I2: a tab with nothing to save closes at once, even while its file is still parsing.
+// A tab with nothing to save closes at once, even while its file is still parsing.
 TEST_F(InkWindowTest, ClosingAnInkTabThatIsStillParsingButHasNothingToSaveDoesNotWait)
 {
     write(QStringLiteral("Big.ink"), bigInkBody(3000));
@@ -11225,7 +11225,7 @@ TEST_F(InkWindowTest, ClosingAnInkTabThatIsStillParsingButHasNothingToSaveDoesNo
     EXPECT_FALSE(eventsRan) << "closing spun the event loop to wait for a parse it did not need";
 }
 
-// I2: quitting with two modified ink tabs, one of them reloading: both are kept, nothing is asked, and no tab goes missing from
+// Quitting with two modified ink tabs, one of them reloading: both are kept, nothing is asked, and no tab goes missing from
 // under the loop (the wait takes no user input).
 TEST_F(InkWindowTest, QuittingWithTwoModifiedInkTabsOneStillReloadingKeepsBothAndAsksNothing)
 {
@@ -11729,7 +11729,7 @@ TEST_F(InkWindowTest, APenLearnedInAPopoutIsSavedWhenTheWindowGoesWithItsPopoutS
 
 #endif
 
-// Task 17 (R1): the index reads .ink text boxes host-side. The module is never loaded for it.
+// The index reads .ink text boxes host-side. The module is never loaded for it.
 #ifdef NOTEAPPC_HAVE_INK_MODULE
 TEST_F(WindowTest, InkTextBoxLinksShowInBacklinksWithoutLoadingTheModule)
 {

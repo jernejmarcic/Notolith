@@ -1,8 +1,7 @@
-/// HTML in live preview edited where it is drawn. Jernej, 2026-10-02: "For
-/// HTML I want rendering of it like in obsidian, but unlike obsidian I want
-/// it inline editable just like the markdown", and an HTML table "editable
-/// like an actual table element (like in excel for example, clicking on
-/// cells, etc.)".
+/// HTML in live preview edited where it is drawn. HTML renders like in
+/// Obsidian but, unlike there, is editable inline just like the Markdown, and
+/// an HTML table is editable like an actual table element (like in a
+/// spreadsheet: clicking on cells, etc.).
 ///
 /// Nothing here is a second editor. An HTML block whose every tag the editor
 /// can lay out itself is turned, after the parse, into the decorations a
