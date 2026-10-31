@@ -51,19 +51,22 @@ notes. For the older map see [[Welcome]] and [[Newer Features]].
   (`tex-embeds`), [[CSV Embeds]] (`csv-embeds`), [[EPUB Embeds]]
   (`epub-reader`), [[Other Embeds]].
 - [[HTML Blocks]] (`html-blocks`), [[Base Blocks]] and [[Library]] (`bases`).
-- [[Mermaid]], [[PlantUML]], [[TikZ]], [[Graphviz]] - diagrams.
+- [[Mermaid]], [[PlantUML]], [[TikZ]], [[Graphviz]] - diagrams; [[Markmap]]
+  (`markmap`) - mind maps drawn by Notolith itself.
 
 ## Code
 
 - [[Code Blocks]], [[Fence Options]], [[Implicit Code]], [[Running Code]],
   [[Runnable File Embeds]], [[Notebook.ipynb]] (`notebooks`).
+- [[Code Styler]] (`advanced-code-blocks`): fence parameters, named highlights,
+  `{lang}` inline code, ` ```reference ` blocks.
 
 ## Files, safety and sharing
 
 - [[Note History]] (`note-history`, `file-recovery`).
 - [[Encrypted Notes]] (`encrypted-notes`).
 - [[PDF Viewer]] (`pdf-viewer`), [[Image Annotation]] (`image-annotation`).
-- [[Export to PDF]], [[Publish]] (`publish`), [[Slides]] (`slides`),
+- [[Export to PDF]], [[Pandoc]] (`pandoc`), [[Publish]] (`publish`), [[Slides]] (`slides`),
   [[Audio Recorder]] (`audio-recorder`).
 - [[Sync and Share]] (`sync`, `share`) - needs a server or a second device.
 - [[Community Plugins]] (`community-plugins`) - needs a built plugin.

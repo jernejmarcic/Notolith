@@ -1044,7 +1044,7 @@ const Substitution *MarkdownEditor::shownSubstitution(qsizetype offset) const
     const qsizetype index = blockAt(offset);
     if (index >= 0 && index < qsizetype(d->m_blocks.size())) {
         const BlockView &view = d->m_blocks[size_t(index)];
-        if (view.active && view.cells.empty() && revealsWholeBlock(view))
+        if (view.active && view.x().cells.empty() && revealsWholeBlock(view))
             return nullptr;
     }
     if (entityRevealed(*(it - 1)))
@@ -1059,7 +1059,8 @@ bool MarkdownEditor::entityRevealed(const Substitution &substitution) const
     const bool vimStepping = d->m_vim.enabled && d->m_vim.mode != VimState::Mode::Insert;
     return d->m_mode == Mode::LivePreview && !vimStepping && d->m_anchor == d->m_cursor
            && substitution.range.start <= d->m_cursor
-           && d->m_cursor <= substitution.range.end && d->m_text.at(substitution.range.start) == QLatin1Char('&');
+           && d->m_cursor <= substitution.range.end
+           && (d->m_text.at(substitution.range.start) == QLatin1Char('&') || d->m_text.at(substitution.range.start) == QLatin1Char('\\'));
 }
 
 QList<Range> MarkdownEditor::revealedEntities() const

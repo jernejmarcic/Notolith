@@ -10,15 +10,15 @@
 /// (CSVparser.h) and needs nothing from libs/ext, so no runner is registered
 /// by the window - the editor reads the file on its own.
 ///
-/// One cache entry per path, replaced when the file's mtime or size differs
+/// One cache entry per path, replaced when the file's mtime, ctime or size differs
 /// from what the entry was read at; the old table stays on screen until the
 /// new one lands. A QFileSystemWatcher, made on the first CSV embed and not
 /// before, holds the cached paths and their folders: a change (debounced)
 /// stats them and relays out only the blocks whose file moved, so a file
 /// rewritten by another program shows with nothing else happening. The
 /// generation counter drops a read that a newer one has superseded. A failed
-/// read is shown but never kept as the answer: the next watcher event or layout
-/// reads again.
+/// read stays shown until the file's ctime moves (a chmod is how it becomes
+/// readable): that is one read again, not one per layout.
 ///
 /// Bounded three ways, so a hostile or merely large file can neither stall
 /// layout nor fill memory: rows and cells shown (kCSVmaxRows, kCSVmaxCells -
@@ -124,23 +124,20 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     const QFileInfo info(path);
     if (!info.isFile())
         return false; // the resolver only answers with files that exist; this is a race with a delete
-    view.CSVpath = path;
+    view.extrasMut().CSVpath = path;
     watchCSV(path);
 
     const qint64 mtime = info.lastModified().toMSecsSinceEpoch();
+    const qint64 ctime = info.metadataChangeTime().toMSecsSinceEpoch();
     const qint64 size = info.size();
     auto it = d->m_CSVcache.find(path);
-    // A read that failed is never kept as the answer: any layout but the one
-    // that shows its error asks again (the file may be readable now - a
-    // chmod changes neither mtime nor size).
-    if (it != d->m_CSVcache.end() && !it->table.error.isEmpty() && d->m_CSVdelivering != path)
-        it->mtime = -1;
-    if (it == d->m_CSVcache.end() || it->mtime != mtime || it->size != size) {
+    if (it == d->m_CSVcache.end() || it->mtime != mtime || it->ctime != ctime || it->size != size) {
         // A re-read keeps the entry's old table: it stays on screen until
         // the new one lands (a fresh entry has none, and shows "Loading...").
         if (it == d->m_CSVcache.end())
             it = d->m_CSVcache.insert(path, CSVcacheEntry());
         it->mtime = mtime;
+        it->ctime = ctime;
         it->size = size;
         it->pending = true;
         it->generation = ++d->m_CSVgeneration;
@@ -155,7 +152,7 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
         // Through m_lifeline, as every other embed's worker: the editor may
         // be gone by the time the file has been parsed.
         (void)QtConcurrent::run([this, lifeline = d->m_lifeline, latest, path, tsv, unreadable, moreColumns,
-                                 generation, mtime, size] {
+                                 generation, mtime, ctime, size] {
             if (latest->load() != generation)
                 return; // a newer read of this file has been asked for: not worth the parse
             CSVcacheEntry result;
@@ -167,6 +164,7 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
                 result.table.error = unreadable;
             }
             result.mtime = mtime;
+            result.ctime = ctime;
             result.size = size;
             result.generation = generation;
             lifeline->post(this, [this, path, generation, result = std::move(result)]() mutable {
@@ -177,12 +175,12 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
 
     // Painted as a data table, like a base's: paintBase with no view name.
     view.isBase = true;
-    view.image = QPixmap();
-    view.cells.clear();
-    view.baseRows.clear();
-    view.baseViewName.clear();
-    view.baseYAML.clear();
-    view.baseRequestedView.clear();
+    view.extrasMut().image = QPixmap();
+    view.extrasMut().cells.clear();
+    view.extrasMut().baseRows.clear();
+    view.extrasMut().baseViewName.clear();
+    view.extrasMut().baseYAML.clear();
+    view.extrasMut().baseRequestedView.clear();
     hideWholeBlockText(view);
 
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
@@ -216,19 +214,17 @@ void MarkdownEditor::deliverCSV(const QString &path, quint64 generation, CSVcach
     const auto latest = it->latest;
     *it = std::move(result);
     it->latest = latest;
-    d->m_CSVdelivering = path;
     relayCSVblocks(path);
-    d->m_CSVdelivering.clear();
 }
 
 void MarkdownEditor::relayCSVblocks(const QString &path)
 {
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isBase || block.CSVpath != path) // the flag is in the hot half of the struct
+        if (!block.isBase || block.x().CSVpath != path) // the flag is in the hot half of the struct
             continue;
         block.layout.reset();
-        block.cells.clear();
+        block.extrasMut().cells.clear();
         block.laidOut = false;
         block.heightEstimated = false;
         touched = true;
@@ -253,7 +249,7 @@ void MarkdownEditor::watchCSV(const QString &path)
         d->m_CSVrefresh->setInterval(200); // a write in place can come in more than one go
         connect(d->m_CSVwatcher, &QFileSystemWatcher::fileChanged, this, &MarkdownEditor::CSVfileEvent);
         connect(d->m_CSVwatcher, &QFileSystemWatcher::directoryChanged, this, &MarkdownEditor::CSVfileEvent);
-        connect(d->m_CSVrefresh, &QTimer::timeout, this, &MarkdownEditor::refreshCSVfiles);
+        connect(d->m_CSVrefresh, &QTimer::timeout, this, &MarkdownEditor::refreshVaultFiles);
     }
     // The file, and its folder: a program that saves by writing a new file
     // and renaming it over the old one makes inotify drop the file's watch.
@@ -287,44 +283,21 @@ void MarkdownEditor::refreshCSVfiles()
             // happened. The block lays out again as whatever the resolver
             // now makes of the link.
             d->m_CSVcache.remove(path);
-            d->m_CSVgone.insert(path);
             relayCSVblocks(path);
             continue;
         }
         watchCSV(path); // put back what a rename-over-save took away
-        // A read already under way for this very mtime and size has its own
-        // relayout coming; one that has moved on from its entry, or failed
-        // (see layoutCSVembed), needs one.
-        if (info.lastModified().toMSecsSinceEpoch() != cached->mtime || info.size() != cached->size
-            || !cached->table.error.isEmpty())
+        // A read already under way for this very mtime, ctime and size has its
+        // own relayout coming; one that has moved on from its entry needs one.
+        if (info.lastModified().toMSecsSinceEpoch() != cached->mtime
+            || info.metadataChangeTime().toMSecsSinceEpoch() != cached->ctime || info.size() != cached->size)
             relayCSVblocks(path);
     }
-    // A file that went and is back: the index watches notes, not attachments,
-    // so it says nothing, and the blocks that fell back to the plain link do
-    // not know. Lay out the embeds the resolver now sends to it.
-    QSet<QString> back;
-    for (auto it = d->m_CSVgone.begin(); it != d->m_CSVgone.end();) {
-        if (QFileInfo(*it).isFile()) {
-            back.insert(*it);
-            it = d->m_CSVgone.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    if (back.isEmpty() || !m_resolver)
-        return;
-    for (const EmbedSpan &embed : std::as_const(d->m_decorations.embeds)) {
-        if (!embed.html && back.contains(m_resolver(embed.target)))
-            invalidateBlock(blockAt(embed.range.start));
-    }
-    updateLayout();
-    viewport()->update();
 }
 
 void MarkdownEditor::dropCSVcache()
 {
     d->m_CSVcache.clear();
-    d->m_CSVgone.clear();
     if (d->m_CSVwatcher) {
         d->m_CSVwatcher->removePaths(d->m_CSVwatcher->files());
         d->m_CSVwatcher->removePaths(d->m_CSVwatcher->directories());
@@ -348,12 +321,12 @@ QList<QStringList> MarkdownEditor::tableCellTextsAt(qsizetype offset) const
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
     int rows = 0, columns = 0;
-    for (const Cell &cell : view.cells) {
+    for (const Cell &cell : view.x().cells) {
         rows = qMax(rows, cell.row + 1);
         columns = qMax(columns, cell.column + 1);
     }
     QList<QStringList> grid(rows, QStringList(columns));
-    for (const Cell &cell : view.cells) {
+    for (const Cell &cell : view.x().cells) {
         if (cell.layout)
             grid[cell.row][cell.column] = cell.layout->text();
     }

@@ -231,7 +231,48 @@ with no `;`, an unknown name, a number
 that is no character and a control character (`&#10;`) show as written. Entities
 inside a Markdown link's text are left as written.
 
-Tests: `tests/test_html_edit.cpp` (`ctest -R html_edit`).
+Backslash escapes: a backslash before ASCII punctuation (`\(`, `\*`, `\\`, `\$`,
+`\#`...) is CommonMark's escape and Obsidian does not show it, so neither does
+live preview: `\(A=26\)` reads "(A=26)", `\*not italic\*` reads "*not italic*",
+`\\` is one backslash. They are substitutions like entities (`scanEscapes` in
+`Parser.cpp`, opened by the caret touching one through the same
+`revealedEntities()`), with the same exclusions: code, maths, HTML, links,
+wikilinks, `%%` comments and the frontmatter keep their backslashes, as does
+Source mode. A backslash before anything else (`C:\Users`, a line-end `\`) is
+text. Obsidian renders only `$...$` and `$$...$$` as maths, so `\(...\)` and
+`\[...\]` are not.
+
+Tests: `tests/test_html_edit.cpp` (`ctest -R html_edit`); escapes in
+`tests/test_math.cpp` (`ctest -R math`).
+
+## Display maths
+
+A `$$ ... $$` that owns its lines is a block of its own even inside a paragraph:
+md4qt does not end a paragraph where a formula starts, so `Parser.cpp`'s
+`splitParagraphsAtDisplayMath` cuts the paragraph into the text before, the
+formula and the text after (`\(A=26\) (a-z):` on the line above `$$` used to
+keep the whole thing as source in a code-looking box). A formula that shares a
+line with other text stays in its paragraph.
+
+MicroTeX draws it; a formula it refuses is retried as MathJax would read it
+(`align*` and the other starred environments unstarred, an `&` outside any
+environment inside an `array`). One that still fails shows its source with a
+dim "Math: <reason>" line under it, never an empty gap. While the caret is in
+the formula and what is typed does not parse yet (`\begin{array}{c} a \end{array} &`),
+the last drawing stays up and no reason shows, so nothing below moves. Display
+maths md4qt did not parse (a blank line inside) keeps its backslashes, as do
+autolinks.
+
+**With the caret in a formula** (or a diagram fence: mermaid, tikz, plantuml,
+dot) the source shows, both `$$` lines included, and what it draws stays
+visible under it, following what is typed (`PreviewBelow.cpp`). A formula is
+drawn on the spot, one kept at a time. A diagram is made by its external tool,
+so it is asked for only once typing has paused for half a second, and the
+last drawing stays up meanwhile; the request is the fence renderer's own, so
+the drawing is already cached when the caret leaves. A drawing the next one
+replaces is dropped from the fence cache, which is also capped at 64 entries. Source mode shows
+neither. The diagram sits under the listing, above the closing fence line.
+Tests: `tests/test_math.cpp`.
 
 ## Lists
 
@@ -703,6 +744,60 @@ Core plugin `csv-embeds` (Settings > Core plugins, "CSV embeds") turns it off:
 the file is then the plain source listing it was before. Tests
 `CSVparserTest.*`, `CSVembedTest.*`, `FeaturesTest.CSVembedsToggle`; the demo
 vault's `Embeds/CSV Embeds.md` shows one of each kind.
+
+## Advanced code blocks (Code Styler)
+
+Core plugin `advanced-code-blocks` (Settings > Core plugins, "Advanced code
+blocks", on by default) reads Obsidian's Code Styler syntax; the user-facing
+description is in STYLING.md ("Code Styler syntax", "Inline code in a
+language", "File references"). One switch covers all four parts and it is a
+parse-level one, `ParseOptions::codeStyler` (like `taskStates`): off, the
+parser never looks at a fence line's parameters, an inline code's `{lang}`
+prefix or a `reference` fence, so notes parse, lay out and paint exactly as
+before and the paint paths find nothing to do. `MainWindow::parseOptions()`
+fills it from `featureOn("advanced-code-blocks")`; PDF export and publish carry
+the same flag (`PdfOptions::codeStyler`, `Options::parse`). A note with
+`code-styler-ignore: true` in its properties parses as with the plugin off.
+
+- **Parameters** (`Parser.cpp`, `parseCodeParameters` and `applyFenceParameters`)
+  fill the same `CodeOptions` a `#|` line fills; a `#|` line wins when both
+  give a key. The tokens are also `CodeFenceSpan::attributes`, so the tab-group
+  grouping keeps working, and `title:"a tab b"` no longer makes a stray `tab`.
+- **Named highlights** are `CodeOptions::highlights`, kind name to line
+  numbers, painted by `paintCodeRows` after the default highlight in the
+  colour `codeHighlightColour()` finds (a theme token or a hex, alpha 0.16 dark
+  and 0.24 light unless the hex has its own). The names and colours are the
+  `editor.codeHighlights` setting.
+- **Inline code** is `StyleSpan::code`, the part after the `{lang}` prefix; the
+  prefix is in `Decorations::syntax`, so it hides outside the caret's element
+  like any marker. `inlineCodeFormats` colours it through the fence's own
+  highlighter.
+- **Reference blocks** are `ReferenceSpan` in `Decorations::references`
+  (`Parser.cpp`, `parseReference`) and `ReferenceBlock.cpp`. `layoutReference`
+  runs in `layoutBlock` after `layoutPluginCode` and makes a text panel
+  (`layoutTextPanel`), marked `isPluginBlock` so no listing chrome is drawn;
+  A file is shown only if its canonical path is under the canonical vault
+  root (`setVaultRootProvider`; the window and the PDF export pass it), else
+  the block says "Outside the vault" and nothing is read; the window checks
+  again before it opens a header click's target.
+  `BlockView::referenceTarget` is what a header click emits as
+  `referenceActivated`, which the window opens. It follows CSVembed.cpp's
+  pattern: one cache entry per resolved path or URL, a read on a worker
+  (`QtConcurrent` through `m_lifeline->post`) or by `QNetworkAccessManager`, a
+  generation counter dropping a superseded answer, a `QFileSystemWatcher` and a
+  200 ms debounce for the files. A URL's copies are also kept in a
+  process-wide table, fresh for five minutes. Nothing is read in layout, and
+  `setReferenceReadHookForTests` is how the tests see which thread the read ran
+  on. PDF export waits (at most 10 s) for `referencesPending()` to clear before
+  it lays out for the page. `setRemoteReferences(false)` (the default, from the
+  `editor.remoteReferences` setting) keeps every URL from being requested.
+  ponytail: a target missing at layout time is not watched for; it shows when
+  the block is next laid out.
+
+Tests: `CodeStylerTest.*` (parser, tests/test_markdown.cpp),
+`CodeStylerEditorTest.*` and `ReferenceBlockTest.*` (tests/test_editor.cpp, the
+remote ones against a local `QTcpServer`), `SettingsFeatureTest.*`; the demo
+vault's `Code/Code Styler.md` shows every part.
 
 ## `[[` link completion
 
@@ -1327,7 +1422,7 @@ comparison (and a clipboard read on Ctrl+V).
 Tests: `TableHandlesTest.*` (`tests/test_tables.cpp`), `HtmlTableHandlesTest.*`
 (`tests/test_html_edit.cpp`).
 
-## Diagrams: Mermaid, PlantUML, TikZ, Graphviz
+## Diagrams: Mermaid, PlantUML, TikZ, Graphviz (and Markmap)
 
 A ```` ```mermaid ```` fence is drawn as its diagram when the caret is outside
 it, and shown as source when the caret is inside, like any rendered block.
@@ -1462,6 +1557,92 @@ failure under `NOTEAPPC_REQUIRE_TOOLS=1`): a diagram per kind, the disk cache,
 the missing-tool hint, PlantUML's refused includes, TikZ's reads and shell,
 the colours, the sandbox itself, PDF export and the window's settings; publish
 is in `tests/test_publish.cpp`.
+
+### Markmap: mind maps without a web view
+
+A ```` ```markmap ```` fence is drawn as a mind map the way the Obsidian markmap
+plugin and markmap.js.org draw one: the root at the left, the fence's headings
+and list items as a tree to its right, a curved branch in its own colour for each
+subtree, a short underline under each node's text and, at its end, a circle
+that folds the branch. Core plugin `markmap` (Settings > Core plugins, "Mind
+maps", on by default); off, the fence is a plain code block and no code of it
+runs. There is no JavaScript and no tool: the tree, the layout and the SVG are
+`libs/render/Markmap.{h,cpp}`, drawn in-process, so reading view, publish and
+PDF export show the same map, each drawn from the fence's text in its own theme.
+
+- **Tree**: headings nest by level (a skipped level still hangs from the
+  nearest lower one) and a list under a heading hangs from it, nested by
+  indentation (tabs count 4); any other line of text is a child of the heading
+  above it and a continuation line joins its list item. One top-level node is
+  the root; several (or none) get an empty root, as in markmap.js. The node text's
+  inline Markdown comes from the application's own parser (`Parser::parseAll`
+  over the fence body, one flag per character): **bold**, *italic*, `code` (on a
+  tint), links and wikilinks (their text, in the accent colour, underlined),
+  ~~strikethrough~~; the markers are gone.
+- **Options**: the fence's frontmatter, under a `markmap:` key or at the top
+  level: `colorFreezeLevel` (nodes below this level share the colour of their
+  ancestor on it; default 0, every node its own), `initialExpandLevel` (nodes on
+  this level or deeper start folded; default -1, all open) and `maxWidth`
+  (pixels before a node's text wraps; default 0, never). Levels count as
+  markmap.js counts them, from 1 at the root: `initialExpandLevel: 1` folds the
+  root (only it shows), 2 shows the root and its children, and
+  `colorFreezeLevel: 1` gives the whole map one colour (markmap-view's
+  `view.ts` `_initializeData` and `util.ts`, pinned by
+  `MarkmapTreeTest.InitialExpandLevelCountsTheRootAsLevelOneLikeMarkmapView`). `<!--
+  markmap: fold -->` after a node, or on a line of its own right after it,
+  folds it to begin with; `<!-- markmap: foldAll -->` folds it and everything
+  below it that has children.
+- **Folding by a click**: a press on a node's circle (live preview and reading
+  view) folds or unfolds the branch and draws the map again. It is view state
+  only: it is not written to the note, it is kept per text of the fence by the
+  window's renderer (so a split of the same note agrees) and it is gone when
+  the text changes. `MarkdownEditor::CodeBlockResult::hotspots` and `activate`
+  carry it: any code-block renderer can mark places on its picture that answer
+  a click, with the picture they lead to, instead of the caret; a click
+  anywhere else on a map puts the caret in the block, as for any diagram.
+- **Layout**: a tidy tree, text measured with `QFontMetricsF` in the theme's text
+  and monospace fonts: each node's subtree is as tall as its children stacked
+  (6 px apart) or the node itself, and a node is centred on its first and last
+  child. A map wider than the editor is scaled down to fit it (and its hotspots
+  with it); there is no zoom or pan.
+- **Colours** are the theme's tokens: branch colours `--color-blue`,
+  `--color-orange`, `--color-green`, `--color-red`, `--color-purple`,
+  `--color-cyan`, `--color-pink`, `--color-yellow` in that order (as first used
+  over the whole tree, so folding does not recolour), text `--text-normal`,
+  links and the root `--interactive-accent`, the card `--background-primary`.
+  The theme (with its fonts) decides them, so a dark and a light theme each
+  have their own SVG.
+- **Off the UI thread, and capped**: parse, layout and raster run on a pool
+  thread of their own (one thread; a thousand nodes parse and draw in about 40
+  ms here); the UI thread reads the theme and queues the job. At most 1000 nodes
+  are drawn (`kMarkmapMaxNodes`); a bigger outline is cut there and the map
+  says "Showing the first 1000 of N nodes" under itself.
+- **Publish, PDF export**: nothing is cached on disk. Both draw the map from the
+  fence's text (`diagramCachedSVG` for Markmap is `drawMarkmap(parseMarkmap(...))`
+  in the theme the output has: the site's dark theme for publish, the paper's
+  light theme for a PDF whatever the window uses), so a note never opened in the
+  editor still gets its map, as the source asks for it (not as a click folded it).
+  With the plugin off (`publish::Options::mindMaps`, `PdfOptions::mindMaps`) they
+  show the plain listing. An encrypted note is not drawn in the editor or in a publish; a PDF of an unlocked one
+  draws its maps from the text in memory.
+- **Show as mind map**: the command "Mind maps: Show as mind map" (`markmap:show-note`,
+  off with the plugin) opens the whole note as a map in a window of its own, as
+  markmap.js reads a document: headings, lists and text, less the frontmatter and
+  the fenced code blocks (`markmapSourceOfNote`), in a reading-view editor, so the
+  circles fold there too. The root is the note's single top heading; with several
+  top-level nodes it is the empty one.
+
+Not covered, against markmap.js: zoom and pan, the toolbar, dragging nodes,
+clicking a link (the map is a picture), maths, images, tables and code blocks inside
+nodes, checkbox boxes (a task's `[x]` is text), the `<!-- markmap: ... -->`
+commands other than `fold` and `foldAll`, other frontmatter options (`color`,
+`duration`, `zoom`, ...), and the Obsidian plugin's per-note frontmatter
+(only the fence's own is read).
+
+Tests: `MarkmapTreeTest.*`, `MarkmapDrawTest.*`, `MarkmapBlockTest.*`,
+`MarkmapWindowTest.*` (`tests/test_markmap.cpp`) and
+`PublishTest.AMindMapIsDrawnFromTheFencesTextEvenInANoteNeverOpened`; the demo vault's
+`Diagrams/Markmap.md`.
 
 ## File cards
 

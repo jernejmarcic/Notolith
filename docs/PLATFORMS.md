@@ -68,23 +68,49 @@ torpedo is a Raspberry Pi 5 running Debian, which would be the best stand-in
 for a phone's CPU, but the script is Arch-only and torpedo is a server - it
 would need its own dependency list and a decision to install build tools there.
 
-## Launching: one window per user
+## Launching: one process per vault
 
 `packaging/io.github.jernejmarcic.Notolith.desktop` registers Markdown files
-and folders, so a file manager runs `notolith %f`. Like Obsidian, only the
-first launch makes a window: it listens on `notolith.sock` in the runtime
-directory (`$XDG_RUNTIME_DIR`, owner-only), and a later launch connects, sends
-the absolute path it was given (nothing, when it was given none) with its
-`XDG_ACTIVATION_TOKEN`, waits up to a second for the answer and exits 0.
+and folders, so a file manager runs `notolith %f`. Like Obsidian, a vault is
+open in one window only, but two vaults are two windows - two processes, each
+with its own indexer, autosaver and sync engine. The first launch for a vault
+makes its window and listens on a socket named after the vault in the runtime
+directory (`$XDG_RUNTIME_DIR`, owner-only): `notolith-<16 hex digits>.sock`,
+the digits being a SHA-256 of the vault's canonical path, so the same vault
+spelled with a trailing slash, `..` or a symbolic link has the same name. A
+later launch for that vault connects, sends the absolute path it was given
+(nothing, when it was given none) with its `XDG_ACTIVATION_TOKEN`, waits up
+to a second for the answer and exits 0. A launch for a vault nobody has open
+starts a process of its own.
 
-A launch with no instance running pays one failed `connect()` and one lock
-file (`notolith.sock.lock`, taken before the window is built and held until
-exit): about 100 to 270 microseconds measured, `QStandardPaths` lookup
-included. The lock is what makes two launches in the same moment - a
-multi-select "Open with" - one window: the second finds it held, and keeps
-retrying the connect for up to two seconds while the first builds its window.
-A crash leaves the socket and lock files behind; the next start sees the dead
-owner and replaces both.
+Which vault a launch is for is worked out the way the window will open it
+(`SingleInstance::launchFor`): a folder, or a note inside a vault
+(`resolveLaunchTarget`), is that vault; with no argument it is the vault the app
+would reopen, the most recent in the settings that is still there. Two
+cases have no vault of their own:
+
+- A note outside every vault goes to the instance of the last-used vault when
+  that runs, and opens beside what it has, as one window always did; else to
+  the process that has no vault; else a process starts, opens the file alone,
+  and serves the no-vault name (`notolith-none.sock`).
+- A bare launch with no vault to reopen goes to the no-vault process, or
+  starts one with an empty window.
+
+A window that opens another vault (open folder, recent vaults, a note
+handed to it from another vault) stops serving the name of the one it left and
+serves the new one. When the new vault is already open in another process,
+that process is handed the vault and raises itself, and this window stays as it
+was. Closing the vault (or opening a loose file) hands the vault's name back and
+takes the no-vault name when it is free.
+
+A launch with no instance running pays one failed `connect()`, one lock file
+(`notolith-<id>.sock.lock`, taken before the window is built and held until
+exit) and, for a launch that names no vault, one read of the settings (done twice before the window: the cheap pass and the full one, about 20 microseconds each). The
+lock is what makes two launches in the same moment - a multi-select "Open
+with" - one window: the second finds it held, and keeps retrying the connect
+for up to two seconds while the first builds its window. A crash leaves the
+socket and lock files behind; the next start sees the dead owner and replaces
+both.
 
 The running window opens the path as the command line would: a note in the
 open vault replaces the current tab, as following a link does; another vault
@@ -99,9 +125,40 @@ instead of only flagging the window. Whether it does depends on the
 compositor and on the file manager passing a token (the desktop file's
 `StartupNotify=true` asks it to); that cannot be tested without one.
 
-`NOTEAPPC_INSTANCE_SOCKET` names another socket: benchmarks and anything else
-that starts the real binary while Notolith is in use should set it, or the
-launch is handed to the open window.
+`NOTEAPPC_INSTANCE_SOCKET` replaces `$XDG_RUNTIME_DIR/notolith` as the start of
+every socket name: it is a prefix, not one socket. `/tmp/run/bench` makes
+`/tmp/run/bench-<id>.sock` for a vault and `/tmp/run/bench-none.sock` for the
+no-vault process (its directory must exist; keep the whole path under 100
+bytes). Benchmarks and anything else that starts the real binary while
+Notolith is in use should set it, or the launch is handed to the open window of
+the same vault. Nothing in the repository's tests or benchmark scripts starts the
+binary, so none sets it; the window tests set it to a directory of their own.
+
+### What two processes share
+
+Per user, not per vault, and what was done about it:
+
+- `settings.ini` and `vaults.ini` (recent vaults and files, remembered note
+  positions): each process holds what it loaded, so `Settings::save()` writes
+  what the object changed since it loaded on top of what the files hold now,
+  under `~/.config/noteAppC/.save.lock` (200 ms wait at most). Another window's change to another
+  setting, a vault it opened, a note it positioned survive; a reset or a forgotten
+  position stays; a setting both changed takes the later save. A setting changed
+  in one window shows in another only after that other loads or saves.
+- Window geometry, sidebar state, plugin switches, EPUB positions
+  (`QSettings`): Qt merges per key under its own file lock. The geometry key is
+  one per user, so the last window closed decides where the next opens.
+- Sharing (`docs/SHARE.md`): a device's link is online once. A peer keeps one
+  connection per identity and every process would publish the same mDNS name,
+  so the share engine takes a lock per identity key (`link-<id>.lock` in the
+  share directory) and the second process says "Sharing is already running in
+  another Notolith window" in the status bar instead of starting a second
+  link. Stored shares, the vault's index, note history and sync journal are
+  per vault digest and need nothing.
+- Content-addressed caches (TeX, Mermaid, notebook outputs, EPUB images): the
+  same key holds the same bytes, so two processes writing it do no harm; a
+  reader can in principle meet a half-copied TeX PDF.
+- Crash recovery snapshots and PDF recovery are per note path.
 
 ## Pop-out windows on Hyprland
 
@@ -239,6 +296,45 @@ needed further changes. yaml-cpp's own `cmake_minimum_required` predates what
 CMake 4.4.3 (installed here) still accepts, so the Android configure also
 needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` - harmless, it only affects that
 one fetched dependency's own policy floor.
+
+**Modules as Qt static plugins (`NOTEAPPC_STATIC_MODULES`).** Android loads only
+native libraries packaged in the APK, so the loadable modules of
+[PLUGINS.md](PLUGINS.md) "Tier 1b" cannot be `dlopen`'ed from
+`<libdir>/noteAppC/modules` there. The CMake option `NOTEAPPC_STATIC_MODULES`
+(default `OFF`; `ON` when `ANDROID`) builds a module as a static library
+instead (`noteappc_add_static_module` in `libs/modules/CMakeLists.txt`: its one
+source compiled with `QT_STATICPLUGIN`, `notolith-ink-static`,
+`notolith-hwfont-static`), links it into the executable and imports it with
+`Q_IMPORT_PLUGIN` in `apps/noteAppC/main.cpp`. `ModuleRegistry::scan` then also
+walks `QPluginLoader::staticPlugins()` with the same IID check and the same
+manifest: the module comes back with `ModuleInfo::isStatic` set and an empty
+`path`, and `ensureLoaded` returns the static instance - constructed on that
+first load, never by the scan. The ABI tag is still checked (it is the same
+build, so it always matches). With the option off nothing changes: every
+module stays a shared object, the registry finds no static plugin and pays one
+walk over Qt's own (which carry another IID). `libnotolith-inkcore` is a static
+library under the option (there is no directory beside the module for a shared
+one to sit in), so the executable then links the stroke modeler and Abseil
+itself; the `needed_exe` check drops `absl` from its list in that case.
+
+Only the ink and hwfont modules go through the helper. The PDF viewer and share
+modules stay shared objects: their poppler-qt6 and protobuf/libdatachannel
+stacks are not in the Android kit and their options are off there. The ink
+modules themselves are not built on Android yet either (the root
+`CMakeLists.txt` gates `libs/ext/ink` on `NOT ANDROID`: Abseil and the stroke
+modeler are not cross-built), so on Android today the option has no module to
+link; it is the path the first one takes. Two things block lifting that gate: the root requires system Abseil
+(`find_package(absl)`), which the NDK does not have, and `libs/ext/ink/core/CMakeLists.txt` forces
+`INK_STROKE_MODELER_FIND_DEPENDENCIES` and writes a googletest shim that does `find_package(GTest CONFIG REQUIRED)`.
+The stroke modeler's own CMake fetches a pinned Abseil and googletest when `FIND_DEPENDENCIES` is `OFF`, so the fix
+is that setting under `ANDROID` and dropping `NOT ANDROID` from the gate. Checked on the desktop: a second
+configure with `-DNOTEAPPC_STATIC_MODULES=ON` builds the whole tree, links
+the executable with both module classes inside it and no `NEEDED` entry for
+`libnotolith-ink*`, and `test_modules` lists, loads and attaches a static test
+module (`tests/fakemodule/FakeStaticModule.cpp`); `test_window` and
+`test_hwfont` run their ink and glyph-studio tests against the static modules.
+Not checked: an Android build, because there is no Android toolchain for it in
+this configuration.
 
 **What is off, and why.** Four of the five options `docs/PLUGINS.md` lists as
 Tier 1 have a system dependency with no arm64 build in this toolchain -

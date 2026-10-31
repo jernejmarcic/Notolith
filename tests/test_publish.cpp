@@ -19,6 +19,7 @@
 #include "Index.h"
 #include "Indexer.h"
 #include "MathRenderer.h"
+#include "Markmap.h"
 #include "MermaidCache.h"
 #include "PageBody.h"
 #include "Parser.h"
@@ -145,6 +146,51 @@ TEST(PublishTest, CustomCheckboxStatesCarryDataTaskAndAClass)
     EXPECT_FALSE(plain.contains(QLatin1String("task-box")));
     EXPECT_FALSE(plain.contains(QLatin1String("data-task")));
     EXPECT_TRUE(plain.contains(today));
+}
+
+TEST(PublishTest, CodeStylerParametersTitleNumberAndColourTheLines)
+{
+    TestSite site({{QStringLiteral("Code.md"), "```cpp title:\"main.cpp\" ln:5 info:2 warn:'int c'\nint a;\nint b;\nint c;\n```\n"}});
+    Options on;
+    on.parse.codeStyler = true;
+    on.parse.highlightKinds = {QStringLiteral("info"), QStringLiteral("warn")};
+    site.publish(on);
+    const QString page = site.read(QStringLiteral("code.html"));
+    EXPECT_TRUE(page.contains(QLatin1String("<div class=\"code-header\">main.cpp</div>"))) << page.toStdString();
+    EXPECT_TRUE(page.contains(QLatin1String("code-block numbered")));
+    EXPECT_TRUE(page.contains(QLatin1String("class=\"line hl hl-info\"")));
+    EXPECT_TRUE(page.contains(QLatin1String("class=\"line hl hl-warn\"")));
+    EXPECT_TRUE(site.read(QStringLiteral("site.css")).contains(QLatin1String(".hl-info")));
+
+    site.publish(); // off: the line is the language and attributes it always was
+    const QString plain = site.read(QStringLiteral("code.html"));
+    EXPECT_FALSE(plain.contains(QLatin1String("code-header")));
+    EXPECT_FALSE(plain.contains(QLatin1String("class=\"line hl")));
+}
+
+TEST(PublishTest, CodeStylerHighlightNumbersCountTheBlocksOwnLinesWhateverLnSays)
+{
+    TestSite site({{QStringLiteral("Code.md"), "```cpp ln:27 hl:2\nint a;\nint b;\n```\n"}});
+    Options on;
+    on.parse.codeStyler = true;
+    site.publish(on);
+    const QString page = site.read(QStringLiteral("code.html"));
+    EXPECT_TRUE(page.contains(QLatin1String("class=\"line hl\" data-line=\"28\""))) << page.toStdString();
+    EXPECT_FALSE(page.contains(QLatin1String("class=\"line hl\" data-line=\"27\"")));
+}
+
+TEST(PublishTest, CodeStylerInlineCodeIsHighlightedWithoutItsPrefix)
+{
+    TestSite site({{QStringLiteral("Inline.md"), "Say `{python} import os` and `plain`.\n"}});
+    Options on;
+    on.parse.codeStyler = true;
+    site.publish(on);
+    const QString page = site.read(QStringLiteral("inline.html"));
+    EXPECT_TRUE(page.contains(QLatin1String("<code class=\"language-python\">"))) << page.toStdString();
+    EXPECT_FALSE(page.contains(QLatin1String("{python}")));
+    EXPECT_TRUE(page.contains(QLatin1String("<code>plain</code>")));
+    site.publish();
+    EXPECT_TRUE(site.read(QStringLiteral("inline.html")).contains(QLatin1String("<code>{python} import os</code>")));
 }
 
 TEST(PublishTest, SiteCSSCarriesFormattingColoursOnlyWhereSet)
@@ -409,6 +455,36 @@ TEST(PublishTest, ADiagramsOwnMarkupNeverReachesThePage)
     const QString css = site.read(QStringLiteral("site.css"));
     EXPECT_TRUE(css.contains(QStringLiteral(".diagram img")));
     EXPECT_FALSE(css.contains(QStringLiteral("mermaid-diagram")));
+}
+
+// A ```markmap fence is published as the mind map drawn from its text right there - no editor has to have drawn it
+// first, so a vault published in one go is all maps - and as the plain listing when the plugin is off.
+TEST(PublishTest, AMindMapIsDrawnFromTheFencesTextEvenInANoteNeverOpened)
+{
+    QTemporaryDir env;
+    ASSERT_TRUE(env.isValid());
+    const QByteArray oldCache = qgetenv("XDG_CACHE_HOME");
+    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8()); // empty: nothing was drawn before
+    TestSite site({{QStringLiteral("Note.md"), "```markmap\n# Root\n## Branch\n- leaf\n```\n"}});
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    const QStringList images = diagramImages(page);
+    ASSERT_EQ(images.size(), 1) << page.toStdString();
+    EXPECT_TRUE(images.first().contains(QStringLiteral(">leaf</text>")));
+    EXPECT_TRUE(images.first().contains(Theme::builtin(Theme::Mode::Dark).color(QStringLiteral("--background-primary")).name()))
+        << "in the site's dark theme, like the other diagrams";
+
+    TestSite off({{QStringLiteral("Note.md"), "```markmap\n# Root\n## Branch\n- leaf\n```\n"}});
+    Options options;
+    options.mindMaps = false;
+    off.publish(options);
+    const QString plain = off.read(QStringLiteral("note.html"));
+    EXPECT_TRUE(diagramImages(plain).isEmpty());
+    EXPECT_TRUE(plain.contains(QStringLiteral("# Root"))) << "the plugin is off: the listing";
+    if (oldCache.isNull())
+        qunsetenv("XDG_CACHE_HOME");
+    else
+        qputenv("XDG_CACHE_HOME", oldCache);
 }
 
 // The picture's words, for a screen reader and the site's search: the source is the alt text, escaped (a

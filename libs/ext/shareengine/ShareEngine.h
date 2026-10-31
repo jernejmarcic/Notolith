@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QList>
+#include <QLockFile>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -181,6 +182,7 @@ private:
     QString m_vaultRoot;
     Config m_config;
     ShareStore m_store;
+    std::unique_ptr<QLockFile> m_linkLock; ///< this device's link is online once per machine, see start()
     std::optional<ShareIdentity> m_me;
     std::unique_ptr<hearth::Node> m_node;
     QString m_error;

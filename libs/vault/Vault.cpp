@@ -464,8 +464,26 @@ QString Vault::createFolder(const QString &parentRelative, const QString &baseNa
     return path;
 }
 
+namespace {
+/// An image's annotations sidecar (ImageAnnotations::sidecarPath: "<file name> annotations.md" beside it) goes with
+/// the file it belongs to. Best effort, and never over a sidecar already at the new name. False when a sidecar was
+/// there to move and could not be.
+bool moveAnnotationSidecar(const QString &oldPath, const QString &newPath)
+{
+    const auto sidecar = [](const QString &path) {
+        const QFileInfo info(path);
+        return info.absolutePath() + QLatin1Char('/') + info.fileName() + QStringLiteral(" annotations.md");
+    };
+    const QString from = sidecar(oldPath);
+    const QString to = sidecar(newPath);
+    if (QFileInfo(newPath).isFile() && QFileInfo(from).isFile() && !QFileInfo::exists(to))
+        return QFile::rename(from, to);
+    return true;
+}
+} // namespace
+
 bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
-                       QString *newAbsolutePath, QString *error) const
+                       QString *newAbsolutePath, QString *error, QString *warning) const
 {
     const QString cleaned = QDir::cleanPath(absolutePath);
     if (!isValid() || !contains(cleaned) || cleaned == m_root) {
@@ -560,6 +578,8 @@ bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
             return false;
         }
     }
+    if (!moveAnnotationSidecar(absolutePath, newPath) && warning)
+        *warning = QStringLiteral("its image annotations file could not be moved with it");
     if (newAbsolutePath)
         *newAbsolutePath = newPath;
     return true;
@@ -571,7 +591,7 @@ bool Vault::isCaseOnlyChange(const QString &oldPath, const QString &newPath)
 }
 
 bool Vault::movePath(const QString &absolutePath, const QString &targetFolder,
-                     QString *newAbsolutePath, QString *error) const
+                     QString *newAbsolutePath, QString *error, QString *warning) const
 {
     const auto refuse = [error](const QString &why) {
         if (error)
@@ -606,6 +626,8 @@ bool Vault::movePath(const QString &absolutePath, const QString &targetFolder,
     QFile file(source);
     if (!file.rename(newPath))
         return refuse(file.errorString());
+    if (!moveAnnotationSidecar(source, newPath) && warning)
+        *warning = QStringLiteral("its image annotations file could not be moved with it");
     if (newAbsolutePath)
         *newAbsolutePath = newPath;
     return true;

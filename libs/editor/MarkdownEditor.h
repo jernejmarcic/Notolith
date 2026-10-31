@@ -17,6 +17,7 @@
 class QAbstractItemModel;
 class QCompleter;
 class QFileSystemWatcher;
+class QNetworkAccessManager;
 class QMimeData;
 class QModelIndex;
 class QStringListModel;
@@ -41,6 +42,8 @@ class QLineEdit;
 class QMenu;
 
 namespace noteAppC {
+
+struct ReferenceExcerpt;
 
 class SyntaxMap;
 class VimEngine;
@@ -191,6 +194,11 @@ public:
     /// codeblocks.ini, a fence's own attributes and the theme. On by default;
     /// off draws every block as if none of it were configured.
     void setComplexCodeBlocks(bool on);
+    /// The alternative highlights `info:2 warn:4-6` may name, as the
+    /// `editor.codeHighlights` setting spells them (`info=blue, warn=#E5A100`).
+    /// Only painting reads this: the names the parser accepts are
+    /// ParseOptions::highlightKinds.
+    void setCodeHighlights(const QString &spec);
     bool complexCodeBlocks() const;
     bool outlineNumbering() const;
     /// What an ordered number ends in as drawn: "." (the default), ":", ")" or
@@ -291,9 +299,16 @@ public:
         qreal marginMillimetres = 25.4; ///< "Default", about an inch
         int downscalePercent = 100;
         bool taskStates = false; ///< ParseOptions::taskStates: the note's own checkbox states
+        bool codeStyler = false; ///< ParseOptions::codeStyler: Code Styler's syntax, drawn as on screen
+        QString codeHighlights;  ///< the `editor.codeHighlights` setting: the names `info:2` may use
+        QString vaultRoot; ///< what a ```reference block may read from: empty shows no local file
+        bool remoteReferences = false; ///< the `editor.remoteReferences` setting: a ```reference may fetch a URL
         /// Paper is white, so the light theme unless a caller passes its own
         /// (the person's formatting colours on top of it).
         std::optional<Theme> theme;
+        /// The markmap plugin: on, a ```markmap fence prints as the map, drawn
+        /// from its text in `theme`; off, as the listing.
+        bool mindMaps = true;
     };
     /// Renders `text` in reading view, light theme, onto paper, page by page.
     /// A page breaks between blocks; only a block taller than a page is cut.
@@ -416,9 +431,21 @@ public:
     /// Turns a link target into an absolute path, or an empty string when it
     /// does not resolve. Supplied by the window, which owns the index.
     void setLinkResolver(std::function<QString(const QString &)> resolver);
+    /// Pictures that live in the note's own document rather than in a file:
+    /// name -> encoded image bytes. `![x](attachment:name)` shows the one
+    /// called `name`, as a notebook's markdown-cell attachments do. Read-only
+    /// and never written anywhere; an empty table (the default) costs nothing.
+    /// `scopeAt`, when given, says for an offset of the text what is put before
+    /// the name to find its picture in the table (a notebook's cells each have
+    /// their own `image.png`: "3/"); empty for none, so a name stays a bare one.
+    void setInlineImages(QHash<QString, QByteArray> images, std::function<QString(qsizetype)> scopeAt = {});
     /// The index changed, so a link drawn as pointing nowhere may point
     /// somewhere now, or the reverse. Relays out only if one did.
     void refreshLinkStatus();
+    /// Files came or went in the vault without the index saying so (an image, a
+    /// PDF, a CSV, a whole folder): looks at the cached tables on disk again,
+    /// then at every link's status.
+    void refreshVaultFiles();
 
     // --- paste and drop --------------------------------------------------
     // The editor never links libs/vault, so saving an attachment or
@@ -592,6 +619,18 @@ public:
         bool isMarkdown = true;
         QString text;
         QImage image;
+        /// Places on `image`, in logical pixels from its top left, that a
+        /// click answers instead of putting the caret there (a mind map's
+        /// fold circles). `activate` is then asked, with that spot's `id`
+        /// and a `deliver` of the same contract as the renderer's own, for
+        /// the picture that replaces this one; the editor keeps the old one
+        /// up until it comes. Empty for a picture with nothing to click.
+        struct Hotspot {
+            QRectF rect;
+            int id = 0;
+        };
+        QList<Hotspot> hotspots;
+        std::function<void(int id, const std::function<void(CodeBlockResult)> &deliver)> activate;
     };
     using CodeBlockRenderer =
         std::function<void(const QString &language, const QString &source, int width, const QString &theme,
@@ -674,6 +713,10 @@ public:
         /// Which note's kernel: blocks that share it share variables.
         /// Left empty here; the window fills it from the note it is in.
         QString scope;
+        /// Which of the note's identical blocks this is: how many earlier ones
+        /// read the same (0 for the first). Part of the output cache's key
+        /// only - the code that runs is never changed by it.
+        int duplicateOrdinal = 0;
         /// Remove this block's kept output instead of reading or running it.
         bool clear = false;
         /// Set on a real run (never on a lookup): the runner may call it, from
@@ -798,6 +841,36 @@ public:
     /// read, with the path; one that throws is what an out-of-memory looks
     /// like. Null clears it.
     static void setCSVreadHookForTests(void (*hook)(const QString &));
+    /// The vault's root, asked each time a ```reference block is laid out: a
+    /// reference may show and open only files inside it (symlinks resolved).
+    /// Without one, no local file is shown.
+    void setVaultRootProvider(std::function<QString()> provider);
+    /// Whether a ```reference block may fetch an `http(s)` URL. Off by
+    /// default: nothing touches the network unasked (ReferenceBlock.cpp).
+    void setRemoteReferences(bool on);
+    /// Whether a file or URL a reference block shows is still being read, or its excerpt cut.
+    bool referencesPending() const;
+    /// Blocks until every reference block shows its excerpt (a file read, then the cut), or `timeoutMs` ran out:
+    /// what a printed page waits for. Lays the blocks out as it goes, so each one's work has been started.
+    void awaitReferences(int timeoutMs);
+    /// For the tests: how many files and URLs this editor holds a read of.
+    int referenceCacheSize() const;
+    /// The address a hosting site's page for a file (GitHub `/blob/`, GitLab
+    /// `/-/blob/`) is fetched as: the raw file's; any other link as it is.
+    static QString rawReferenceURL(const QString &link);
+    /// For the tests: the number of colour runs the panel at `offset` drew.
+    int panelFormatCountAt(qsizetype offset) const;
+    /// For the tests: what a reference block's watcher holds, how many URLs'
+    /// text the process keeps, how many times a file's text was cut to a
+    /// block's lines, and an address the remote-host check lets through (the
+    /// local servers the tests run); empty clears it.
+    int referenceWatchedForTests() const;
+    static int remoteReferenceCopiesForTests();
+    static int referenceScansForTests();
+    static void allowReferenceAddressForTests(const QString &address);
+    /// For the tests: called on the worker thread at the top of every local
+    /// reference read, with the path. Null clears it.
+    static void setReferenceReadHookForTests(void (*hook)(const QString &));
     /// For the tests: that cell's caption - the file name of a card, the
     /// `alt` of an `<img>` whose file is missing. Empty for an image.
     QString embedCellLabelAt(qsizetype offset, int cell) const;
@@ -820,6 +893,9 @@ public:
     /// send one there without reimplementing this layout by hand. Null
     /// outside a hooked embed with an image.
     QRect hookedEmbedImageRectAt(qsizetype offset) const;
+    /// The same for the picture a renderer made for a fence (setCodeBlockRenderer),
+    /// where its hotspots are; null while the fence is its listing or a placeholder.
+    QRect codeBlockImageRectAt(qsizetype offset) const;
 
     /// A notebook block's state at `offset` (NotebookBlock.cpp) - default
     /// (`eligible` false) outside a fenced code block, when the notebooks
@@ -839,6 +915,12 @@ public:
         int outputCellCount = 0; ///< outputs laid out under the block
     };
     NotebookBlockInfo notebookInfoAt(qsizetype offset) const;
+    /// The size of the formula or diagram drawn under the source of the block
+    /// holding `offset` while the caret is in it, or an empty size when there
+    /// is none. For the tests.
+    QSize previewSizeAt(qsizetype offset) const;
+    /// The dim line shown where that drawing would be when it cannot be made.
+    QString previewHintAt(qsizetype offset) const;
     /// The text of each output cell under the block at `offset`, line breaks
     /// as typed (an image or other cell with no text gives an empty string).
     /// For the tests.
@@ -855,6 +937,9 @@ public:
     /// Every runnable block from the top of the note to `offset`, the block
     /// holding it included (Jupyter's "run all above"); how many were asked for.
     int runNotebookBlocksUpTo(qsizetype offset);
+    /// Every runnable block from the one holding `offset` to the end of the
+    /// note (Jupyter's "run all below"); how many were asked for.
+    int runNotebookBlocksFrom(qsizetype offset);
     /// Forgets every block's output here and in the sidecar (Jupyter's
     /// "clear all outputs"); how many blocks had any.
     int clearNotebookOutputs();
@@ -879,6 +964,15 @@ public:
     /// How many parses have run on this editor, on the calling thread or the
     /// pool. For the tests.
     int parseCountForTest() const;
+    /// sizeof one block view: a 1 MB note has tens of thousands of them. For the tests.
+    static std::size_t blockViewSizeForTest();
+    /// How many block views hold a BlockExtras (the rarely used fields), and how many
+    /// of those were never laid out - always 0, an untouched view is a bare one. For the tests.
+    int blockExtrasCountForTest() const;
+    int blockCountForTest() const;
+    int untouchedBlockExtrasCountForTest() const;
+    /// How many diagrams the fence cache holds (drawn, pending or failed).
+    int codeBlockCacheSizeForTest() const;
     /// Pretends the last parse took this long, which is what decides whether
     /// the next newline is parsed on the spot (applyEdit). For the tests.
     void setLastParseTimeForTest(qint64 nanoseconds);
@@ -1106,6 +1200,8 @@ signals:
     void lookupRequested(const QString &text, const QPoint &globalPos);
     /// It left that link, or let go of it by leaving the editor.
     void linkHoverEnded();
+    /// Something the user should be told that is no error: the window shows it in the status bar.
+    void noticeRaised(const QString &message);
     /// A result in a rendered ```query``` block was clicked: `relativePath`
     /// is the note it matched, `offset` the first match inside it.
     void queryResultActivated(const QString &relativePath, qsizetype offset);
@@ -1119,6 +1215,10 @@ signals:
     /// opened the same way every other pane's noteActivated already is:
     /// MainWindow connects this straight to openRelative().
     void fileEmbedActivated(const QString &relativePath);
+    /// The header of a ```reference block was clicked: `target` is the file's
+    /// absolute path or the URL, for the window to open - a note in a tab,
+    /// anything else with the system's own handler.
+    void referenceActivated(const QString &target);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -1157,6 +1257,7 @@ private:
     struct NestedCallout;
     struct EmbedCell;
     struct BlockView;
+    struct BlockExtras;
     struct FoldMark;
     struct CodeLabel;
     struct TabGroup;
@@ -1175,6 +1276,7 @@ private:
     struct QueryCacheEntry;
     struct BaseCacheEntry;
     struct CSVcacheEntry;
+    struct ReferenceCacheEntry;
     struct InlineHTMLpair;
     struct HTMLtableEdit;
     struct CellRef;
@@ -1277,6 +1379,12 @@ private:
     /// The same for a listing nested in a callout or quote, which has the
     /// language and nothing else to go on.
     LanguageStyle styleOfLanguage(const QString &language) const;
+    /// A named highlight's row colour, with the alpha a highlighted row gets;
+    /// invalid for a name the setting does not have.
+    QColor codeHighlightColour(const QString &kind) const;
+    /// The highlighter's tokens for an inline code span written `{lang} code`,
+    /// in `map`'s display coordinates.
+    QList<QTextLayout::FormatRange> inlineCodeFormats(const StyleSpan &span, const DisplayMap &map) const;
     /// Token colours for a block styled `style`: its own `syntax.*` over the
     /// theme's. False (and `*out` untouched) when nothing is configured or the
     /// setting is off, which is when the highlighter must get no map at all.
@@ -1508,6 +1616,11 @@ private:
     /// code block or a small card.
     bool layoutEmbed(BlockView &view);
     bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// `attachment:<scope><name>` when setInlineImages holds that picture for
+    /// the embed (the "path" such an embed has), else empty.
+    QString attachmentPathOf(const EmbedSpan &embed) const;
+    /// The picture at `path`: a file, or an `attachment:` one from the table. Null when neither decodes.
+    QPixmap loadEmbedPixmap(const QString &path) const;
     bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
     /// NotebookEmbed.cpp: a runnable `![[script.py]]` embed (stage 13's
     /// rest) - called once layoutSourceFile has already built the panel's
@@ -1634,7 +1747,25 @@ private:
     bool applyFileEmbedInput(qsizetype blockIndex, const FileEmbedInputEvent &event);
     /// CodeBlockHook.cpp: a fence in a language setCodeBlockRenderer has.
     bool layoutPluginCode(BlockView &view);
+    /// The cache entry for a fence's drawing, asked of its renderer on the
+    /// first call (and never twice); null when no renderer has the language.
+    /// `key` is what deliverCodeBlock finds its blocks by.
+    /// What a fence's drawing is cached under, and found again by.
+    QString codeBlockKeyFor(const QString &language, const QString &source, int width) const;
+    /// Drops what the editor no longer shows: the preview's earlier drawing
+    /// once a newer one is asked for, and, past a cap, anything no block points at.
+    void pruneCodeBlockCache(const QString &keep);
+    const CodeBlockCacheEntry *requestCodeBlock(const QString &language, const QString &source,
+                                                int width, QString *key);
+    /// PreviewBelow.cpp: the formula or diagram of the block the caret is in,
+    /// kept visible under its source, as Obsidian does.
+    void appendPreview(BlockView &view);
+    void paintPreview(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void deliverCodeBlock(const QString &key, quint64 generation, CodeBlockResult result);
+    /// A press on a hotspot of a plugin block's picture (CodeBlockResult::
+    /// hotspots): asks the renderer for the picture it leads to. False when
+    /// the press is not on one.
+    bool pressCodeBlockHotspot(const QPoint &viewportPoint);
     /// NotebookBlock.cpp: a fenced code block's output, shown below its own
     /// listing rather than in place of it - the one difference from
     /// layoutPluginCode's shape just above, which this otherwise mirrors.
@@ -1642,7 +1773,15 @@ private:
     /// fenced block's own `#| sandbox:` - see NotebookRunOptions.
     void appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
                               const QString &blockID, const QString &workingDir = QString(),
-                              const CodeOptions *options = nullptr);
+                              const CodeOptions *options = nullptr, int duplicateOrdinal = 0);
+    /// How many fences before `fence` read the same (same language, same code):
+    /// NotebookRunOptions::duplicateOrdinal. Counted over the fences that are cells of a notebook (a fence
+    /// that opens at the start of a line: not one quoted or listed inside a markdown cell), in order.
+    int notebookDuplicateOrdinal(const CodeFenceSpan &fence) const;
+    /// Lays out every code block (and runnable embed) that is not yet laid out, so what a command for all of them
+    /// finds is decided for each (notebookEligible, the key, the options) and not just for the ones near the
+    /// view. The view stays where it is.
+    void layOutNotebookBlocks();
     /// The options a run of what `view` last laid out is made with.
     NotebookRunOptions notebookOptionsOf(const BlockView &view) const;
     void deliverNotebookResult(const QString &key, quint64 generation, NotebookRunResult result);
@@ -1657,7 +1796,7 @@ private:
     /// prompt row while the block's code is waiting in input().
     void appendNotebookOutputRows(BlockView &view, const QString &language, const QString &source,
                                   const QString &blockID, const QString &workingDir,
-                                  const CodeOptions *options);
+                                  const CodeOptions *options, int duplicateOrdinal);
     /// The "Running...", or a kernel-level error, single-line message a
     /// block shows below its listing when there is nothing richer yet.
     void appendNotebookMessage(BlockView &view, const QString &text, const QString &colourToken);
@@ -1868,6 +2007,29 @@ private:
     void refreshCSVfiles();
     /// Forgets every cached file and its watch: the feature went off.
     void dropCSVcache();
+    // --- ```reference blocks, implemented in ReferenceBlock.cpp --------------
+
+    /// A fenced block Code Styler's `reference` names a file or URL for: that
+    /// file's lines (`start`/`end`) as a listing under the file's name. The
+    /// read is on a worker thread - or the network - never in layout: "Loading..."
+    /// until deliverReference lands. False for any other block.
+    bool layoutReference(BlockView &view);
+    /// A read or fetch finished (on this thread); ignored if `generation` is
+    /// no longer the one on record for `key`.
+    void deliverReference(const QString &key, quint64 generation, ReferenceCacheEntry result);
+    /// Asks for `url` through the network manager, never blocking.
+    void fetchReference(const QString &key, const QString &url, quint64 generation, int hops);
+    /// Relays out the blocks showing `key`.
+    void relayReferenceBlocks(const QString &key);
+    void deliverExcerpt(const QString &key, quint64 generation, const QString &memoKey, const QString &language,
+                        ReferenceExcerpt made);
+    void watchReference(const QString &path);
+    void referenceFileEvent();
+    void refreshReferences();
+    /// Forgets every URL's text and the network manager: remote fetching went off.
+    void dropRemoteReferences();
+    /// Forgets everything a reference block kept - reads, watches, fetches: the plugin went off.
+    void dropReferenceCache();
     /// The view's name (if any) above the grid, then paintTable for the
     /// grid itself - the table painting is not duplicated, only framed.
     void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
@@ -2076,9 +2238,22 @@ private:
     /// The insertFromMimeData logic shared by Ctrl+V and a drop: an image
     /// goes through m_attachmentSaver, local file URLs through
     /// m_fileImporter (or the path as text with neither set), else plain
-    /// text - cellSafe()'d either way. Inserts at the caret.
-    void insertMimeData(const QMimeData *mime);
+    /// text - cellSafe()'d either way. Inserts at the caret. A remote URL
+    /// is [title](url) when `dropped`, the bare URL (nothing, over a
+    /// selection) when pasted, as in Obsidian.
+    void insertMimeData(const QMimeData *mime, bool dropped = false);
     void removeSelectionOrChar(int direction);
+    /// Where a word key takes a caret at `from`, grouped as CodeMirror 6 does
+    /// (Obsidian's editor): grapheme clusters sorted into space, word
+    /// characters (letters, digits, `_`, CJK) and the rest. `deleting` is
+    /// Ctrl+Backspace/Delete: at a line's edge the line break itself, a single
+    /// space skipped, never past the line. Otherwise Ctrl+Left/Right: every
+    /// space and line break skipped, then one group. In a drawn table cell never
+    /// past the cell; never inside an entity drawn as one character.
+    qsizetype wordTarget(qsizetype from, int direction, bool deleting) const;
+    /// Ctrl+Backspace (-1) and Ctrl+Delete (1): the selection if there is one,
+    /// else up to wordTarget().
+    void removeWord(int direction);
     void moveCursor(qsizetype offset, bool keepAnchor);
     void moveVertically(int lines, bool keepAnchor);
     Range selection() const;

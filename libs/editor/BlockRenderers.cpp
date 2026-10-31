@@ -626,7 +626,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         // for a fenced block's header, reached from here instead of the
         // Code-kind branch below since an embed's own span.kind is
         // Paragraph, not Code.
-        if (view.embedPanel && view.notebookEligible) {
+        if (view.x().embedPanel && view.notebookEligible) {
             const QRectF runRect = notebookRunRectFor(view, left, top);
             if (runRect.isValid() && touchable(runRect, 4).contains(point)) {
                 runNotebookBlockAt(view.span.range.start);
@@ -634,18 +634,26 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             }
         }
 
+        // A reference block's header is the link to what it shows; the rest of
+        // it is an ordinary click, which puts the caret in and shows its source.
+        if (!view.x().referenceTarget.isEmpty()
+            && QRectF(left, top, contentWidth(), codeHeaderHeight()).contains(point)) {
+            emit referenceActivated(view.x().referenceTarget);
+            return true;
+        }
+
         if (view.isQuery) {
-            if (view.queryCollapseRect.isValid()
-                && touchable(view.queryCollapseRect.translated(left, top)).contains(point)) {
+            if (view.x().queryCollapseRect.isValid()
+                && touchable(view.x().queryCollapseRect.translated(left, top)).contains(point)) {
                 toggleQueryCollapsed(view.span.range.start);
                 return true;
             }
-            if (view.querySortRect.isValid()
-                && touchable(view.querySortRect.translated(left, top)).contains(point)) {
+            if (view.x().querySortRect.isValid()
+                && touchable(view.x().querySortRect.translated(left, top)).contains(point)) {
                 cycleQuerySort(view.span.range.start);
                 return true;
             }
-            for (const BlockView::QueryRow &row : view.queryRows) {
+            for (const BlockExtras::QueryRow &row : view.x().queryRows) {
                 if (row.rect.translated(left, top).contains(point)) {
                     emit queryResultActivated(row.path, row.offset);
                     return true;
@@ -660,7 +668,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         }
 
         if (view.isBase) {
-            for (const BlockView::BaseRow &row : view.baseRows) {
+            for (const BlockExtras::BaseRow &row : view.x().baseRows) {
                 if (row.rect.translated(left, top).contains(point)) {
                     emit baseRowActivated(row.path);
                     return true;
@@ -672,7 +680,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 return true;
         }
 
-        for (const NestedCallout &nested : view.nested) {
+        for (const NestedCallout &nested : view.x().nested) {
             if (nested.span->foldable
                 && touchable(nestedFoldHandleRect(view, nested, left, top), 6).contains(point)) {
                 toggleFoldAt(nested.span->range.start);
@@ -711,7 +719,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 setFolded(view, !view.folded);
                 return true;
             }
-            for (const PropertyRow &row : view.propertyRows) {
+            for (const PropertyRow &row : view.x().propertyRows) {
                 if (!row.control.isNull()) {
                     if (touchable(row.control.translated(left, top), 4).contains(point)) {
                         toggleProperty(row.property);
@@ -764,7 +772,8 @@ qreal MarkdownEditor::propertyRowHeight() const
 
 bool MarkdownEditor::layoutProperties(BlockView &view)
 {
-    view.propertyRows.clear();
+    if (view.extras)
+        view.extras->propertyRows.clear();
     if (d->m_properties.isEmpty())
         return false; // nothing to show: fall back to the hidden YAML
 
@@ -777,7 +786,7 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
         hidden.append(d->m_decorations.syntax.at(i));
     view.map = DisplayMap::build(d->m_text, view.span.range, hidden);
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
 
     const qreal rowHeight = propertyRowHeight();
     view.folded = d->m_folds.value(view.span.range.start, false);
@@ -835,7 +844,7 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
 
         row.rect = QRectF(0, y, contentWidth(), height);
         y += height;
-        view.propertyRows.push_back(row);
+        view.extrasMut().propertyRows.push_back(row);
     }
 
     // Obsidian closes the table with a hairline and a breath of space.
@@ -876,7 +885,7 @@ void MarkdownEditor::paintProperties(QPainter &painter, const BlockView &view, q
     }
 
     const qreal iconSize = qMin<qreal>(15, metrics.height());
-    for (const PropertyRow &row : view.propertyRows) {
+    for (const PropertyRow &row : view.x().propertyRows) {
         const Property &property = d->m_properties.at(row.property);
         const QRectF rect = row.rect.translated(left, top);
         const qreal keyTop = rect.top() + (propertyRowHeight() - metrics.height()) / 2;
@@ -1082,10 +1091,10 @@ bool MarkdownEditor::listIsRewritable(const Property &property) const
 const MarkdownEditor::PropertyRow *MarkdownEditor::propertyRowOf(int index, qreal *top) const
 {
     for (const BlockView &view : d->m_blocks) {
-        if (view.span.kind != BlockSpan::Kind::Frontmatter || view.propertyRows.empty()
+        if (view.span.kind != BlockSpan::Kind::Frontmatter || view.x().propertyRows.empty()
             || view.folded)
             continue;
-        for (const PropertyRow &row : view.propertyRows) {
+        for (const PropertyRow &row : view.x().propertyRows) {
             if (row.property == index) {
                 *top = view.y - verticalScrollBar()->value();
                 return &row;
@@ -1365,7 +1374,8 @@ bool MarkdownEditor::hasCodeHeader(const BlockView &view) const
     // Code kind: the paragraph above a fence holds its opening line, and
     // codeFenceOf finds that fence from there too.
     const CodeFenceSpan *fence = view.span.kind == BlockSpan::Kind::Code ? codeFenceOf(view) : nullptr;
-    return fence && !fence->language.trimmed().isEmpty();
+    // `ignore` (Code Styler) asks for the plain panel it would have without a plugin.
+    return fence && !fence->ignored && !fence->language.trimmed().isEmpty();
 }
 
 QString MarkdownEditor::codeTitleOf(const BlockView &view) const
@@ -1374,8 +1384,13 @@ QString MarkdownEditor::codeTitleOf(const BlockView &view) const
         return {}; // the tabs are the titles
     // Read from the source, not view.options, which is null while the caret
     // is in the block and would rename it under the cursor.
-    if (const CodeOptions *options = codeOptionsFor(view); options && !options->title.isEmpty())
-        return options->title;
+    if (const CodeOptions *options = codeOptionsFor(view)) {
+        if (!options->title.isEmpty())
+            return options->title;
+        // `fold:"Collapsed"` names the block only while it is folded away.
+        if (!options->foldLabel.isEmpty() && view.folded)
+            return options->foldLabel;
+    }
     const CodeFenceSpan *fence = codeFenceOf(view);
     return fence && !fence->language.trimmed().isEmpty() ? styleOfFence(*fence).name : QString();
 }
@@ -1452,7 +1467,7 @@ QRectF MarkdownEditor::bandOf(const BlockView &view, const Range &source) const
 void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,
                                          qreal top) const
 {
-    for (const NestedCallout &nested : view.nested) {
+    for (const NestedCallout &nested : view.x().nested) {
         const QRectF band = bandOf(view, nested.span->range);
         if (band.height() <= 0)
             continue;
@@ -1585,6 +1600,35 @@ LanguageStyle MarkdownEditor::styleOfFence(const CodeFenceSpan &fence) const
     if (d->m_complexCodeBlocks)
         style.applyColours(own); // `bg=`, `fg=`, `border=`, `syntax.<capture>=`
     return style;
+}
+
+void MarkdownEditor::setCodeHighlights(const QString &spec)
+{
+    const auto kinds = parseHighlightKinds(spec);
+    if (kinds == d->m_codeHighlights)
+        return;
+    d->m_codeHighlights = kinds;
+    viewport()->update(); // only painting reads them: no row moves
+}
+
+QColor MarkdownEditor::codeHighlightColour(const QString &kind) const
+{
+    for (const auto &entry : std::as_const(d->m_codeHighlights)) {
+        if (entry.first != kind)
+            continue;
+        // A theme colour's name (`blue` is --color-blue), or a hex code with
+        // an alpha of its own; a name no theme has falls back to the plain
+        // highlight, so a typo in the setting still marks the row.
+        const bool hex = entry.second.startsWith(QLatin1Char('#'));
+        QColor colour = hex ? CalloutStyle::parseColor(entry.second)
+                            : d->m_theme.color(QStringLiteral("--color-") + entry.second.toLower());
+        if (!colour.isValid())
+            colour = findHighlightColor();
+        if (!hex || colour.alpha() == 255)
+            colour.setAlphaF(d->m_theme.isDark() ? 0.16f : 0.24f);
+        return colour;
+    }
+    return {};
 }
 
 LanguageStyle MarkdownEditor::styleOfLanguage(const QString &language) const
@@ -2080,6 +2124,16 @@ void MarkdownEditor::paintCodeRows(QPainter &painter, const BlockView &view, qre
     tint.setAlphaF(d->m_theme.isDark() ? 0.13f : 0.22f);
     const QColor faint = d->m_theme.color(QStringLiteral("--text-faint"));
 
+    // Code Styler's named highlights, in the order the setting lists them so a
+    // line two names share is tinted the same way every time; a name the
+    // setting no longer has paints nothing.
+    QList<std::pair<const QList<int> *, QColor>> named;
+    for (const auto &kind : std::as_const(d->m_codeHighlights)) {
+        const auto lines = view.options->highlights.constFind(kind.first);
+        if (lines != view.options->highlights.cend() && !lines->isEmpty())
+            named.append({&lines.value(), codeHighlightColour(kind.first)});
+    }
+
     const qreal textTop = top + view.textTop;
     const qreal gutter = codeGutterWidth(view);
     painter.setFont(fontFor(view.span));
@@ -2099,6 +2153,12 @@ void MarkdownEditor::paintCodeRows(QPainter &painter, const BlockView &view, qre
             painter.fillRect(QRectF(panel.left(), textTop + line.y(), panel.width(),
                                     line.height()),
                              tint);
+        }
+        for (const auto &[lines, colour] : std::as_const(named)) {
+            if (lines->contains(sourceLine + 1)) {
+                painter.fillRect(QRectF(panel.left(), textTop + line.y(), panel.width(), line.height()),
+                                 colour);
+            }
         }
         if (gutter > 0 && (i == 0 || !wrapped)) {
             painter.setPen(faint);

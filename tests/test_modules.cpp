@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QtPlugin>
 #include <QTemporaryDir>
 
 #include "LoadedObjects.h"
@@ -19,6 +20,12 @@
 #include "ModuleRegistry.h"
 
 using namespace noteAppC;
+
+#ifdef NOTEAPPC_STATIC_FAKE
+// The static fake module (tests/fakemodule/FakeStaticModule.cpp), linked into this executable: what an
+// NOTEAPPC_STATIC_MODULES build does for every module in the app (apps/noteAppC/main.cpp).
+Q_IMPORT_PLUGIN(FakeStaticModule)
+#endif
 
 namespace {
 
@@ -57,6 +64,13 @@ private:
     QByteArray m_previous;
 };
 
+/// The modules a scan found in directories: a build with static modules lists those too, every scan.
+QList<ModuleInfo> fromFiles(QList<ModuleInfo> modules)
+{
+    modules.removeIf([](const ModuleInfo &module) { return module.isStatic; });
+    return modules;
+}
+
 /// A registry over `modules` with every feature on (a QObject: it cannot be returned by value).
 void useModules(ModuleRegistry &registry, const QList<ModuleInfo> &modules)
 {
@@ -94,8 +108,8 @@ TEST(ModuleRegistryTest, StrayFilesInTheDirectoryAreSkippedSilently)
     ASSERT_TRUE(notAPlugin.open(QIODevice::WriteOnly));
     notAPlugin.write("not an ELF file");
     notAPlugin.close();
-    EXPECT_TRUE(ModuleRegistry::scan({tmp.path()}).isEmpty());
-    EXPECT_TRUE(ModuleRegistry::scan({tmp.filePath(QStringLiteral("missing"))}).isEmpty());
+    EXPECT_TRUE(fromFiles(ModuleRegistry::scan({tmp.path()})).isEmpty());
+    EXPECT_TRUE(fromFiles(ModuleRegistry::scan({tmp.filePath(QStringLiteral("missing"))})).isEmpty());
 }
 
 TEST(ModuleRegistryTest, LoadsOnFirstUseAndAttachesOnce)
@@ -307,8 +321,84 @@ TEST(ModuleRegistryTest, DefaultDirectoriesAreTheOverrideOrTheLibdirAlone)
 TEST(ModuleRegistryTest, TheTestEnvironmentPointsTheRegistryAtAnEmptyDirectory)
 {
     ASSERT_TRUE(qEnvironmentVariableIsSet("NOTEAPPC_MODULE_DIRS")) << "run through ctest";
-    EXPECT_TRUE(ModuleRegistry::scan(ModuleRegistry::defaultDirectories()).isEmpty());
+    EXPECT_TRUE(fromFiles(ModuleRegistry::scan(ModuleRegistry::defaultDirectories())).isEmpty());
 }
+
+// A module found in a directory has a path and is not static, in either configuration.
+TEST(ModuleRegistryTest, AModuleFoundInADirectoryIsNotStaticAndHasAPath)
+{
+    const QList<ModuleInfo> modules = ModuleRegistry::scan({fakeDir()});
+    const ModuleInfo *good = byID(modules, "fake");
+    ASSERT_NE(good, nullptr);
+    EXPECT_FALSE(good->isStatic);
+    EXPECT_FALSE(good->path.isEmpty());
+}
+
+#ifdef NOTEAPPC_STATIC_FAKE
+// R12: a module linked into the executable (Qt static plugin, Android has no directory to scan) is
+// listed from QPluginLoader::staticPlugins() by the same IID check, with no path, and loaded only when used.
+TEST(ModuleStaticTest, AStaticModuleIsListedWithoutADirectoryAndWithoutBeingInstantiated)
+{
+    QTemporaryDir tmp;
+    const QString mark = tmp.filePath(QStringLiteral("mark"));
+    EnvGuard markGuard("NOTEAPPC_FAKE_MODULE_MARK", mark.toLocal8Bit());
+    const QList<ModuleInfo> modules = ModuleRegistry::scan({});
+    const ModuleInfo *fake = byID(modules, "fake-static");
+    ASSERT_NE(fake, nullptr);
+    EXPECT_TRUE(fake->isStatic);
+    EXPECT_TRUE(fake->path.isEmpty());
+    EXPECT_EQ(fake->suffixes, QStringList{QStringLiteral("fakestatic")});
+    ASSERT_EQ(fake->commands.size(), 1);
+    EXPECT_EQ(fake->commands.first().id, QStringLiteral("fake-static:hello"));
+    EXPECT_EQ(fake->ABItag, ModuleRegistry::ABItag());
+    EXPECT_TRUE(fake->problem.isEmpty()) << fake->problem.toStdString();
+    EXPECT_FALSE(QFile::exists(mark)) << "the scan constructed the module: metaData() must not";
+}
+
+TEST(ModuleStaticTest, AStaticModuleLoadsOnFirstUseAndAttachesOnce)
+{
+    QTemporaryDir tmp;
+    const QString mark = tmp.filePath(QStringLiteral("mark"));
+    EnvGuard markGuard("NOTEAPPC_FAKE_MODULE_MARK", mark.toLocal8Bit());
+    ModuleRegistry registry;
+    useModules(registry, ModuleRegistry::scan({}));
+    const std::optional<ModuleInfo> fake = registry.moduleForSuffix(QStringLiteral("/v/a.fakestatic"));
+    ASSERT_TRUE(fake.has_value());
+    EXPECT_EQ(fake->id, QStringLiteral("fake-static"));
+    ASSERT_TRUE(registry.moduleForCommand(QStringLiteral("fake-static:hello")).has_value());
+    EXPECT_FALSE(registry.isLoaded(fake->id));
+    EXPECT_FALSE(QFile::exists(mark));
+
+    int commands = 0;
+    QStringList viewSuffixes;
+    ModuleHost host;
+    host.registerView = [&](const QStringList &suffixes, ModuleHost::ViewFactory) { viewSuffixes += suffixes; };
+    host.registerCommand = [&](const QString &, const QString &, std::function<void()>) { ++commands; };
+    QString error;
+    ASSERT_TRUE(registry.ensureLoaded(*fake, host, &error)) << error.toStdString();
+    EXPECT_TRUE(registry.isLoaded(fake->id));
+    EXPECT_EQ(commands, 1);
+    EXPECT_EQ(viewSuffixes, QStringList{QStringLiteral("fakestatic")});
+    EXPECT_TRUE(QFile::exists(mark)) << "the module is constructed on the first load";
+    ASSERT_TRUE(registry.ensureLoaded(*fake, host, &error));
+    EXPECT_EQ(commands, 1) << "a second ensureLoaded does not attach again";
+}
+
+TEST(ModuleStaticTest, AStaticEntryWithNoModuleBehindItFailsToLoadAndSaysSo)
+{
+    ModuleInfo ghost;
+    ghost.id = QStringLiteral("ghost");
+    ghost.featureID = ghost.id;
+    ghost.isStatic = true;
+    ModuleRegistry registry;
+    ModuleHost host;
+    QString error;
+    EXPECT_FALSE(registry.ensureLoaded(ghost, host, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(registry.loadFailure(QStringLiteral("ghost")), error);
+    EXPECT_FALSE(registry.isLoaded(QStringLiteral("ghost")));
+}
+#endif
 
 int main(int argc, char **argv)
 {

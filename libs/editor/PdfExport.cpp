@@ -3,9 +3,11 @@
 
 #include "MermaidBlock.h"
 
+#include <QEventLoop>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QScrollBar>
+#include <QThread>
 
 
 namespace noteAppC {
@@ -55,14 +57,26 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     editor.setTheme(options.theme.value_or(Theme::builtin(Theme::Mode::Light)));
     editor.setReadableLineLength(false);
     editor.setLinkResolver(std::move(resolver));
+    editor.setVaultRootProvider([root = options.vaultRoot] { return root; });
     editor.setMode(Mode::Reading);
     ParseOptions parse = editor.parseOptions(); // the editor's own defaults, but for the states
     parse.taskStates = options.taskStates;
+    parse.codeStyler = options.codeStyler;
+    if (options.codeStyler) {
+        for (const auto &kind : parseHighlightKinds(options.codeHighlights))
+            parse.highlightKinds.append(kind.first);
+        editor.setCodeHighlights(options.codeHighlights);
+    }
     editor.setParseOptions(parse);
-    // A diagram fence (mermaid, plantuml, tikz, dot) is the diagram the editor already made (never the
+    editor.setRemoteReferences(options.remoteReferences);
+    // A diagram fence (mermaid, plantuml, tikz, dot, markmap) is the diagram the editor already made (never the
     // tool: an export waits for nothing); one it never made stays its listing.
     for (const DiagramKind kind : {DiagramKind::Mermaid, DiagramKind::PlantUML, DiagramKind::TikZ, DiagramKind::Graphviz})
         editor.setCodeBlockRenderer(diagramLanguages(kind), diagramCachedRenderer(kind, Theme::builtin(Theme::Mode::Light)));
+    // A mind map needs no tool: it is drawn from the fence's text, in the paper's colours (never the window's).
+    if (options.mindMaps)
+        editor.setCodeBlockRenderer(diagramLanguages(DiagramKind::Markmap),
+                                    diagramCachedRenderer(DiagramKind::Markmap, options.theme.value_or(Theme::builtin(Theme::Mode::Light))));
     const QSize viewport(int(page.width() / scale), int(page.height() / scale));
     editor.resize(viewport);
     editor.setNoteText(printed);
@@ -74,6 +88,9 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
             editor.layoutBlock(view);
     }
     QCoreApplication::processEvents(); // the cached diagrams the layout asked for land, and re-lay-out their blocks
+    // The files a ```reference block shows are read (or fetched) off this
+    // thread: a printed page waits for them, a few seconds at the most.
+    editor.awaitReferences(10'000);
     for (BlockView &view : editor.d->m_blocks) {
         if (!view.laidOut)
             editor.layoutBlock(view);

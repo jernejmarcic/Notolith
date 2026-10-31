@@ -58,8 +58,8 @@ QList<MarkdownEditor::BaseRowRect> MarkdownEditor::baseRowsAt(qsizetype offset) 
         return rows;
     const qreal left = contentLeft();
     const qreal top = view.y - verticalScrollBar()->value();
-    rows.reserve(int(view.baseRows.size()));
-    for (const BlockView::BaseRow &row : view.baseRows)
+    rows.reserve(int(view.x().baseRows.size()));
+    for (const BlockExtras::BaseRow &row : view.x().baseRows)
         rows.append({row.rect.translated(left, top), row.path});
     return rows;
 }
@@ -75,10 +75,10 @@ void MarkdownEditor::setBaseRunner(
     d->m_baseCache.clear();
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isBase || !block.CSVpath.isEmpty()) // a CSV embed is no base's
+        if (!block.isBase || !block.x().CSVpath.isEmpty()) // a CSV embed is no base's
             continue;
         block.layout.reset();
-        block.cells.clear();
+        block.extrasMut().cells.clear();
         block.laidOut = false;
         block.heightEstimated = false;
         touched = true;
@@ -99,10 +99,10 @@ void MarkdownEditor::refreshBases()
             d->m_baseCache.clear();
             bool touched = false;
             for (BlockView &block : d->m_blocks) {
-                if (!block.isBase || !block.CSVpath.isEmpty()) // a CSV embed is no base's
+                if (!block.isBase || !block.x().CSVpath.isEmpty()) // a CSV embed is no base's
                     continue;
                 block.layout.reset();
-                block.cells.clear();
+                block.extrasMut().cells.clear();
                 block.laidOut = false;
                 block.heightEstimated = false;
                 touched = true;
@@ -163,10 +163,10 @@ void MarkdownEditor::deliverBaseResults(const QString &yamlText, const QString &
 
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isBase || block.baseYAML != yamlText || block.baseRequestedView != viewName)
+        if (!block.isBase || block.x().baseYAML != yamlText || block.x().baseRequestedView != viewName)
             continue;
         block.layout.reset();
-        block.cells.clear();
+        block.extrasMut().cells.clear();
         block.laidOut = false;
         block.heightEstimated = false;
         touched = true;
@@ -230,12 +230,12 @@ bool MarkdownEditor::layoutPlainMessage(BlockView &view, const QString &text, co
 bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, const QString &viewName)
 {
     view.isBase = true;
-    view.image = QPixmap();
-    view.cells.clear();
-    view.baseRows.clear();
-    view.baseViewName.clear();
-    view.baseYAML = yamlText;
-    view.baseRequestedView = viewName;
+    view.extrasMut().image = QPixmap();
+    view.extrasMut().cells.clear();
+    view.extrasMut().baseRows.clear();
+    view.extrasMut().baseViewName.clear();
+    view.extrasMut().baseYAML = yamlText;
+    view.extrasMut().baseRequestedView = viewName;
 
     const QColor mutedColour = d->m_theme.color(QStringLiteral("--text-muted"));
     const QColor errorColour = d->m_theme.color(QStringLiteral("--text-error"));
@@ -258,7 +258,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     if (entry.results.rows.isEmpty())
         return plainMessage(tr("No results"), mutedColour);
 
-    view.baseViewName = entry.results.shownView >= 0
+    view.extrasMut().baseViewName = entry.results.shownView >= 0
                               && entry.results.shownView < entry.results.viewNames.size()
                          ? entry.results.viewNames.at(entry.results.shownView)
                          : QString();
@@ -367,7 +367,7 @@ bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data,
 
     QFont headingFont = d->m_theme.uiFont();
     headingFont.setWeight(QFont::DemiBold);
-    view.textTop = view.baseViewName.isEmpty() ? 0 : QFontMetricsF(headingFont).height() + 10;
+    view.textTop = view.x().baseViewName.isEmpty() ? 0 : QFontMetricsF(headingFont).height() + 10;
 
     QList<qreal> rowHeights(totalRows, cellLineHeight + 2 * padY);
     for (Cell &cell : cells) {
@@ -406,11 +406,11 @@ bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data,
         if (dataIndex < 0 || dataIndex >= shownRows)
             continue;
         if (!data.rows.at(dataIndex).notePath.isEmpty())
-            view.baseRows.push_back({cell.rect, data.rows.at(dataIndex).notePath});
+            view.extrasMut().baseRows.push_back({cell.rect, data.rows.at(dataIndex).notePath});
     }
 
-    view.cells = std::move(cells);
-    view.headerRows = 1;
+    view.extrasMut().cells = std::move(cells);
+    view.extrasMut().headerRows = 1;
     view.sideScroll =
         qBound<qreal>(0, view.sideScroll, qMax<qreal>(0, view.sideWidth - contentWidth()));
     view.layout.reset();
@@ -422,14 +422,14 @@ bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data,
 void MarkdownEditor::paintBase(QPainter &painter, const BlockView &view, qreal left,
                                qreal top) const
 {
-    if (!view.baseViewName.isEmpty()) {
+    if (!view.x().baseViewName.isEmpty()) {
         QFont headingFont = d->m_theme.uiFont();
         headingFont.setWeight(QFont::DemiBold);
         painter.save();
         painter.setFont(headingFont);
         painter.setPen(d->m_theme.color(QStringLiteral("--text-normal")));
         painter.drawText(QRectF(left, top, contentWidth(), view.textTop),
-                         Qt::AlignVCenter | Qt::AlignLeft, view.baseViewName);
+                         Qt::AlignVCenter | Qt::AlignLeft, view.x().baseViewName);
         painter.restore();
     }
     paintTable(painter, view, left, top);

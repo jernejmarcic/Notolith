@@ -614,9 +614,9 @@ private:
     }
 
     /// The diagram the editor already made for a fence's source (mermaid,
-    /// plantuml, tikz, dot) as an <img>, or empty (the fence is then an
-    /// ordinary code block, its source in a <pre>). Publishing never starts a
-    /// tool. An <img>, not inlined: an SVG drawn as an image never runs
+    /// plantuml, tikz, dot) or the map drawn from it (markmap) as an <img>, or
+    /// empty (the fence is then an ordinary code block, its source in a <pre>).
+    /// Publishing never starts a tool. An <img>, not inlined: an SVG drawn as an image never runs
     /// script or loads anything, and a note decides what goes into its SVG
     /// (TikZ's \special{dvisvgm:raw ...} writes markup straight through), so
     /// inlining would need a full SVG sanitiser. Its ids stay its own too.
@@ -672,9 +672,12 @@ private:
         const CodeOptions *options = optionsFor(fence.content, note);
         const QString lang = fence.language;
         for (const noteAppC::DiagramKind kind : {noteAppC::DiagramKind::Mermaid, noteAppC::DiagramKind::PlantUML,
-                                                 noteAppC::DiagramKind::TikZ, noteAppC::DiagramKind::Graphviz}) {
+                                                 noteAppC::DiagramKind::TikZ, noteAppC::DiagramKind::Graphviz,
+                                                 noteAppC::DiagramKind::Markmap}) {
             if (!noteAppC::diagramLanguages(kind).contains(lang, Qt::CaseInsensitive))
                 continue;
+            if (kind == noteAppC::DiagramKind::Markmap && !m_env.mindMaps)
+                continue; // the plugin is off: a listing, as for any language nobody draws
             const QString diagram = cachedDiagram(kind, note.text.mid(fence.content.start, fence.content.length()));
             if (!diagram.isEmpty())
                 return diagram;
@@ -700,9 +703,18 @@ private:
         QString code;
         for (qsizetype i = 0; i < highlightedSplit.size(); ++i) {
             const int lineNo = firstLine + int(i);
-            const bool hl = highlighted.contains(lineNo);
+            // highlight numbers count the block's own lines, whatever `ln:` numbers them from
+            QString classes = highlighted.contains(int(i) + 1) ? QStringLiteral(" hl") : QString();
+            // Code Styler's named highlights: `info:2` is class `hl-info`, which the
+            // stylesheet colours (the kind is a word, as the settings parse it).
+            if (options) {
+                for (auto kind = options->highlights.cbegin(); kind != options->highlights.cend(); ++kind) {
+                    if (kind.value().contains(int(i) + 1))
+                        classes += QStringLiteral(" hl hl-") + kind.key();
+                }
+            }
             code += QStringLiteral("<span class=\"line%1\"%2>%3</span>\n")
-                       .arg(hl ? QStringLiteral(" hl") : QString(),
+                       .arg(classes,
                            numbered ? QStringLiteral(" data-line=\"%1\"").arg(lineNo) : QString(),
                            highlightedSplit.at(i));
         }
@@ -1092,9 +1104,16 @@ private:
         case InlineNode::Strike:
             return QStringLiteral("<del>") + emitInline(node.range, note, node.kind, node.dataIndex)
                   + QStringLiteral("</del>");
-        case InlineNode::Code:
-            return QStringLiteral("<code>") + escapeHtml(stripHiddenRanges(node.range, note))
-                  + QStringLiteral("</code>");
+        case InlineNode::Code: {
+            const StyleSpan &span = note.decorations.styles.at(node.dataIndex);
+            const QString code = stripHiddenRanges(node.range, note);
+            // `{python} code`: the language's colours, as a fence gets them.
+            if (span.code.isValid()) {
+                return QStringLiteral("<code class=\"language-%1\">").arg(escapeAttr(span.payload))
+                       + highlightedLines(code, span.payload) + QStringLiteral("</code>");
+            }
+            return QStringLiteral("<code>") + escapeHtml(code) + QStringLiteral("</code>");
+        }
         case InlineNode::Highlight:
             return QStringLiteral("<mark>") + emitInline(node.range, note, node.kind, node.dataIndex)
                   + QStringLiteral("</mark>");

@@ -93,7 +93,7 @@ public:
         /// Reads every row's mtime, size and kind once, so a whole walk's isCurrent() is a hash lookup instead of
         /// a query per file. Dropped by the first put(), putAttachment() or remove(): isCurrent() then queries again.
         void loadCurrent();
-        /// Notes only, vault-relative, as Index::allPaths().
+        /// Every file the cache holds, notes and attachments, vault-relative.
         QStringList allPaths();
         void begin();
         void commit();

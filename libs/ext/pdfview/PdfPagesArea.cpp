@@ -78,6 +78,23 @@ bool PdfPagesArea::load(const QString &path, QString *error)
     return true;
 }
 
+void PdfPagesArea::setPath(const QString &path)
+{
+    const QString from = m_document.path() + QLatin1Char('|');
+    m_document.setPath(path);
+    // A rename keeps the modification time: a page already drawn is still the page, under the new name. One being
+    // rendered is dropped (it would land on the old key) and asked for again.
+    QHash<QString, RasterEntry> rekeyed;
+    for (auto it = m_rasterCache.begin(); it != m_rasterCache.end(); ++it) {
+        if (it.key().startsWith(from) && !it->pending)
+            rekeyed.insert(path + QLatin1Char('|') + it.key().mid(from.size()), *it);
+        else if (!it.key().startsWith(from))
+            rekeyed.insert(it.key(), *it);
+    }
+    m_rasterCache = std::move(rekeyed);
+    viewport()->update();
+}
+
 bool PdfPagesArea::save(QString *error)
 {
     commitCommentEditor();

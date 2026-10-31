@@ -86,14 +86,21 @@ message Payload {
   }
 }
 
-// Where a member's caret is, in UTF-16 offsets of the text as its author had
-// it. Members pass it on like an update; `counter` rises with every one an
-// author sends, so a copy arriving twice, or late, is ignored.
+// Where a member's caret is. `anchor` and `head` are UTF-16 offsets of the
+// text as its author had it; an old build sends nothing else. `anchor_pos` and
+// `head_pos` (CrdtDoc::encodePosition) name the same places by the characters
+// they follow, so a member who has seen more or fewer edits than the author
+// still puts the caret on the same characters; a receiver that finds them
+// uses them, and falls back to the offsets when they are absent or name text
+// it has not received. Members pass it on like an update; `counter` rises with
+// every one an author sends, so a copy arriving twice, or late, is ignored.
 message Presence {
   bytes author = 1;
   uint64 counter = 2;
   uint32 anchor = 3;
   uint32 head = 4;
+  bytes anchor_pos = 5;
+  bytes head_pos = 6;
 }
 
 message Envelope {

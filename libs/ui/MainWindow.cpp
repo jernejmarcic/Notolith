@@ -71,9 +71,13 @@
 #include "FileTree.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
+#include "SingleInstance.h"
+#include "Markmap.h"
+#include "MarkmapBlock.h"
 #include "MermaidBlock.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
+#include "DimMenu.h"
 #include "AudioRecorder.h"
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
 #include "DirectRunner.h"
@@ -95,6 +99,10 @@
 #include "EncryptionSession.h"
 #endif
 #include "ExportPdfDialog.h"
+#ifdef NOTEAPPC_HAVE_PANDOC
+#include "Pandoc.h"
+#include "PandocRunner.h"
+#endif
 #include "DictClient.h"
 #include "PagePreview.h"
 #include "PdfPage.h"
@@ -264,6 +272,45 @@ QString rgbaString(const QColor &color, double alpha)
         .arg(color.blue())
         .arg(alpha, 0, 'f', 3);
 }
+
+/// A tab's view that is one file it saves to: a module's view (PDF, ink, ...), a canvas, an image. The window watches
+/// that file, follows it when it moves outside the app and refuses to save it once it is gone.
+bool isFileView(const QWidget *view)
+{
+    if (!view)
+        return false;
+    if (qobject_cast<const ModuleView *>(view))
+        return true;
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (qobject_cast<const CanvasView *>(view))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+    if (qobject_cast<const ImageView *>(view))
+        return true;
+#endif
+    return false;
+}
+
+/// The view keeps the path it saves to: tell it the file moved.
+void followViewPath(QWidget *view, const QString &path)
+{
+    if (auto *module = qobject_cast<ModuleView *>(view))
+        module->setFilePath(path);
+#ifdef NOTEAPPC_HAVE_CANVAS
+    else if (auto *canvas = qobject_cast<CanvasView *>(view))
+        canvas->setPath(path);
+#endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+    else if (auto *image = qobject_cast<ImageView *>(view))
+        image->setPath(path);
+#endif
+}
+
+QString stampOf(const QFileInfo &info)
+{
+    return QStringLiteral("%1|%2").arg(info.size()).arg(info.lastModified().toMSecsSinceEpoch());
+}
 } // namespace
 
 MainWindow::~MainWindow()
@@ -363,6 +410,17 @@ MainWindow::MainWindow(QWidget *parent)
     // shows: the file's own watch dies with the file.
     connect(m_noteWatcher, &QFileSystemWatcher::directoryChanged, this, [this] { m_noteChanges.start(); });
     connect(&m_noteChanges, &QTimer::timeout, this, &MainWindow::reloadChangedNotes);
+    // The vault's own watcher (the Indexer's, so no second set of inotify watches): a file that is no
+    // note appearing or going changes no index row, yet an open note's link to it must change look.
+    // The refresh waits for the Indexer's scan of the same event (a bare-name link resolves through
+    // the index it updates), and Index::changed then does it, so one save is one refresh.
+    m_vaultFiles.setSingleShot(true);
+    m_vaultFiles.setInterval(300); // a sync or a trash emptying is a storm of events
+    connect(&m_vaultFiles, &QTimer::timeout, this, [this] {
+        m_vaultPendingSince.invalidate();
+        if (!m_indexer->isRunning())
+            refreshOpenVaultFiles();
+    });
     m_lostRetry.setSingleShot(true);
     m_lostRetry.setInterval(1000);
     connect(&m_lostRetry, &QTimer::timeout, this, [this] { followLostNotes(true); });
@@ -370,11 +428,6 @@ MainWindow::MainWindow(QWidget *parent)
     m_savePool.setExpiryTimeout(-1);
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
-#ifdef NOTEAPPC_HAVE_HISTORY
-    // libgit2's one-time init is 5 ms; the window is built meanwhile.
-    if (featureOn("note-history"))
-        m_historyPool.start([] { NoteHistory::warmUp(); });
-#endif
     m_theme = themeFromSettings();
     m_modules = new ModuleRegistry(this);
     m_modules->setEnabledCheck([this](const QString &featureID) { return featureOn(featureID.toUtf8().constData()); });
@@ -549,6 +602,15 @@ MainWindow::MainWindow(QWidget *parent)
         // open() for a vault that was up to date and from the batch for one
         // that was not. Both ran it, 210 ms apiece on 20 000 notes.
     });
+    connect(m_indexer, &Indexer::vaultFilesChanged, this, [this] {
+        m_vaultDirty = true;
+        // A debounce, but a sync that raises an event every 100 ms must still show: past 2 s the running timer is left to fire.
+        if (!m_vaultPendingSince.isValid())
+            m_vaultPendingSince.start();
+        if (!m_vaultFiles.isActive() || m_vaultPendingSince.elapsed() < 2000)
+            m_vaultFiles.start();
+    });
+    connect(m_indexer, &Indexer::finished, this, [this] { refreshOpenVaultFiles(); }); // a scan that changed nothing says nothing itself
     connect(m_indexer, &Indexer::watchesFailed, this, [this](int folders) {
         statusBar()->showMessage(tr("%n folder(s) cannot be watched (fs.inotify.max_user_watches?): changes made "
                                     "outside Notolith there are found every 30 seconds",
@@ -771,7 +833,7 @@ QWidget *MainWindow::buildSidebar()
         connect(action, &QAction::triggered, this, [this, entry] {
             m_tree->sortByColumn(entry.column, entry.order);
             m_settings.setValue(QStringLiteral("files.sortOrder"), QLatin1String(entry.key));
-            m_settings.save();
+            saveSettings();
         });
     }
     sortButton->setMenu(sortMenu);
@@ -841,6 +903,17 @@ QWidget *MainWindow::buildSidebar()
     connect(fileTree, &FileTree::moveRequested, this,
             [this](const QString &path, const QString &folder) { moveToFolder(path, folder); },
             Qt::QueuedConnection);
+#ifdef NOTEAPPC_HAVE_PANDOC
+    // A .docx, .odt, .epub, .html, .rtf or .tex dragged in from a file manager: Import with pandoc.
+    connect(fileTree, &FileTree::filesDropped, this, [this](const QStringList &files, const QString &folder) {
+        if (!m_vault.isValid() || !featureOn("pandoc") || !m_vault.contains(folder))
+            return;
+        for (const QString &file : files) {
+            if (!pandoc::readerForSuffix(QFileInfo(file).suffix()).isEmpty())
+                importWithPandoc(file, m_vault.relative(folder));
+        }
+    });
+#endif
     fileTree->rowDelegate()->setIconHook([this](const QString &absolutePath) {
         return fileIconsOn() && m_vault.contains(absolutePath) ? m_fileIcons.iconFor(m_vault.relative(absolutePath))
                                                               : QString();
@@ -869,26 +942,28 @@ QWidget *MainWindow::buildSidebar()
     return m_sidebar;
 }
 
+QString MainWindow::resolveLinkFrom(const QString &target, const QString &notePath) const
+{
+    if (!m_vault.isValid())
+        return {};
+    // An attachment may not be in the index (it only holds notes), so fall
+    // back on the path the note actually wrote.
+    const QString resolved = m_index.resolve(target, notePath);
+    if (!resolved.isEmpty())
+        return m_vault.absolute(resolved);
+    const QString beside = QFileInfo(notePath).absolutePath() + QLatin1Char('/') + target;
+    if (QFileInfo::exists(beside))
+        return beside;
+    const QString fromRoot = m_vault.absolute(target);
+    return QFileInfo::exists(fromRoot) ? fromRoot : QString();
+}
+
 QWidget *MainWindow::buildMainArea()
 {
     auto *notesPage = new QWidget(this);
     notesPage->setObjectName(QStringLiteral("mainArea"));
 
-    const auto resolver = [this](const QString &target) -> QString {
-        if (!m_vault.isValid())
-            return {};
-        // An attachment may not be in the index (it only holds notes), so fall
-        // back on the path the note actually wrote.
-        const QString resolved = m_index.resolve(target, m_active->notePath);
-        if (!resolved.isEmpty())
-            return m_vault.absolute(resolved);
-        const QString beside =
-            QFileInfo(m_active->notePath).absolutePath() + QLatin1Char('/') + target;
-        if (QFileInfo::exists(beside))
-            return beside;
-        const QString fromRoot = m_vault.absolute(target);
-        return QFileInfo::exists(fromRoot) ? fromRoot : QString();
-    };
+    const auto resolver = [this](const QString &target) { return resolveLinkFrom(target, m_active->notePath); };
     m_resolveLink = resolver;
 
     m_previewDelay.setSingleShot(true);
@@ -920,7 +995,7 @@ QWidget *MainWindow::buildMainArea()
     m_settingsPage = new SettingsPage(m_settingsWindow);
     settingsLayout->addWidget(m_settingsPage);
     connect(m_settingsWindow, &QDialog::finished, this, [this] {
-        m_settings.save();
+        saveSettings();
         if (isVisible())
             activateWindow(); // back to the notes: their shortcuts are this window's
         if (m_active && m_active->editor->isEnabled() && m_active->editor->isVisible())
@@ -931,6 +1006,9 @@ QWidget *MainWindow::buildMainArea()
     connect(m_settingsPage, &SettingsPage::recoveryRequested, this, &MainWindow::openRecovery);
     connect(m_settingsPage, &SettingsPage::closeRequested, this, &MainWindow::closeSettings);
     connect(m_settingsPage, &SettingsPage::pluginsChanged, this, [this] { syncPlugins(true); });
+#ifdef NOTEAPPC_HAVE_PANDOC
+    connect(m_settingsPage, &SettingsPage::pandocNeeded, this, &MainWindow::showPandocMissing);
+#endif
 
     m_mainStack = new QStackedWidget(this);
     m_mainStack->setObjectName(QStringLiteral("mainStack"));
@@ -1076,8 +1154,18 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         if (leaf == m_active)
             updateModeButton();
     });
-    editor->setLinkResolver(m_resolveLink);
+    // Looked up by editor, never by the Leaf pointer: dropLeaf frees the Leaf at once and the editor (and the
+    // nested editors that copy this resolver) a moment later, and a posted completion may ask in between.
+    editor->setLinkResolver([this, editor = QPointer<MarkdownEditor>(editor)](const QString &target) -> QString {
+        for (const auto &owned : m_leaves) {
+            if (owned->editor == editor)
+                return resolveLinkFrom(target, owned->notePath);
+        }
+        return {};
+    });
+    editor->setVaultRootProvider([this] { return m_vault.isValid() ? m_vault.root() : QString(); });
     connect(editor, &MarkdownEditor::linkActivated, this, &MainWindow::followLink);
+    connect(editor, &MarkdownEditor::noticeRaised, this, [this](const QString &message) { statusBar()->showMessage(message, 6000); });
     connect(editor, &MarkdownEditor::linkHovered, this,
             [this](const QString &target, const QPoint &globalPos) {
                 if (!featureOn("page-preview"))
@@ -1211,10 +1299,21 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         const notebook::SandboxTier tier = host                  ? notebook::SandboxTier::Host
                                            : options.sandboxWasm ? notebook::SandboxTier::Wasm
                                                                  : notebook::SandboxTier::Bubblewrap;
+        notebook::NotebookController::RunRequest request;
+        request.language = language;
+        request.source = source;
+        request.prelude = options.implicit;
+        request.wrapper = options.implicitMain;
+        request.duplicateOrdinal = options.duplicateOrdinal; // the key's only: the code is what was written
+        request.tier = tier;
+        const QString cacheKey = notebook::NotebookController::cacheKeyOf(request);
         // Forgetting a block's output: the sidecar entry goes, nothing runs.
         if (options.clear) {
-            notebook::removeNotebookCache(
-                notebook::notebookCacheKey(language, source, tier, options.implicit, options.implicitMain));
+            // A notebook file says so on its next save, if there was anything to forget.
+            const bool had = notebook::hasNotebookCache(cacheKey);
+            notebook::removeNotebookCache(cacheKey);
+            if (had)
+                notebookOutputsChanged(notePathOf(editor), cacheKey, notebook::NotebookRunResult());
             deliver(MarkdownEditor::NotebookRunResult());
             return;
         }
@@ -1227,11 +1326,6 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             return;
         }
 #endif
-        notebook::NotebookController::RunRequest request;
-        request.language = language;
-        request.source = source;
-        request.prelude = options.implicit;
-        request.wrapper = options.implicitMain;
         // `#| sandbox: host` is the note asking, and a note can come from
         // anyone: it leaves the sandbox only when the person has allowed that
         // in settings. A runnable embed's own folder is bound read-only.
@@ -1242,7 +1336,6 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                                                  "Settings allows that"),
                                      6000);
         }
-        request.tier = tier;
         request.wasmModules = m_settings.text(QStringLiteral("notebooks.wasmModules"));
         if (!options.workingDir.isEmpty())
             request.extraReadOnlyBinds = {options.workingDir};
@@ -1257,7 +1350,18 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 handler(MarkdownEditor::NotebookInputPrompt{prompt.prompt, prompt.password}, reply);
             };
         }
-        m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {
+        m_notebook->run(request, forceRun, [this, deliver, forceRun, cacheKey, notePath = notePathOf(editor),
+                                            guard = QPointer<MarkdownEditor>(editor),
+                                            keep = request.cache](const notebook::NotebookRunResult &result) {
+            // A run of a notebook's cell changes what the file would say: the tab is modified, and the save
+            // writes that cell's outputs back (a lookup, or a run that never reached a kernel, changes nothing).
+            // The path is the tab's when the result lands: the notebook may have been renamed while it ran.
+            if (forceRun && keep && result.hasRun && result.kernelError.isEmpty()) {
+                QMetaObject::invokeMethod(this, [this, notePath, guard, cacheKey, result] {
+                    const QString now = guard ? notePathOf(guard) : QString();
+                    notebookOutputsChanged(now.isEmpty() ? notePath : now, cacheKey, result);
+                });
+            }
             MarkdownEditor::NotebookRunResult shown;
             shown.hasRun = result.hasRun;
             shown.ok = result.ok;
@@ -1330,6 +1434,20 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 result.rows.append({row.cells, row.notePath});
             deliver(result);
         });
+    });
+    // A reference block's header: a note opens in a tab and a URL in the browser; any other file of the
+    // vault is left alone (the file tree has "Open in default app").
+    connect(editor, &MarkdownEditor::referenceActivated, this, [this](const QString &target) {
+        if (target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+            || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
+            QDesktopServices::openUrl(QUrl(target));
+        else if (!m_vault.isValid()
+                 || !QFileInfo(target).canonicalFilePath().startsWith(QDir(m_vault.root()).canonicalPath() + QLatin1Char('/')))
+            return; // the editor only offers vault files; this is the second lock
+        else if (Vault::isNote(target))
+            openNote(target);
+        else // a click on what looks like a title never hands a vault file to xdg-open: that is an explicit command
+            statusBar()->showMessage(tr("%1 is not a note: open it from the file tree").arg(QFileInfo(target).fileName()), 5000);
     });
     connect(editor, &MarkdownEditor::baseRowActivated, this, [this](const QString &relativePath) {
         openRelative(relativePath);
@@ -1484,6 +1602,11 @@ ParseOptions MainWindow::parseOptions() const
     }
     options.ignoreFormatting = m_settings.boolean(QStringLiteral("editor.countIgnoreFormatting"));
     options.taskStates = featureOn("task-states");
+    options.codeStyler = featureOn("advanced-code-blocks");
+    if (options.codeStyler) {
+        for (const auto &kind : parseHighlightKinds(m_settings.text(QStringLiteral("editor.codeHighlights"))))
+            options.highlightKinds.append(kind.first);
+    }
     return options;
 }
 
@@ -1506,6 +1629,8 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setHoverEditButton(m_settings.boolean(QStringLiteral("editor.hoverEditButton")));
     editor->setTableHandles(m_settings.boolean(QStringLiteral("editor.tableHandles")));
     editor->setComplexCodeBlocks(m_settings.boolean(QStringLiteral("editor.complexCodeBlocks")));
+    editor->setCodeHighlights(m_settings.text(QStringLiteral("editor.codeHighlights")));
+    editor->setRemoteReferences(m_settings.boolean(QStringLiteral("editor.remoteReferences")));
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setParseOptions(parseOptions());
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
@@ -1569,6 +1694,30 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
                     }
                     renderer(language, source, width, theme, deliver);
                 });
+        }
+    }
+    // Mind maps (```markmap): the renderer is the switch here too. Nothing is made until a fence is laid out.
+    {
+        const QString key = featureOn("markmap") ? QStringLiteral("1") : QString();
+        if (editor->property("markmapKey").toString() != key) {
+            editor->setProperty("markmapKey", key);
+            if (key.isEmpty()) {
+                editor->setCodeBlockRenderer({QStringLiteral("markmap")}, nullptr);
+            } else {
+                if (!m_markmapRenderer)
+                    m_markmapRenderer = markmapRenderer([this] { return m_theme; });
+                // The map is drawn from the fence's text here, in the window; publish and PDF export draw their own.
+                editor->setCodeBlockRenderer(
+                    {QStringLiteral("markmap")},
+                    [this, editor](const QString &language, const QString &source, int width, const QString &theme,
+                                   const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
+                        if (showsEncryptedNote(editor)) {
+                            deliver({true, tr("*Mind maps are not drawn for encrypted notes.*"), QImage()});
+                            return;
+                        }
+                        m_markmapRenderer(language, source, width, theme, deliver);
+                    });
+            }
         }
     }
     // "/" commands: the palette's own list, the window's then the editor's,
@@ -1812,6 +1961,8 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
     if (leaf->notePath.isEmpty())
         return tr("New tab");
     QString name = QFileInfo(leaf->notePath).completeBaseName();
+    if (leaf->view && m_lostNotes.value(leaf->notePath, false))
+        name += tr(" (missing)"); // a view's file is gone: its save is refused
 #ifdef NOTEAPPC_HAVE_SHARE
     if (sessionFor(leaf->notePath))
         name += QStringLiteral(" \u21C4"); // shared: others may be editing it
@@ -2007,6 +2158,7 @@ void MainWindow::dropLeaf(Leaf *leaf)
         group = nullptr;
     }
     std::erase_if(m_leaves, [leaf](const auto &owned) { return owned.get() == leaf; });
+    pruneNotebookImages(); // a notebook no tab shows keeps no pictures
 #ifdef NOTEAPPC_HAVE_SHARE
     syncShareViews(); // the closed tab's editor no longer shows a shared note
 #endif
@@ -2872,6 +3024,9 @@ bool MainWindow::maybeLeave()
 
 void MainWindow::resetWorkspace()
 {
+#ifdef NOTEAPPC_HAVE_PANDOC
+    m_pandocQueue.clear(); // dropped files waiting for pandoc were meant for the vault left
+#endif
     // Pop-outs' tabs first: the main window's last one must not be the one left over.
     while (m_leaves.size() > 1) {
         Leaf *last = m_leaves.back().get();
@@ -3141,6 +3296,12 @@ void MainWindow::applyFeatures()
         delete m_graph;
     }
 #endif
+#ifdef NOTEAPPC_HAVE_PANDOC
+    if (auto *tree = qobject_cast<FileTree *>(m_tree))
+        tree->setAcceptFileDrops(featureOn("pandoc") ? [](const QString &path) {
+            return !pandoc::readerForSuffix(QFileInfo(path).suffix()).isEmpty();
+        } : std::function<bool(const QString &)>());
+#endif
     if (!featureOn("page-preview"))
         delete m_preview;
     if (!featureOn("word-lookup")) { // nothing built, nothing listening
@@ -3347,6 +3508,22 @@ void MainWindow::buildActions()
     });
 #endif
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+    // Where New note puts a note (newNoteFolder), the next free "Untitled", opened at once. A python kernel is the
+    // notebook's kernelspec when one is installed; without, only the language says python.
+    add(QStringLiteral("notebooks:new"), tr("Notebooks: Create new notebook"), QString(), [this] {
+        if (!m_vault.isValid())
+            return;
+        const notebook::KernelSpec kernel = notebook::kernelSpecsByLanguage().value(QStringLiteral("python"));
+        QString error;
+        const QString path = m_vault.createNote(newNoteFolder(), tr("Untitled"), &error, QStringLiteral(".ipynb"),
+                                                QString::fromUtf8(notebook::newIpynb(kernel.name.isEmpty() ? nullptr : &kernel)));
+        if (path.isEmpty()) {
+            QMessageBox::warning(this, tr("New notebook"), tr("Could not create the notebook:\n%1").arg(error));
+            return;
+        }
+        m_indexer->reindex(path);
+        openNote(path);
+    });
     add(QStringLiteral("notebooks:run-block"), tr("Notebooks: Run the code block at the cursor"),
         QStringLiteral("Ctrl+Shift+Return"), [this] {
             if (!m_active->view)
@@ -3360,6 +3537,11 @@ void MainWindow::buildActions()
         [this] {
             if (!m_active->view)
                 m_active->editor->runNotebookBlocksUpTo(m_active->editor->cursorOffset());
+        });
+    add(QStringLiteral("notebooks:run-below"), tr("Notebooks: Run every code block from the cursor down"), QString(),
+        [this] {
+            if (!m_active->view)
+                m_active->editor->runNotebookBlocksFrom(m_active->editor->cursorOffset());
         });
     // The kernel of the block at the cursor, in this note: a note has one
     // kernel per language, so what one block set the next one sees.
@@ -3533,6 +3715,7 @@ void MainWindow::buildActions()
         &MainWindow::openRecovery);
     add(QStringLiteral("workspace:export-pdf"), tr("Export to PDF"), QString(),
         &MainWindow::exportPdf);
+    add(QStringLiteral("markmap:show-note"), tr("Mind maps: Show as mind map"), QString(), &MainWindow::showAsMindMap);
     add(QStringLiteral("daily-notes"), tr("Daily notes: Open today's daily note"), QString(),
         [this] { openDailyNote(0); });
     add(QStringLiteral("daily-notes:goto-prev"), tr("Daily notes: Open previous daily note"),
@@ -3559,6 +3742,9 @@ void MainWindow::buildActions()
                                           QFileInfo(m_active->notePath).completeBaseName());
         });
 
+#ifdef NOTEAPPC_HAVE_PANDOC
+    buildPandocActions();
+#endif
     buildPopoutActions();
     buildSidebarPopoutActions();
     rebuildHotkeyCommands();
@@ -3921,15 +4107,19 @@ void MainWindow::openCommandPalette()
         });
     }
 
+#ifdef NOTEAPPC_HAVE_PANDOC
+    refreshPandocCommands();
+#endif
     struct Entry {
         QString id;
         QString name;
         QList<QKeySequence> keys;
+        bool dimmed = false;
     };
     QList<Entry> entries;
     for (const QAction *action : std::as_const(m_commands)) {
         if (action->isEnabled() && action->objectName() != QLatin1String("command-palette:open"))
-            entries.append({action->objectName(), action->text(), action->shortcuts()});
+            entries.append({action->objectName(), action->text(), action->shortcuts(), action->property("dimmed").toBool()});
     }
     // Editing commands only while a note is open for editing, as in Obsidian.
     if (!m_active->notePath.isEmpty() && !m_active->view) {
@@ -3946,13 +4136,15 @@ void MainWindow::openCommandPalette()
 
     QStringList names;
     QStringList keys;
+    QList<bool> dimmed;
     m_paletteIDs.clear();
     for (const Entry &entry : std::as_const(entries)) {
         names << entry.name;
+        dimmed << entry.dimmed;
         keys << (entry.keys.isEmpty() ? QString() : entry.keys.constFirst().toString(QKeySequence::NativeText));
         m_paletteIDs.insert(entry.name, entry.id);
     }
-    m_palette->setCandidates(names, keys);
+    m_palette->setCandidates(names, keys, {}, dimmed);
     m_palette->popUp();
 }
 
@@ -4031,8 +4223,17 @@ void MainWindow::openRelativeInNewTab(const QString &relativePath)
     openNote(m_vault.absolute(relativePath));
 }
 
+void MainWindow::refreshOpenVaultFiles()
+{
+    if (!std::exchange(m_vaultDirty, false))
+        return;
+    for (const auto &leaf : m_leaves)
+        leaf->editor->refreshVaultFiles();
+}
+
 void MainWindow::onIndexChanged()
 {
+    const bool files = std::exchange(m_vaultDirty, false); // this refresh is the vault timer's as well
     const QStringList targets = m_index.linkTargets();
     const auto aliases = m_index.aliases();
     for (const auto &leaf : m_leaves) {
@@ -4040,7 +4241,10 @@ void MainWindow::onIndexChanged()
         leaf->editor->setLinkAliases(aliases);
         // Before this, a note opened while the vault was first indexed showed
         // every link as missing until it was next edited.
-        leaf->editor->refreshLinkStatus();
+        if (files)
+            leaf->editor->refreshVaultFiles();
+        else
+            leaf->editor->refreshLinkStatus();
     }
     // The backlinks, tags and outgoing-links panes listen to Index::changed
     // themselves; refreshing them here as well did each one twice per save.
@@ -4268,10 +4472,15 @@ void MainWindow::startRecording()
 
 void MainWindow::mergeCurrentNote()
 {
-    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath) || !save())
+    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath)
+        || !Vault::isNote(m_active->notePath) || !save()) // never from a notebook: its JSON is not a note's text
         return;
     const QString source = m_active->notePath;
-    QStringList notes = m_index.allPaths();
+    QStringList notes;
+    for (const QString &path : m_index.allPaths()) { // the index lists a notebook too, while the reader is on
+        if (Vault::isNote(path))
+            notes << path;
+    }
     notes.removeOne(m_vault.relative(source));
     auto *picker = new QuickSwitcher(this);
     picker->setObjectName(QStringLiteral("mergePicker"));
@@ -4287,6 +4496,12 @@ void MainWindow::mergeCurrentNote()
 
 bool MainWindow::mergeNote(const QString &source, const QString &target)
 {
+    // Both ends are Markdown notes: appending text to a notebook's JSON, or its JSON to a note, corrupts it.
+    if (!Vault::isNote(source) || !Vault::isNote(target)) {
+        QMessageBox::warning(this, tr("Merge"), tr("Only Markdown notes can be merged: %1")
+                                                    .arg(QFileInfo(Vault::isNote(source) ? target : source).fileName()));
+        return false;
+    }
     // What the target's tabs hold unsaved is its text too.
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath == target && isModified(leaf.get()) && !saveLeaf(leaf.get(), false))
@@ -4504,6 +4719,41 @@ void MainWindow::jumpToHeading(const QString &subpath)
     });
 }
 
+void MainWindow::showAsMindMap()
+{
+    if (!m_active || !m_active->editor || m_active->view)
+        return;
+    if (showsEncryptedNote(m_active->editor)) { // the dialog's editor is not the note's, and has no key
+        QMessageBox::information(this, tr("Mind map"), tr("Mind maps are not drawn for encrypted notes."));
+        return;
+    }
+    const QString title = m_active->notePath.isEmpty() ? tr("Untitled") : QFileInfo(m_active->notePath).completeBaseName();
+    const QString outline = markmapSourceOfNote(m_active->editor->noteText());
+    if (outline.isEmpty()) {
+        QMessageBox::information(this, tr("Mind map"), tr("This note has nothing to draw."));
+        return;
+    }
+    // A fence longer than any run of backticks in the text, so nothing in it can close it early.
+    qsizetype longest = 0, run = 0;
+    for (const QChar c : outline)
+        longest = qMax(longest, run = (c == QLatin1Char('`') ? run + 1 : 0));
+    const QString fence(qMax<qsizetype>(3, longest + 1), QLatin1Char('`'));
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("mindMapDialog"));
+    dialog.setWindowTitle(tr("Mind map: %1").arg(title));
+    dialog.resize(1000, 700);
+    auto *editor = new MarkdownEditor(&dialog);
+    editor->setTheme(m_theme);
+    applyEditorSettings(editor); // registers the markmap renderer, as for any note
+    editor->setReadableLineLength(false);
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    editor->setNoteText(fence + QStringLiteral("markmap\n") + outline + QLatin1Char('\n') + fence + QLatin1Char('\n'));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(editor);
+    dialog.exec();
+}
+
 void MainWindow::exportPdf()
 {
     if (m_active->notePath.isEmpty())
@@ -4520,6 +4770,11 @@ void MainWindow::exportPdf()
     QString error;
     MarkdownEditor::PdfOptions pdf = options.options();
     pdf.taskStates = featureOn("task-states");
+    pdf.mindMaps = featureOn("markmap");
+    pdf.codeStyler = featureOn("advanced-code-blocks");
+    pdf.codeHighlights = m_settings.text(QStringLiteral("editor.codeHighlights"));
+    pdf.remoteReferences = m_settings.boolean(QStringLiteral("editor.remoteReferences"));
+    pdf.vaultRoot = m_vault.isValid() ? m_vault.root() : QString();
     pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
     applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
@@ -4966,13 +5221,16 @@ void MainWindow::publishSite()
     // (a built-in scheme has none), on the worker with the rest.
     const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
     const bool taskStates = featureOn("task-states");
+    const bool mindMaps = featureOn("markmap");
+    const ParseOptions codeStylerOptions = parseOptions(); // codeStyler and the highlight names, which are all of it
     // The formatting colours too, read here: Settings is not for the worker.
     QHash<QString, QString> colours;
     for (const FormatRow &row : formatRows())
         for (const FormatColour &colour : row.colours)
             for (const bool dark : {true, false})
                 colours.insert(formatColourKey(colour, dark), m_settings.text(formatColourKey(colour, dark)));
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates] {
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates, mindMaps,
+                                         codeStylerOptions] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -4987,6 +5245,9 @@ void MainWindow::publishSite()
         options.siteName = choices.siteName.isEmpty() ? vault.name() : choices.siteName;
         options.theme = publish::Options::ThemeMode(choices.theme);
         options.parse.taskStates = taskStates;
+        options.mindMaps = mindMaps;
+        options.parse.codeStyler = codeStylerOptions.codeStyler;
+        options.parse.highlightKinds = codeStylerOptions.highlightKinds;
         for (const Theme::Mode mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
             Theme theme = schemePath.isEmpty() ? Theme::builtin(mode) : Scheme::apply(schemePath, mode);
             applyUserColours(theme, [&colours](const QString &key) { return colours.value(key); });
@@ -5213,6 +5474,7 @@ void MainWindow::clearOpenNote()
     m_active->editor->setNoteText(QString());
     m_active->editor->setEnabled(false);
     m_active->inlineTitle->setVisible(false);
+    pruneNotebookImages();
 #ifdef NOTEAPPC_HAVE_SHARE
     syncShareViews();
 #endif
@@ -5222,6 +5484,13 @@ void MainWindow::clearOpenNote()
 
 void MainWindow::openVault(const QString &path)
 {
+    // A vault another Notolith process has open is that process's: asked before anything here is
+    // saved or closed, since a handed-over vault leaves this window as it is.
+    const QString served = SingleInstance::nameForVault(path);
+    if (m_instance && m_instance->name() != served && QFileInfo(path).isDir()
+        && m_instance->deliverTo(served, QFileInfo(path).absoluteFilePath()))
+        return;
+
     if (!maybeSaveAll())
         return;
 
@@ -5230,6 +5499,9 @@ void MainWindow::openVault(const QString &path)
         QMessageBox::warning(this, tr("Open vault"), tr("%1 is not a directory.").arg(path));
         return;
     }
+    // Lost the race for the name (the other process was still starting): it has the vault now.
+    if (m_instance && !m_instance->moveTo(served, vault.root()))
+        return;
 
     saveLayout(); // the vault being left
     if (m_graphSave.isActive()) {
@@ -5250,6 +5522,8 @@ void MainWindow::openVault(const QString &path)
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
+    m_settings.save(); // at once: another process's bare launch reopens the vault most recently opened
+    m_settings.takeAdoptedKeys(); // applySettings() follows: nothing left to report
     // Before the scan, by this vault's settings: its notebooks and meta notes
     // are indexed by the first one, and a warm cache is checked against them.
     updateNotebookIndex();
@@ -5294,6 +5568,8 @@ void MainWindow::closeVault()
 #endif
 
     saveLayout();
+    if (m_instance)
+        m_instance->moveTo(SingleInstance::nameForVault(QString()));
     m_openMode = OpenMode::Empty;
     m_vault = Vault();
     m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
@@ -5322,6 +5598,8 @@ void MainWindow::openSingleFile(const QString &path)
         return;
 
     saveLayout();
+    if (m_instance)
+        m_instance->moveTo(SingleInstance::nameForVault(QString()));
     m_openMode = OpenMode::SingleFile;
     m_vault = Vault();
     m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
@@ -5653,9 +5931,14 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     if (!maybeLeave())
         return false;
 
+    // Another tab showing it already holds the document, runs not yet saved included: the file is not the truth
+    // for it, so its outputs are not read in again over them.
+    const bool shownElsewhere = std::any_of(m_leaves.cbegin(), m_leaves.cend(), [&](const auto &other) {
+        return other.get() != m_active && !other->view && other->notePath == path;
+    });
     Note note;
     QString error;
-    if (!readNote(path, note, &error)) {
+    if (!readNote(path, note, &error, !shownElsewhere)) {
         // Replaying history over a note that has since been deleted or
         // renamed is not an error, just a dead end to skip past; a password
         // prompt cancelled is not one either.
@@ -5673,6 +5956,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     m_active->note = note;
     m_active->notePath = path;
     m_active->editor->setEnabled(true);
+    showNotebookPictures(m_active->editor, path); // a notebook's attachments, else none
     // Open in another tab already: that document, unsaved edits and all,
     // not the older bytes on disk.
     const QList<Leaf *> others = viewsOfSameNote(m_active);
@@ -6107,11 +6391,8 @@ void MainWindow::updateNoteHistory()
     m_noteHistoryRoot = root;
     if (!wanted)
         return;
+    // Nothing is opened here: libgit2 (OpenSSL, +6 MB) is set up by the first save, on the pool.
     m_noteHistory = std::make_shared<NoteHistory>(root);
-    if (!m_noteHistory->isOpen()) {
-        statusBar()->showMessage(tr("Note history is off: %1").arg(m_noteHistory->error()), 6000);
-        m_noteHistory.reset();
-    }
 #endif
 }
 
@@ -6544,7 +6825,17 @@ void MainWindow::recordHistory(const QString &absolutePath, const QString &text)
     // version as a delta: never on a save's own path, and only once there
     // are enough to be worth it.
     const bool maybePack = ++m_historyRecords % 256 == 0;
-    m_historyPool.start([history, relative, text, maybePack] {
+    m_historyPool.start([this, history, relative, text, maybePack] {
+        if (!history->isOpen()) { // an existing repository that would not open: say so once, and stop recording
+            const QString error = history->error();
+            QMetaObject::invokeMethod(this, [this, history, error] {
+                if (m_noteHistory != history)
+                    return;
+                statusBar()->showMessage(tr("Note history is off: %1").arg(error), 6000);
+                m_noteHistory.reset();
+            });
+            return;
+        }
         history->record(relative, text);
         if (maybePack && history->looseObjects() > 4000)
             history->pack();
@@ -6881,7 +7172,14 @@ void MainWindow::rememberCurrentPosition()
     m_settings.setNotePosition(m_active->notePath, m_active->editor->cursorOffset(),
                                m_active->editor->verticalScrollBar()->value(),
                                m_active->editor->foldState(), m_active->editor->topOffset());
-    m_settings.save();
+    saveSettings();
+}
+
+void MainWindow::saveSettings()
+{
+    m_settings.save(nullptr, 5); // from the UI thread, often (every note switch): never a 200 ms wait on another window's save
+    if (!m_settings.takeAdoptedKeys().isEmpty())
+        applySettings();
 }
 
 void MainWindow::revealInTree(const QString &path)
@@ -6965,6 +7263,78 @@ bool MainWindow::save()
 
 // --- encrypted notes (docs/ENCRYPTION.md) ------------------------------------
 
+void MainWindow::notebookOutputsChanged(const QString &path, const QString &cacheKey,
+                                        const notebook::NotebookRunResult &result)
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (!isNotebookFile(path))
+        return; // only a .ipynb keeps its outputs in the file; any other note keeps them in the cache
+    std::shared_ptr<notebook::IpynbRuns> &runs = m_notebookDirty[path];
+    if (!runs)
+        runs = std::make_shared<notebook::IpynbRuns>();
+    runs->results.insert(cacheKey, result);
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && leaf->notePath == path)
+            leaf->editor->setModified(true);
+    }
+    if (m_settings.boolean(QStringLiteral("files.autosave")))
+        armAutosave();
+#else
+    Q_UNUSED(path)
+    Q_UNUSED(cacheKey)
+    Q_UNUSED(result)
+#endif
+}
+
+void MainWindow::moveNotebookState(const QString &from, const QString &to)
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (m_notebookDirty.contains(from))
+        m_notebookDirty.insert(to, m_notebookDirty.take(from));
+    if (m_notebookImages.contains(from))
+        m_notebookImages.insert(to, m_notebookImages.take(from));
+#else
+    Q_UNUSED(from)
+    Q_UNUSED(to)
+#endif
+}
+
+void MainWindow::pruneNotebookImages()
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    for (auto it = m_notebookImages.begin(); it != m_notebookImages.end();) {
+        const QString &path = it.key();
+        const bool shown = std::any_of(m_leaves.cbegin(), m_leaves.cend(),
+                                       [&path](const auto &leaf) { return !leaf->view && leaf->notePath == path; });
+        it = shown ? std::next(it) : m_notebookImages.erase(it);
+    }
+    // The runs a notebook no tab shows were saved or discarded with it; a key left behind would be written
+    // into whatever file later takes that name.
+    for (auto it = m_notebookDirty.begin(); it != m_notebookDirty.end();) {
+        const QString &path = it.key();
+        const bool shown = std::any_of(m_leaves.cbegin(), m_leaves.cend(),
+                                       [&path](const auto &leaf) { return !leaf->view && leaf->notePath == path; });
+        it = shown ? std::next(it) : m_notebookDirty.erase(it);
+    }
+#endif
+}
+
+void MainWindow::showNotebookPictures(MarkdownEditor *editor, const QString &path)
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (const auto pictures = m_notebookImages.value(path)) {
+        // Each cell has its own `image.png`: the scope says whose, for the text as it is now.
+        editor->setInlineImages(pictures->images(), [pictures, editor](qsizetype offset) {
+            return pictures->scopeAt(editor->noteText(), offset);
+        });
+        return;
+    }
+#else
+    Q_UNUSED(path)
+#endif
+    editor->setInlineImages({});
+}
+
 bool MainWindow::isNotebookFile(const QString &path) const
 {
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
@@ -6975,7 +7345,7 @@ bool MainWindow::isNotebookFile(const QString &path) const
 #endif
 }
 
-bool MainWindow::readNote(const QString &path, Note &out, QString *error)
+bool MainWindow::readNote(const QString &path, Note &out, QString *error, bool seedOutputs)
 {
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
     // A Jupyter notebook: its cells as text (docs/NOTEBOOKS.md), outputs seeded into the cache.
@@ -6987,7 +7357,25 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error)
             return false;
         }
         out = Note();
-        return notebook::readIpynb(file.readAll(), &out.text, error);
+        const QByteArray bytes = file.readAll();
+        if (seedOutputs) {
+            // The file is the truth from here: what ran before it was read (and was discarded) is not its to save.
+            m_notebookDirty.remove(path);
+            auto pictures = std::make_shared<notebook::IpynbPictures>();
+            const bool read = notebook::readIpynb(bytes, &out.text, error, pictures.get());
+            if (pictures->isEmpty())
+                m_notebookImages.remove(path);
+            else
+                m_notebookImages.insert(path, std::move(pictures));
+            return read;
+        }
+        // A look at what is on disk (the change watcher, a save comparing): never seeded, or the outputs of a
+        // cell that ran since the file was read would give way to the ones the file still has.
+        notebook::IpynbDocument document;
+        if (!notebook::parseIpynb(bytes, &document, error))
+            return false;
+        out.text = notebook::ipynbMarkdown(document);
+        return true;
     }
 #endif
     if (!Vault::isEncryptedNote(path))
@@ -7028,11 +7416,23 @@ bool MainWindow::writeNote(const QString &path, const Note &note, QString *error
                 *error = file.errorString();
             return false;
         }
-        const QByteArray merged = notebook::mergeIpynb(file.readAll(), note.text, error);
+        const auto runs = m_notebookDirty.value(path);
+        const QByteArray merged =
+            notebook::mergeIpynb(file.readAll(), note.text, runs ? *runs : notebook::IpynbRuns(), error);
         file.close();
-        return !merged.isEmpty() && Vault::writeBytes(path, merged, error);
+        if (merged.isEmpty() || !Vault::writeBytes(path, merged, error))
+            return false;
+        m_notebookDirty.remove(path); // the file says what those runs produced now
+        return true;
     }
 #endif
+    if (path.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive)) {
+        // Never as Markdown, whatever the notebooks plugin is believed to be doing: that would replace the
+        // notebook's JSON (its outputs, counts and ids) with the cells' text.
+        if (error)
+            *error = tr("a Jupyter notebook is not written as Markdown (the Notebooks plugin is off)");
+        return false;
+    }
     if (!Vault::isEncryptedNote(path))
         return Vault::write(path, note, error);
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
@@ -7149,8 +7549,10 @@ template<typename Leaves>
 void retarget(Leaves &leaves, const QString &from, const QString &to)
 {
     for (const auto &leaf : leaves) {
-        if (leaf->notePath == from)
+        if (leaf->notePath == from) {
             leaf->notePath = to;
+            leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
+        }
     }
 }
 
@@ -7329,6 +7731,16 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
 {
     if (!background)
         flushSaves(); // the file and the tab's baseline are the last save's before this one reads them
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+    if (qobject_cast<ImageView *>(target->view))
+        return true; // never saved here: its marks go to their own file as they are made, so a missing one has nothing to refuse
+#endif
+    if (isFileView(target->view) && m_lostNotes.contains(target->notePath)) {
+        // gone from disk (not found yet, or not found at all): a save would recreate it
+        reportSaveError(QFileInfo(target->notePath).fileName(),
+                        tr("the file is gone from disk (deleted or moved outside the app)"), quiet);
+        return false;
+    }
     if (auto *module = qobject_cast<ModuleView *>(target->view)) { // a file-less view too: R6
         const QString shown = target->notePath.isEmpty() ? target->viewTitle : QFileInfo(target->notePath).fileName();
         QString error;
@@ -7336,12 +7748,22 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
             reportSaveError(shown, error, quiet);
             return false;
         }
+        if (!target->notePath.isEmpty())
+            rememberViewStamp(target->notePath);
         if (!quiet)
             statusBar()->showMessage(tr("Saved %1").arg(shown), 2000);
         return true;
     }
     if (target->notePath.isEmpty())
         return true;
+    // An autosave of a notebook the plugin no longer handles would take the background path below, which
+    // writes the encoded text straight to the file: refused here, before either path, and again in writeNote().
+    if (target->notePath.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive) && !isNotebookFile(target->notePath)
+        && !target->view) {
+        reportSaveError(QFileInfo(target->notePath).fileName(),
+                        tr("a Jupyter notebook is not written as Markdown (the Notebooks plugin is off)"), quiet);
+        return false;
+    }
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;
@@ -7349,6 +7771,7 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
             reportSaveError(target->notePath, error, quiet);
             return false;
         }
+        rememberViewStamp(target->notePath);
         if (!quiet)
             statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(target->notePath).fileName()), 2000);
         return true;
@@ -7558,6 +7981,7 @@ void MainWindow::showDiskNote(const QString &path, const Note &note)
             continue;
         leaf->note = note;
         MarkdownEditor *editor = leaf->editor;
+        showNotebookPictures(editor, path);
         const QString &shown = editor->noteText();
         if (shown != note.text) {
             // Only the part that differs, so the caret and the scroll stay
@@ -7579,15 +8003,21 @@ void MainWindow::watchOpenNotes()
     QStringList wanted;
     QStringList wantedFolders;
     for (const auto &leaf : m_leaves) {
-        // A module's view follows its file like a note does (ModuleView::reloadFromDisk); the other views do not.
-        if ((leaf->view && !qobject_cast<ModuleView *>(leaf->view)) || leaf->notePath.isEmpty()
+        // A module's view follows its file like a note does (ModuleView::reloadFromDisk), and a canvas or an image
+        // is told where it went (followLostNotes); the other views do not.
+        if ((leaf->view && !isFileView(leaf->view)) || leaf->notePath.isEmpty()
             || wanted.contains(leaf->notePath))
             continue;
         wanted << leaf->notePath;
+        if (isFileView(leaf->view))
+            rememberViewStamp(leaf->notePath); // not once it is gone: the stamp is what a moved file is known by
         const QString folder = QFileInfo(leaf->notePath).absolutePath();
         if (!wantedFolders.contains(folder))
             wantedFolders << folder;
     }
+    for (auto it = m_viewStamps.begin(); it != m_viewStamps.end();)
+        it = wanted.contains(it.key()) ? std::next(it) : m_viewStamps.erase(it);
+    pruneNotebookImages(); // a tab that went on to another note let its notebook go
     const QStringList watched = m_noteWatcher->files();
     const QStringList watchedFolders = m_noteWatcher->directories();
     QStringList gone;
@@ -7648,11 +8078,56 @@ QString MainWindow::findMovedNote(const QString &lost, const Note &known)
     return found;
 }
 
+QString MainWindow::findMovedFile(const QString &lost)
+{
+    // ponytail: the same walk as findMovedNote; a view's file has no text to compare, so the candidate must have
+    // the name and the size and modification time the tab last saw (a move keeps all three; a copy-then-delete
+    // sync does not, and the tab is then marked missing). One such file not open in a tab, or none: two are a guess.
+    const QString stamp = m_viewStamps.value(lost);
+    if (stamp.isEmpty() || !m_vault.isValid() || !m_vault.contains(lost))
+        return {};
+    const QString name = QFileInfo(lost).fileName();
+    QStringList open;
+    for (const auto &leaf : m_leaves)
+        open << leaf->notePath;
+    QString found;
+    QDirIterator files(m_vault.root(), QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QString candidate = files.next();
+        if (files.fileName() != name || candidate == lost || open.contains(candidate)
+            || stampOf(files.fileInfo()) != stamp)
+            continue;
+        if (!found.isEmpty())
+            return {};
+        found = candidate;
+    }
+    return found;
+}
+
+void MainWindow::rememberViewStamp(const QString &path)
+{
+    const QFileInfo info(path);
+    if (info.exists())
+        m_viewStamps.insert(path, stampOf(info));
+}
+
 void MainWindow::followLostNotes(bool final)
 {
+    // A note's editor, or a view of one file (the watcher follows exactly those): a file a tab saves to.
+    const auto followed = [](const auto &leaf) {
+        return !leaf->notePath.isEmpty() && (!leaf->view || isFileView(leaf->view));
+    };
+    // autosave() skipped a modified view while its file was gone: nothing else would try again before the next edit.
+    const auto rearmAutosave = [this](const QString &path) {
+        const bool modifiedView = std::any_of(m_leaves.cbegin(), m_leaves.cend(), [&](const auto &leaf) {
+            return leaf->notePath == path && isFileView(leaf->view) && isModified(leaf.get());
+        });
+        if (modifiedView && m_settings.boolean(QStringLiteral("files.autosave")))
+            armAutosave();
+    };
     QStringList open;
     for (const auto &leaf : m_leaves) {
-        if (!leaf->view && !leaf->notePath.isEmpty() && !open.contains(leaf->notePath))
+        if (followed(leaf) && !open.contains(leaf->notePath))
             open << leaf->notePath;
     }
     for (auto it = m_lostNotes.begin(); it != m_lostNotes.end();) // closed since
@@ -7663,6 +8138,10 @@ void MainWindow::followLostNotes(bool final)
             if (m_lostNotes.remove(path)) {
                 m_changedNotes.insert(path);
                 m_noteChanges.start();
+                for (const auto &group : m_groups) // a view's tab says "missing" while it is, in every split
+                    syncTabs(group.get());
+                updateTitle();
+                rearmAutosave(path);
             }
             continue;
         }
@@ -7671,6 +8150,8 @@ void MainWindow::followLostNotes(bool final)
         if (!final) {
             // A sync client deletes before it writes, and a move is found by
             // looking through the vault: not before the grace is over.
+            // ponytail: one look after the grace (1 s). A file that turns up later (a slow sync client, a copy-then-delete
+            // across devices) stays missing, and the destination folders are not watched; look again on a longer timer.
             m_lostNotes.insert(path, false);
             if (!m_lostRetry.isActive())
                 m_lostRetry.start();
@@ -7679,7 +8160,7 @@ void MainWindow::followLostNotes(bool final)
         const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
             return !leaf->view && leaf->notePath == path;
         });
-        const QString moved = findMovedNote(path, (*first)->note);
+        const QString moved = first != m_leaves.cend() ? findMovedNote(path, (*first)->note) : findMovedFile(path);
         if (!moved.isEmpty()) {
             m_lostNotes.remove(path);
             if (m_vault.contains(path) && m_vault.contains(moved)
@@ -7687,11 +8168,14 @@ void MainWindow::followLostNotes(bool final)
                 m_fileIcons.save();
             // The caret, the scroll and what is typed stay: only the name changes.
             for (const auto &leaf : m_leaves) {
-                if (!leaf->view && leaf->notePath == path) {
+                if (followed(leaf) && leaf->notePath == path) {
                     leaf->notePath = moved;
+                    leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
                     leaf->inlineTitle->setText(QFileInfo(moved).completeBaseName());
+                    followViewPath(leaf->view, moved);
                 }
             }
+            moveNotebookState(path, moved);
 #ifdef NOTEAPPC_HAVE_HISTORY
             if (m_noteHistory && m_vault.contains(moved)) {
                 const std::shared_ptr<NoteHistory> history = m_noteHistory;
@@ -7704,17 +8188,24 @@ void MainWindow::followLostNotes(bool final)
                 syncTabs(group.get());
             watchOpenNotes();
             updateTitle();
+            rearmAutosave(moved);
             statusBar()->showMessage(tr("%1 was moved outside the app: following it to %2")
                                          .arg(QFileInfo(path).fileName(), m_vault.relative(moved)),
                                      6000);
             notifyPlugins("note-renamed", moved);
         } else {
             m_lostNotes[path] = true; // autosave leaves it alone from here
-            statusBar()->showMessage(
-                tr("%1 is gone from disk (deleted or moved outside the app): it is not saved again until you "
-                   "save it yourself")
-                    .arg(QFileInfo(path).fileName()),
-                10000);
+            for (const auto &group : m_groups)
+                syncTabs(group.get());
+            updateTitle(); // a view's tab says "missing"
+            statusBar()->showMessage(first != m_leaves.cend()
+                                         ? tr("%1 is gone from disk (deleted or moved outside the app): it is not saved "
+                                              "again until you save it yourself")
+                                               .arg(QFileInfo(path).fileName())
+                                         : tr("%1 is gone from disk (deleted or moved outside the app): its tab is not "
+                                              "saved, so the file is not recreated")
+                                               .arg(QFileInfo(path).fileName()),
+                                     10000);
         }
     }
 }
@@ -7756,7 +8247,7 @@ void MainWindow::reloadChangedNotes()
         // change (under 1 ms at 200 kB); compare size and mtime first if a
         // note ever gets big enough for that to show.
         Note disk;
-        if (!readNote(path, disk, nullptr))
+        if (!readNote(path, disk, nullptr, !m_notebookDirty.contains(path)))
             continue;
         const Note &known = (*first)->note;
         if (disk.text == known.text && disk.crlf == known.crlf && disk.bom == known.bom && disk.mixed == known.mixed)
@@ -7845,6 +8336,30 @@ void MainWindow::setAutosaveIntervalsForTests(int pause, int maxWait)
     m_autosaveMax.setInterval(maxWait);
 }
 
+int MainWindow::lostStateForTests(const QString &path) const
+{
+    const auto found = m_lostNotes.constFind(path);
+    return found == m_lostNotes.constEnd() ? -1 : int(found.value());
+}
+
+qsizetype MainWindow::notebookRunSetsForTests() const
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    return m_notebookDirty.size();
+#else
+    return 0;
+#endif
+}
+
+qsizetype MainWindow::notebookPictureSetsForTests() const
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    return m_notebookImages.size();
+#else
+    return 0;
+#endif
+}
+
 void MainWindow::armAutosave()
 {
     m_autosave.start();
@@ -7866,8 +8381,8 @@ QStringList MainWindow::autosave(bool background)
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || saved.contains(leaf->notePath))
             continue;
-        if (m_lostNotes.value(leaf->notePath, false))
-            continue; // gone from disk and not found: writing it back is for the person to decide
+        if (isFileView(leaf->view) ? m_lostNotes.contains(leaf->notePath) : m_lostNotes.value(leaf->notePath, false))
+            continue; // gone from disk and not found: writing it back is for the person to decide (a view's: never)
         if (std::any_of(m_saveJobs.cbegin(), m_saveJobs.cend(),
                         [&](const SaveJob &job) { return job.path == leaf->notePath; }))
             continue; // its last save is still being committed; finishSave() arms the next one if it is behind
@@ -7904,6 +8419,16 @@ bool MainWindow::maybeSave()
     // Obsidian's way: what is typed is kept, never asked about - unless the
     // file is gone and was not found, where saving would bring it back.
     const bool lost = m_lostNotes.value(m_active->notePath, false);
+    if (isFileView(m_active->view) && m_lostNotes.contains(m_active->notePath)) { // in the grace too
+        // saveLeaf refuses a view whose file is gone (a save would recreate it): only discarding, or keeping the tab, is left
+        const QString name = m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();
+        const auto answer = QMessageBox::question(
+            this, tr("Unsaved changes"),
+            tr("%1 is gone from disk (deleted or moved outside the app), so its changes cannot be saved. Discard them?")
+                .arg(name),
+            QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Cancel);
+        return answer == QMessageBox::Discard;
+    }
     // A save that fails (disk full, read-only folder) falls through to the
     // box below, so leaving is never refused without a word.
     m_lastSaveError.clear();
@@ -8154,7 +8679,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         return;
 
     const QModelIndex index = m_tree->indexAt(pos);
-    QMenu menu(this);
+    DimMenu menu(this);
     QAction *newNoteAction = menu.addAction(tr("New note"));
     QAction *newFolderAction = menu.addAction(tr("New folder"));
     QAction *renameAction = nullptr;
@@ -8162,6 +8687,9 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     QAction *deleteAction = nullptr;
     QAction *copyAction = nullptr;
     QAction *openOutsideAction = nullptr;
+#ifdef NOTEAPPC_HAVE_PANDOC
+    QAction *importAction = nullptr;
+#endif
     QAction *showAction = nullptr;
     QAction *iconAction = nullptr;
     QAction *removeIconAction = nullptr;
@@ -8176,6 +8704,34 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         menu.addSeparator();
         if (!m_files->isDir(index))
             openOutsideAction = menu.addAction(tr("Open in default app"));
+#ifdef NOTEAPPC_HAVE_PANDOC
+        if (!m_files->isDir(index) && featureOn("pandoc")) {
+            // Looked for now, with the menu: the entries stay when it is missing, drawn disabled, and say why.
+            const bool missing = pandoc::locate(m_settings.text(QStringLiteral("pandoc.path"))).isEmpty();
+            const auto dim = [missing](QAction *action) {
+                if (missing) {
+                    action->setProperty("dimmed", true);
+                    action->setToolTip(QObject::tr("pandoc was not found: click to see how to get it"));
+                }
+            };
+            if (Vault::isNote(path)) {
+                auto *exportMenu = new DimMenu(tr("Export with pandoc"), &menu);
+                menu.addMenu(exportMenu);
+                dim(exportMenu->menuAction());
+                for (const pandoc::Format &format : pandoc::exportFormats()) {
+                    QAction *entry = exportMenu->addAction(format.label);
+                    entry->setProperty("pandocFormat", format.id);
+                    dim(entry);
+                }
+                QAction *other = exportMenu->addAction(tr("Other format..."));
+                other->setProperty("pandocFormat", QStringLiteral("other"));
+                dim(other);
+            } else if (!pandoc::readerForSuffix(QFileInfo(path).suffix()).isEmpty()) {
+                importAction = menu.addAction(tr("Import with pandoc"));
+                dim(importAction);
+            }
+        }
+#endif
         showAction = menu.addAction(tr("Show in system explorer"));
         if (fileIconsOn()) {
             menu.addSeparator();
@@ -8202,6 +8758,12 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         copyPath(path);
     else if (chosen == openOutsideAction)
         QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+#ifdef NOTEAPPC_HAVE_PANDOC
+    else if (chosen == importAction)
+        importWithPandoc(path, m_vault.relative(QFileInfo(path).absolutePath()));
+    else if (chosen->property("pandocFormat").isValid())
+        exportWithPandoc(path, chosen->property("pandocFormat").toString());
+#endif
     else if (chosen == showAction)
         // ponytail: opens the folder; selecting the file in it needs the
         // FileManager1 D-Bus call, add if the folder alone is not enough.
@@ -8354,9 +8916,12 @@ bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QStri
     // new links yet, so it is named to the rewrite, which reads it from disk.
     const QStringList unindexed = unindexedNotes(autosave());
     QString newPath;
-    if (!m_vault.renamePath(oldPath, newName, &newPath, error))
+    QString warning;
+    if (!m_vault.renamePath(oldPath, newName, &newPath, error, &warning))
         return false;
     followPathChange(oldPath, isDir, newPath, unindexed);
+    if (!warning.isEmpty())
+        statusBar()->showMessage(tr("%1: %2").arg(QFileInfo(newPath).fileName(), warning), 8000);
     return true;
 }
 
@@ -8366,10 +8931,13 @@ bool MainWindow::moveVaultPath(const QString &oldPath, bool isDir, const QString
     // read from there for its links.
     const QStringList unindexed = unindexedNotes(autosave());
     QString newPath;
-    if (!m_vault.movePath(oldPath, targetFolder, &newPath, error))
+    QString warning;
+    if (!m_vault.movePath(oldPath, targetFolder, &newPath, error, &warning))
         return false;
     if (newPath != oldPath)
         followPathChange(oldPath, isDir, newPath, unindexed);
+    if (!warning.isEmpty())
+        statusBar()->showMessage(tr("%1: %2").arg(QFileInfo(newPath).fileName(), warning), 8000);
     return true;
 }
 
@@ -8447,9 +9015,10 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
         } else if (isDir && leaf->notePath.startsWith(oldPath + QLatin1Char('/'))) {
             leaf->notePath.replace(0, oldPath.size(), newPath);
         }
-        if (leaf->notePath != before) { // a module's view keeps its own path: it must save to the new one
-            if (auto *module = qobject_cast<ModuleView *>(leaf->view))
-                module->setFilePath(leaf->notePath);
+        if (leaf->notePath != before) { // a view keeps its own path: it must save to the new one
+            leaf->editor->refreshLinkStatus(); // relative links are asked about from the new place
+            followViewPath(leaf->view, leaf->notePath);
+            moveNotebookState(before, leaf->notePath);
         }
     }
     for (const auto &group : m_groups)

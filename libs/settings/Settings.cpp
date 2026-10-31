@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -15,7 +16,9 @@
 #include <QTextStream>
 #include <QUrl>
 
+#include <algorithm>
 #include <deque>
+#include <utility>
 
 namespace noteAppC {
 
@@ -73,6 +76,8 @@ QVariantMap &defaults()
         {QStringLiteral("editor.alignTables"), true},
         {QStringLiteral("editor.hoverEditButton"), true},
         {QStringLiteral("editor.tableHandles"), true}, // row/column grips, add bars, cell selection on a drawn table
+        {QStringLiteral("editor.remoteReferences"), false}, // a ```reference block may fetch an http(s) URL: off, nothing touches the network unasked
+        {QStringLiteral("editor.codeHighlights"), QStringLiteral("info=blue, warn=orange, error=red, add=green, del=red")},
         {QStringLiteral("editor.complexCodeBlocks"), true}, // bg/fg/border/syntax.* on code blocks; nothing configured draws as before
         {QStringLiteral("editor.metaNotes"), false}, // [like this] in --meta-note-color; off: the parse never looks
         {QStringLiteral("editor.metaNoteOpen"), QStringLiteral("[")},   // 1-3 characters
@@ -124,6 +129,11 @@ QVariantMap &defaults()
         {QStringLiteral("render.latexTool"), QStringLiteral("latex")},
         {QStringLiteral("render.graphviz"), true},
         {QStringLiteral("render.dotTool"), QStringLiteral("dot")},
+        // Pandoc export and import (docs/PLUGINS.md): empty path is `pandoc` on PATH, looked for only when a
+        // pandoc command is used or the settings are open. Extra arguments are split like a shell would, run by none.
+        {QStringLiteral("pandoc.path"), QString()},
+        {QStringLiteral("pandoc.extraArguments"), QString()},
+        {QStringLiteral("pandoc.referenceDoc"), QString()},
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},
 
@@ -647,6 +657,16 @@ static QList<Settings::Feature> &mutableFeatures()
          QT_TRANSLATE_NOOP("Settings", "Show an embedded .csv or .tsv file as a table, read and parsed "
                                        "off the editing thread. Off, it is a plain listing of the file."),
          false},
+        {"markmap", QT_TRANSLATE_NOOP("Settings", "Mind maps"),
+         QT_TRANSLATE_NOOP("Settings", "Draw markmap code blocks as mind maps, laid out and drawn by Notolith itself "
+                                       "(no web view). Off, the block is a plain listing."),
+         false},
+        {"advanced-code-blocks", QT_TRANSLATE_NOOP("Settings", "Advanced code blocks"),
+         QT_TRANSLATE_NOOP("Settings", "Obsidian's Code Styler syntax: title:, ln:, hl:, fold and unwrap on a "
+                                       "code block's first line, coloured named highlights, `{python} code` "
+                                       "inline code with highlighting, and ```reference blocks that show a file. "
+                                       "Off, they are plain text."),
+         false},
         {"epub-reader", QT_TRANSLATE_NOOP("Settings", "EPUB reader"),
          QT_TRANSLATE_NOOP("Settings", "Open .epub books in a tab, with highlights and notes kept in a note "
                                        "beside the book."),
@@ -703,6 +723,11 @@ static QList<Settings::Feature> &mutableFeatures()
          QT_TRANSLATE_NOOP("Settings", "Export the vault, or its notes marked publish: true, as a static "
                                        "website."),
          true},
+        {"pandoc", QT_TRANSLATE_NOOP("Settings", "Pandoc"),
+         QT_TRANSLATE_NOOP("Settings", "Export a note as Word, OpenDocument, EPUB, HTML, LaTeX, RTF or slides, and "
+                                       "import such files as notes, through the pandoc program, which is installed "
+                                       "separately. Nothing runs until you use a pandoc command."),
+         false},
         {"sync", QT_TRANSLATE_NOOP("Settings", "Sync"),
          QT_TRANSLATE_NOOP("Settings", "Sync this vault through a server, end-to-end encrypted: the server "
                                        "never sees note contents, file names or tags."),
@@ -787,15 +812,102 @@ void Settings::adoptStored()
 {
     const QVariantMap stored = readINI(configFile());
     for (auto it = stored.constBegin(); it != stored.constEnd(); ++it) {
-        if (defaults().contains(it.key()) && !m_user.contains(it.key()))
+        if (defaults().contains(it.key()) && !m_user.contains(it.key())) {
             m_user.insert(it.key(), valueOf(it.value().toString(), defaultValue(it.key())));
+            m_baseUser.insert(it.key(), m_user.value(it.key()));
+        }
     }
     const QVariantMap index = readINI(indexFile());
     for (auto it = index.constBegin(); it != index.constEnd(); ++it) {
-        if (defaults().contains(it.key()) && !m_index.contains(it.key()))
+        if (defaults().contains(it.key()) && !m_index.contains(it.key())) {
             m_index.insert(it.key(), valueOf(it.value().toString(), defaultValue(it.key())));
+            m_baseIndex.insert(it.key(), m_index.value(it.key()));
+        }
     }
 }
+
+namespace {
+
+/// The user's file as load() reads it: the keys the app knows, typed by their defaults.
+QVariantMap readKnown(const QString &path)
+{
+    QVariantMap out;
+    const QVariantMap stored = readINI(path);
+    for (auto it = stored.constBegin(); it != stored.constEnd(); ++it) {
+        if (defaults().contains(it.key()))
+            out.insert(it.key(), valueOf(it.value().toString(), Settings::defaultValue(it.key())));
+    }
+    return out;
+}
+
+/// What the app remembers as lists, newest first: how many it keeps, and whether an entry is
+/// told by its first field (a note position) or whole.
+struct RememberedList {
+    const char *key;
+    int cap;
+    bool byPath;
+};
+constexpr RememberedList kRemembered[] = {
+    {"state.recentVaults", 10, false}, {"state.recentFiles", 10, false}, {"state.notePositions", 50, true}};
+
+/// The merged list, newest first: what this window added or moved to the front (`ours`, the
+/// window saving has just acted), then what another window added to `theirs` since `base`, then
+/// what both still have, in this window's order, up to the cap - the cap cuts the oldest, never
+/// a fresh entry. An entry of `ours` still as `base` had it and gone from `theirs` was removed
+/// by another window, so it is not brought back. `touched`: this window opened something, so
+/// its first entry leads even when it was first already.
+QStringList mergeRemembered(const QStringList &ours, const QStringList &base, const QStringList &theirs,
+                            const RememberedList &kind, bool touched)
+{
+    const auto told = [&kind](const QString &entry) { return kind.byPath ? entry.section(kPositionField, 0, 0) : entry; };
+    QStringList merged;
+    QSet<QString> seen;
+    const auto add = [&](const QString &entry) {
+        if (seen.contains(told(entry)))
+            return;
+        seen.insert(told(entry));
+        merged.append(entry);
+    };
+    for (qsizetype i = 0; i < ours.size(); ++i) {
+        if (!base.contains(ours.at(i)) || (touched && i == 0))
+            add(ours.at(i));
+    }
+    for (const QString &entry : theirs) {
+        if (!base.contains(entry))
+            add(entry);
+    }
+    for (const QString &entry : ours) {
+        if (theirs.contains(entry))
+            add(entry);
+    }
+    while (merged.size() > kind.cap)
+        merged.removeLast();
+    return merged;
+}
+
+/// What is on disk now, with this object's changes since `base` on top.
+QVariantMap overlay(QVariantMap disk, const QVariantMap &ours, const QVariantMap &base, const QSet<QString> &touched)
+{
+    for (auto it = ours.constBegin(); it != ours.constEnd(); ++it) {
+        if (base.contains(it.key()) && base.value(it.key()) == it.value() && !touched.contains(it.key()))
+            continue;
+        const auto *kind = std::find_if(std::begin(kRemembered), std::end(kRemembered),
+                                        [&it](const RememberedList &list) { return it.key() == QLatin1String(list.key); });
+        if (kind != std::end(kRemembered))
+            disk.insert(it.key(), mergeRemembered(it.value().toStringList(), base.value(it.key()).toStringList(),
+                                                  disk.value(it.key()).toStringList(), *kind,
+                                                  touched.contains(it.key())));
+        else
+            disk.insert(it.key(), it.value());
+    }
+    for (auto it = base.constBegin(); it != base.constEnd(); ++it) {
+        if (!ours.contains(it.key()))
+            disk.remove(it.key()); // reset here
+    }
+    return disk;
+}
+
+} // namespace
 
 Settings Settings::load(const QString &vaultRoot)
 {
@@ -816,6 +928,8 @@ Settings Settings::load(const QString &vaultRoot)
             settings.m_index.insert(it.key(), valueOf(it.value().toString(), defaultValue(it.key())));
     }
 
+    settings.m_baseUser = settings.m_user;
+    settings.m_baseIndex = settings.m_index;
     settings.m_vault = fromObsidianConfig(vaultRoot);
     return settings;
 }
@@ -852,11 +966,21 @@ void Settings::reset(const QString &key)
     m_user.remove(key);
 }
 
-bool Settings::save(QString *error) const
+bool Settings::save(QString *error, int lockWaitMs)
 {
     QDir().mkpath(configDirectory());
     QDir().mkpath(themesDirectory());
     QDir().mkpath(templatesDirectory());
+
+    // Another Notolith process may save between this one's read and its write, and it writes
+    // what it merged from the same files: one at a time. Best effort - a lock that cannot be had
+    // (a read-only directory fails below anyway) still gets the merge.
+    QLockFile lock(QDir(configDirectory()).filePath(QStringLiteral(".save.lock")));
+    lock.setStaleLockTime(10000); // a save takes about 0.1 ms: 200 ms is long past a live owner
+    lock.tryLock(lockWaitMs);
+
+    const QVariantMap user = overlay(readKnown(configFile()), m_user, m_baseUser, {});
+    const QVariantMap indexMerged = overlay(readKnown(indexFile()), m_index, m_baseIndex, m_touched);
 
     // Only what differs from the compiled-in default, so the file stays short
     // enough to read and a later change of default still reaches people.
@@ -864,8 +988,8 @@ bool Settings::save(QString *error) const
     for (const QString &key : keys()) {
         if (key.startsWith(QLatin1String("state.")))
             continue;
-        if (m_user.contains(key) && m_user.value(key) != defaultValue(key))
-            settings.insert(key, m_user.value(key));
+        if (user.contains(key) && user.value(key) != defaultValue(key))
+            settings.insert(key, user.value(key));
     }
     static const QString settingsHeader = QStringLiteral(
         "# Notolith settings.\n"
@@ -883,11 +1007,29 @@ bool Settings::save(QString *error) const
         return false;
 
     QVariantMap index;
-    for (auto it = m_index.constBegin(); it != m_index.constEnd(); ++it)
+    for (auto it = indexMerged.constBegin(); it != indexMerged.constEnd(); ++it)
         index.insert(it.key(), it.value());
     static const QString indexHeader = QStringLiteral(
         "# What Notolith remembers. Safe to delete; it fills itself in again.\n");
-    return writeINI(indexFile(), index, known, indexHeader, error);
+    if (!writeINI(indexFile(), index, known, indexHeader, error))
+        return false;
+
+    // This object now holds what the files do. Whatever that changed under it was another window's write,
+    // and nothing re-applies it to the live editors and features: the window is told (takeAdoptedKeys()).
+    QList<QString> changed = user.keys() + m_user.keys();
+    for (const QString &key : std::as_const(changed)) {
+        if (m_user.value(key) != user.value(key) && !m_adopted.contains(key))
+            m_adopted.append(key);
+    }
+    m_user = m_baseUser = user;
+    m_index = m_baseIndex = indexMerged;
+    m_touched.clear();
+    return true;
+}
+
+QStringList Settings::takeAdoptedKeys()
+{
+    return std::exchange(m_adopted, {});
 }
 
 QStringList Settings::recentVaults() const
@@ -913,6 +1055,11 @@ void Settings::noteOpened(const QString &vaultRoot, const QString &filePath)
     };
     setValue(QStringLiteral("state.recentVaults"), push(recentVaults(), vaultRoot));
     setValue(QStringLiteral("state.recentFiles"), push(recentFiles(), filePath));
+    // Even when it changed nothing here, an entry named now is the one last used: save() puts it first.
+    if (!vaultRoot.isEmpty())
+        m_touched.insert(QStringLiteral("state.recentVaults"));
+    if (!filePath.isEmpty())
+        m_touched.insert(QStringLiteral("state.recentFiles"));
 }
 
 std::optional<Settings::NotePosition> Settings::notePosition(const QString &path) const

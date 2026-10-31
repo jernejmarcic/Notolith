@@ -879,6 +879,8 @@ bool VimEngine::key(QKeyEvent *event)
             feed(kCtrlV);
             return true;
         }
+        if (k == Qt::Key_Backspace || k == Qt::Key_Delete)
+            return true; // the editor's word delete is typing, not a vim binding
         return false; // Ctrl+F, Ctrl+B, Ctrl+S ... keep their meaning
     }
     if (other)

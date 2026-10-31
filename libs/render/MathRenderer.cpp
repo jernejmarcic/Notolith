@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QPainter>
+#include <QRegularExpression>
 #include <QCoreApplication>
 #include <QStandardPaths>
 #include <QSvgGenerator>
@@ -76,16 +77,10 @@ bool ensureInitialised(QString *error)
 struct MathRenderer::Private {
     mutable QString error;
 
-    /// The parse step render() and renderSvg() share; only the paint device
-    /// differs afterwards. MicroTeX owns the returned render.
-    std::unique_ptr<tex::TeXRender> parse(const QString &latex, qreal pointSize,
-                                          const QColor &colour, int maxWidth) const
+    /// One MicroTeX parse; null with `error` set when it throws or lays out nothing.
+    std::unique_ptr<tex::TeXRender> attempt(const QString &latex, qreal pointSize, const QColor &colour,
+                                            int maxWidth) const
     {
-        error.clear();
-        if (latex.trimmed().isEmpty() || maxWidth <= 0)
-            return nullptr;
-        if (!ensureInitialised(&error))
-            return nullptr;
         try {
             std::unique_ptr<tex::TeXRender> render(
                 tex::LaTeX::parse(latex.toStdWString(), maxWidth, float(pointSize),
@@ -100,6 +95,46 @@ struct MathRenderer::Private {
         } catch (...) {
             error = QStringLiteral("could not parse the formula");
         }
+        return nullptr;
+    }
+
+    /// The parse step render() and renderSvg() share; only the paint device
+    /// differs afterwards. MicroTeX owns the returned render. A formula it
+    /// refuses is tried again in the shapes MathJax (and so Obsidian) accepts
+    /// and MicroTeX does not: the starred `align*` family, and alignment
+    /// `&`s outside any environment.
+    std::unique_ptr<tex::TeXRender> parse(const QString &latex, qreal pointSize,
+                                          const QColor &colour, int maxWidth) const
+    {
+        error.clear();
+        if (latex.trimmed().isEmpty() || maxWidth <= 0)
+            return nullptr;
+        if (!ensureInitialised(&error))
+            return nullptr;
+        if (auto render = attempt(latex, pointSize, colour, maxWidth))
+            return render;
+        const QString firstError = error;
+
+        static const QRegularExpression starred(
+            QStringLiteral(R"(\\(begin|end)\{(align|alignat|flalign|gather|multline|equation)\*\})"));
+        QString retry = latex;
+        retry.replace(starred, QStringLiteral(R"(\\\1{\2})"));
+        if (retry != latex) {
+            if (auto render = attempt(retry, pointSize, colour, maxWidth))
+                return render;
+        }
+        // Only with a row break to align across: an `&` in a one-line formula is
+        // a typo for `\&` far more often than an alignment, and drawing it as
+        // a blank would hide the mistake.
+        if (retry.contains(QLatin1Char('&')) && retry.contains(QLatin1String("\\\\"))
+            && !retry.contains(QLatin1String("\\begin{"))) {
+            // `a &= b \\ c &= d` as an align would set it: right, left, right, left...
+            if (auto render = attempt(QStringLiteral("\\begin{array}{rlrlrlrl}") + retry
+                                          + QStringLiteral("\\end{array}"),
+                                      pointSize, colour, maxWidth))
+                return render;
+        }
+        error = firstError;
         return nullptr;
     }
 };

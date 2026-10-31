@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <QBuffer>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDir>
@@ -3723,6 +3724,176 @@ TEST(CodeOptionsTest, LineNumbersIndentTheListingAndLeaveTheBytesAlone)
     EXPECT_EQ(editor->displayText().trimmed(), QStringLiteral("x = 1\ny = 2"));
 }
 
+// --- Code Styler: the fence line's parameters, drawn ---------------------------
+
+namespace {
+
+/// An editor with the advanced-code-blocks plugin on (or off), and the
+/// highlight names the settings default to.
+std::unique_ptr<MarkdownEditor> stylerEditorWith(const QString &text, bool on = true)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    ParseOptions options;
+    options.codeStyler = on;
+    options.highlightKinds = {QStringLiteral("info"), QStringLiteral("warn"), QStringLiteral("error"),
+                              QStringLiteral("custom")};
+    editor->setParseOptions(options);
+    editor->setNoteText(text);
+    return editor;
+}
+
+} // namespace
+
+TEST(CodeStylerEditorTest, ATitleOnTheFenceLineNamesTheBlockAndIsHidden)
+{
+    const QString note = QStringLiteral("```cpp title:\"main file.cpp\" ln:5\nint a;\n```\n");
+    auto editor = stylerEditorWith(note);
+    const qsizetype inside = note.indexOf(QStringLiteral("int a;"));
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("main file.cpp"));
+    EXPECT_EQ(editor->noteText(), note);
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("title")));
+}
+
+TEST(CodeStylerEditorTest, FoldStartsClosedAndNamesItselfWhileFolded)
+{
+    const QString note = QStringLiteral("```cpp fold:\"Collapsed listing\"\nint a;\nint b;\n```\n");
+    auto editor = stylerEditorWith(note);
+    const qsizetype inside = note.indexOf(QStringLiteral("int a;"));
+    ASSERT_TRUE(editor->isFoldedAt(inside));
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("Collapsed listing"));
+    const qreal folded = editor->documentHeight();
+    editor->toggleFoldAt(inside);
+    EXPECT_FALSE(editor->isFoldedAt(inside));
+    EXPECT_GT(editor->documentHeight(), folded);
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("cpp")) << "open, it is the language's name again";
+}
+
+TEST(CodeStylerEditorTest, IgnoreDropsTheHeaderStrip)
+{
+    auto plain = stylerEditorWith(QStringLiteral("```cpp\nint a;\n```\n"));
+    auto ignored = stylerEditorWith(QStringLiteral("```cpp ignore title:x\nint a;\n```\n"));
+    EXPECT_GT(plain->documentHeight() - ignored->documentHeight(), 10);
+}
+
+TEST(CodeStylerEditorTest, OffTheFenceLineIsOnlyALanguageAndAttributes)
+{
+    const QString note = QStringLiteral("```cpp title:x fold\nint a;\n```\n");
+    auto editor = stylerEditorWith(note, false);
+    const qsizetype inside = note.indexOf(QStringLiteral("int a;"));
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("cpp"));
+    EXPECT_FALSE(editor->isFoldedAt(inside));
+    // Turning it on later (the core plugin's switch) re-reads the note.
+    ParseOptions on = editor->parseOptions();
+    on.codeStyler = true;
+    editor->setParseOptions(on);
+    EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("x"));
+    EXPECT_TRUE(editor->isFoldedAt(inside));
+}
+
+namespace {
+
+/// The mean colour change between two grabs of the same note, over the pixels
+/// that changed, as {red, green, blue}.
+std::array<double, 3> meanChange(const QImage &before, const QImage &after, int *changed = nullptr)
+{
+    std::array<double, 3> sum{0, 0, 0};
+    int count = 0;
+    for (int y = 0; y < qMin(before.height(), after.height()); ++y) {
+        for (int x = 0; x < qMin(before.width(), after.width()); ++x) {
+            const QColor a = before.pixelColor(x, y);
+            const QColor b = after.pixelColor(x, y);
+            if (a == b)
+                continue;
+            sum[0] += b.red() - a.red();
+            sum[1] += b.green() - a.green();
+            sum[2] += b.blue() - a.blue();
+            ++count;
+        }
+    }
+    if (changed)
+        *changed = count;
+    for (double &channel : sum)
+        channel = count ? channel / count : 0;
+    return sum;
+}
+
+QImage grabbed(MarkdownEditor &editor)
+{
+    return editor.grab().toImage().convertToFormat(QImage::Format_RGB32);
+}
+
+} // namespace
+
+TEST(CodeStylerEditorTest, NamedHighlightsTintTheirLinesWithTheirOwnColour)
+{
+    const QString body = QStringLiteral("one\ntwo\nthree\nfour\n```\n");
+    const auto paint = [&](const QString &info) {
+        auto editor = stylerEditorWith(QStringLiteral("```text ") + info + QStringLiteral("\n") + body);
+        editor->setCodeHighlights(QStringLiteral("info=blue, error=red, custom=#00FF00"));
+        return grabbed(*editor);
+    };
+    const QImage none = paint(QString());
+    int infoPixels = 0;
+    const auto info = meanChange(none, paint(QStringLiteral("info:2")), &infoPixels);
+    int errorPixels = 0;
+    const auto error = meanChange(none, paint(QStringLiteral("error:2")), &errorPixels);
+    const auto custom = meanChange(none, paint(QStringLiteral("custom:2")));
+    EXPECT_GT(infoPixels, 500) << "a whole row of the panel changes";
+    EXPECT_NEAR(infoPixels, errorPixels, 200) << "the same row, a different colour";
+    EXPECT_GT(info[2], info[0]) << "info is blue";
+    EXPECT_GT(error[0], error[2]) << "error is red";
+    EXPECT_GT(custom[1], custom[0]) << "a hex colour is taken as written";
+    EXPECT_GT(custom[1], custom[2]);
+}
+
+TEST(CodeStylerEditorTest, AnUnknownNameAndAnOffPluginPaintNothing)
+{
+    const QString note = QStringLiteral("```text info:2\none\ntwo\n```\n");
+    auto named = stylerEditorWith(note);
+    named->setCodeHighlights(QStringLiteral("info=blue"));
+    auto unknown = stylerEditorWith(note);
+    unknown->setCodeHighlights(QStringLiteral("error=red")); // `info` is no name the setting has
+    auto without = stylerEditorWith(QStringLiteral("```text info\none\ntwo\n```\n"));
+    without->setCodeHighlights(QStringLiteral("error=red"));
+    int changed = 0;
+    meanChange(grabbed(*without), grabbed(*named), &changed);
+    EXPECT_GT(changed, 500) << "control: the named one does paint";
+    meanChange(grabbed(*without), grabbed(*unknown), &changed);
+    EXPECT_EQ(changed, 0);
+
+    // Off, `info:2` is plain text on the fence line and nothing is tinted.
+    auto off = stylerEditorWith(note, false);
+    off->setCodeHighlights(QStringLiteral("info=blue"));
+    auto offPlain = stylerEditorWith(QStringLiteral("```text\none\ntwo\n```\n"), false);
+    meanChange(grabbed(*offPlain), grabbed(*off), &changed);
+    EXPECT_EQ(changed, 0);
+}
+
+TEST(CodeStylerEditorTest, InlineCodeIsHighlightedInItsLanguageAndTheTagComesBackOnTheCaretLine)
+{
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+    const QString tagged = QStringLiteral("Say `{python} import os` now.\n\nElsewhere.\n");
+    const QString plain = QStringLiteral("Say `import os` now.\n\nElsewhere.\n");
+    auto styled = stylerEditorWith(tagged);
+    auto bare = stylerEditorWith(plain);
+    auto off = stylerEditorWith(tagged, false);
+    const auto keyword = [](const MarkdownEditor &editor, const QString &note) {
+        return editor.formatAt(note.indexOf(QStringLiteral("import"))).foreground().color();
+    };
+    EXPECT_NE(keyword(*styled, tagged), keyword(*bare, plain)) << "`import` is a keyword in Python";
+    EXPECT_EQ(keyword(*off, tagged), keyword(*bare, plain)) << "off: one plain colour for the whole span";
+
+    // Hidden while the caret is elsewhere, written out while it touches the span (as `**` are).
+    EXPECT_FALSE(styled->displayText().contains(QStringLiteral("{python}")));
+    EXPECT_TRUE(off->displayText().contains(QStringLiteral("{python}")));
+    styled->enterBlockAt(tagged.indexOf(QStringLiteral("import")) + 2);
+    styled->grab();
+    EXPECT_TRUE(styled->displayText().contains(QStringLiteral("{python}")));
+    EXPECT_NE(keyword(*styled, tagged), keyword(*bare, plain)) << "still coloured while the tag shows";
+}
+
 // Stage 13: setNotebookRunner is a fake here, the same way setQueryRunner and
 // setBaseRunner are faked elsewhere in this file - libs/editor must not link
 // libs/ext/notebook, so a real kernel is only ever exercised by
@@ -4195,6 +4366,143 @@ TEST(NotebookBlockTest, RunToTheCursorStopsThere)
     EXPECT_EQ(editor->runNotebookBlocksUpTo(note.indexOf(QStringLiteral("print(2)"))), 2);
     EXPECT_EQ(fake.runSources, (QStringList{QStringLiteral("print(1)"), QStringLiteral("print(2)")}));
     EXPECT_EQ(editor->runAllNotebookBlocks(), 3);
+}
+
+TEST(NotebookBlockTest, RunFromTheCursorStartsAtTheBlockHoldingIt)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n\n```python\nprint(2)\n```\n\n"
+                                        "```python\nprint(12)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    EXPECT_EQ(editor->runNotebookBlocksFrom(note.indexOf(QStringLiteral("print(2)"))), 2);
+    EXPECT_EQ(fake.runSources, (QStringList{QStringLiteral("print(2)"), QStringLiteral("print(12)")}));
+    fake.runSources.clear();
+    EXPECT_EQ(editor->runNotebookBlocksFrom(note.indexOf(QStringLiteral("print(12)"))), 1);
+    EXPECT_EQ(editor->runNotebookBlocksFrom(0), 3);
+    EXPECT_EQ(editor->runNotebookBlocksFrom(note.size()), 0);
+}
+
+TEST(NotebookBlockTest, BlocksThatReadTheSameAskWithTheirOwnOrdinalAndTheCodeUnchanged)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n\n```python\nprint(2)\n```\n\n"
+                                        "```python\nprint(1)\n```\n\n```Python\nprint(1)\n```\n\n"
+                                        "```bash\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    EXPECT_EQ(editor->runAllNotebookBlocks(), 5);
+    ASSERT_EQ(fake.runs.size(), 5);
+    QList<int> ordinals;
+    for (const auto &options : std::as_const(fake.runs))
+        ordinals << options.duplicateOrdinal;
+    EXPECT_EQ(ordinals, (QList<int>{0, 0, 1, 2, 0})) << "the language is part of what reads the same, its case is not";
+    EXPECT_EQ(fake.runSources, (QStringList{QStringLiteral("print(1)"), QStringLiteral("print(2)"), QStringLiteral("print(1)"),
+                                            QStringLiteral("print(1)"), QStringLiteral("print(1)")}));
+}
+
+namespace {
+
+/// `count` fenced python blocks `x = N`, a blank line between them: far more than a screen.
+QString manyBlocks(int count)
+{
+    QString note;
+    for (int i = 0; i < count; ++i)
+        note += QStringLiteral("```python\nx = %1\n```\n\n").arg(i);
+    return note;
+}
+
+} // namespace
+
+// A notebook is longer than its window: what is laid out is the view and a screen either side, and "all"
+// means all, not the ones that happened to be laid out.
+TEST(NotebookBlockTest, RunningAndClearingActOnEveryBlockOfALongNoteLaidOutOrNot)
+{
+    const QString note = manyBlocks(200);
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(note.size()); // the end is on screen; the first blocks are far above it
+    editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    ASSERT_FALSE(editor->notebookInfoAt(note.indexOf(QStringLiteral("x = 0\n"))).eligible) << "not laid out: the premise";
+
+    EXPECT_EQ(editor->runAllNotebookBlocks(), 200);
+    EXPECT_EQ(fake.runs.size(), 200);
+    QTest::qWait(50); // the runs finish: a block still running is interrupted by a second ask
+    fake.runs.clear();
+    fake.runSources.clear();
+    EXPECT_EQ(editor->runNotebookBlocksFrom(note.indexOf(QStringLiteral("x = 100\n"))), 100);
+    ASSERT_EQ(fake.runSources.size(), 100);
+    EXPECT_EQ(fake.runSources.first(), QStringLiteral("x = 100"));
+    EXPECT_EQ(fake.runSources.last(), QStringLiteral("x = 199"));
+    QTest::qWait(50);
+    fake.runs.clear();
+    EXPECT_EQ(editor->runNotebookBlocksUpTo(note.indexOf(QStringLiteral("x = 49\n"))), 50);
+    EXPECT_EQ(fake.runs.size(), 50);
+
+    editor->clearNotebookOutputs();
+    QTest::qWait(50);
+    EXPECT_EQ(fake.clears.size(), 200);
+}
+
+// Laying the far blocks out must not move what is on screen.
+TEST(NotebookBlockTest, RunningEveryBlockOfALongNoteLeavesTheViewWhereItWas)
+{
+    const QString note = manyBlocks(200);
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(note.size());
+    editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    const qsizetype shown = note.indexOf(QStringLiteral("x = 199\n"));
+    ASSERT_TRUE(editor->notebookInfoAt(shown).eligible);
+    const qreal before = editor->notebookInfoAt(shown).runRect.top();
+    EXPECT_EQ(editor->runAllNotebookBlocks(), 200);
+    QTest::qWait(50);
+    EXPECT_EQ(editor->notebookInfoAt(shown).runRect.top(), before);
+}
+
+// A fenced example inside a markdown cell (here quoted) is not a cell of the notebook, so it is not one of
+// the blocks that read the same: the cell after it is the first.
+// An edit above can make a block read the same as an earlier one without this block being laid out again: it
+// still runs under the key its place in the note gives it now.
+TEST(NotebookBlockTest, ABlockRunsWithTheOrdinalItsPlaceGivesItAfterAnEditAbove)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n\n```python\nprint(2)\n```\n");
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(note.size());
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    editor->applyExternalEdit(note.indexOf(QStringLiteral("print(1)")) + 6, 1, QStringLiteral("2")); // print(2) twice now
+    const qsizetype second = editor->noteText().lastIndexOf(QStringLiteral("print(2)"));
+    ASSERT_TRUE(editor->runNotebookBlockAt(second));
+    ASSERT_EQ(fake.runs.size(), 1);
+    EXPECT_EQ(fake.runs.constFirst().duplicateOrdinal, 1);
+}
+
+TEST(NotebookBlockTest, AFenceNestedInAQuoteIsNotCountedAsABlockThatReadsTheSame)
+{
+    const QString note = QStringLiteral("> ```python\n> print(1)\n> ```\n\n```python\nprint(1)\n```\n");
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(note.size());
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    const qsizetype cell = note.lastIndexOf(QStringLiteral("print(1)"));
+    ASSERT_TRUE(editor->runNotebookBlockAt(cell));
+    ASSERT_EQ(fake.runs.size(), 1);
+    EXPECT_EQ(fake.runs.constFirst().duplicateOrdinal, 0);
 }
 
 TEST(NotebookBlockTest, ClickingARunningBlockAsksForAnInterrupt)
@@ -5234,6 +5542,63 @@ TEST(MultiEmbedTest, AParagraphOfSeveralImageEmbedsRendersEveryOne)
     // Two embeds, each on its own line, nothing else in the block: each is
     // its own row of one cell.
     EXPECT_EQ(editor->embedCellCountAt(0), 2);
+}
+
+namespace {
+
+QByteArray redPNG()
+{
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    return bytes;
+}
+
+} // namespace
+
+TEST(InlineImageTest, AnAttachmentSourceDrawsThePictureTheTableHolds)
+{
+    auto editor = editorWith(QStringLiteral("![x](attachment:pic.png)\n"));
+    editor->setLinkResolver([](const QString &) { return QString(); });
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x"))) << "no table: the alt text, as a broken link shows";
+
+    editor->setInlineImages({{QStringLiteral("pic.png"), redPNG()}});
+    EXPECT_TRUE(editor->displayText().trimmed().isEmpty()) << "its source is hidden: the picture is the block";
+    editor->setInlineImages({});
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x"))) << "and gone with the table";
+}
+
+TEST(InlineImageTest, ASameNamedPictureIsLookedUpUnderTheScopeOfItsOffset)
+{
+    const QString note = QStringLiteral("![x](attachment:pic.png)\n\n![y](attachment:pic.png)\n");
+    auto editor = editorWith(note);
+    editor->setLinkResolver([](const QString &) { return QString(); });
+    const qsizetype second = note.lastIndexOf(QStringLiteral("!["));
+    // Only the second embed's scope finds a picture: the first stays text.
+    editor->setInlineImages({{QStringLiteral("1/pic.png"), redPNG()}},
+                            [second](qsizetype offset) { return offset >= second ? QStringLiteral("1/") : QString(); });
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x"))) << "no picture under the first one's scope";
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("y"))) << "the second shows its picture";
+}
+
+TEST(InlineImageTest, AnAttachmentNeitherInTheTableNorAFileStaysText)
+{
+    auto editor = editorWith(QStringLiteral("![x](attachment:other.png)\n"));
+    editor->setLinkResolver([](const QString &) { return QString(); });
+    editor->setInlineImages({{QStringLiteral("pic.png"), redPNG()}});
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x")));
+}
+
+TEST(InlineImageTest, AnAttachmentInRunningTextIsAnInlineCell)
+{
+    auto editor = editorWith(QStringLiteral("see ![x](attachment:pic.png) here\n"));
+    editor->setLinkResolver([](const QString &) { return QString(); });
+    editor->setInlineImages({{QStringLiteral("pic.png"), redPNG()}});
+    EXPECT_EQ(editor->embedCellCountAt(0), 1);
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(20, 20));
 }
 
 TEST(MultiEmbedTest, AnEmbedInsideRunningTextStillRenders)
@@ -6724,6 +7089,34 @@ TEST(StyleFilesTest, EditingCalloutsIniRestylesWithoutARestart)
         QTest::qWait(20);
     EXPECT_GT(pixelsOf(*editor, qRgb(0, 255, 0)), 0);
 
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// The config directory is also where the settings are saved, on every note switch: only the
+// style files' own change may re-lay the note out (a relayout in the middle of restoring a
+// scroll position put the text two lines off).
+TEST(StyleFilesTest, SavingOtherFilesInTheConfigDirectoryDoesNotLayTheNoteOutAgain)
+{
+    QTemporaryDir home;
+    ASSERT_TRUE(home.isValid());
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
+    const QString ini = QDir(home.path()).filePath(QStringLiteral("noteAppC/callouts.ini"));
+    writeAtomically(ini, "[note]\nbar = #FF0000ff\n");
+
+    auto editor = editorWith(QStringLiteral("> [!note] Title\n> Body.\n"));
+    QTest::qWait(100);
+    const quint64 before = editor->layoutCount();
+
+    for (const char *other : {"noteAppC/settings.ini", "noteAppC/vaults.ini", "noteAppC/.save.lock"})
+        writeAtomically(QDir(home.path()).filePath(QString::fromLatin1(other)), "[state]\nrecent-vaults = /x\n");
+    QFile::remove(QDir(home.path()).filePath(QStringLiteral("noteAppC/.save.lock")));
+    QTest::qWait(400);
+    EXPECT_EQ(editor->layoutCount(), before) << "a settings save laid the note out again";
+
+    writeAtomically(ini, "[note]\nbar = #0000FFff\n");
+    EXPECT_TRUE(QTest::qWaitFor([&] { return editor->layoutCount() > before; }, 3000)) << "the style file's own change still does";
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
@@ -9308,7 +9701,9 @@ TEST(CSVembedTest, AReadErrorIsRetriedWhenTheFileBecomesReadable)
     auto editor = CSVeditorWith(path, false);
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked.csv")); }, 5000));
 
-    // a chmod changes neither mtime nor size, only ctime: the watcher's attribute event is all there is
+    // a chmod changes neither mtime nor size, only ctime (kept to the millisecond, so not within the one
+    // the first chmod fell in): the watcher's attribute event is all there is
+    QTest::qWait(20);
     const QDateTime mtime = QFileInfo(path).lastModified();
     ASSERT_TRUE(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
     ASSERT_EQ(QFileInfo(path).lastModified(), mtime);
@@ -9325,10 +9720,45 @@ TEST(CSVembedTest, AReadErrorIsRetriedAtTheNextLayout)
         GTEST_SKIP() << "this user can read a mode 000 file";
     auto editor = CSVeditorWith(path, false);
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked2.csv")); }, 5000));
+    QTest::qWait(20); // the ctime the cache is keyed on has millisecond resolution
     QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     // the next layout of the block - here the note set again - asks again, whatever the watcher did
     editor->setNoteText(QStringLiteral("![[locked2.csv]]\n\nafter\n"));
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+}
+
+namespace {
+std::atomic<int> gCSVreads{0};
+}
+
+TEST(CSVembedTest, AChmodIsOneReReadNotOnePerLayout)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("locked3.csv"), "a,b\n1,2\n");
+    QFile::setPermissions(path, QFileDevice::Permissions());
+    if (QFile(path).open(QIODevice::ReadOnly))
+        GTEST_SKIP() << "this user can read a mode 000 file";
+    gCSVreads = 0;
+    MarkdownEditor::setCSVreadHookForTests([](const QString &) { ++gCSVreads; });
+    auto editor = CSVeditorWith(path, false);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked3.csv")); }, 5000));
+    EXPECT_EQ(gCSVreads.load(), 1);
+    // layouts while it stays unreadable ask nothing: the ctime has not moved
+    for (int i = 0; i < 3; ++i) {
+        editor->setNoteText(QStringLiteral("![[locked3.csv]]\n\nlayout %1\n").arg(i));
+        QTest::qWait(30);
+    }
+    EXPECT_EQ(gCSVreads.load(), 1);
+
+    ASSERT_TRUE(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+    for (int i = 0; i < 3; ++i) {
+        editor->setNoteText(QStringLiteral("![[locked3.csv]]\n\nagain %1\n").arg(i));
+        QTest::qWait(30);
+    }
+    MarkdownEditor::setCSVreadHookForTests(nullptr);
+    EXPECT_EQ(gCSVreads.load(), 2) << "one read for the chmod, none for the layouts after it";
 }
 
 TEST(CSVembedTest, AFileAppendedToContinuouslyStillRefreshes)
@@ -10177,6 +10607,34 @@ TEST(PasteDropTest, NoSaverSetDoesNothingForAnImagePaste)
     EXPECT_EQ(editor->noteText(), QStringLiteral("hello\n"));
 }
 
+// Obsidian: a drop makes [title](url), a paste of the same URL is the URL as typed.
+TEST(PasteDropTest, PasteOfABrowserLinkIsTheBareUrl)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->setCursorOffset(5);
+    auto *mime = new QMimeData;
+    mime->setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+    mime->setText(QStringLiteral("A title"));
+    QGuiApplication::clipboard()->setMimeData(mime);
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hellohttps://example.com/a\n"));
+}
+
+TEST(PasteDropTest, PasteOfABrowserLinkOverASelectionStaysAsItWas)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->selectRange({0, 5});
+    auto *mime = new QMimeData;
+    mime->setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+    QGuiApplication::clipboard()->setMimeData(mime);
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hello\n")); // main inserted nothing for a remote URL list
+}
+
 TEST(PasteDropTest, DropOfAnOutsideFileImportsAndInsertsTheEmbedAtTheDropPoint)
 {
     const QString note = QStringLiteral("above\nbelow\n");
@@ -10229,6 +10687,131 @@ TEST(PasteDropTest, DropWithNoImporterInsertsThePathAsText)
     ASSERT_TRUE(dropOnto(*editor, point, mime));
 
     EXPECT_EQ(editor->noteText(), QStringLiteral("above\n/outside/photo.pngbelow\n"));
+}
+
+TEST(PasteDropTest, DropOfABrowserLinkInsertsAMarkdownLinkTitledByTheMozUrl)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    ASSERT_FALSE(point.isNull());
+
+    bool imported = false;
+    editor->setFileImporter([&](const QString &) {
+        imported = true;
+        return QString();
+    });
+    // Firefox: text/x-moz-url is "URL\ntitle" in UTF-16.
+    const QString pair = QStringLiteral("https://example.com/page\nExample [page]");
+    QByteArray moz(reinterpret_cast<const char *>(pair.utf16()), pair.size() * 2);
+    QMimeData mime;
+    mime.setUrls({QUrl(QStringLiteral("https://example.com/page"))});
+    mime.setData(QStringLiteral("text/x-moz-url"), moz);
+    mime.setText(QStringLiteral("https://example.com/page"));
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+
+    EXPECT_FALSE(imported);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[Example \\[page\\]](https://example.com/page)below\n"));
+}
+
+TEST(PasteDropTest, DropOfABrowserLinkFallsBackToPlainTextThenTheHost)
+{
+    {
+        auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+        editor->show();
+        const QPoint point = clickInto(*editor, {5, 7});
+        QMimeData mime; // Chrome: the page title as text, beside the URL
+        mime.setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+        mime.setText(QStringLiteral("A title"));
+        ASSERT_TRUE(dropOnto(*editor, point, mime));
+        EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[A title](https://example.com/a)below\n"));
+    }
+    {
+        auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+        editor->show();
+        const QPoint point = clickInto(*editor, {5, 7});
+        QMimeData mime; // the text is the URL itself: nothing better than the host
+        mime.setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+        mime.setText(QStringLiteral("https://example.com/a"));
+        ASSERT_TRUE(dropOnto(*editor, point, mime));
+        EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[example.com](https://example.com/a)below\n"));
+    }
+}
+
+TEST(PasteDropTest, DropOfAScriptOrDataLinkIsPlainTextNeverALink)
+{
+    for (const QString &raw : {QStringLiteral("javascript:alert(1)"), QStringLiteral("data:text/html;base64,PGI+")}) {
+        auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+        editor->show();
+        const QPoint point = clickInto(*editor, {5, 7});
+        bool imported = false;
+        editor->setFileImporter([&](const QString &) {
+            imported = true;
+            return QString();
+        });
+        QMimeData mime;
+        mime.setUrls({QUrl(raw)});
+        ASSERT_TRUE(dropOnto(*editor, point, mime));
+        EXPECT_FALSE(imported);
+        EXPECT_EQ(editor->noteText(), QStringLiteral("above\n") + raw + QStringLiteral("below\n"));
+    }
+}
+
+TEST(PasteDropTest, ADroppedNonLinkUrlOverTwoThousandCharactersIsTextAndSaysSo)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    QSignalSpy notice(editor.get(), &MarkdownEditor::noticeRaised);
+    const QString raw = QStringLiteral("data:text/plain,") + QString(3000, QLatin1Char('a'));
+    QMimeData mime;
+    mime.setUrls({QUrl(raw)});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n") + raw + QStringLiteral("below\n"));
+    EXPECT_EQ(notice.count(), 1);
+}
+
+TEST(PasteDropTest, DropOfAMailLinkTitlesItByTheAddressNotTheWholeUrl)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    QMimeData mime;
+    mime.setUrls({QUrl(QStringLiteral("mailto:a@example.com"))});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[a@example.com](mailto:a@example.com)below\n"));
+}
+
+TEST(PasteDropTest, DropOfALocalFileAndABrowserLinkKeepsOrderAndImportsOnlyTheFile)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    QStringList imported;
+    editor->setFileImporter([&](const QString &path) {
+        imported << path;
+        return QStringLiteral("![[photo.png]]");
+    });
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(QStringLiteral("/outside/photo.png")), QUrl(QStringLiteral("https://example.com/a"))});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(imported, QStringList{QStringLiteral("/outside/photo.png")});
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n![[photo.png]]\n[example.com](https://example.com/a)below\n"));
+}
+
+TEST(PasteDropTest, ABrowserTitleWithBackslashAndAMozUrlWithBomAndNulStillMakeAWorkingLink)
+{
+    auto editor = editorWith(QStringLiteral("above\nbelow\n"));
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    const QString pair = QStringLiteral("\uFEFFhttps://example.com/p\nC:\\dir\\");
+    QByteArray moz(reinterpret_cast<const char *>(pair.utf16()), pair.size() * 2);
+    moz.append(QByteArray(2, '\0')); // NUL-terminated
+    QMimeData mime;
+    mime.setUrls({QUrl(QStringLiteral("https://example.com/p"))});
+    mime.setData(QStringLiteral("text/x-moz-url"), moz);
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[C:\\\\dir\\\\](https://example.com/p)below\n"));
 }
 
 TEST(PasteDropTest, DroppedTextIsInsertedAtThePoint)
@@ -11505,6 +12088,38 @@ TEST(CodeScrollTest, PiecesShareOneOffset)
     EXPECT_DOUBLE_EQ(editor->sideScrollAt(first), editor->sideScrollAt(long35));
 }
 
+// A parse landing looks the old view of each fresh one up (the sideways offset of a
+// listing lives there) with a forward cursor over the old blocks. The views a landing
+// remakes are the ones that were drawn - here four listings, one of them edited around -
+// and each must find its own old self, not a neighbour's, while the 80 paragraphs
+// nothing drew are not remade at all.
+TEST(CodeScrollTest, ALandingKeepsEveryListingsOffsetAndLeavesUntouchedViewsAlone)
+{
+    const QString fence = QStringLiteral("```text\n") + longLine() + QStringLiteral("\n```\n\n");
+    const QString note = fence + fence + QStringLiteral("middle\n\n") + fence + fence
+                         + QStringLiteral("after\n\n").repeated(80);
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.indexOf(QLatin1String("middle")));
+    (void)editor->grab();
+    const qsizetype first = kFenceBody;
+    const qsizetype second = first + fence.size();
+    sendWheel(*editor, centreOf(editor->blockPanelAt(first)), QPoint(), QPoint(0, -120), Qt::ShiftModifier);
+    sendWheel(*editor, centreOf(editor->blockPanelAt(second)), QPoint(), QPoint(0, -480), Qt::ShiftModifier);
+    const qreal one = editor->sideScrollAt(first);
+    const qreal two = editor->sideScrollAt(second);
+    ASSERT_GT(one, 0);
+    ASSERT_GT(two, one);
+
+    const quint64 rebuilt = editor->rebuiltViewCount();
+    QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    for (int waited = 0; editor->rebuiltViewCount() == rebuilt && waited < 5000; waited += 20)
+        QTest::qWait(20);
+    ASSERT_GT(editor->rebuiltViewCount(), rebuilt) << "the landing never came";
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(first), one);
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(second), two);
+    EXPECT_LT(editor->rebuiltViewCount() - rebuilt, 60u) << "the paragraphs nothing drew stay as they are";
+}
+
 TEST(CodeScrollTest, ALineNumberGutterStaysPut)
 {
     auto editor = editorWith(fenceNote(longLine(), QStringLiteral("#| lines: true\n")));
@@ -12150,4 +12765,654 @@ TEST(HunkTest, TheRegionThatDiffersNeverSplitsASurrogatePair)
     const MarkdownEditor::Hunk tail = MarkdownEditor::hunkBetween(low, lowOther);
     EXPECT_EQ(tail.at, 0);
     EXPECT_EQ(tail.removed, 2);
+}
+
+// --- Code Styler: ```reference blocks ----------------------------------------------
+
+#include <QTcpServer>
+#include <QTcpSocket>
+
+namespace {
+
+/// An offset inside the block's listing, just past the opening fence.
+constexpr qsizetype kInsideReference = 13;
+
+/// An editor on `fenceLines` (the lines inside a ```reference fence), with the
+/// plugin on and every target resolved to `path` unless it is a URL.
+std::unique_ptr<MarkdownEditor> referenceEditorWith(const QString &fenceLines, const QString &path,
+                                                    bool on = true)
+{
+    // the caret goes below the block: with it inside, the source shows
+    const QString note = QStringLiteral("```reference\n%1```\n\nafter\n").arg(fenceLines);
+    auto editor = stylerEditorWith(note, on);
+    editor->setLinkResolver([path](const QString &) { return path; });
+    // the file's folder is the vault: confinement has its own tests below
+    const QString root = QFileInfo(path).absolutePath();
+    editor->setVaultRootProvider([root] { return root; });
+    editor->setCursorOffset(note.size() - 2);
+    return editor;
+}
+
+/// A vault in a temp folder next to a file outside it, and the resolver the
+/// window has (the note's folder, then the vault root: whatever exists).
+struct ReferenceVault {
+    QTemporaryDir outer;
+    QString vault;
+    QString secret;
+
+    ReferenceVault()
+    {
+        vault = outer.filePath(QStringLiteral("vault"));
+        EXPECT_TRUE(QDir().mkpath(vault));
+        secret = outer.filePath(QStringLiteral("secret.txt"));
+        QFile(secret).open(QIODevice::WriteOnly);
+        write(secret, "TOPSECRET\n");
+        write(vault + QStringLiteral("/inside.txt"), "visible\n");
+        EXPECT_TRUE(QFile::link(QStringLiteral("../secret.txt"), vault + QStringLiteral("/escape.txt")));
+        EXPECT_TRUE(QFile::link(QStringLiteral("inside.txt"), vault + QStringLiteral("/alias.txt")));
+    }
+    static void write(const QString &path, const QByteArray &bytes)
+    {
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+    }
+    std::unique_ptr<MarkdownEditor> editorOn(const QString &fenceLines) const
+    {
+        const QString note = QStringLiteral("```reference\n%1```\n\nafter\n").arg(fenceLines);
+        auto editor = stylerEditorWith(note, true);
+        const QString root = vault;
+        editor->setLinkResolver([root](const QString &target) -> QString {
+            const QString beside = root + QLatin1Char('/') + target;
+            if (QFileInfo::exists(beside))
+                return beside;
+            const QString fromRoot = QDir(root).absoluteFilePath(target);
+            return QFileInfo::exists(fromRoot) ? fromRoot : QString();
+        });
+        editor->setVaultRootProvider([root] { return root; });
+        editor->setCursorOffset(note.size() - 2);
+        return editor;
+    }
+};
+
+/// The panel's text with its line separators as the newlines they stand for.
+QString listingOf(MarkdownEditor &editor)
+{
+    (void)editor.grab(); // blocks are laid out as they are painted
+    QString text = editor.panelTextAt(kInsideReference);
+    text.replace(QChar(QChar::LineSeparator), QLatin1Char('\n'));
+    return text;
+}
+
+bool waitForListing(MarkdownEditor &editor, const QString &needle)
+{
+    return QTest::qWaitFor([&] { return listingOf(editor).contains(needle); }, 5000);
+}
+
+QString numberedFile(const QTemporaryDir &dir, int lines)
+{
+    QByteArray bytes;
+    for (int i = 1; i <= lines; ++i)
+        bytes += "line" + QByteArray::number(i) + (i == 4 ? "  marker\n" : "\n");
+    return writeTextFile(dir, QStringLiteral("many.txt"), bytes);
+}
+
+std::atomic<bool> gReferenceReadOnUIthread{false};
+std::thread::id gReferenceUIthread;
+
+} // namespace
+
+TEST(ReferenceBlockTest, ShowsTheFileHighlightedUnderItsName)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "import os\nprint(os.name)\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path);
+
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("Loading"))) << "nothing is read on the layout path: loading first";
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("import os")));
+    EXPECT_EQ(listingOf(*editor), QStringLiteral("import os\nprint(os.name)"));
+    EXPECT_EQ(editor->panelLabelAt(kInsideReference), QStringLiteral("hello.py"));
+    EXPECT_GT(editor->panelFormatCountAt(kInsideReference), 0) << "highlighted by the file's suffix";
+    EXPECT_EQ(editor->referenceCacheSize(), 1);
+}
+
+// A printed page waits for the excerpt, not only for the file read: the cut is a second worker, started
+// by the layout that follows the read (what exportPdf does between its first pass and the page).
+TEST(ReferenceBlockTest, AwaitingReferencesWaitsForTheExcerptToo)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // long enough that cutting the excerpt (a scan for the start word) outlasts the event that delivers the read
+    QByteArray bytes;
+    for (int i = 0; i < 60000; ++i)
+        bytes += "filler line " + QByteArray::number(i) + "\n";
+    bytes += "needle here\n";
+    const QString path = writeTextFile(dir, QStringLiteral("big.txt"), bytes);
+    auto editor = referenceEditorWith(QStringLiteral("file: big.txt\nstart: needle\n"), path);
+    (void)editor->grab(); // the first layout starts the read
+    editor->awaitReferences(5000);
+    EXPECT_FALSE(editor->referencesPending());
+    EXPECT_EQ(listingOf(*editor), QStringLiteral("needle here")) << "no Loading... on the printed page";
+}
+
+TEST(ReferenceBlockTest, TheLanguageKeyOverridesTheSuffix)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("script.txt"), "import os\n");
+    auto plain = referenceEditorWith(QStringLiteral("file: script.txt\n"), path);
+    ASSERT_TRUE(waitForListing(*plain, QStringLiteral("import")));
+    auto python = referenceEditorWith(QStringLiteral("file: script.txt\nlang: python\n"), path);
+    ASSERT_TRUE(waitForListing(*python, QStringLiteral("import")));
+    EXPECT_GT(python->panelFormatCountAt(kInsideReference), plain->panelFormatCountAt(kInsideReference));
+}
+
+TEST(ReferenceBlockTest, StartAndEndPickTheLines)
+{
+    QTemporaryDir dir;
+    const QString path = numberedFile(dir, 20);
+
+    auto numbers = referenceEditorWith(QStringLiteral("file: many.txt\nstart: 3\nend: 5\n"), path);
+    ASSERT_TRUE(waitForListing(*numbers, QStringLiteral("line3")));
+    EXPECT_EQ(listingOf(*numbers), QStringLiteral("line3\nline4  marker\nline5"));
+    EXPECT_EQ(numbers->panelLabelAt(kInsideReference), QStringLiteral("many.txt:3-5"));
+
+    // `+N` counts on from start, inclusive: 10 through 12
+    auto relative = referenceEditorWith(QStringLiteral("file: many.txt\nstart: 10\nend: +2\n"), path);
+    ASSERT_TRUE(waitForListing(*relative, QStringLiteral("line10")));
+    EXPECT_EQ(listingOf(*relative), QStringLiteral("line10\nline11\nline12"));
+
+    // a word is the first line containing it, a /regex/ the first line it matches
+    auto word = referenceEditorWith(QStringLiteral("file: many.txt\nstart: marker\nend: /^line7$/\n"), path);
+    ASSERT_TRUE(waitForListing(*word, QStringLiteral("marker")));
+    EXPECT_EQ(listingOf(*word), QStringLiteral("line4  marker\nline5\nline6\nline7"));
+
+    // no end: to the end of the file
+    auto open = referenceEditorWith(QStringLiteral("file: many.txt\nstart: 19\n"), path);
+    ASSERT_TRUE(waitForListing(*open, QStringLiteral("line19")));
+    EXPECT_EQ(listingOf(*open), QStringLiteral("line19\nline20"));
+}
+
+TEST(ReferenceBlockTest, ALineThatIsNotThereIsSaidSo)
+{
+    QTemporaryDir dir;
+    const QString path = numberedFile(dir, 5);
+    auto editor = referenceEditorWith(QStringLiteral("file: many.txt\nstart: nonexistent\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("nonexistent")));
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("No line matches")));
+}
+
+TEST(ReferenceBlockTest, AFileThatIsNotThereShowsWhy)
+{
+    auto editor = referenceEditorWith(QStringLiteral("file: gone.py\n"), QString());
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("Could not find gone.py")));
+}
+
+TEST(ReferenceBlockTest, PlainSourceWhenThePluginIsOff)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path, false);
+    QTest::qWait(50);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("file: hello.py"))) << "the plain listing";
+    EXPECT_TRUE(editor->panelLabelAt(kInsideReference).isEmpty());
+    EXPECT_EQ(editor->referenceCacheSize(), 0) << "nothing is read when the feature is off";
+}
+
+TEST(ReferenceBlockTest, TheCaretInsideShowsTheSource)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("print")));
+    editor->enterBlockAt(editor->noteText().indexOf(QStringLiteral("hello")) + 2);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("file: hello.py")));
+    EXPECT_TRUE(editor->panelLabelAt(kInsideReference).isEmpty());
+}
+
+TEST(ReferenceBlockTest, AChangeOnDiskIsReadAgain)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("live.txt"), "first\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: live.txt\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("first")));
+
+    writeTextFile(dir, QStringLiteral("live.txt"), "second version, longer\n");
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("second version"))) << "the watcher relays the block out";
+    EXPECT_EQ(editor->referenceCacheSize(), 1);
+}
+
+TEST(ReferenceBlockTest, TheFileIsNeverReadOnTheUIthread)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    gReferenceUIthread = std::this_thread::get_id();
+    gReferenceReadOnUIthread = false;
+    MarkdownEditor::setReferenceReadHookForTests([](const QString &) {
+        gReferenceReadOnUIthread = std::this_thread::get_id() == gReferenceUIthread;
+    });
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path);
+    const bool shown = waitForListing(*editor, QStringLiteral("print"));
+    MarkdownEditor::setReferenceReadHookForTests(nullptr);
+    ASSERT_TRUE(shown);
+    EXPECT_FALSE(gReferenceReadOnUIthread);
+}
+
+TEST(ReferenceBlockTest, ClickingTheHeaderAsksForTheFileToBeOpened)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("print")));
+    (void)editor->grab();
+
+    QSignalSpy spy(editor.get(), &MarkdownEditor::referenceActivated);
+    const QRectF panel = editor->blockPanelAt(kInsideReference);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(editor->textColumn() + 10, int(panel.top()) + 20)); // on the title strip
+    ASSERT_EQ(spy.count(), 1);
+    EXPECT_EQ(spy.first().first().toString(), path);
+
+    // a click on the listing is no link: it puts the caret in, and the source shows
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(editor->textColumn() + 10, int(panel.top()) + 50));
+    EXPECT_EQ(spy.count(), 1);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("file: hello.py")));
+}
+
+TEST(ReferenceBlockTest, AHostingSitesPageLinkIsFetchedAsTheRawFile)
+{
+    EXPECT_EQ(MarkdownEditor::rawReferenceURL(QStringLiteral("https://github.com/u/r/blob/main/src/a.py")),
+              QStringLiteral("https://raw.githubusercontent.com/u/r/main/src/a.py"));
+    EXPECT_EQ(MarkdownEditor::rawReferenceURL(QStringLiteral("https://gitlab.com/g/p/-/blob/v1/dir/a.py")),
+              QStringLiteral("https://gitlab.com/g/p/-/raw/v1/dir/a.py"));
+    const QString other = QStringLiteral("https://example.com/blob/a/b/c/d.txt");
+    EXPECT_EQ(MarkdownEditor::rawReferenceURL(other), other);
+}
+
+namespace {
+
+/// The remote-host check refuses loopback, which is where the tests' server is:
+/// this lets 127.0.0.1 through for one test, and only that address.
+struct AllowLoopback {
+    AllowLoopback() { MarkdownEditor::allowReferenceAddressForTests(QStringLiteral("127.0.0.1")); }
+    ~AllowLoopback() { MarkdownEditor::allowReferenceAddressForTests(QString()); }
+};
+
+/// A web server on 127.0.0.1 answering every GET with `body`, counting them.
+struct FakeServer {
+    QTcpServer server;
+    int requests = 0;
+    QByteArray body = "remote line 1\nremote line 2\n";
+    int status = 200;
+    QByteArray redirectTo; ///< answered as a 302 to this URL
+
+    explicit FakeServer(const QHostAddress &address = QHostAddress::LocalHost)
+    {
+        EXPECT_TRUE(server.listen(address));
+        QObject::connect(&server, &QTcpServer::newConnection, &server, [this] {
+            while (QTcpSocket *socket = server.nextPendingConnection()) {
+                QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket] {
+                    if (!socket->peek(8192).contains("\r\n\r\n"))
+                        return;
+                    socket->readAll();
+                    ++requests;
+                    if (!redirectTo.isEmpty())
+                        socket->write("HTTP/1.1 302 Found\r\nLocation: " + redirectTo
+                                      + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    else
+                        socket->write("HTTP/1.1 " + QByteArray::number(status) + " X\r\nContent-Length: "
+                                      + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+                QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+            }
+        });
+    }
+    QString url(const QString &path = QStringLiteral("/dir/file.txt")) const
+    {
+        return QStringLiteral("http://127.0.0.1:%1%2").arg(server.serverPort()).arg(path);
+    }
+};
+
+} // namespace
+
+TEST(ReferenceBlockTest, ARemoteFileIsNotFetchedWhileTheSettingIsOff)
+{
+    FakeServer server;
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url()), QString());
+    QTest::qWait(200);
+    EXPECT_EQ(server.requests, 0);
+    EXPECT_EQ(editor->referenceCacheSize(), 0);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("off")));
+    EXPECT_EQ(editor->panelLabelAt(kInsideReference), QStringLiteral("file.txt (127.0.0.1)")) << "the host is in the title";
+}
+
+TEST(ReferenceBlockTest, ARemoteFileIsFetchedOnceAndCached)
+{
+    AllowLoopback allow;
+    FakeServer server;
+    const QString url = server.url(QStringLiteral("/dir/cached.txt"));
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
+    editor->setRemoteReferences(true);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("remote line 2")));
+    EXPECT_EQ(server.requests, 1);
+
+    // another editor, the same URL: the copy of the first is what it shows
+    auto second = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
+    second->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*second, QStringLiteral("remote line 1"))) << "from the cache (the cut is on a worker)";
+    // a relayout of the first (a width change) asks for nothing either
+    editor->resize(700, 500);
+    (void)editor->grab();
+    QTest::qWait(100);
+    EXPECT_EQ(server.requests, 1);
+}
+
+TEST(ReferenceBlockTest, ARemoteFailureIsShownAndNotRetriedPerLayout)
+{
+    AllowLoopback allow;
+    FakeServer server;
+    server.status = 404;
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url(QStringLiteral("/missing.txt"))),
+                                      QString());
+    editor->setRemoteReferences(true);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("404")));
+    editor->resize(700, 500);
+    (void)editor->grab();
+    QTest::qWait(100);
+    EXPECT_EQ(server.requests, 1);
+}
+
+// --- reference blocks stay inside the vault ------------------------------------------
+
+TEST(ReferenceBlockTest, AFileInsideTheVaultIsShownWhicheverWayItIsWritten)
+{
+    ReferenceVault vault;
+    for (const char *written : {"inside.txt", "./inside.txt", "@/inside.txt", "alias.txt"}) {
+        SCOPED_TRACE(written);
+        auto editor = vault.editorOn(QStringLiteral("file: %1\n").arg(QLatin1String(written)));
+        EXPECT_TRUE(waitForListing(*editor, QStringLiteral("visible")));
+    }
+}
+
+TEST(ReferenceBlockTest, AFileOutsideTheVaultIsRefusedWithANotice)
+{
+    ReferenceVault vault;
+    const QStringList written = {vault.secret,                    // absolute
+                                 QStringLiteral("../secret.txt"), // out by ..
+                                 QStringLiteral("@/../secret.txt"),
+                                 QStringLiteral("./../secret.txt"),
+                                 QStringLiteral("escape.txt"),   // a symlink in the vault pointing out
+                                 QStringLiteral("[[../secret.txt]]")};
+    for (const QString &target : written) {
+        SCOPED_TRACE(target.toStdString());
+        auto editor = vault.editorOn(QStringLiteral("file: %1\n").arg(target));
+        EXPECT_TRUE(waitForListing(*editor, QStringLiteral("Outside the vault")));
+        EXPECT_FALSE(listingOf(*editor).contains(QStringLiteral("TOPSECRET")));
+        EXPECT_EQ(editor->referenceCacheSize(), 0) << "never read";
+
+        // and the title opens nothing
+        (void)editor->grab();
+        QSignalSpy spy(editor.get(), &MarkdownEditor::referenceActivated);
+        const QRectF panel = editor->blockPanelAt(kInsideReference);
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                          QPoint(editor->textColumn() + 10, int(panel.top()) + 20));
+        EXPECT_EQ(spy.count(), 0);
+    }
+}
+
+TEST(ReferenceBlockTest, WithoutAVaultNoLocalFileIsShown)
+{
+    ReferenceVault vault;
+    auto editor = vault.editorOn(QStringLiteral("file: inside.txt\n"));
+    editor->setVaultRootProvider(nullptr);
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("Outside the vault")));
+}
+
+TEST(ReferenceBlockTest, ARunawayStartPatternIsStoppedQuickly)
+{
+    QTemporaryDir dir;
+    QByteArray bytes;
+    for (int i = 0; i < 300; ++i)
+        bytes += QByteArray(30, 'a') + "!\n";
+    const QString path = writeTextFile(dir, QStringLiteral("bad.txt"), bytes);
+    auto editor = referenceEditorWith(QStringLiteral("file: bad.txt\nstart: /(a+)+$/\n"), path);
+    QElapsedTimer clock;
+    clock.start();
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("No line matches start")));
+    EXPECT_LT(clock.elapsed(), 1500) << "ms: without the match budget this took seconds";
+}
+
+TEST(ReferenceBlockTest, AScanOverABigFileNeverStallsTheUIthread)
+{
+    QTemporaryDir dir;
+    QByteArray bytes;
+    for (int i = 0; i < 80000; ++i)
+        bytes += "lorem ipsum dolor sit am!\n"; // 2 MB of prose no `$` can follow a word on
+    const QString path = writeTextFile(dir, QStringLiteral("big.txt"), bytes);
+    auto editor = referenceEditorWith(QStringLiteral("file: big.txt\nstart: /(\\w+\\s?)+$/\n"), path);
+    (void)editor->grab();
+    // a ticking timer measures the longest the event loop was kept from running
+    QElapsedTimer since;
+    since.start();
+    qint64 last = 0;
+    qint64 longest = 0;
+    QTimer ticker;
+    QObject::connect(&ticker, &QTimer::timeout, [&] {
+        longest = qMax(longest, since.elapsed() - last);
+        last = since.elapsed();
+    });
+    ticker.start(2);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return listingOf(*editor).contains(QStringLiteral("No line matches start")); }, 15000));
+    ticker.stop();
+    EXPECT_LT(longest, 300) << "ms the UI thread was held: the scan belongs on the worker";
+}
+
+// --- remote references: hosts that are not the internet ---------------------------------
+
+TEST(ReferenceBlockTest, LiteralLocalAndPrivateHostsAreRefused)
+{
+    const QStringList urls = {
+        QStringLiteral("http://10.1.2.3/a.txt"),         QStringLiteral("http://192.168.0.7/a.txt"),
+        QStringLiteral("http://172.16.0.1/a.txt"),       QStringLiteral("http://169.254.169.254/latest/meta-data"),
+        QStringLiteral("http://127.0.0.1:9/a.txt"),      QStringLiteral("http://[::1]/a.txt"),
+        QStringLiteral("http://[fd00::1]/a.txt"),        QStringLiteral("http://[fe80::1]/a.txt"),
+        QStringLiteral("http://0.0.0.0/a.txt"),          QStringLiteral("http://[::ffff:10.0.0.1]/a.txt"),
+        QStringLiteral("http://[::127.0.0.1]/a.txt"),    QStringLiteral("http://[::a00:1]/a.txt"),
+        QStringLiteral("http://[64:ff9b::7f00:1]/a.txt"), QStringLiteral("http://[64:ff9b::a9fe:a9fe]/a.txt"),
+        QStringLiteral("http://[2002:7f00:1::1]/a.txt")};
+    for (const QString &url : urls) {
+        SCOPED_TRACE(url.toStdString());
+        auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
+        editor->setRemoteReferences(true);
+        EXPECT_TRUE(waitForListing(*editor, QStringLiteral("local address")));
+        EXPECT_FALSE(editor->referencesPending());
+    }
+}
+
+TEST(ReferenceBlockTest, ANameThatResolvesToLoopbackIsRefusedBeforeAnyRequest)
+{
+    FakeServer server;
+    auto editor = referenceEditorWith(
+        QStringLiteral("link: http://localhost:%1/a.txt\n").arg(server.server.serverPort()), QString());
+    editor->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("local address")));
+    QTest::qWait(200);
+    EXPECT_EQ(server.requests, 0);
+
+    // by address, with no allowance for it, the same
+    auto direct = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url()), QString());
+    direct->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*direct, QStringLiteral("local address")));
+    QTest::qWait(200);
+    EXPECT_EQ(server.requests, 0);
+}
+
+TEST(ReferenceBlockTest, ALookupThatEndsAfterTheSettingIsOffSendsNothing)
+{
+    // "localhost" stands for a public name: both of its addresses are allowed
+    MarkdownEditor::allowReferenceAddressForTests(QStringLiteral("127.0.0.1,::1"));
+    const auto restore = qScopeGuard([] { MarkdownEditor::allowReferenceAddressForTests(QString()); });
+    FakeServer server;
+    const QString note = QStringLiteral("link: http://localhost:%1/a.txt\n").arg(server.server.serverPort());
+
+    // control: left on, the request does arrive
+    {
+        auto editor = referenceEditorWith(note, QString());
+        editor->setRemoteReferences(true);
+        EXPECT_TRUE(QTest::qWaitFor([&] { (void)editor->grab(); return server.requests > 0; }, 5000));
+    }
+    server.requests = 0;
+
+    // the lookup is asked for in the layout and answers on the event loop: the setting goes off in between
+    auto off = referenceEditorWith(note, QString());
+    off->setRemoteReferences(true);
+    (void)off->grab();
+    off->setRemoteReferences(false);
+    QTest::qWait(500);
+    EXPECT_EQ(server.requests, 0);
+
+    // and so does the plugin
+    auto plugin = referenceEditorWith(note, QString());
+    plugin->setRemoteReferences(true);
+    (void)plugin->grab();
+    auto none = plugin->parseOptions();
+    none.codeStyler = false;
+    plugin->setParseOptions(none);
+    QTest::qWait(500);
+    EXPECT_EQ(server.requests, 0);
+}
+
+TEST(ReferenceBlockTest, ARedirectToALocalHostIsRefusedToo)
+{
+    AllowLoopback allow; // 127.0.0.1 stands for "a public host" here; 127.0.0.2 is where it must not go
+    FakeServer inner(QHostAddress(QStringLiteral("127.0.0.2")));
+    FakeServer outer;
+    outer.redirectTo = QByteArray("http://127.0.0.2:") + QByteArray::number(inner.server.serverPort()) + "/secret.txt";
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(outer.url(QStringLiteral("/a.txt"))), QString());
+    editor->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("local address")));
+    EXPECT_EQ(outer.requests, 1);
+    EXPECT_EQ(inner.requests, 0);
+}
+
+TEST(ReferenceBlockTest, ARedirectToAPublicHostIsFollowed)
+{
+    AllowLoopback allow;
+    FakeServer target;
+    target.body = "landed\n";
+    FakeServer outer;
+    outer.redirectTo = target.url(QStringLiteral("/b.txt")).toUtf8();
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(outer.url(QStringLiteral("/a.txt"))), QString());
+    editor->setRemoteReferences(true);
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("landed")));
+    EXPECT_EQ(target.requests, 1);
+}
+
+// --- what is kept, and when it is dropped ----------------------------------------------------
+
+TEST(ReferenceBlockTest, TurningThePluginOffDropsTheCacheTheWatchesAndTheFetchedText)
+{
+    AllowLoopback allow;
+    FakeServer server;
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    const QString note = QStringLiteral("```reference\nfile: hello.py\n```\n\n```reference\nlink: %1\n```\n\nafter\n")
+                             .arg(server.url(QStringLiteral("/kept.txt")));
+    auto editor = stylerEditorWith(note, true);
+    editor->setLinkResolver([path](const QString &) { return path; });
+    editor->setVaultRootProvider([root = dir.path()] { return root; });
+    editor->setRemoteReferences(true);
+    editor->setCursorOffset(note.size() - 2);
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            (void)editor->grab();
+            return editor->referenceCacheSize() == 2 && !editor->referencesPending();
+        },
+        5000));
+    EXPECT_GT(editor->referenceWatchedForTests(), 0);
+    EXPECT_GT(MarkdownEditor::remoteReferenceCopiesForTests(), 0);
+
+    ParseOptions off = editor->parseOptions();
+    off.codeStyler = false;
+    editor->setParseOptions(off);
+    EXPECT_EQ(editor->referenceCacheSize(), 0);
+    EXPECT_EQ(editor->referenceWatchedForTests(), 0);
+    EXPECT_EQ(MarkdownEditor::remoteReferenceCopiesForTests(), 0);
+}
+
+TEST(ReferenceBlockTest, TurningRemoteFetchingOffForgetsWhatWasFetched)
+{
+    AllowLoopback allow;
+    FakeServer server;
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url(QStringLiteral("/gone.txt"))), QString());
+    editor->setRemoteReferences(true);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("remote line 1")));
+    ASSERT_EQ(editor->referenceCacheSize(), 1);
+
+    editor->setRemoteReferences(false);
+    EXPECT_EQ(editor->referenceCacheSize(), 0);
+    EXPECT_EQ(MarkdownEditor::remoteReferenceCopiesForTests(), 0);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("off")));
+}
+
+TEST(ReferenceBlockTest, ARelayoutDoesNotCutTheFileAgain)
+{
+    QTemporaryDir dir;
+    QByteArray bytes;
+    for (int i = 1; i <= 200; ++i)
+        bytes += "line " + QByteArray::number(i) + "\n";
+    const QString path = writeTextFile(dir, QStringLiteral("many.txt"), bytes);
+    auto editor = referenceEditorWith(QStringLiteral("file: many.txt\nstart: 20\nend: 40\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("line 40")));
+    const int scans = MarkdownEditor::referenceScansForTests();
+    EXPECT_GT(scans, 0);
+    for (int width : {700, 640, 800, 900}) {
+        editor->resize(width, 500);
+        (void)editor->grab();
+    }
+    EXPECT_EQ(MarkdownEditor::referenceScansForTests(), scans) << "the excerpt is kept per file, range and theme";
+    EXPECT_GT(editor->panelFormatCountAt(kInsideReference) + 1, 0);
+}
+
+TEST(ReferenceBlockTest, AVeryLongLineIsCutAndABinaryFileIsReadOnce)
+{
+    QTemporaryDir dir;
+    const QString minified = writeTextFile(dir, QStringLiteral("min.js"), QByteArray(100000, 'x') + "\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: min.js\n"), minified);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("xxx")));
+    EXPECT_LT(listingOf(*editor).size(), 3000);
+
+    static std::atomic<int> reads{0};
+    reads = 0;
+    const QString binary = writeTextFile(dir, QStringLiteral("blob.bin"), QByteArray("ab\0cd", 5) + QByteArray(100, 'x'));
+    MarkdownEditor::setReferenceReadHookForTests([](const QString &) { ++reads; });
+    auto second = referenceEditorWith(QStringLiteral("file: blob.bin\n"), binary);
+    const bool said = waitForListing(*second, QStringLiteral("not a text file"));
+    for (int width : {700, 640, 800})
+        second->resize(width, 500), (void)second->grab();
+    QTest::qWait(100);
+    MarkdownEditor::setReferenceReadHookForTests(nullptr);
+    ASSERT_TRUE(said);
+    EXPECT_EQ(reads.load(), 1) << "a file that is not text is not asked for again at every layout";
+}
+
+TEST(CodeStylerEditorTest, IgnoreWinsOverAnOptionLine)
+{
+    auto plain = stylerEditorWith(QStringLiteral("```cpp\nint a;\n```\n"));
+    auto ignored = stylerEditorWith(QStringLiteral("```cpp ignore\n#| title: X\nint a;\n```\n"));
+    EXPECT_GT(plain->documentHeight() - ignored->documentHeight(), 10) << "no header strip";
+}
+
+TEST(CodeStylerEditorTest, InlineLanguagePrefixIsTextInSourceModeAndHiddenInReading)
+{
+    const QString note = QStringLiteral("Say `{python} import os` now.\n\nend\n");
+    auto editor = stylerEditorWith(note);
+    editor->setCursorOffset(note.size() - 2);
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("{python}")));
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("{python}")));
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("{python}")));
 }

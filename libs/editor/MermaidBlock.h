@@ -2,6 +2,7 @@
 
 #include <functional>
 
+#include <QImage>
 #include <QString>
 
 #include "MarkdownEditor.h"
@@ -54,6 +55,11 @@ MarkdownEditor::CodeBlockRenderer mermaidRenderer(const QString &tool, std::func
 /// PlantUML (--dark-mode), Graphviz (default colours, the user's own
 /// attributes win) and TikZ (black becomes the text colour on a dark theme).
 MarkdownEditor::CodeBlockRenderer diagramRenderer(DiagramKind kind, const QString &tool, std::function<Theme()> theme);
+
+/// `svg` drawn at `width` logical pixels (never wider than it is) and `ratio` device pixels to each, or a
+/// null image when it cannot be drawn. `logicalScale`, when given, is set to the logical pixels one SVG
+/// unit came to (what a click in the image is turned back into the SVG's own coordinates by).
+QImage rasteriseSVG(const QByteArray &svg, int width, qreal ratio, qreal *logicalScale = nullptr);
 
 /// A renderer that only reads MermaidCache.h's directory and answers at once
 /// (the editor still posts the answer, so the caller processes events): the

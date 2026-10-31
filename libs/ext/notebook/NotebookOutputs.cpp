@@ -44,12 +44,15 @@ NotebookOutput outputFromMimeBundle(const QJsonObject &data)
     if (data.contains(QLatin1String("image/png"))) {
         output.kind = NotebookOutput::Kind::ImagePng;
         output.imageBytes = QByteArray::fromBase64(text("image/png").toLatin1());
+        output.alt = stripAnsi(text("text/plain")); // the twin a notebook file keeps beside it
     } else if (data.contains(QLatin1String("image/jpeg"))) {
         output.kind = NotebookOutput::Kind::ImagePng; // the editor reads either
         output.imageBytes = QByteArray::fromBase64(text("image/jpeg").toLatin1());
+        output.alt = stripAnsi(text("text/plain"));
     } else if (data.contains(QLatin1String("image/svg+xml"))) {
         output.kind = NotebookOutput::Kind::ImageSvg;
         output.text = text("image/svg+xml");
+        output.alt = stripAnsi(text("text/plain"));
     } else if (data.contains(QLatin1String("text/html"))) {
         output.kind = NotebookOutput::Kind::Html;
         output.text = text("text/html");

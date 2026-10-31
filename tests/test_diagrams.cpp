@@ -236,6 +236,44 @@ TEST_F(DiagramTest, TikZAcceptsTikZJaxsBlockAndABareTikzpicture)
     EXPECT_FALSE(bare->result.isMarkdown) << bare->result.text.toStdString();
 }
 
+TEST_F(DiagramTest, TikZJaxsReadmeExamplesDrawEndToEndInAnEditor)
+{
+    NEED("latex");
+    // The three styles TikZJax's README shows: a package with its own commands,
+    // pgfplots' axes, and tikz-cd's commutative diagram.
+    const QString circuit = QStringLiteral(
+        "\\usepackage{circuitikz}\n\\begin{document}\n\n\\begin{circuitikz}[american, voltage shift=0.5]\n"
+        "\\draw (0,0)\nto[isourceAM, l=$I_0$, v=$v_{in}$] (0,3)\nto[short, -*, i=$i_0$] (2,3)\n"
+        "to[R=$R_1$, i=$i_1$, -*] (2,0) -- (0,0);\n\\draw (2,3) -- (4,3)\nto[R=$R_2$, i=$i_2$] (4,0) to[short, -*] (2,0);\n"
+        "\\end{circuitikz}\n\n\\end{document}");
+    const QString plot = QStringLiteral(
+        "\\usepackage{pgfplots}\n\\pgfplotsset{compat=1.16}\n\n\\begin{document}\n\\begin{tikzpicture}\n"
+        "\\begin{axis}[axis lines = left, xlabel = $x$, ylabel = {$f(x)$},]\n"
+        "\\addplot [domain=-10:10, samples=100, color=red,] {x^2 - 2*x - 1};\n\\addlegendentry{$x^2 - 2x - 1$}\n"
+        "\\end{axis}\n\\end{tikzpicture}\n\\end{document}");
+    const QString diagram = QStringLiteral(
+        "\\usepackage{tikz-cd}\n\\begin{document}\n\\begin{tikzcd}\nA \\arrow[r, \"\\phi\"] \\arrow[d, red]\n"
+        "& B \\arrow[d, \"\\psi\", blue] \\\\\nC \\arrow[r, green] & D\n\\end{tikzcd}\n\\end{document}");
+
+    MarkdownEditor editor;
+    editor.resize(900, 700);
+    editor.setCodeBlockRenderer({QStringLiteral("tikz")}, rendererFor(DiagramKind::TikZ, QString()));
+    editor.show();
+    QString note;
+    for (const QString &source : {circuit, plot, diagram})
+        note += QStringLiteral("```tikz\n") + source + QStringLiteral("\n```\n\n");
+    editor.setNoteText(note + QStringLiteral("after\n"));
+    editor.setCursorOffset(editor.noteText().size());
+    for (const QString &source : {circuit, plot, diagram}) {
+        SCOPED_TRACE(source.toStdString());
+        const qsizetype at = editor.noteText().indexOf(source);
+        // The fence is drawn in the editor, and the tool's SVG is what the cache holds.
+        EXPECT_TRUE(QTest::qWaitFor([&] { return !editor.embedImageSizeAt(at).isEmpty(); }, 90000)) << "not drawn";
+        const QByteArray svg = cached(DiagramKind::TikZ, source);
+        EXPECT_TRUE(svg.contains("<path") || svg.contains("<circle")) << svg.left(300).constData();
+    }
+}
+
 TEST_F(DiagramTest, TikZBlackBecomesTheTextColourOnADarkThemeAndOtherColoursStay)
 {
     NEED("latex");

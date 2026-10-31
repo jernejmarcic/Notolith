@@ -46,6 +46,8 @@ public:
     /// isViewFile()/openView()'s isModified() dispatch expects.
     bool isModified() const { return !m_undo.isClean(); }
     QString path() const { return m_document.path(); }
+    /// A rename or move: saves go to `path`, and the pages already drawn stay (the cache is keyed by path).
+    void setPath(const QString &path);
     PdfDocument *document() { return &m_document; }
 
     QUndoStack *undoStack() { return &m_undo; }

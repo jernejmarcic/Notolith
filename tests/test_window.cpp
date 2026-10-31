@@ -16,6 +16,10 @@
 #include <functional>
 #include <map>
 
+#include <sys/wait.h>
+#ifdef NOTEAPPC_HAVE_HISTORY
+#include "NoteHistory.h"
+#endif
 #include <QDialogButtonBox>
 #include <QAbstractButton>
 #include <QApplication>
@@ -36,6 +40,9 @@
 #include <QInputDialog>
 #include <QDoubleSpinBox>
 #include <QLabel>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QLockFile>
 #include <QPointer>
 #include <QScopeGuard>
 #include <QSqlDatabase>
@@ -94,6 +101,7 @@
 #include <QClipboard>
 #include <QSignalSpy>
 #include <QAction>
+#include <QBuffer>
 #include <QDate>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -122,7 +130,16 @@
 #include "InkCanvas.h"
 #include "InkFormat.h"
 #endif
+#ifdef NOTEAPPC_STATIC_INK
+#include <QtPlugin>
+Q_IMPORT_PLUGIN(InkModule) // NOTEAPPC_STATIC_MODULES: the ink module is linked into this test, as into the app
+#endif
 #include "ToggleSwitch.h"
+#ifdef NOTEAPPC_HAVE_PANDOC
+#include "DimMenu.h"
+#include "Pandoc.h"
+#include "PandocRunner.h"
+#endif
 #include "QuickSwitcher.h"
 #include "Snapshots.h"
 #include "FileIcons.h"
@@ -136,6 +153,9 @@
 using noteAppC::Index;
 using noteAppC::LaunchTarget;
 using noteAppC::MainWindow;
+#ifdef NOTEAPPC_HAVE_HISTORY
+using noteAppC::NoteHistory;
+#endif
 using noteAppC::SingleInstance;
 using noteAppC::MarkdownEditor;
 using noteAppC::Settings;
@@ -165,6 +185,27 @@ QByteArray readAll(const QString &path)
     QFile file(path);
     EXPECT_TRUE(file.open(QIODevice::ReadOnly)) << path.toStdString();
     return file.readAll();
+}
+
+/// A private settings directory for a test that flips switches, put back after.
+struct PrivateConfig {
+    QTemporaryDir dir;
+    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    PrivateConfig() { qputenv("XDG_CONFIG_HOME", dir.path().toUtf8()); }
+    ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
+};
+
+/// A settings directory as every real user has one: it exists and holds what the app remembers.
+/// The big-note scroll tests run against it - they were exact only while the directory did not
+/// exist yet, because the editor re-laid the note out whenever anything was saved into it.
+/// Write it into a PrivateConfig of the test's own (put back after) and call this through
+/// ASSERT_NO_FATAL_FAILURE, so a failed write fails the test instead of running it without.
+void useAConfigDirectory()
+{
+    ASSERT_TRUE(QDir().mkpath(Settings::configDirectory()));
+    QFile remembered(Settings::indexFile());
+    ASSERT_TRUE(remembered.open(QIODevice::WriteOnly));
+    ASSERT_GT(remembered.write("[state]\nrecent-vaults = /nowhere\n"), 0);
 }
 
 /// A vault with one LF note, one CRLF note and one non-note file.
@@ -250,6 +291,8 @@ int topLine(MarkdownEditor *editor)
 // remembered scroll pixel alone means different text in the two.
 TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 {
+    PrivateConfig config; // a used one of its own, the suite's shared one left as it was
+    ASSERT_NO_FATAL_FAILURE(useAConfigDirectory());
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -273,6 +316,8 @@ TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 
 TEST_F(WindowTest, AReopenedClosedTabOfABigNoteLandsAtTheTextItWasClosedAt)
 {
+    PrivateConfig config; // a used one of its own, the suite's shared one left as it was
+    ASSERT_NO_FATAL_FAILURE(useAConfigDirectory());
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -1216,6 +1261,576 @@ TEST_F(WindowTest, PopoutWindowsOffBuildsNothingAndDocksEverything)
     }
     qputenv("XDG_CONFIG_HOME", previous);
 }
+
+// --- pandoc ----------------------------------------------------------------------------
+
+#ifdef NOTEAPPC_HAVE_PANDOC
+namespace {
+
+/// Types `path` into the pandoc path row of the open settings and leaves the field, as a person does.
+void setPandocPath(MainWindow &window, const QString &path)
+{
+    QLineEdit *edit = nullptr;
+    EXPECT_TRUE(QTest::qWaitFor([&] {
+        return (edit = settingsWidget<QLineEdit>(window, QStringLiteral("settingsLineEdit_pandoc.path"))) != nullptr;
+    }, 3000));
+    if (!edit)
+        return;
+    edit->clear();
+    QTest::keyClicks(edit, path);
+    QTest::keyClick(edit, Qt::Key_Return); // editingFinished: the page looks again
+}
+
+/// Writes a stand-in pandoc into `bin`: a shell script that runs `body` in the scratch folder, as pandoc would be
+/// run, with `$last` the input file. Returns its path.
+QString fakePandoc(const QTemporaryDir &bin, const QByteArray &body)
+{
+    QFile fake(bin.filePath(QStringLiteral("pandoc")));
+    EXPECT_TRUE(fake.open(QIODevice::WriteOnly));
+    fake.write("#!/bin/sh\nfor a; do last=\"$a\"; done\n" + body + "\n");
+    fake.close();
+    fake.setPermissions(fake.permissions() | QFileDevice::ExeOwner);
+    return fake.fileName();
+}
+
+/// The pandoc to use, written to the (isolated) settings before the window reads them.
+void usePandoc(const QString &program)
+{
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("pandoc.path"), program);
+    EXPECT_TRUE(settings.save());
+}
+
+/// What the tree's context menu on `file` shows of pandoc: the "dimmed" mark of its entries.
+struct PandocMenu {
+    bool exportListed = false, exportDimmed = false, exportEntriesDimmed = false, importListed = false, importDimmed = false;
+};
+
+PandocMenu pandocMenuOn(noteAppC::FileTree *tree, const QString &file)
+{
+    PandocMenu seen;
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    QTimer::singleShot(0, [&seen] {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (!menu)
+            return;
+        for (QAction *action : menu->actions()) {
+            if (action->text() == QLatin1String("Export with pandoc")) {
+                seen.exportListed = true;
+                seen.exportDimmed = action->property("dimmed").toBool();
+                seen.exportEntriesDimmed = !action->menu()->actions().isEmpty();
+                for (QAction *entry : action->menu()->actions())
+                    seen.exportEntriesDimmed = seen.exportEntriesDimmed && entry->property("dimmed").toBool() && entry->isEnabled();
+            } else if (action->text() == QLatin1String("Import with pandoc")) {
+                seen.importListed = true;
+                seen.importDimmed = action->property("dimmed").toBool() && action->isEnabled();
+            }
+        }
+        menu->close();
+    });
+    const QPoint at = tree->visualRect(model->index(file)).center();
+    QContextMenuEvent event(QContextMenuEvent::Mouse, at, tree->viewport()->mapToGlobal(at));
+    QCoreApplication::sendEvent(tree->viewport(), &event);
+    return seen;
+}
+
+} // namespace
+
+// No pandoc: the plugin stays listed but greyed, never written on; every way in says why, and gets to the path.
+TEST_F(WindowTest, PandocMissingStaysListedAndExplains)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+        command(window, "app:open-settings")->trigger();
+        setPandocPath(window, QStringLiteral("/nonexistent/dir/pandoc")); // a fake path, wherever the test runs
+
+        noteAppC::ToggleSwitch *toggle = nullptr;
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return (toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.pandoc"))) != nullptr
+                   && toggle->graphicsEffect() != nullptr; // the page rebuilt, with the plugin greyed
+        }, 3000));
+        EXPECT_FALSE(toggle->isChecked());
+        toggle->click();
+        EXPECT_FALSE(toggle->isChecked()) << "it cannot be switched";
+        auto *dialog = window.findChild<QMessageBox *>(QStringLiteral("pandocMissingDialog"));
+        ASSERT_NE(dialog, nullptr);
+        EXPECT_TRUE(dialog->text().contains(QStringLiteral("pandoc"))) << dialog->text().toStdString();
+        EXPECT_TRUE(dialog->text().contains(QStringLiteral("/nonexistent/dir/pandoc")));
+        EXPECT_TRUE(dialog->informativeText().contains(QStringLiteral("pacman -S pandoc")));
+        EXPECT_TRUE(dialog->informativeText().contains(QStringLiteral("pandoc.org")));
+        EXPECT_NE(dialog->findChild<QPushButton *>(QStringLiteral("pandocSetPath")), nullptr);
+        dialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        // The commands are listed (on by default) and enabled, and each opens the same dialog.
+        for (const char *id : {"pandoc:export-docx", "pandoc:export-other", "pandoc:import"}) {
+            QAction *action = command(window, id);
+            ASSERT_NE(action, nullptr) << id;
+            EXPECT_TRUE(action->isEnabled()) << id;
+            action->trigger();
+            auto *shown = window.findChild<QMessageBox *>(QStringLiteral("pandocMissingDialog"));
+            EXPECT_NE(shown, nullptr) << id;
+            if (shown)
+                shown->close();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// The entries of a pandoc that is not there are drawn disabled, not renamed, and still do their work: the palette
+// row and the file explorer's menu entries are "dimmed" (a mark the menu and the palette read), yet clickable.
+TEST_F(WindowTest, MissingPandocDimsItsEntriesButTheyStillExplain)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    write(QStringLiteral("Report.docx"), "not really a document\n");
+    usePandoc(QStringLiteral("/nonexistent/dir/pandoc"));
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+
+        command(window, "command-palette:open")->trigger();
+        auto *palette = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("commandPalette"));
+        ASSERT_NE(palette, nullptr);
+        auto *list = palette->findChild<QListWidget *>(QStringLiteral("quickSwitcherResults"));
+        auto *query = palette->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+        ASSERT_TRUE(list && query);
+        QTest::keyClicks(query, QStringLiteral("Pandoc: Import"));
+        ASSERT_GT(list->count(), 0);
+        QListWidgetItem *row = list->item(0);
+        EXPECT_EQ(row->text(), QStringLiteral("Pandoc: Import a file as a note...")) << "the name is not changed";
+        EXPECT_EQ(row->foreground().color(), list->palette().color(QPalette::Disabled, QPalette::Text));
+        EXPECT_TRUE(command(window, "pandoc:import")->isEnabled());
+        EXPECT_FALSE(command(window, "pandoc:import")->toolTip().isEmpty());
+        QTest::keyClick(query, Qt::Key_Return); // chosen like any other row: it explains
+        auto *dialog = window.findChild<QMessageBox *>(QStringLiteral("pandocMissingDialog"));
+        ASSERT_NE(dialog, nullptr);
+        dialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        // An ordinary row is not dimmed.
+        command(window, "command-palette:open")->trigger();
+        QTest::keyClicks(query, QStringLiteral("settings"));
+        ASSERT_GT(list->count(), 0);
+        EXPECT_NE(list->item(0)->foreground().color(), list->palette().color(QPalette::Disabled, QPalette::Text));
+        palette->hide();
+
+        auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+        ASSERT_NE(tree, nullptr);
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        WAIT_TRUE(tree->rootIndex().isValid() && tree->visualRect(model->index(path(QStringLiteral("Report.docx")))).isValid()
+                      && tree->visualRect(model->index(path(QStringLiteral("Welcome.md")))).isValid(), 5000);
+        const PandocMenu onNote = pandocMenuOn(tree, path(QStringLiteral("Welcome.md")));
+        EXPECT_TRUE(onNote.exportListed);
+        EXPECT_TRUE(onNote.exportDimmed);
+        EXPECT_TRUE(onNote.exportEntriesDimmed);
+        const PandocMenu onDocument = pandocMenuOn(tree, path(QStringLiteral("Report.docx")));
+        EXPECT_TRUE(onDocument.importListed);
+        EXPECT_TRUE(onDocument.importDimmed);
+
+        // The menu draws a dimmed entry as disabled and an ordinary one as it is.
+        noteAppC::DimMenu menu;
+        QAction *plain = menu.addAction(QStringLiteral("plain"));
+        QAction *dimmed = menu.addAction(QStringLiteral("dimmed"));
+        dimmed->setProperty("dimmed", true);
+        EXPECT_TRUE(menu.optionFor(plain).state & QStyle::State_Enabled);
+        EXPECT_FALSE(menu.optionFor(dimmed).state & QStyle::State_Enabled);
+        EXPECT_TRUE(dimmed->isEnabled());
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// With pandoc there, nothing is dimmed.
+TEST_F(WindowTest, FoundPandocDimsNothing)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    write(QStringLiteral("Report.docx"), "x\n");
+    usePandoc(fakePandoc(bin, "exit 0"));
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+        command(window, "command-palette:open")->trigger();
+        EXPECT_FALSE(command(window, "pandoc:import")->property("dimmed").toBool());
+        auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        WAIT_TRUE(tree->rootIndex().isValid() && tree->visualRect(model->index(path(QStringLiteral("Report.docx")))).isValid(), 5000);
+        const PandocMenu onDocument = pandocMenuOn(tree, path(QStringLiteral("Report.docx")));
+        EXPECT_TRUE(onDocument.importListed);
+        EXPECT_FALSE(onDocument.importDimmed);
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// An export never overwrites a note: not the one it is made from, not another of the vault. The stand-in leaves a
+// mark when it runs, so "refused" is told from "ran and wrote nothing".
+TEST_F(WindowTest, PandocExportRefusesToOverwriteANote)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir out;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    const QString mark = out.filePath(QStringLiteral("ran"));
+    usePandoc(fakePandoc(bin, "cat > /dev/null; echo ran > '" + mark.toUtf8() + "'; echo x > \"$last\""));
+    write(QStringLiteral("Plan.md"), "# Plan\n\n[[Welcome]]\n");
+    write(QStringLiteral("Other.md"), "other\n");
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Plan.md"))));
+        const QByteArray before = readAll(path(QStringLiteral("Plan.md")));
+
+        for (const QString &target : {path(QStringLiteral("Plan.md")), path(QStringLiteral("Other.md")),
+                                      path(QStringLiteral("./Plan.md"))}) {
+            QMetaObject::invokeMethod(&window, "exportWithPandoc", Q_ARG(QString, path(QStringLiteral("Plan.md"))),
+                                      Q_ARG(QString, QStringLiteral("other:gfm")), Q_ARG(QString, target));
+            auto *refusal = window.findChild<QMessageBox *>(QStringLiteral("pandocRefusedDialog"));
+            ASSERT_NE(refusal, nullptr) << target.toStdString();
+            EXPECT_TRUE(refusal->text().contains(QStringLiteral("overwrite")));
+            refusal->close();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+        EXPECT_FALSE(QFileInfo::exists(mark)) << "pandoc was never started";
+        EXPECT_EQ(readAll(path(QStringLiteral("Plan.md"))), before);
+        EXPECT_EQ(readAll(path(QStringLiteral("Other.md"))), QByteArray("other\n"));
+
+        // A new file, even a Markdown one beside it, is fine.
+        const QString fresh = path(QStringLiteral("Plan (gfm).md"));
+        QMetaObject::invokeMethod(&window, "exportWithPandoc", Q_ARG(QString, path(QStringLiteral("Plan.md"))),
+                                  Q_ARG(QString, QStringLiteral("other:gfm")), Q_ARG(QString, fresh));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo::exists(mark) && QFileInfo::exists(fresh); }, 10000));
+        EXPECT_EQ(window.findChild<QMessageBox *>(QStringLiteral("pandocRefusedDialog")), nullptr);
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// Several documents dropped at once are all imported, one after the other, and a failure does not stop the rest.
+TEST_F(WindowTest, PandocImportsEveryDroppedFileInTurn)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    // Slow enough that the second file arrives while the first runs; fails for the one named broken.
+    usePandoc(fakePandoc(bin, "sleep 0.2\ncase \"$last\" in *broken.docx) echo boom >&2; exit 1;; esac\n"
+                              "printf 'imported %s\\n' \"$(basename \"$last\")\" > out.md"));
+    QStringList files;
+    for (const char *name : {"first.docx", "broken.docx", "third.docx"}) {
+        QFile file(inputs.filePath(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("x");
+        files << file.fileName();
+    }
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        // The failure's box is modal; close whichever is up.
+        QTimer closer;
+        QObject::connect(&closer, &QTimer::timeout, &window, [&window] {
+            for (auto *box : window.findChildren<QMessageBox *>()) {
+                if (box->isVisible())
+                    box->close();
+            }
+        });
+        closer.start(20);
+        for (const QString &file : files)
+            QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, file), Q_ARG(QString, QString()));
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return QFileInfo::exists(path(QStringLiteral("first.md"))) && QFileInfo::exists(path(QStringLiteral("third.md")));
+        }, 20000));
+        EXPECT_NE(readAll(path(QStringLiteral("first.md"))).indexOf("imported first.docx"), -1);
+        EXPECT_NE(readAll(path(QStringLiteral("third.md"))).indexOf("imported third.docx"), -1);
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("broken.md")))) << "a failed import leaves no note";
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// A picture that cannot be copied into the vault is reported, and the note does not link the file that is not there.
+TEST_F(WindowTest, PandocImportReportsAPictureItCouldNotCopy)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "mkdir media; echo png > media/x.png; printf 'text ![a](media/x.png)\\n' > out.md"));
+    QFile input(inputs.filePath(QStringLiteral("Doc.docx")));
+    ASSERT_TRUE(input.open(QIODevice::WriteOnly));
+    input.write("x");
+    input.close();
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    write(QStringLiteral(".obsidian/app.json"), R"({"attachmentFolderPath": "assets"})");
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("assets")));
+    const QFile::Permissions open = QFile::permissions(path(QStringLiteral("assets")));
+    ASSERT_TRUE(QFile::setPermissions(path(QStringLiteral("assets")), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    if (QFile(path(QStringLiteral("assets/probe"))).open(QIODevice::WriteOnly)) {
+        QFile::setPermissions(path(QStringLiteral("assets")), open);
+        GTEST_SKIP() << "this user can write into a read-only folder (root)";
+    }
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, input.fileName()), Q_ARG(QString, QString()));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo::exists(path(QStringLiteral("Doc.md"))); }, 20000));
+        const QString note = QString::fromUtf8(readAll(path(QStringLiteral("Doc.md"))));
+        EXPECT_FALSE(note.contains(QStringLiteral("media/x.png"))) << note.toStdString();
+        EXPECT_FALSE(note.contains(QStringLiteral("![["))) << note.toStdString();
+        EXPECT_TRUE(note.contains(QStringLiteral("could not be imported"))) << note.toStdString();
+        ASSERT_TRUE(QTest::qWaitFor([&] { return window.findChild<QMessageBox *>(QStringLiteral("pandocMediaDialog")) != nullptr; }, 5000));
+        EXPECT_TRUE(window.findChild<QMessageBox *>(QStringLiteral("pandocMediaDialog"))->text().contains(QStringLiteral("x.png")));
+    }
+    QFile::setPermissions(path(QStringLiteral("assets")), open);
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// pandoc copies the pictures first and makes the note after: a note that cannot be made takes them back out.
+TEST_F(WindowTest, PandocImportTakesItsPicturesBackWhenTheNoteCannotBeMade)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "mkdir media; echo png > media/x.png; printf 'text ![a](media/x.png)\\n' > out.md"));
+    QFile input(inputs.filePath(QStringLiteral("Doc.docx")));
+    ASSERT_TRUE(input.open(QIODevice::WriteOnly));
+    input.write("x");
+    input.close();
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    write(QStringLiteral(".obsidian/app.json"), R"({"attachmentFolderPath": "assets"})");
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Locked")));
+    const QFile::Permissions open = QFile::permissions(path(QStringLiteral("Locked")));
+    ASSERT_TRUE(QFile::setPermissions(path(QStringLiteral("Locked")), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    if (QFile(path(QStringLiteral("Locked/probe"))).open(QIODevice::WriteOnly)) {
+        QFile::setPermissions(path(QStringLiteral("Locked")), open);
+        GTEST_SKIP() << "this user can write into a read-only folder (root)";
+    }
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        bool warned = false;
+        QTimer closer; // "Could not create the note" is modal
+        QObject::connect(&closer, &QTimer::timeout, &window, [&] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                warned = warned || box->text().contains(QStringLiteral("Could not create the note"));
+                box->close();
+            }
+        });
+        closer.start(20);
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, input.fileName()), Q_ARG(QString, QStringLiteral("Locked")));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return warned; }, 20000));
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("assets/x.png")))) << "the picture of a note that is not there";
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("assets")))) << "and the folder it made for it";
+    }
+    QFile::setPermissions(path(QStringLiteral("Locked")), open);
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// A file waiting for pandoc was dropped for the vault that was open then: another vault opened since does not get it.
+TEST_F(WindowTest, AQueuedPandocImportIsDroppedWhenAnotherVaultIsOpened)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    QTemporaryDir other;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "sleep 0.3\nprintf 'imported %s\\n' \"$(basename \"$last\")\" > out.md"));
+    QStringList files;
+    for (const char *name : {"first.docx", "second.docx"}) {
+        QFile file(inputs.filePath(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("x");
+        files << file.fileName();
+    }
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        for (const QString &file : files)
+            QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, file), Q_ARG(QString, QString()));
+        window.openVault(other.path()); // the second is queued behind the first, which still runs
+        QTest::qWait(2500);
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("second.md"))));
+        EXPECT_FALSE(QFileInfo::exists(other.filePath(QStringLiteral("second.md")))) << "not imported into the vault opened since";
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// A click on a reference block's header opens a note in Notolith; any other file is not handed to the system.
+TEST_F(WindowTest, AReferenceHeaderOpensNotesAndNeverHandsOtherFilesToTheSystem)
+{
+    write(QStringLiteral("run.sh"), "#!/bin/sh\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    MarkdownEditor *editor = window.editor();
+    write(QStringLiteral("Other.md"), "# Other\n");
+    ASSERT_TRUE(QMetaObject::invokeMethod(editor, "referenceActivated", Q_ARG(QString, path(QStringLiteral("run.sh")))));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("run.sh")));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("not a note")));
+    ASSERT_TRUE(QMetaObject::invokeMethod(editor, "referenceActivated", Q_ARG(QString, path(QStringLiteral("Other.md")))));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Other\n"));
+}
+
+// An import that is already running when another vault opens belongs to the vault it was started for.
+TEST_F(WindowTest, ARunningPandocImportIsDroppedWhenAnotherVaultIsOpened)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    QTemporaryDir other;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "sleep 0.3\nprintf 'imported %s\\n' \"$(basename \"$last\")\" > out.md"));
+    QFile file(inputs.filePath(QStringLiteral("first.docx")));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("x");
+    file.close();
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, file.fileName()), Q_ARG(QString, QString()));
+        window.openVault(other.path()); // pandoc is still running
+        QTest::qWait(2000);
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("first.md"))));
+        EXPECT_FALSE(QFileInfo::exists(other.filePath(QStringLiteral("first.md")))) << "not imported into the vault opened since";
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// Pandoc found (a stand-in executable): the switch is a switch again, and off takes the commands away.
+TEST_F(WindowTest, PandocFoundIsToggleable)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QFile fake(bin.filePath(QStringLiteral("pandoc")));
+    ASSERT_TRUE(fake.open(QIODevice::WriteOnly));
+    fake.write("#!/bin/sh\nexit 0\n");
+    fake.close();
+    fake.setPermissions(fake.permissions() | QFileDevice::ExeOwner);
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        command(window, "app:open-settings")->trigger();
+        setPandocPath(window, fake.fileName());
+
+        noteAppC::ToggleSwitch *toggle = nullptr;
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return (toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.pandoc"))) != nullptr
+                   && toggle->graphicsEffect() == nullptr;
+        }, 3000));
+        EXPECT_TRUE(toggle->isChecked()) << "on by default";
+        EXPECT_TRUE(command(window, "pandoc:export-docx")->isEnabled());
+        toggle->click();
+        EXPECT_FALSE(toggle->isChecked());
+        EXPECT_EQ(window.findChild<QMessageBox *>(QStringLiteral("pandocMissingDialog")), nullptr);
+        for (const char *id : {"pandoc:export-docx", "pandoc:export-html", "pandoc:export-other", "pandoc:import"})
+            EXPECT_FALSE(command(window, id)->isEnabled()) << id;
+        toggle->click();
+        EXPECT_TRUE(command(window, "pandoc:export-docx")->isEnabled());
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// With pandoc installed (else skipped): a note out through the window as .docx and the .docx back in as a
+// new note, which does not touch the note that has its name.
+TEST_F(WindowTest, PandocExportsANoteAndImportsItBack)
+{
+    if (noteAppC::pandoc::locate(QString()).isEmpty())
+        GTEST_SKIP() << "pandoc is not installed";
+    QTemporaryDir config;
+    QTemporaryDir out;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    write(QStringLiteral("Round.md"), "# Round heading\n\nBody with ==marked== words and %%a comment%%.\n\n![[Other]]\n");
+    write(QStringLiteral("Other.md"), "other note text\n");
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Round.md"))));
+        const QString docx = out.filePath(QStringLiteral("Round.docx"));
+        QMetaObject::invokeMethod(&window, "exportWithPandoc", Q_ARG(QString, path(QStringLiteral("Round.md"))),
+                                  Q_ARG(QString, QStringLiteral("docx")), Q_ARG(QString, docx));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo(docx).size() > 1000; }, 20000));
+        auto *runner = window.findChild<noteAppC::pandoc::Runner *>();
+        ASSERT_NE(runner, nullptr);
+        ASSERT_TRUE(QTest::qWaitFor([&] { return !runner->running(); }, 20000)); // one run at a time
+
+        // A note called Round is there already: the import makes "Round 1" and leaves it be.
+        const QByteArray before = readAll(path(QStringLiteral("Round.md")));
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, docx), Q_ARG(QString, QString()));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo::exists(path(QStringLiteral("Round 1.md"))); }, 20000));
+        EXPECT_EQ(readAll(path(QStringLiteral("Round.md"))), before);
+        const QString imported = QString::fromUtf8(readAll(path(QStringLiteral("Round 1.md"))));
+        EXPECT_TRUE(imported.contains(QStringLiteral("# Round heading"))) << imported.toStdString();
+        EXPECT_TRUE(imported.contains(QStringLiteral("==marked==")));
+        EXPECT_TRUE(imported.contains(QStringLiteral("other note text"))) << "the embed was inlined";
+        EXPECT_FALSE(imported.contains(QStringLiteral("a comment")));
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// A .docx from a file manager is wanted by the file explorer (it imports it); any other foreign file is not.
+TEST_F(WindowTest, TheTreeTakesAForeignDocumentForPandocAndNothingElse)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Src")));
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+        ASSERT_NE(tree, nullptr);
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        WAIT_TRUE(tree->rootIndex().isValid() && model->rowCount(tree->rootIndex()) >= 2
+                      && tree->visualRect(model->index(path(QStringLiteral("Src")))).isValid(), 5000);
+        const QPoint where = tree->visualRect(model->index(path(QStringLiteral("Src")))).center();
+        const auto accepted = [&](const QString &file) {
+            QMimeData data;
+            data.setUrls({QUrl::fromLocalFile(file)});
+            QDragEnterEvent enter(where, Qt::CopyAction, &data, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(tree->viewport(), &enter);
+            return enter.isAccepted();
+        };
+        EXPECT_TRUE(accepted(QStringLiteral("/tmp/some report.docx")));
+        EXPECT_TRUE(accepted(QStringLiteral("/tmp/page.HTML")));
+        EXPECT_FALSE(accepted(QStringLiteral("/tmp/notes.txt")));
+        EXPECT_FALSE(accepted(QStringLiteral("/tmp/picture.png")));
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+#endif // NOTEAPPC_HAVE_PANDOC
 
 // --- detached sidebars and panes ---------------------------------------------
 
@@ -4201,6 +4816,54 @@ TEST_F(WindowTest, NoteComposerMergesANoteAndItsLinksFollow)
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("Bravo\n\nAlpha\n"));
 }
 
+// A notebook is never a merge target or source: appending Markdown to its JSON, or its JSON to a note, corrupts it.
+TEST_F(WindowTest, NoteComposerNeverMergesIntoOrFromANotebook)
+{
+    const QByteArray notebook = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("A.md"), "Alpha\n");
+    write(QStringLiteral("B.md"), "Bravo\n");
+    write(QStringLiteral("Nb.ipynb"), notebook);
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    WAIT_TRUE(window.index()->allPaths().contains(QStringLiteral("Nb.ipynb")), 5000); // the indexer does list it
+
+    QString refusals;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&refusals] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            refusals += box->text();
+            box->close();
+        }
+    });
+    watch.start(20);
+
+    // As a target: not offered, and refused when named anyway.
+    window.openNote(path(QStringLiteral("A.md")));
+    window.findChild<QAction *>(QStringLiteral("note-composer:merge-file"))->trigger();
+    auto *picker = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("mergePicker"));
+    ASSERT_NE(picker, nullptr);
+    auto *list = picker->findChild<QListWidget *>();
+    ASSERT_NE(list, nullptr);
+    QStringList offered;
+    for (int i = 0; i < list->count(); ++i)
+        offered << list->item(i)->text();
+    EXPECT_TRUE(offered.contains(QStringLiteral("B.md")));
+    EXPECT_FALSE(offered.contains(QStringLiteral("Nb.ipynb")));
+    emit picker->accepted(QStringLiteral("Nb.ipynb"));
+    EXPECT_EQ(readAll(path(QStringLiteral("Nb.ipynb"))), notebook);
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("A.md")))) << "the source is kept";
+
+    // As a source: the command does nothing from a notebook tab.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Nb.ipynb"))));
+    window.findChild<QAction *>(QStringLiteral("note-composer:merge-file"))->trigger();
+    EXPECT_EQ(window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("mergePicker")), nullptr);
+    EXPECT_EQ(readAll(path(QStringLiteral("B.md"))), QByteArray("Bravo\n"));
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Nb.ipynb"))));
+}
+
 TEST_F(WindowTest, NoteComposerMergeKeepsAnUnsavedLinkInAnotherTab)
 {
     write(QStringLiteral("A.md"), "Alpha\n");
@@ -4427,6 +5090,26 @@ TEST_F(WindowTest, NoteHistoryCreatesItsRepositoryOnTheFirstSaveNotWhenTheVaultO
         QTest::keyClicks(window.editor(), QStringLiteral("x"));
         ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
         WAIT_TRUE(histories.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1, 5000);
+    }
+    qputenv("XDG_DATA_HOME", previous);
+}
+
+TEST_F(WindowTest, NoteHistoryNeverSetsUpLibgit2OnTheWindowsThread)
+{
+    // libgit2's set-up loads OpenSSL (+6 MB, 3-4 ms): never at start, never on the UI thread.
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    const int before = NoteHistory::mainThreadSetupsForTests();
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        QTest::keyClicks(window.editor(), QStringLiteral("x"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        const QDir histories(data.path() + QStringLiteral("/noteAppC/history"));
+        WAIT_TRUE(histories.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1, 5000);
+        EXPECT_EQ(NoteHistory::mainThreadSetupsForTests(), before);
     }
     qputenv("XDG_DATA_HOME", previous);
 }
@@ -4989,6 +5672,157 @@ TEST_F(WindowTest, ADeletedCSVComesBackWhenItIsRestored)
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 10000));
 }
 
+// The folder goes with its file: its watches die with it (the CSV's own watcher
+// hears nothing more), and only the vault's watcher still has a word to say.
+TEST_F(WindowTest, ACSVInAFolderThatIsDeletedAndRestoredComesBack)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    write(QStringLiteral("Assets/data.csv"), "a,b\n1,2\n");
+    write(QStringLiteral("Table.md"), "![[Assets/data.csv]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Table.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+
+    settleIndexer(window);
+    ASSERT_TRUE(QDir(path(QStringLiteral("Assets"))).removeRecursively());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("data.csv")); }, 5000));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return window.index()->resolve(QStringLiteral("Assets/data.csv")).isEmpty(); }, 5000));
+    // From here the index says nothing: only the vault's file signal can bring the table back.
+    QObject::disconnect(window.index(), &Index::changed, &window, nullptr);
+    QTest::qWait(1500); // the trash, a minute later
+
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    write(QStringLiteral("Assets/data.csv"), "a,b\n1,2\n3,4\n"); // the folder with it
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 10000));
+}
+
+TEST_F(WindowTest, ADeletedImageGoesBackToItsLinkAndComesBackWithItsFile)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    QImage picture(32, 32, QImage::Format_RGB32);
+    picture.fill(Qt::red);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Assets/pic.png"))));
+    write(QStringLiteral("Pic.md"), "![[Assets/pic.png]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Pic.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->displayText().contains(QStringLiteral("pic.png")); }, 5000));
+
+    settleIndexer(window);
+    ASSERT_TRUE(QDir(path(QStringLiteral("Assets"))).removeRecursively());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("pic.png")); }, 10000));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return window.index()->resolve(QStringLiteral("Assets/pic.png")).isEmpty(); }, 5000));
+    QObject::disconnect(window.index(), &Index::changed, &window, nullptr); // only the vault's file signal is left
+
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Assets/pic.png"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->displayText().contains(QStringLiteral("pic.png")); }, 10000));
+}
+
+// A folder the vault ignores is not watched by the vault's watcher: only the CSV's own
+// folder watcher hears the file come back.
+TEST_F(WindowTest, ACSVInAnIgnoredFolderComesBackWhenItIsRestored)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".private")));
+    write(QStringLiteral(".private/data.csv"), "a,b\n1,2\n");
+    write(QStringLiteral("Table.md"), "![[.private/data.csv]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Table.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+
+    settleIndexer(window);
+    QObject::disconnect(window.index(), &Index::changed, &window, nullptr); // the index never knew this file anyway
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral(".private/data.csv"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("data.csv")); }, 5000));
+    QTest::qWait(1500);
+
+    write(QStringLiteral(".private/data.csv"), "a,b\n1,2\n3,4\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 10000));
+}
+
+// One resolver for every editor read the note of the active pane: the other pane's
+// relative embed was looked for beside the wrong note and turned into a broken link.
+TEST_F(WindowTest, ARelativeEmbedInTheInactiveSplitPaneSurvivesTheOtherPanesIndexChange)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Projects/sub")));
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Other")));
+    QImage picture(32, 32, QImage::Format_RGB32);
+    picture.fill(Qt::red);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Projects/sub/img.png"))));
+    write(QStringLiteral("Projects/A.md"), "![[sub/img.png]]\n");
+    write(QStringLiteral("Other/B.md"), "plain\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Projects/A.md")));
+    MarkdownEditor *left = window.editor();
+    settleIndexer(window);
+    ASSERT_FALSE(left->displayText().contains(QStringLiteral("img.png"))) << "drawn as the picture";
+
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    window.openNote(path(QStringLiteral("Other/B.md")));
+    ASSERT_NE(window.editor(), left);
+
+    emit window.index()->changed(); // what the other pane's save raises
+    QTest::qWait(300);
+    EXPECT_FALSE(left->displayText().contains(QStringLiteral("img.png"))) << "still the picture";
+}
+
+// The tab's Leaf is freed at once, its editor a moment later: an editor that is still
+// asked about a link in between must not read the Leaf (nor resolve as if it were open).
+TEST_F(WindowTest, AClosedTabsEditorNeverReadsItsFreedLeafForALink)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Projects/sub")));
+    QImage picture(32, 32, QImage::Format_RGB32);
+    picture.fill(Qt::red);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Projects/sub/img.png"))));
+    write(QStringLiteral("Projects/A.md"), "![[sub/img.png]]\n");
+    write(QStringLiteral("Other.md"), "plain\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Projects/A.md")));
+    QPointer<MarkdownEditor> closing = window.editor();
+    settleIndexer(window);
+    ASSERT_FALSE(closing->displayText().contains(QStringLiteral("img.png")));
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    window.openNote(path(QStringLiteral("Other.md")));
+    closing->setFocus();
+    QApplication::processEvents();
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+
+    ASSERT_NE(closing.data(), nullptr) << "deleted later, by DeferredDelete";
+    closing->refreshLinkStatus(); // a posted completion would do this
+    EXPECT_TRUE(closing->displayText().contains(QStringLiteral("img.png"))) << "no leaf: nothing resolves";
+    flushDeletes();
+}
+
+// A link to a file that never existed: it appears, and only the vault's file signal says so.
+TEST_F(WindowTest, ALinkedImageThatIsCreatedFlipsItsLinkWithoutAnIndexChange)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets")));
+    write(QStringLiteral("Pic.md"), "![[Assets/never.png]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Pic.md")));
+    MarkdownEditor *editor = window.editor();
+    settleIndexer(window);
+    ASSERT_TRUE(editor->displayText().contains(QStringLiteral("never.png")));
+    QObject::disconnect(window.index(), &Index::changed, &window, nullptr);
+
+    QImage picture(32, 32, QImage::Format_RGB32);
+    picture.fill(Qt::blue);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Assets/never.png"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->displayText().contains(QStringLiteral("never.png")); }, 10000));
+}
+
 TEST_F(WindowTest, AMissingImageAppearsWhenItsFileDoes)
 {
     ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets"))); // a folder of its own: not the note's, so only the vault scan sees into it
@@ -5464,6 +6298,744 @@ TEST_F(WindowTest, ANotebookFileOpensAsANoteAndSavesBackAsANotebook)
         EXPECT_FALSE(window.statusBar()->currentMessage().contains(QStringLiteral("had changed on disk")));
         EXPECT_LE(noteAppC::Snapshots::versions(path(QStringLiteral("Analysis.ipynb"))).size(), before + 1);
     }
+}
+
+namespace {
+
+QJsonArray notebookCells(const QByteArray &file)
+{
+    return QJsonDocument::fromJson(file).object().value(QStringLiteral("cells")).toArray();
+}
+
+/// A Jupyter python kernel and bubblewrap: what a notebook cell needs to run.
+bool notebookCellsCanRun()
+{
+    return !QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
+                                      QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
+           && !QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty();
+}
+
+/// Three code cells and a marker no earlier run of this test shares, so the output cache holds nothing of them.
+QByteArray threeCellNotebook(const QString &marker)
+{
+    const auto cell = [&marker](const QString &id, const QString &text) {
+        return QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("code")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("print('%1')  # %2").arg(text, marker)}},
+                           {QStringLiteral("execution_count"), QJsonValue()},
+                           {QStringLiteral("outputs"), QJsonArray()}};
+    };
+    return QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                     {QStringLiteral("nbformat_minor"), 5},
+                                     {QStringLiteral("metadata"),
+                                      QJsonObject{{QStringLiteral("kernelspec"),
+                                                   QJsonObject{{QStringLiteral("display_name"), QStringLiteral("Python 3")},
+                                                               {QStringLiteral("language"), QStringLiteral("python")},
+                                                               {QStringLiteral("name"), QStringLiteral("python3")}}}}},
+                                     {QStringLiteral("cells"),
+                                      QJsonArray{cell(QStringLiteral("a"), QStringLiteral("one")),
+                                                 cell(QStringLiteral("b"), QStringLiteral("two")),
+                                                 cell(QStringLiteral("c"), QStringLiteral("three"))}}})
+        .toJson();
+}
+
+} // namespace
+
+// "Clear outputs" in a notebook is a change to it: the tab is modified, and the
+// save writes `outputs: []` and a null count for the cells that had any. No
+// kernel is involved.
+TEST_F(WindowTest, ClearingANotebooksOutputsIsSavedIntoTheFile)
+{
+    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("Analysis.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+    WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+    EXPECT_FALSE(editor->isModified());
+
+    window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+    EXPECT_TRUE(editor->isModified());
+    WAIT_TRUE(!editor->notebookInfoAt(code).hasRun, 5000);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_FALSE(editor->isModified());
+
+    const QJsonArray before = notebookCells(original);
+    const QJsonArray after = notebookCells(readAll(path(QStringLiteral("Analysis.ipynb"))));
+    ASSERT_EQ(after.size(), before.size());
+    for (qsizetype i = 0; i < after.size(); ++i) {
+        const QJsonObject cell = after.at(i).toObject();
+        if (cell.value(QStringLiteral("cell_type")).toString() == QLatin1String("code")) {
+            EXPECT_TRUE(cell.value(QStringLiteral("outputs")).toArray().isEmpty()) << i;
+            EXPECT_TRUE(cell.value(QStringLiteral("execution_count")).isNull()) << i;
+        } else {
+            EXPECT_EQ(cell, before.at(i).toObject()) << "only code cells change: " << i;
+        }
+    }
+    // The cell that never ran is exactly the file's own object.
+    EXPECT_EQ(after.at(4).toObject().value(QStringLiteral("source")), before.at(4).toObject().value(QStringLiteral("source")));
+}
+
+// Closing a notebook without saving what ran in it, and opening it again: the file
+// is the truth, so the next save writes none of those runs (the sample's traceback
+// carries colour codes that a rewrite from the cache would change).
+TEST_F(WindowTest, AReopenedNotebookWritesNoneOfTheRunsItDiscarded)
+{
+    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("Analysis.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+    WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+    window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+    ASSERT_TRUE(editor->isModified());
+    editor->setModified(false); // "close it without saving"
+
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *again = window.editor();
+    again->setCursorOffset(again->noteText().size());
+    QTest::keyClicks(again, QStringLiteral("x")); // something to save
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonArray before = notebookCells(original);
+    const QJsonArray after = notebookCells(readAll(path(QStringLiteral("Analysis.ipynb"))));
+    ASSERT_EQ(after.size(), before.size());
+    for (qsizetype i = 0; i < 4; ++i)
+        EXPECT_EQ(after.at(i).toObject(), before.at(i).toObject()) << "cell " << i << " was not touched in this session";
+}
+
+// Running cell 2 of 3 makes the notebook modified, and the save puts that run's
+// output and count on that cell alone.
+TEST_F(WindowTest, ARunOfOneNotebookCellIsSavedOnThatCellAlone)
+{
+    if (!notebookCellsCanRun())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    const QByteArray original = threeCellNotebook(marker);
+    write(QStringLiteral("Run.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Run.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(200);
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("print('two')"));
+    ASSERT_TRUE(editor->notebookInfoAt(second).eligible);
+    ASSERT_FALSE(editor->isModified());
+
+    ASSERT_TRUE(editor->runNotebookBlockAt(second));
+    WAIT_TRUE(editor->notebookInfoAt(second).hasRun && !editor->notebookInfoAt(second).running, 30000);
+    EXPECT_TRUE(editor->isModified()) << "a finished run changes what the file would say";
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+
+    const QJsonArray before = notebookCells(original);
+    const QJsonArray after = notebookCells(readAll(path(QStringLiteral("Run.ipynb"))));
+    ASSERT_EQ(after.size(), 3);
+    EXPECT_EQ(after.at(0).toObject(), before.at(0).toObject());
+    EXPECT_EQ(after.at(2).toObject(), before.at(2).toObject());
+    const QJsonObject ran = after.at(1).toObject();
+    EXPECT_GE(ran.value(QStringLiteral("execution_count")).toInt(), 1);
+    const QJsonArray outputs = ran.value(QStringLiteral("outputs")).toArray();
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(QString::fromUtf8(QJsonDocument(outputs.at(0).toObject()).toJson()).contains(QStringLiteral("two")));
+    EXPECT_FALSE(editor->isModified());
+}
+
+// A copy of a notebook shares its cells' text, so the output cache cannot tell
+// whose output is whose: what a notebook's save writes is the run it saw
+// land, not whatever the cache holds under that text by then (here, the other
+// notebook's stored output, seeded when it was opened).
+TEST_F(WindowTest, ANotebooksSaveWritesItsOwnRunNotAnIdenticalCellsOfAnother)
+{
+    if (!notebookCellsCanRun())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    write(QStringLiteral("A.ipynb"), threeCellNotebook(marker));
+    QJsonObject copy = QJsonDocument::fromJson(threeCellNotebook(marker)).object();
+    QJsonArray copyCells = copy.value(QStringLiteral("cells")).toArray();
+    QJsonObject stored = copyCells.at(1).toObject();
+    stored.insert(QStringLiteral("execution_count"), 7);
+    stored.insert(QStringLiteral("outputs"),
+                  QJsonArray{QJsonObject{{QStringLiteral("output_type"), QStringLiteral("stream")},
+                                         {QStringLiteral("name"), QStringLiteral("stdout")},
+                                         {QStringLiteral("text"), QJsonArray{QStringLiteral("OTHER-NOTEBOOK\n")}}}});
+    copyCells.replace(1, stored);
+    copy.insert(QStringLiteral("cells"), copyCells);
+    write(QStringLiteral("B.ipynb"), QJsonDocument(copy).toJson());
+
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("A.ipynb"))));
+    MarkdownEditor *editorA = window.editor();
+    editorA->setCursorOffset(editorA->noteText().size());
+    QTest::qWait(200);
+    const qsizetype second = editorA->noteText().indexOf(QStringLiteral("print('two')"));
+    ASSERT_TRUE(editorA->notebookInfoAt(second).eligible);
+    ASSERT_TRUE(editorA->runNotebookBlockAt(second));
+    WAIT_TRUE(editorA->notebookInfoAt(second).hasRun && !editorA->notebookInfoAt(second).running, 30000);
+    ASSERT_TRUE(editorA->isModified());
+
+    // B opens in a tab beside it and shows its stored output (the cache now holds B's, under A's key).
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("B.ipynb"))));
+    MarkdownEditor *editorB = window.editor();
+    ASSERT_NE(editorB, editorA);
+    editorB->setCursorOffset(editorB->noteText().size());
+    const qsizetype inB = editorB->noteText().indexOf(QStringLiteral("print('two')"));
+    WAIT_TRUE(editorB->notebookInfoAt(inB).hasRun, 5000);
+    ASSERT_EQ(editorB->notebookOutputTextAt(inB).size(), 1);
+    ASSERT_TRUE(editorB->notebookOutputTextAt(inB).constFirst().contains(QStringLiteral("OTHER-NOTEBOOK")));
+
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    tabs->setCurrentIndex(0);
+    ASSERT_EQ(window.editor(), editorA);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+
+    const QJsonObject ran = notebookCells(readAll(path(QStringLiteral("A.ipynb")))).at(1).toObject();
+    const QString outputs = QString::fromUtf8(QJsonDocument(ran.value(QStringLiteral("outputs")).toArray()).toJson());
+    EXPECT_TRUE(outputs.contains(QStringLiteral("two"))) << outputs.toStdString();
+    EXPECT_FALSE(outputs.contains(QStringLiteral("OTHER-NOTEBOOK"))) << outputs.toStdString();
+    EXPECT_NE(ran.value(QStringLiteral("execution_count")).toInt(), 7);
+}
+
+// What ran in a notebook and is not saved yet follows it to the name it is renamed to.
+TEST_F(WindowTest, ARenamedNotebookStillSavesTheRunsThatWereAwaitingItsSave)
+{
+    write(QStringLiteral("Analysis.ipynb"), readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb")));
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+    WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+    window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+    ASSERT_TRUE(editor->isModified());
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    ASSERT_NE(model, nullptr);
+    const QModelIndex index = model->index(path(QStringLiteral("Analysis.ipynb")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        dialog->setTextValue(QStringLiteral("Renamed"));
+        dialog->accept();
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    ASSERT_TRUE(QFile::exists(path(QStringLiteral("Renamed.ipynb"))));
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonArray after = notebookCells(readAll(path(QStringLiteral("Renamed.ipynb"))));
+    ASSERT_EQ(after.size(), 7);
+    for (const QJsonValue &cell : after) {
+        if (cell.toObject().value(QStringLiteral("cell_type")).toString() == QLatin1String("code"))
+            EXPECT_TRUE(cell.toObject().value(QStringLiteral("outputs")).toArray().isEmpty());
+    }
+}
+
+// A run that is still going when its notebook is renamed belongs to the notebook, under its new name.
+TEST_F(WindowTest, ANotebookRunThatFinishesAfterARenameIsSavedUnderTheNewName)
+{
+    if (!notebookCellsCanRun())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    QByteArray slow = threeCellNotebook(marker);
+    slow.replace("print('two')", "import time; time.sleep(3); print('two')");
+    write(QStringLiteral("Slow.ipynb"), slow);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Slow.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(200);
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("time.sleep"));
+    ASSERT_TRUE(editor->notebookInfoAt(second).eligible);
+    ASSERT_TRUE(editor->runNotebookBlockAt(second));
+    ASSERT_TRUE(editor->notebookInfoAt(second).running);
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    ASSERT_NE(model, nullptr);
+    const QModelIndex index = model->index(path(QStringLiteral("Slow.ipynb")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        if (!dialog)
+            return;
+        dialog->setTextValue(QStringLiteral("Renamed"));
+        dialog->accept();
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    ASSERT_TRUE(QFile::exists(path(QStringLiteral("Renamed.ipynb"))));
+    ASSERT_TRUE(editor->notebookInfoAt(second).running) << "the rename came first";
+
+    WAIT_TRUE(editor->notebookInfoAt(second).hasRun && !editor->notebookInfoAt(second).running, 30000);
+    EXPECT_TRUE(editor->isModified()) << "the result lands on the notebook, not on its old name";
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonArray outputs = notebookCells(readAll(path(QStringLiteral("Renamed.ipynb"))))
+                                   .at(1).toObject().value(QStringLiteral("outputs")).toArray();
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(QString::fromUtf8(QJsonDocument(outputs.at(0).toObject()).toJson()).contains(QStringLiteral("two")));
+}
+
+// "Clear outputs" is for the whole notebook, not for the cells a window of it happens to have laid out.
+TEST_F(WindowTest, ClearingALongNotebooksOutputsClearsEveryCellOfIt)
+{
+    QJsonArray cells;
+    for (int i = 0; i < 200; ++i) {
+        cells.append(QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("code")},
+                                 {QStringLiteral("id"), QStringLiteral("c%1").arg(i)},
+                                 {QStringLiteral("metadata"), QJsonObject()},
+                                 {QStringLiteral("source"), QJsonArray{QStringLiteral("x = %1").arg(i)}},
+                                 {QStringLiteral("execution_count"), i + 1},
+                                 {QStringLiteral("outputs"),
+                                  QJsonArray{QJsonObject{{QStringLiteral("output_type"), QStringLiteral("stream")},
+                                                         {QStringLiteral("name"), QStringLiteral("stdout")},
+                                                         {QStringLiteral("text"), QJsonArray{QStringLiteral("out %1\n").arg(i)}}}}}});
+    }
+    write(QStringLiteral("Long.ipynb"),
+          QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                    {QStringLiteral("nbformat_minor"), 5},
+                                    {QStringLiteral("metadata"),
+                                     QJsonObject{{QStringLiteral("language_info"),
+                                                  QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                    {QStringLiteral("cells"), cells}})
+              .toJson());
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Long.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(0);
+    editor->verticalScrollBar()->setValue(0);
+    QTest::qWait(100);
+    ASSERT_FALSE(editor->notebookInfoAt(editor->noteText().indexOf(QStringLiteral("x = 150\n"))).eligible)
+        << "a cell far below what is laid out: the premise";
+
+    window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+    QTest::qWait(100);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonArray after = notebookCells(readAll(path(QStringLiteral("Long.ipynb"))));
+    ASSERT_EQ(after.size(), 200);
+    int stillRan = 0;
+    for (const QJsonValue &cell : after) {
+        stillRan += cell.toObject().value(QStringLiteral("outputs")).toArray().isEmpty()
+                            && cell.toObject().value(QStringLiteral("execution_count")).isNull()
+                        ? 0
+                        : 1;
+    }
+    EXPECT_EQ(stillRan, 0) << "cells that kept their outputs";
+}
+
+// Two cells that each pasted "image.png" (JupyterLab names every pasted screenshot that) each show their own.
+TEST_F(WindowTest, TwoNotebookCellsThatAttachDifferentPicturesByOneNameEachShowTheirOwn)
+{
+    const auto png = [](const QColor &colour) {
+        QImage image(20, 20, QImage::Format_RGB32);
+        image.fill(colour);
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        buffer.open(QIODevice::WriteOnly);
+        image.save(&buffer, "PNG");
+        return QString::fromLatin1(bytes.toBase64());
+    };
+    const auto cell = [&png](const QString &id, const QColor &colour) {
+        return QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("![pic](attachment:image.png)")}},
+                           {QStringLiteral("attachments"),
+                            QJsonObject{{QStringLiteral("image.png"), QJsonObject{{QStringLiteral("image/png"), png(colour)}}}}}};
+    };
+    write(QStringLiteral("Two.ipynb"),
+          QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                    {QStringLiteral("nbformat_minor"), 5},
+                                    {QStringLiteral("metadata"),
+                                     QJsonObject{{QStringLiteral("language_info"),
+                                                  QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                    {QStringLiteral("cells"),
+                                     QJsonArray{cell(QStringLiteral("a"), Qt::red), cell(QStringLiteral("b"), Qt::blue)}}})
+              .toJson());
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Two.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(100);
+    const QImage shot = editor->viewport()->grab().toImage();
+    int red = 0;
+    int blue = 0;
+    for (int y = 0; y < shot.height(); ++y) {
+        for (int x = 0; x < shot.width(); ++x) {
+            const QColor pixel = shot.pixelColor(x, y);
+            red += pixel.red() > 200 && pixel.green() < 60 && pixel.blue() < 60;
+            blue += pixel.blue() > 200 && pixel.red() < 60 && pixel.green() < 60;
+        }
+    }
+    EXPECT_GT(red, 100) << "the first cell's picture";
+    EXPECT_GT(blue, 100) << "the second cell's picture, not the first's again";
+}
+
+// A fenced example in a markdown cell (quoted here) is not one of the notebook's cells: the cell after it that
+// reads the same keeps the output the file stored for it.
+TEST_F(WindowTest, ACodeCellAfterAQuotedExampleOfItsOwnCodeShowsItsStoredOutput)
+{
+    const auto cell = [](const QString &type, const QString &source) {
+        QJsonObject object{{QStringLiteral("cell_type"), type},
+                           {QStringLiteral("id"), type},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{source}}};
+        if (type == QLatin1String("code")) {
+            object.insert(QStringLiteral("execution_count"), 5);
+            object.insert(QStringLiteral("outputs"),
+                          QJsonArray{QJsonObject{{QStringLiteral("output_type"), QStringLiteral("stream")},
+                                                 {QStringLiteral("name"), QStringLiteral("stdout")},
+                                                 {QStringLiteral("text"), QJsonArray{QStringLiteral("stored\n")}}}});
+        }
+        return object;
+    };
+    write(QStringLiteral("Quoted.ipynb"),
+          QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                    {QStringLiteral("nbformat_minor"), 5},
+                                    {QStringLiteral("metadata"),
+                                     QJsonObject{{QStringLiteral("language_info"),
+                                                  QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                    {QStringLiteral("cells"),
+                                     QJsonArray{cell(QStringLiteral("markdown"), QStringLiteral("> ```python\n> print(1)\n> ```")),
+                                                cell(QStringLiteral("code"), QStringLiteral("print(1)"))}}})
+              .toJson());
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Quoted.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype code = editor->noteText().lastIndexOf(QStringLiteral("print(1)"));
+    WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+    ASSERT_EQ(editor->notebookOutputTextAt(code).size(), 1);
+    EXPECT_EQ(editor->notebookOutputTextAt(code).constFirst().trimmed(), QStringLiteral("stored"));
+}
+
+// "Run every code block from the cursor down": the block holding the cursor and
+// every one after it, none before.
+TEST_F(WindowTest, RunBelowRunsTheCursorsBlockAndEveryOneAfterIt)
+{
+    if (!notebookCellsCanRun())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    write(QStringLiteral("Below.ipynb"), threeCellNotebook(marker));
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Below.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(200);
+    const qsizetype first = editor->noteText().indexOf(QStringLiteral("print('one')"));
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("print('two')"));
+    const qsizetype third = editor->noteText().indexOf(QStringLiteral("print('three')"));
+    ASSERT_TRUE(editor->notebookInfoAt(first).eligible);
+
+    editor->setCursorOffset(second + 3);
+    QAction *below = window.findChild<QAction *>(QStringLiteral("notebooks:run-below"));
+    ASSERT_NE(below, nullptr);
+    below->trigger();
+    EXPECT_FALSE(editor->notebookInfoAt(first).running);
+    EXPECT_TRUE(editor->notebookInfoAt(second).running);
+    EXPECT_TRUE(editor->notebookInfoAt(third).running);
+    WAIT_TRUE(editor->notebookInfoAt(second).hasRun && !editor->notebookInfoAt(second).running
+                  && editor->notebookInfoAt(third).hasRun && !editor->notebookInfoAt(third).running,
+              30000);
+    EXPECT_FALSE(editor->notebookInfoAt(first).hasRun);
+
+    // The counts it asks for: from the last block, one; from the first, all three.
+    EXPECT_EQ(editor->runNotebookBlocksFrom(third), 1);
+    WAIT_TRUE(!editor->notebookInfoAt(third).running, 30000);
+    EXPECT_EQ(editor->runNotebookBlocksFrom(0), 3);
+    WAIT_TRUE(!editor->notebookInfoAt(first).running && !editor->notebookInfoAt(second).running
+                  && !editor->notebookInfoAt(third).running,
+              30000);
+}
+
+// "New notebook": the next free Untitled.ipynb where New note puts a note, one
+// empty python cell, opened at once; greyed out with the notebooks feature off.
+TEST_F(WindowTest, NewNotebookCreatesAnUntitledNotebookAndOpensIt)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    QAction *create = window.findChild<QAction *>(QStringLiteral("notebooks:new"));
+    ASSERT_NE(create, nullptr);
+    ASSERT_TRUE(create->isEnabled());
+    create->trigger();
+    const QString first = path(QStringLiteral("Untitled.ipynb"));
+    ASSERT_TRUE(QFileInfo::exists(first));
+    const QJsonObject root = QJsonDocument::fromJson(readAll(first)).object();
+    EXPECT_EQ(root.value(QStringLiteral("nbformat")).toInt(), 4);
+    EXPECT_EQ(root.value(QStringLiteral("nbformat_minor")).toInt(), 5);
+    const QJsonArray cells = root.value(QStringLiteral("cells")).toArray();
+    ASSERT_EQ(cells.size(), 1);
+    EXPECT_EQ(cells.at(0).toObject().value(QStringLiteral("cell_type")).toString(), QStringLiteral("code"));
+    EXPECT_FALSE(cells.at(0).toObject().value(QStringLiteral("id")).toString().isEmpty());
+    EXPECT_TRUE(window.windowTitle().contains(QStringLiteral("Untitled"))) << window.windowTitle().toStdString();
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("```python\n\n```\n")) << "it is open, as a code cell";
+
+    const QByteArray firstBytes = readAll(first);
+    create->trigger();
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Untitled 1.ipynb")))) << "the next free name";
+    EXPECT_EQ(readAll(first), firstBytes) << "the first is left alone";
+
+    Settings config = Settings::load();
+    config.setValue(Settings::featureKey("notebooks"), false);
+    ASSERT_TRUE(config.save());
+    MainWindow off;
+    off.show();
+    off.openVault(dir.path());
+    EXPECT_FALSE(off.findChild<QAction *>(QStringLiteral("notebooks:new"))->isEnabled());
+    config.setValue(Settings::featureKey("notebooks"), true);
+    config.save();
+}
+
+// A markdown cell's attachment is a picture in the note, not a broken link, while
+// the notebook is open; saving the notebook keeps it.
+TEST_F(WindowTest, ANotebooksCellAttachmentIsShownAsAnImage)
+{
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    const QJsonObject cell{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                           {QStringLiteral("id"), QStringLiteral("m")},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("![pic](attachment:image.png)")}},
+                           {QStringLiteral("attachments"),
+                            QJsonObject{{QStringLiteral("image.png"),
+                                         QJsonObject{{QStringLiteral("image/png"), QString::fromLatin1(png.toBase64())}}}}}};
+    const QByteArray original =
+        QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                  {QStringLiteral("nbformat_minor"), 5},
+                                  {QStringLiteral("metadata"),
+                                   QJsonObject{{QStringLiteral("language_info"),
+                                                QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                  {QStringLiteral("cells"), QJsonArray{cell}}})
+            .toJson();
+    write(QStringLiteral("Pic.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Pic.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("![pic](attachment:image.png)\n"));
+    EXPECT_TRUE(editor->displayText().trimmed().isEmpty()) << "an image block, not the text of a broken link";
+
+    editor->setCursorOffset(editor->noteText().size() - 1);
+    QTest::keyClicks(editor, QStringLiteral("!"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QByteArray saved = readAll(path(QStringLiteral("Pic.ipynb")));
+    EXPECT_TRUE(saved.contains("\"image/png\"")) << "the attachment is kept by an edit of its cell: "
+                                                  << saved.left(600).toStdString() << editor->noteText().toStdString();
+}
+
+namespace {
+/// A notebook with one markdown cell that carries a picture as an attachment.
+QByteArray notebookWithAPicture()
+{
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    const QJsonObject cell{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                           {QStringLiteral("id"), QStringLiteral("m")},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("![pic](attachment:image.png)")}},
+                           {QStringLiteral("attachments"),
+                            QJsonObject{{QStringLiteral("image.png"),
+                                         QJsonObject{{QStringLiteral("image/png"), QString::fromLatin1(png.toBase64())}}}}}};
+    return QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                     {QStringLiteral("nbformat_minor"), 5},
+                                     {QStringLiteral("metadata"),
+                                      QJsonObject{{QStringLiteral("language_info"),
+                                                   QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                     {QStringLiteral("cells"), QJsonArray{cell}}})
+        .toJson();
+}
+} // namespace
+
+// The pictures of a notebook are kept while a tab shows it and let go when none does: a tab that goes on to another
+// note, and the last tab closed, both free them.
+TEST_F(WindowTest, ANotebooksPicturesAreFreedWhenNoTabShowsIt)
+{
+    write(QStringLiteral("Pic.ipynb"), notebookWithAPicture());
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 0);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Pic.ipynb"))));
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 1);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md")))); // the same tab goes on
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 0);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Pic.ipynb"))));
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 1);
+    command(window, "workspace:split-vertical")->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 1) << "still shown in the first split";
+    command(window, "workspace:close")->trigger(); // the split's tab: the notebook's tab stays
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 1);
+    command(window, "workspace:close")->trigger(); // the last one
+    EXPECT_EQ(window.notebookPictureSetsForTests(), 0);
+}
+
+// Two cells that read the same are two results: each block shows the output
+// its own cell had, not one that was cached under the shared text.
+TEST_F(WindowTest, IdenticalNotebookCellsShowTheirOwnOutputs)
+{
+    const auto cell = [](const QString &id, const QString &output, int count) {
+        return QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("code")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("print('same')")}},
+                           {QStringLiteral("execution_count"), count},
+                           {QStringLiteral("outputs"),
+                            QJsonArray{QJsonObject{{QStringLiteral("output_type"), QStringLiteral("stream")},
+                                                   {QStringLiteral("name"), QStringLiteral("stdout")},
+                                                   {QStringLiteral("text"), QJsonArray{output}}}}}};
+    };
+    write(QStringLiteral("Same.ipynb"),
+          QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                    {QStringLiteral("nbformat_minor"), 5},
+                                    {QStringLiteral("metadata"),
+                                     QJsonObject{{QStringLiteral("language_info"),
+                                                  QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                    {QStringLiteral("cells"),
+                                     QJsonArray{cell(QStringLiteral("a"), QStringLiteral("first-output"), 1),
+                                                cell(QStringLiteral("b"), QStringLiteral("second-output"), 2)}}})
+              .toJson());
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Same.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype first = editor->noteText().indexOf(QStringLiteral("print('same')"));
+    const qsizetype second = editor->noteText().indexOf(QStringLiteral("print('same')"), first + 1);
+    ASSERT_GT(second, first);
+    WAIT_TRUE(editor->notebookInfoAt(first).hasRun && editor->notebookInfoAt(second).hasRun, 5000);
+    ASSERT_EQ(editor->notebookOutputTextAt(first).size(), 1);
+    ASSERT_EQ(editor->notebookOutputTextAt(second).size(), 1);
+    EXPECT_EQ(editor->notebookOutputTextAt(first).constFirst().trimmed(), QStringLiteral("first-output"));
+    EXPECT_EQ(editor->notebookOutputTextAt(second).constFirst().trimmed(), QStringLiteral("second-output"));
+    EXPECT_EQ(editor->notebookInfoAt(first).executionCount, 1);
+    EXPECT_EQ(editor->notebookInfoAt(second).executionCount, 2);
+}
+
+// Another window (another process, another vault) turns the Notebooks plugin off. This window adopts that
+// on its next settings save, which a note switch triggers; it must apply it (the commands go grey) and, whatever
+// it believes about the plugin, must never write an open notebook as Markdown.
+TEST_F(WindowTest, ANotebookIsNeverOverwrittenWithMarkdownWhenAnotherWindowTurnsThePluginOff)
+{
+    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("Analysis.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    QTest::keyClicks(editor, QStringLiteral("edited "));
+    ASSERT_TRUE(editor->isModified());
+    QAction *newNotebook = window.findChild<QAction *>(QStringLiteral("notebooks:new"));
+    ASSERT_NE(newNotebook, nullptr);
+    ASSERT_TRUE(newNotebook->isEnabled());
+
+    Settings other = Settings::load();
+    other.setValue(Settings::featureKey("notebooks"), false);
+    ASSERT_TRUE(other.save());
+
+    // A second tab and a note switch in it: leaving a note saves this window's settings.
+    write(QStringLiteral("Other.md"), "# Other\n");
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Other.md"))));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    tabs->setCurrentIndex(0);
+    ASSERT_EQ(window.editor(), editor);
+    EXPECT_FALSE(newNotebook->isEnabled()) << "the adopted switch is applied, not just held";
+
+    QString refusal;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&refusal] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            refusal = box->text() + box->informativeText();
+            box->close();
+        }
+    });
+    watch.start(20);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save")); // refused, and says so
+    EXPECT_TRUE(refusal.contains(QStringLiteral("Analysis.ipynb"))) << refusal.toStdString();
+    const QByteArray after = readAll(path(QStringLiteral("Analysis.ipynb")));
+    EXPECT_TRUE(after.contains("\"nbformat\"")) << "still a notebook, not the cells' Markdown";
+    EXPECT_TRUE(after.contains("ZeroDivisionError")) << "with its outputs";
+
+    other.setValue(Settings::featureKey("notebooks"), true);
+    other.save();
+}
+
+// What ran in a notebook and was discarded with its tab must not wait for a file that later takes the name.
+TEST_F(WindowTest, DiscardedNotebookRunsAreForgottenWhenTheTabLeavesTheNotebook)
+{
+    write(QStringLiteral("Analysis.ipynb"), readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb")));
+    Settings config = Settings::load();
+    config.setValue(QStringLiteral("files.autosave"), false); // nothing saves it behind the test's back
+    ASSERT_TRUE(config.save());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size());
+        const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+        WAIT_TRUE(editor->notebookInfoAt(code).eligible && editor->notebookInfoAt(code).hasRun, 5000);
+        window.findChild<QAction *>(QStringLiteral("notebooks:clear-outputs"))->trigger();
+        ASSERT_TRUE(editor->isModified());
+        ASSERT_EQ(window.notebookRunSetsForTests(), 1);
+
+        QTimer watch;
+        QObject::connect(&watch, &QTimer::timeout, [] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+                box->button(QMessageBox::Discard)->click();
+        });
+        watch.start(20);
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+        EXPECT_EQ(window.notebookRunSetsForTests(), 0);
+    }
+    config.setValue(QStringLiteral("files.autosave"), true);
+    config.save();
 }
 
 TEST_F(WindowTest, ANotebookFileIsNotANoteWithTheNotebooksFeatureOff)
@@ -6742,14 +8314,6 @@ TEST_F(WindowTest, TreeRowsHideTheMarkdownExtensionAndTagOtherTypes)
 
 namespace {
 
-/// A private settings directory for a test that flips switches, put back after.
-struct PrivateConfig {
-    QTemporaryDir dir;
-    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
-    PrivateConfig() { qputenv("XDG_CONFIG_HOME", dir.path().toUtf8()); }
-    ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
-};
-
 noteAppC::ToggleSwitch *settingsToggle(MainWindow &window, const char *key)
 {
     noteAppC::ToggleSwitch *found = nullptr;
@@ -7894,6 +9458,422 @@ TEST_F(WindowTest, ASocketFileLeftByACrashDoesNotStopTheServer)
     ASSERT_FALSE(instance.handOver(QString())); // nothing answers on a dead socket
     instance.serve(&window);
     EXPECT_TRUE(instance.ok());
+}
+
+namespace {
+
+/// What a vault's own process is to the others: its lock and its listening socket, and the lines
+/// it was handed. Stands in for "a Notolith that has that vault open" where the test does not
+/// need a whole window behind it.
+struct FakeInstance {
+    QLockFile lock;
+    QLocalServer server;
+    QStringList lines;
+    bool up = false;
+
+    /// Holds the lock; listens at once unless `listening` is false (a process still starting).
+    explicit FakeInstance(const QString &name, bool listening = true)
+        : lock(name + QStringLiteral(".lock"))
+        , m_name(name)
+    {
+        lock.setStaleLockTime(0);
+        up = lock.tryLock(0);
+        QObject::connect(&server, &QLocalServer::newConnection, &server, [this] {
+            while (QLocalSocket *socket = server.nextPendingConnection()) {
+                QObject::connect(socket, &QLocalSocket::readyRead, socket, [this, socket] {
+                    if (!socket->canReadLine())
+                        return;
+                    lines << QString::fromUtf8(socket->readLine()).trimmed();
+                    socket->write("ok\n");
+                    socket->disconnectFromServer();
+                });
+            }
+        });
+        if (listening)
+            listen();
+    }
+
+    void listen()
+    {
+        QLocalServer::removeServer(m_name);
+        up = up && server.listen(m_name);
+    }
+
+    QString m_name;
+};
+
+/// One Notolith process per vault: the socket names live under a directory of the test's own
+/// (NOTEAPPC_INSTANCE_SOCKET), the settings under a private config, and each launch is asked on
+/// a thread as its own process would ask it.
+class InstanceTest : public WindowTest {
+protected:
+    void SetUp() override
+    {
+        WindowTest::SetUp();
+        ASSERT_TRUE(sockets.isValid());
+        ASSERT_TRUE(other.isValid());
+        ASSERT_TRUE(loose.isValid());
+        // Real vaults, so a note in one is known for it whatever the settings remember.
+        ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+        ASSERT_TRUE(QDir(other.path()).mkpath(QStringLiteral(".obsidian")));
+        wasSet = qEnvironmentVariableIsSet("NOTEAPPC_INSTANCE_SOCKET");
+        previous = qgetenv("NOTEAPPC_INSTANCE_SOCKET");
+        qputenv("NOTEAPPC_INSTANCE_SOCKET", sockets.filePath(QStringLiteral("n")).toUtf8());
+        QFile note(other.filePath(QStringLiteral("Other.md")));
+        ASSERT_TRUE(note.open(QIODevice::WriteOnly));
+        note.write("# Other\n");
+        note.close();
+        QFile stray(loose.filePath(QStringLiteral("Loose.md")));
+        ASSERT_TRUE(stray.open(QIODevice::WriteOnly));
+        stray.write("# Loose\n");
+        stray.close();
+    }
+
+    void TearDown() override
+    {
+        if (wasSet)
+            qputenv("NOTEAPPC_INSTANCE_SOCKET", previous);
+        else
+            qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    }
+
+    void lastUsed(const QStringList &vaults)
+    {
+        Settings settings = Settings::load();
+        settings.setValue(QStringLiteral("state.recentVaults"), vaults);
+        ASSERT_TRUE(settings.save());
+    }
+
+    /// A launch as main() makes it: null when a running instance took the argument, else the
+    /// instance this process would be, holding its lock.
+    static std::future<std::unique_ptr<SingleInstance>> launch(const QString &argument)
+    {
+        return std::async(std::launch::async, [argument] {
+            auto instance = std::make_unique<SingleInstance>(SingleInstance::launchFor(argument));
+            if (instance->handOver(argument))
+                return std::unique_ptr<SingleInstance>();
+            instance->moveToThread(qApp->thread()); // it serves a window of the main thread
+            return instance;
+        });
+    }
+
+    /// Waits for a launch to finish: its answer needs this thread's event loop.
+    static std::unique_ptr<SingleInstance> finished(std::future<std::unique_ptr<SingleInstance>> &result)
+    {
+        EXPECT_TRUE(QTest::qWaitFor([&] { return result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }, 5000));
+        return result.get();
+    }
+
+    /// `window` as the first launch of `argument` would have made it: serving, then opening.
+    std::unique_ptr<SingleInstance> serving(MainWindow &window, const QString &argument)
+    {
+        auto instance = std::make_unique<SingleInstance>(SingleInstance::launchFor(argument));
+        EXPECT_FALSE(instance->handOver(argument));
+        instance->serve(&window);
+        window.setSingleInstance(instance.get());
+        window.openTarget(noteAppC::resolveLaunchTarget(argument));
+        return instance;
+    }
+
+    static QStringList tabsOf(MainWindow &window)
+    {
+        auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+        return tabs ? tabTexts(tabs) : QStringList();
+    }
+
+    static QString explorerRoot(MainWindow &window)
+    {
+        auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+        return qobject_cast<QFileSystemModel *>(tree->model())->filePath(tree->rootIndex());
+    }
+
+    PrivateConfig config;
+    QTemporaryDir sockets, other, loose;
+    QByteArray previous;
+    bool wasSet = false;
+};
+
+} // namespace
+
+// The socket of a vault is named by the vault, not by the way it was spelled, under the
+// directory (prefix) NOTEAPPC_INSTANCE_SOCKET gives - or the runtime directory without it.
+TEST_F(InstanceTest, AVaultsSocketNameFollowsTheVaultAndTheOverride)
+{
+    const QString prefix = sockets.filePath(QStringLiteral("n"));
+    const QString name = SingleInstance::nameForVault(dir.path());
+    EXPECT_TRUE(name.startsWith(prefix + QLatin1Char('-'))) << name.toStdString();
+    EXPECT_TRUE(name.endsWith(QStringLiteral(".sock")));
+    EXPECT_LT(name.toUtf8().size(), 100) << "a unix socket path is 108 bytes at most";
+    EXPECT_EQ(SingleInstance::nameForVault(dir.path() + QStringLiteral("/")), name);
+    EXPECT_EQ(SingleInstance::nameForVault(dir.path() + QStringLiteral("/Projects/..")), name);
+    EXPECT_NE(SingleInstance::nameForVault(other.path()), name);
+    EXPECT_NE(SingleInstance::nameForVault(QString()), name) << "no vault has a name of its own too";
+
+    // The same folder through a symbolic link is the same vault.
+    const QString link = sockets.filePath(QStringLiteral("link"));
+    ASSERT_TRUE(QFile::link(dir.path(), link));
+    EXPECT_EQ(SingleInstance::nameForVault(link), name);
+
+    qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    const QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    EXPECT_TRUE(SingleInstance::nameForVault(dir.path()).startsWith(runtime + QStringLiteral("/notolith-")));
+}
+
+// Two vaults, two processes, each serving its own: a launch goes to the one that has its vault.
+TEST_F(InstanceTest, TwoVaultsAreTwoServingInstances)
+{
+    lastUsed({});
+    MainWindow first, second;
+    auto firstServing = serving(first, dir.path());
+    auto secondServing = serving(second, other.path());
+    ASSERT_TRUE(firstServing->ok());
+    ASSERT_TRUE(secondServing->ok());
+    EXPECT_NE(firstServing->name(), secondServing->name());
+
+    auto handed = launch(other.filePath(QStringLiteral("Other.md")));
+    EXPECT_EQ(finished(handed), nullptr) << "the vault is open in the second window";
+    EXPECT_TRUE(tabsOf(second).contains(QStringLiteral("Other")));
+    EXPECT_FALSE(tabsOf(first).contains(QStringLiteral("Other")));
+
+    handed = launch(path(QStringLiteral("Welcome.md")));
+    EXPECT_EQ(finished(handed), nullptr);
+    WAIT_TRUE(tabsOf(first).contains(QStringLiteral("Welcome")), 5000);
+    EXPECT_FALSE(tabsOf(second).contains(QStringLiteral("Welcome")));
+    EXPECT_EQ(explorerRoot(first), dir.path());
+    EXPECT_EQ(explorerRoot(second), other.path());
+
+    // A vault nobody has open starts a process of its own.
+    QTemporaryDir third;
+    ASSERT_TRUE(third.isValid());
+    handed = launch(third.path());
+    auto starting = finished(handed);
+    ASSERT_NE(starting, nullptr);
+    EXPECT_EQ(starting->name(), SingleInstance::nameForVault(third.path()));
+}
+
+// With nothing named, the vault the app would reopen decides: its instance when it runs.
+TEST_F(InstanceTest, ABareLaunchGoesToTheInstanceOfTheLastUsedVault)
+{
+    lastUsed({dir.path(), other.path()});
+    {
+        auto handed = launch(QString());
+        auto starting = finished(handed);
+        ASSERT_NE(starting, nullptr) << "nothing runs: this one starts";
+        EXPECT_EQ(starting->name(), SingleInstance::nameForVault(dir.path())) << "and it will open that vault";
+    }
+    MainWindow elsewhere;
+    auto elsewhereServing = serving(elsewhere, other.path());
+    lastUsed({dir.path(), other.path()}); // what the window just opened may have saved
+    {
+        auto handed = launch(QString());
+        EXPECT_NE(finished(handed), nullptr) << "another vault running is not the last-used one";
+    }
+    MainWindow last;
+    auto lastServing = serving(last, dir.path());
+    auto handed = launch(QString());
+    EXPECT_EQ(finished(handed), nullptr);
+}
+
+// No vault to reopen: such launches share one no-vault instance, started when none runs.
+TEST_F(InstanceTest, ALaunchWithNoVaultToReopenSharesTheNoVaultInstance)
+{
+    lastUsed({});
+    auto handed = launch(QString());
+    auto empty = finished(handed);
+    ASSERT_NE(empty, nullptr);
+    EXPECT_EQ(empty->name(), SingleInstance::nameForVault(QString()));
+    MainWindow window;
+    empty->serve(&window);
+    ASSERT_TRUE(empty->ok());
+
+    handed = launch(QString());
+    EXPECT_EQ(finished(handed), nullptr) << "a second bare launch goes to the first";
+    handed = launch(loose.filePath(QStringLiteral("Loose.md")));
+    EXPECT_EQ(finished(handed), nullptr) << "so does a loose file: nobody has a vault open";
+}
+
+// A note outside every vault is not tied to one: the last-used vault's instance takes it when it
+// runs, else the no-vault instance does, else a process starts for it.
+TEST_F(InstanceTest, ALooseFileGoesToTheLastUsedVaultsInstanceElseToANoVaultOne)
+{
+    lastUsed({dir.path()});
+    const QString note = loose.filePath(QStringLiteral("Loose.md"));
+    {
+        auto handed = launch(note);
+        auto starting = finished(handed);
+        ASSERT_NE(starting, nullptr);
+        EXPECT_EQ(starting->name(), SingleInstance::nameForVault(QString())) << "no vault of it, so the no-vault name";
+    }
+    MainWindow vault;
+    auto vaultServing = serving(vault, dir.path());
+    auto handed = launch(note);
+    EXPECT_EQ(finished(handed), nullptr);
+    WAIT_TRUE(tabsOf(vault).contains(QStringLiteral("Loose")), 5000);
+}
+
+// A window that opens another vault stops serving the one it left and serves the new one.
+TEST_F(InstanceTest, SwitchingVaultMovesTheServedName)
+{
+    lastUsed({});
+    MainWindow window;
+    auto serv = serving(window, dir.path());
+    const QString before = serv->name();
+    window.openVault(other.path());
+    EXPECT_EQ(serv->name(), SingleInstance::nameForVault(other.path()));
+    EXPECT_NE(serv->name(), before);
+    ASSERT_TRUE(serv->ok());
+
+    auto handed = launch(other.filePath(QStringLiteral("Other.md")));
+    EXPECT_EQ(finished(handed), nullptr) << "the new vault is served here";
+    WAIT_TRUE(tabsOf(window).contains(QStringLiteral("Other")), 5000);
+
+    handed = launch(path(QStringLiteral("Welcome.md")));
+    auto starting = finished(handed);
+    ASSERT_NE(starting, nullptr) << "the old vault is nobody's: a launch for it starts its own";
+    EXPECT_EQ(starting->name(), before);
+
+    // Closing the vault leaves the window with no vault: the other name is let go too.
+    starting.reset();
+    window.closeVault();
+    EXPECT_EQ(serv->name(), SingleInstance::nameForVault(QString()));
+    handed = launch(other.filePath(QStringLiteral("Other.md")));
+    EXPECT_NE(finished(handed), nullptr);
+}
+
+// Asked to open a vault another process has, a window hands that process the vault, focuses it
+// and stays what it was.
+TEST_F(InstanceTest, SwitchingToAVaultOpenElsewhereHandsOverAndKeepsTheWindow)
+{
+    lastUsed({});
+    MainWindow window;
+    auto serv = serving(window, dir.path());
+    const QString mine = serv->name();
+    FakeInstance owner(SingleInstance::nameForVault(other.path()));
+    ASSERT_TRUE(owner.up);
+
+    window.openVault(other.path());
+    WAIT_TRUE(!owner.lines.isEmpty(), 5000);
+    EXPECT_TRUE(owner.lines.first().endsWith(other.path())) << owner.lines.first().toStdString();
+    EXPECT_EQ(explorerRoot(window), dir.path()) << "this window is as it was";
+    EXPECT_EQ(serv->name(), mine);
+
+    auto handed = launch(path(QStringLiteral("Welcome.md")));
+    EXPECT_EQ(finished(handed), nullptr) << "and it still serves its own vault";
+    WAIT_TRUE(tabsOf(window).contains(QStringLiteral("Welcome")), 5000);
+}
+
+// A vault chosen from a window that already has the other process's lock but is not yet
+// listening (it is starting) waits for it as a launch would, instead of opening the vault twice.
+TEST_F(InstanceTest, SwitchingToAVaultThatIsStartingElsewhereWaitsForIt)
+{
+    lastUsed({});
+    MainWindow window;
+    auto serv = serving(window, dir.path());
+    const QString target = SingleInstance::nameForVault(other.path());
+    FakeInstance starting(target, false);
+    ASSERT_TRUE(starting.up);
+
+    auto result = std::async(std::launch::async, [&] { return serv->moveTo(target, other.path()); });
+    QTest::qWait(200);
+    EXPECT_EQ(result.wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
+    starting.listen();
+    ASSERT_TRUE(starting.up);
+    WAIT_TRUE(result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 5000);
+    EXPECT_FALSE(result.get()) << "handed over, so the move is refused";
+    EXPECT_FALSE(starting.lines.isEmpty());
+}
+
+// Launches in the same moment for one vault end in one process: one takes the lock, the rest
+// wait for it to listen and hand their argument over.
+TEST_F(InstanceTest, LaunchesOfOneVaultInTheSameMomentEndInOneProcess)
+{
+    lastUsed({});
+    std::vector<std::future<std::unique_ptr<SingleInstance>>> launches;
+    for (int i = 0; i < 4; ++i)
+        launches.push_back(launch(dir.path()));
+    QElapsedTimer waited;
+    waited.start();
+    QTest::qWait(300);
+    int done = 0;
+    std::unique_ptr<SingleInstance> owner;
+    for (auto &each : launches) {
+        if (each.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            ++done;
+            owner = each.get();
+        }
+    }
+    if (waited.elapsed() >= 1500)
+        GTEST_SKIP() << "the machine was too busy to tell who was still waiting (" << waited.elapsed() << " ms)";
+    EXPECT_EQ(done, 1) << "exactly one takes the lock; the others wait for it to listen";
+    ASSERT_NE(owner, nullptr);
+
+    MainWindow window;
+    owner->serve(&window);
+    window.setSingleInstance(owner.get());
+    window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+    int handed = 0;
+    for (auto &each : launches) {
+        if (!each.valid())
+            continue;
+        if (!finished(each))
+            ++handed;
+    }
+    EXPECT_EQ(handed, 3);
+}
+
+// A bare launch reopens "the vault last used", which another process reads from the settings
+// file: so a vault is remembered when it is opened, not only when a note is next switched.
+TEST_F(InstanceTest, AnOpenedVaultIsRememberedAtOnce)
+{
+    lastUsed({});
+    MainWindow window;
+    window.openVault(other.path());
+    EXPECT_EQ(Settings::load().recentVaults().value(0), other.path());
+    window.openVault(dir.path());
+    EXPECT_EQ(Settings::load().recentVaults().value(0), dir.path());
+}
+
+// A lock whose owner died is not a reason to wait: the next launch takes it.
+TEST_F(InstanceTest, ALockLeftByADeadProcessIsTakenOver)
+{
+    lastUsed({});
+    const pid_t child = ::fork();
+    ASSERT_GE(child, 0);
+    if (child == 0)
+        ::_exit(0);
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+
+    const QString name = SingleInstance::nameForVault(dir.path());
+    QFile stale(name + QStringLiteral(".lock"));
+    ASSERT_TRUE(stale.open(QIODevice::WriteOnly));
+    stale.write(QByteArray::number(qint64(child)) + "\nnoteAppC\n" + QSysInfo::machineHostName().toUtf8() + "\n");
+    stale.close();
+
+    QElapsedTimer waited;
+    waited.start();
+    auto handed = launch(dir.path());
+    auto starting = finished(handed);
+    ASSERT_NE(starting, nullptr);
+    EXPECT_LT(waited.elapsed(), 1500) << "no waiting for an owner that is gone";
+}
+
+// No test process reaches the sockets of a Notolith someone is using: IsolatedHome.cpp (and the
+// CMake environment) put the runtime directory and the name prefix under the test's own, and no
+// test leaves them pointing back at the real ones - InstanceTest included, which sets its own
+// and puts the isolated one back.
+TEST(InstanceIsolation, EveryTestProcessNamesItsSocketsUnderItsOwnRuntimeDirectory)
+{
+    const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    ASSERT_FALSE(runtime.isEmpty());
+    EXPECT_NE(runtime, QStringLiteral("/run/user/%1").arg(::getuid())) << "the real runtime directory";
+    ASSERT_TRUE(qEnvironmentVariableIsSet("NOTEAPPC_INSTANCE_SOCKET"));
+    EXPECT_TRUE(qEnvironmentVariable("NOTEAPPC_INSTANCE_SOCKET").startsWith(runtime));
+    for (const QString &name : {QString(), QStringLiteral("/tmp")}) {
+        EXPECT_FALSE(SingleInstance::nameForVault(name).startsWith(QStringLiteral("/run/user/")))
+            << SingleInstance::nameForVault(name).toStdString();
+        EXPECT_TRUE(SingleInstance::nameForVault(name).startsWith(runtime));
+    }
 }
 
 TEST_F(WindowTest, FormattingColourRowsResetAndRecolourTheEditor)
@@ -9485,6 +11465,219 @@ TEST_F(InkWindowTest, AnOpenInkTabSavesToTheNewPathAfterItsFileIsMovedToAnotherF
     expectAnInkTabSavesAt(window, view, canvas, dir.path(), path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink")));
 }
 
+// A file moved outside the app (a sync client, a file manager) is followed by the tab that holds it, like a note: the view
+// then saves to the new path.
+TEST_F(InkWindowTest, AnOpenInkTabFollowsItsFileMovedOutsideTheApp)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_TRUE(QFile::rename(path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink"))));
+    WAIT_TRUE(window.windowTitle().contains(QStringLiteral("Dest/Sketch.ink")), 5000);
+    expectAnInkTabSavesAt(window, view, canvas, dir.path(), path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink")));
+}
+
+// Deleted outside the app and nowhere else in the vault: the tab says so and a save is refused, so the file is not recreated.
+TEST_F(InkWindowTest, AnOpenInkTabWhoseFileIsDeletedIsMarkedMissingAndRefusesToSave)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Sketch.ink"))));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    WAIT_TRUE(tabs->tabText(tabs->currentIndex()).contains(QStringLiteral("missing")), 5000);
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("gone from disk")));
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(view->isModified());
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(asked) << "the refusal is said out loud";
+    EXPECT_TRUE(view->isModified()) << "nothing was written";
+    QTest::qWait(3500); // past the autosave
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "the file is not recreated";
+}
+
+// An autosave that came due while the file was gone was skipped: once the file is followed, the edits are saved at its new
+// path without another keystroke.
+TEST_F(InkWindowTest, AModifiedInkTabIsSavedAtItsNewPathOnceItsMovedFileIsFollowed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    window.setAutosaveIntervalsForTests(600000, 600000); // nothing is due until the move has been seen
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(view->isModified());
+    ASSERT_TRUE(QFile::rename(path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink"))));
+    WAIT_TRUE(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))) == 0, 5000); // gone, in the grace
+    window.setAutosaveIntervalsForTests(100, 100);
+    inktest::penStroke(canvas, QPointF(100, 700), QPointF(300, 740), 1000); // arms an autosave that falls in the grace
+    WAIT_TRUE(window.windowTitle().contains(QStringLiteral("Dest/Sketch.ink")), 5000); // followed
+    WAIT_TRUE(!view->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Dest/Sketch.ink"))).count("\"type\":\"stroke\""), 3);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "never written back at the old name";
+}
+
+// The second between the file going and its tab saying "missing" is no licence to write it back: Ctrl+S refuses at once.
+TEST_F(InkWindowTest, ASaveInTheGraceOfAGoneInkFileIsRefusedAsWell)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    window.setAutosaveIntervalsForTests(600000, 600000);
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Sketch.ink"))));
+    WAIT_TRUE(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))) == 0, 5000);
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
+    ASSERT_EQ(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))), 0) << "still in the grace";
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(asked) << "the refusal is said out loud";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "the file is not recreated";
+}
+
+// Likewise closing: Save is not offered while the file is only just gone.
+TEST_F(InkWindowTest, ClosingInTheGraceOfAGoneInkFileOffersOnlyDiscardAndCancel)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    window.setAutosaveIntervalsForTests(600000, 600000);
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Sketch.ink"))));
+    WAIT_TRUE(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))) == 0, 5000);
+    int questions = 0;
+    bool hadSave = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            ++questions;
+            hadSave = box->button(QMessageBox::Save) != nullptr;
+            closeBoxWith(box, QMessageBox::Cancel);
+        }
+    });
+    watch.start(20);
+    ASSERT_EQ(window.lostStateForTests(path(QStringLiteral("Sketch.ink"))), 0) << "still in the grace";
+    EXPECT_FALSE(window.close()) << "Cancel keeps the window";
+    EXPECT_EQ(questions, 1);
+    EXPECT_FALSE(hadSave);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "nothing is written back";
+}
+
+// A look-alike is not the file: another document of the same name elsewhere in the vault is not followed to (its size
+// or modification time is not the one this tab's file had), so a save cannot write over it.
+class InkLookAlikeTest : public InkWindowTest {
+protected:
+    void expectNotAdopted(const QByteArray &otherBody, bool sameSizeLaterMtime)
+    {
+        ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("A")));
+        ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("B")));
+        write(QStringLiteral("A/Sketch.ink"), inkWithStrokes(1));
+        write(QStringLiteral("B/Sketch.ink"), otherBody);
+        if (sameSizeLaterMtime) {
+            ASSERT_EQ(QFileInfo(path(QStringLiteral("A/Sketch.ink"))).size(), QFileInfo(path(QStringLiteral("B/Sketch.ink"))).size());
+            QFile later(path(QStringLiteral("B/Sketch.ink")));
+            ASSERT_TRUE(later.open(QIODevice::ReadWrite));
+            ASSERT_TRUE(later.setFileTime(QDateTime::currentDateTime().addSecs(30), QFileDevice::FileModificationTime));
+        }
+        const QByteArray other = readAll(path(QStringLiteral("B/Sketch.ink")));
+        MainWindow window;
+        noteAppC::ModuleView *view = nullptr;
+        noteAppC::ink::InkCanvas *canvas = nullptr;
+        openInkNote(window, dir.path(), QStringLiteral("A/Sketch.ink"), view, canvas);
+        ASSERT_NE(canvas, nullptr);
+        ASSERT_TRUE(QFile::remove(path(QStringLiteral("A/Sketch.ink"))));
+        auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+        ASSERT_NE(tabs, nullptr);
+        WAIT_TRUE(tabs->tabText(tabs->currentIndex()).contains(QStringLiteral("missing")), 5000);
+        EXPECT_TRUE(window.windowTitle().contains(QStringLiteral("A/Sketch.ink"))) << "still the old path, not B's";
+        EXPECT_EQ(readAll(path(QStringLiteral("B/Sketch.ink"))), other);
+    }
+};
+
+TEST_F(InkLookAlikeTest, AnInkFileOfTheSameNameAndAnotherSizeIsNotAdoptedWhenTheOpenOneIsDeleted)
+{
+    expectNotAdopted(inkWithStrokes(3), false);
+}
+
+TEST_F(InkLookAlikeTest, AnInkFileOfTheSameNameAndSizeButAnotherModificationTimeIsNotAdopted)
+{
+    expectNotAdopted(inkWithStrokes(1), true);
+}
+
+// Quitting with a modified tab whose file is gone cannot offer Save (it is refused): Discard or Cancel, Cancel first.
+TEST_F(InkWindowTest, QuittingWithAModifiedMissingInkTabOffersOnlyDiscardAndCancel)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(view->isModified());
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Sketch.ink"))));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    WAIT_TRUE(tabs->tabText(tabs->currentIndex()).contains(QStringLiteral("missing")), 5000);
+
+    QMessageBox::StandardButton answer = QMessageBox::Cancel;
+    int questions = 0;
+    bool hadSave = true, cancelIsDefault = false;
+    QString text;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            ++questions;
+            hadSave = box->button(QMessageBox::Save) != nullptr;
+            cancelIsDefault = box->defaultButton() == box->button(QMessageBox::Cancel);
+            text = box->text();
+            closeBoxWith(box, answer);
+        }
+    });
+    watch.start(20);
+    EXPECT_FALSE(window.close()) << "Cancel keeps the window";
+    EXPECT_EQ(questions, 1);
+    EXPECT_FALSE(hadSave);
+    EXPECT_TRUE(cancelIsDefault);
+    EXPECT_TRUE(text.contains(QStringLiteral("gone from disk (deleted or moved outside the app), so its changes cannot be saved. Discard them?")))
+        << text.toStdString();
+    answer = QMessageBox::Discard;
+    EXPECT_TRUE(window.close()) << "Discard lets the quit through: it is not blocked for good";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Sketch.ink")))) << "and nothing is written back";
+}
+
 // M5: a pen width in the settings is the width of the first stroke, not only the default that equals the canvas'.
 TEST_F(InkWindowTest, TheDefaultPenWidthSettingIsTheWidthOfTheFirstStroke)
 {
@@ -9583,5 +11776,275 @@ TEST_F(WindowTest, WithInkOffTheInkTextIsStillIndexed)
     ASSERT_NE(indexer, nullptr);
     ASSERT_TRUE(QTest::qWaitFor([&] { return !indexer->isRunning(); }, 10000)) << "a rescan, if the switch caused one, has ended";
     EXPECT_EQ(list->topLevelItemCount(), 1);
+}
+#endif
+
+// --- a tab's view follows its file when the app renames or moves it ---
+
+namespace {
+bool renameVault(MainWindow &window, const QString &from, bool isDir, const QString &to)
+{
+    bool renamed = false;
+    QString error;
+    EXPECT_TRUE(QMetaObject::invokeMethod(&window, "renameVaultPath", Q_RETURN_ARG(bool, renamed), Q_ARG(QString, from),
+                                          Q_ARG(bool, isDir), Q_ARG(QString, to), Q_ARG(QString *, &error)));
+    EXPECT_TRUE(renamed) << error.toStdString();
+    return renamed;
+}
+} // namespace
+
+#ifdef NOTEAPPC_HAVE_CANVAS
+TEST_F(WindowTest, AnOpenCanvasSavesToTheNewPathAfterItsFileOrFolderIsRenamed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Notes")));
+    write(QStringLiteral("Notes/Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Notes/Board.canvas"))));
+    auto *canvas = window.findChild<noteAppC::CanvasView *>();
+    ASSERT_NE(canvas, nullptr);
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes/Board.canvas")), false, QStringLiteral("Renamed")));
+    EXPECT_EQ(canvas->path(), path(QStringLiteral("Notes/Renamed.canvas")));
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Notes/Renamed.canvas")))); // so a save is seen to write it
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Notes/Renamed.canvas"))));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Notes/Board.canvas")))) << "the old name is not recreated";
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes")), true, QStringLiteral("Archive")));
+    EXPECT_EQ(canvas->path(), path(QStringLiteral("Archive/Renamed.canvas")));
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Archive/Renamed.canvas"))));
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Archive/Renamed.canvas"))));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Notes")))) << "the old folder is not recreated";
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+TEST_F(WindowTest, AnOpenImageFollowsItsFileOrFolderBeingRenamed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Notes")));
+    QImage picture(40, 20, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Notes/pic.png"))));
+    Settings config = Settings::load();
+    const QVariant before = config.value(Settings::featureKey("image-annotation"));
+    config.setValue(Settings::featureKey("image-annotation"), true); // off until asked for
+    ASSERT_TRUE(config.save());
+    const auto restore = qScopeGuard([&config, before] { // the settings file is shared by every test of the process
+        config.setValue(Settings::featureKey("image-annotation"), before.isValid() ? before : QVariant(false));
+        config.save();
+    });
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Notes/pic.png"))));
+    auto *image = window.findChild<noteAppC::ImageView *>();
+    ASSERT_NE(image, nullptr);
+
+    noteAppC::ImageAnnotation mark;
+    mark.kind = noteAppC::ImageAnnotation::Kind::Note;
+    mark.point = QPointF(5, 5);
+    mark.text = QStringLiteral("first");
+    image->canvas()->add(mark);
+    ASSERT_TRUE(QFile::exists(path(QStringLiteral("Notes/pic.png annotations.md")))) << "an edit is written to the sidecar";
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes/pic.png")), false, QStringLiteral("photo")));
+    EXPECT_EQ(image->path(), path(QStringLiteral("Notes/photo.png")));
+    EXPECT_EQ(image->sidecarPath(), path(QStringLiteral("Notes/photo.png annotations.md"))) << "its marks are saved under the new name";
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Notes/photo.png annotations.md")))) << "the sidecar went with the image";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Notes/pic.png annotations.md"))));
+    mark.text = QStringLiteral("second");
+    image->canvas()->add(mark); // a save lands on the new name; the old one is not recreated
+    EXPECT_EQ(noteAppC::ImageAnnotations::load(path(QStringLiteral("Notes/photo.png annotations.md"))).size(), 2);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Notes/pic.png annotations.md"))));
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes")), true, QStringLiteral("Archive")));
+    EXPECT_EQ(image->path(), path(QStringLiteral("Archive/photo.png")));
+    EXPECT_EQ(image->sidecarPath(), path(QStringLiteral("Archive/photo.png annotations.md")));
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Archive/photo.png annotations.md"))));
+}
+#endif
+
+namespace {
+/// The text of the current tab of the window's tab bar.
+QString currentTabText(MainWindow &window)
+{
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    return tabs ? tabs->tabText(tabs->currentIndex()) : QString();
+}
+} // namespace
+
+#ifdef NOTEAPPC_HAVE_CANVAS
+// A canvas tab is watched like a module's view: moved outside the app it follows, deleted it is marked missing and
+// never writes its old file back.
+TEST_F(WindowTest, AnOpenCanvasFollowsItsFileMovedOutsideTheApp)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    auto *canvas = window.findChild<noteAppC::CanvasView *>();
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_TRUE(QFile::rename(path(QStringLiteral("Board.canvas")), path(QStringLiteral("Dest/Board.canvas"))));
+    WAIT_TRUE(canvas->path() == path(QStringLiteral("Dest/Board.canvas")), 5000);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Dest/Board.canvas")))); // so a save is seen to write it
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Dest/Board.canvas")))) << "the save landed at the new name";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Board.canvas")))) << "the old name is not recreated";
+}
+
+TEST_F(WindowTest, AnOpenCanvasWhoseFileIsDeletedIsMarkedMissingAndNeverRecreatesIt)
+{
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Board.canvas"))));
+    WAIT_TRUE(currentTabText(window).contains(QStringLiteral("missing")), 5000);
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(asked) << "the refusal is said out loud";
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Board.canvas")))) << "a save does not recreate it";
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+TEST_F(WindowTest, AnOpenImageFollowsItsFileMovedOutsideTheAppOrIsMarkedMissing)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    QImage picture(40, 20, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+    Settings config = Settings::load();
+    const QVariant before = config.value(Settings::featureKey("image-annotation"));
+    config.setValue(Settings::featureKey("image-annotation"), true);
+    ASSERT_TRUE(config.save());
+    const auto restore = qScopeGuard([&config, before] {
+        config.setValue(Settings::featureKey("image-annotation"), before.isValid() ? before : QVariant(false));
+        config.save();
+    });
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("pic.png"))));
+    auto *image = window.findChild<noteAppC::ImageView *>();
+    ASSERT_NE(image, nullptr);
+    ASSERT_TRUE(QFile::rename(path(QStringLiteral("pic.png")), path(QStringLiteral("Dest/pic.png"))));
+    WAIT_TRUE(image->path() == path(QStringLiteral("Dest/pic.png")), 5000);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Dest/pic.png"))));
+    WAIT_TRUE(currentTabText(window).contains(QStringLiteral("missing")), 5000);
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+// An image is never saved by the window (its marks go to their own file as they are made): Ctrl+S on a missing one is not
+// a "could not save" box.
+TEST_F(WindowTest, SavingAMissingImageTabSaysNothingAndWritesNothing)
+{
+    QImage picture(40, 20, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+    Settings config = Settings::load();
+    const QVariant before = config.value(Settings::featureKey("image-annotation"));
+    config.setValue(Settings::featureKey("image-annotation"), true);
+    ASSERT_TRUE(config.save());
+    const auto restore = qScopeGuard([&config, before] {
+        config.setValue(Settings::featureKey("image-annotation"), before.isValid() ? before : QVariant(false));
+        config.save();
+    });
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("pic.png"))));
+    ASSERT_NE(window.findChild<noteAppC::ImageView *>(), nullptr);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("pic.png"))));
+    WAIT_TRUE(currentTabText(window).contains(QStringLiteral("missing")), 5000);
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
+    command(window, "editor:save-file")->trigger();
+    EXPECT_FALSE(asked);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("pic.png"))));
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_CANVAS
+// The same file open in a tab of each split: "(missing)" is in both, not only in the group of the first.
+TEST_F(WindowTest, AMissingFilesTabSaysSoInEverySplit)
+{
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    command(window, "workspace:split-vertical")->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    const auto bars = mainBars(window);
+    ASSERT_EQ(bars.size(), 2);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Board.canvas"))));
+    WAIT_TRUE(tabTexts(bars.at(0)).join(QString()).contains(QStringLiteral("missing"))
+                  && tabTexts(bars.at(1)).join(QString()).contains(QStringLiteral("missing")), 5000);
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})"); // found again, as a recreation
+    WAIT_TRUE(!tabTexts(bars.at(0)).join(QString()).contains(QStringLiteral("missing"))
+                  && !tabTexts(bars.at(1)).join(QString()).contains(QStringLiteral("missing")), 5000);
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_PDFVIEW_MODULE
+TEST_F(WindowTest, AnOpenPdfSavesToTheNewPathAfterItsFileOrFolderIsRenamed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Notes")));
+    {
+        QPdfWriter pdf(path(QStringLiteral("Notes/doc.pdf")));
+        QPainter painter(&pdf);
+        painter.drawText(100, 100, QStringLiteral("page one"));
+    }
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Notes/doc.pdf"))));
+    auto *view = window.findChild<noteAppC::ModuleView *>();
+    ASSERT_NE(view, nullptr);
+    const auto viewPath = [view] {
+        QString result;
+        EXPECT_TRUE(QMetaObject::invokeMethod(view, "path", Q_RETURN_ARG(QString, result)));
+        return result;
+    };
+    ASSERT_EQ(viewPath(), path(QStringLiteral("Notes/doc.pdf")));
+
+    // A save that lands at the new path is seen as that file being rewritten.
+    const auto saveRewrites = [&](const QString &where) {
+        const QDateTime before = QFileInfo(where).lastModified();
+        QTest::qWait(30);
+        command(window, "editor:save-file")->trigger();
+        EXPECT_GT(QFileInfo(where).lastModified(), before) << where.toStdString();
+    };
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes/doc.pdf")), false, QStringLiteral("paper")));
+    EXPECT_EQ(viewPath(), path(QStringLiteral("Notes/paper.pdf")));
+    saveRewrites(path(QStringLiteral("Notes/paper.pdf")));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Notes/doc.pdf")))) << "the old name is not recreated";
+
+    ASSERT_TRUE(renameVault(window, path(QStringLiteral("Notes")), true, QStringLiteral("Archive")));
+    EXPECT_EQ(viewPath(), path(QStringLiteral("Archive/paper.pdf")));
+    saveRewrites(path(QStringLiteral("Archive/paper.pdf")));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Notes")))) << "the old folder is not recreated";
 }
 #endif

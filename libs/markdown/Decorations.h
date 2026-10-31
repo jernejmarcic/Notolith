@@ -61,6 +61,11 @@ struct StyleSpan {
     /// with the caret kept. Invalid along with `anchorHash` when there is no
     /// subpath.
     Range anchorText;
+
+    /// For Kind::InlineCode with a `{lang}` prefix (ParseOptions::codeStyler):
+    /// `payload` is the language and this is the code after the prefix, which
+    /// is hidden (`syntax`). Invalid for plain inline code.
+    Range code;
 };
 
 /// One top-level block: the unit the editor lays out, caches a height for,
@@ -213,6 +218,24 @@ struct CodeOptions {
     /// added to this block when it runs.
     bool implicit = true;
     QMap<QString, QString> extra; ///< every key with no meaning here, as written
+
+    // --- Code Styler (ParseOptions::codeStyler) ---------------------------
+    // Obsidian's Code Styler plugin writes its parameters on the opening
+    // fence line instead (`cpp title:"a.cpp" ln:5 hl:2,4-6 fold`). They land
+    // in this same struct, so one renderer serves both spellings; a `#|` line
+    // for the same key wins, being the more explicit and the one inside the
+    // block.
+    /// True when the options come from the fence line alone, with no `#|`
+    /// line (`range` is then invalid, so nothing is hidden).
+    bool fromFence = false;
+    /// `fold:"Collapsed"`: what a folded block with no title says instead of
+    /// the language's name. Empty for a bare `fold`.
+    QString foldLabel;
+    /// Alternative highlights, `info:2 warn:4-6`: the configured name
+    /// (ParseOptions::highlightKinds, as written there) to its 1-based
+    /// lines, resolved from numbers, ranges, text and `/regex/` the way
+    /// `highlight` is. The names are the plugin's own and the settings'.
+    QMap<QString, QList<int>> highlights;
 };
 
 /// A fenced code block's own header. CommonMark reads only the info string's
@@ -237,9 +260,26 @@ struct CodeFenceSpan {
     /// outside any group - which is also what a lone `tab` fence gets, since
     /// it has nobody to share a tab strip with.
     int tabGroup = -1;
+    /// `ignore` on the fence line (ParseOptions::codeStyler): Code Styler is
+    /// told to leave this block alone, so it keeps its panel and its colours
+    /// and loses the header strip and everything else the plugin adds.
+    bool ignored = false;
     /// The `tab` attribute's value, empty for a bare `tab` - the editor then
     /// labels that tab with the language's own style name instead.
     QString tabLabel;
+};
+
+/// A ```` ```reference ```` block (Code Styler's file reference, found only
+/// when ParseOptions::codeStyler is on): the file or URL to show as a listing.
+/// The parser only reads the block's own `key: value` lines; fetching and
+/// drawing the file is the editor's.
+struct ReferenceSpan {
+    Range block;      ///< the whole fenced block, both fences included
+    Range content;    ///< the `key: value` lines between the fences
+    QString target;   ///< `file`, `path`, `filePath` or `link`, as written
+    QString language; ///< `language` or `lang`; empty means the file's suffix
+    QString start;    ///< as written: a line number, a word or a `/regex/`
+    QString end;      ///< as written; `+10` counts on from `start`
 };
 
 /// One item of a list, so live preview can hide the source marker, draw a
@@ -315,9 +355,15 @@ struct Decorations {
     /// `codeOptions` - match the two by `content` against `CodeOptions::block`,
     /// which is the same range under a different name.
     QList<CodeFenceSpan> codeFences;
+    /// Every ```` ```reference ```` block, sorted by `block.start`. Empty
+    /// unless ParseOptions::codeStyler is on.
+    QList<ReferenceSpan> references;
     /// Markers hidden while the cursor is outside the block: `#`, `**`, `[[`,
     /// `==`, fence lines, the target half of an aliased wikilink.
     QList<Range> syntax;
+    /// Every `%%comment%%`, delimiters included, sorted by position: also in
+    /// `syntax` (hidden in live preview), kept apart for what leaves them out.
+    QList<Range> comments;
     QList<StyleSpan> styles;
     /// Sorted by position. A reference to a label no definition names is
     /// not a footnote, as in Obsidian: it stays text.

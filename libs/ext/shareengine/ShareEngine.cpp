@@ -4,7 +4,9 @@
 #include <format>
 #include <utility>
 
+#include <QCryptographicHash>
 #include <QDateTime>
+#include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -70,6 +72,9 @@ std::optional<ShareEngine::InviteInfo::Host> privateHost(const QString &text)
 
 /// A Presence whose head is this: its author closed the note.
 constexpr quint32 kCaretGone = 0xFFFFFFFFu;
+/// A CrdtDoc position is a few bytes; more is not one. The Yrs decoder has its own copy of this
+/// number (MAX_POSITION_BYTES in yrs-ffi/src/lib.rs); the Native one needs none, its reader is bounded.
+constexpr size_t kMaxPositionBytes = 64;
 
 /// A frame of ours has a reader there: it has sent us one we could open, so
 /// it holds this epoch's key. Presence waits for that, so a member still
@@ -127,12 +132,14 @@ struct ShareEngine::Share {
     Counters counters;
     struct Seen {
         qsizetype anchor = 0, head = 0;
+        QByteArray anchorPos, headPos; ///< the same places by their characters; empty from an old build
         quint64 counter = 0;
         qint64 at = 0; ///< ms since epoch it arrived
         bool gone = false; ///< its author closed the note: kept for the counter
     };
     QHash<QByteArray, Seen> carets; ///< by author
     std::optional<std::pair<qsizetype, qsizetype>> myCaret;
+    QByteArray myAnchorPos, myHeadPos; ///< myCaret by its characters (CrdtDoc::encodePosition)
     // Starts at the clock, so an author that restarted is not taken for a
     // replay by a member who only hears it through the owner (no peerDown there).
     quint64 caretCounter = quint64(QDateTime::currentMSecsSinceEpoch());
@@ -241,11 +248,35 @@ bool ShareEngine::start()
     if (m_node)
         return true;
     m_error.clear();
-    m_me = ShareIdentity::load(m_config.identityKey);
-    if (!m_me) {
-        m_error = tr("The keyring would not keep this device's sharing keys.");
-        return false;
+    // A device is online once: a peer keeps one connection per identity, so a second Notolith
+    // process (one per vault) with the same keys would split its peers between two links, and
+    // both would publish one mDNS name. The first keeps the link; the others say so. The lock
+    // is per identity key and, with a store directory of its own (tests), lives in it.
+    if (!m_linkLock) {
+        const QString directory = m_config.storeDirectory.isEmpty()
+            ? QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share")
+            : m_config.storeDirectory;
+        QDir().mkpath(directory);
+        const QByteArray id =
+            QCryptographicHash::hash(m_config.identityKey.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+        auto lock = std::make_unique<QLockFile>(directory + QStringLiteral("/link-") + QString::fromLatin1(id)
+                                                + QStringLiteral(".lock"));
+        lock->setStaleLockTime(0); // only a dead owner frees it: a window can run for months
+        if (!lock->tryLock(0)) {
+            m_error = tr("Sharing is already running in another Notolith window: this device's link can be "
+                         "online once. Close that window, or turn sharing off in it, then reopen this vault to share from here.");
+            return false;
+        }
+        m_linkLock = std::move(lock);
     }
+    const auto fail = [this](const QString &why) {
+        m_error = why;
+        m_linkLock.reset();
+        return false;
+    };
+    m_me = ShareIdentity::load(m_config.identityKey);
+    if (!m_me)
+        return fail(tr("The keyring would not keep this device's sharing keys."));
     hearth::setDebugLogPath(
         (QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share/link.log"))
             .toStdString());
@@ -285,8 +316,7 @@ bool ShareEngine::start()
                 throw;
             m_node = open(0);
         } catch (const std::exception &e) {
-            m_error = tr("Sharing could not start its network link: %1").arg(QString::fromUtf8(e.what()));
-            return false;
+            return fail(tr("Sharing could not start its network link: %1").arg(QString::fromUtf8(e.what())));
         }
     }
 
@@ -906,9 +936,15 @@ void ShareEngine::setCaret(const QByteArray &shareID, qsizetype anchor, qsizetyp
     if (it == m_shares.constEnd())
         return;
     Share &share = **it;
-    if (share.myCaret && share.myCaret->first == anchor && share.myCaret->second == head)
+    // Same offsets is not always the same characters: a remote edit that replaced the text just before
+    // the caret leaves its offset alone and its old positions on deleted characters.
+    if (share.myCaret && share.myCaret->first == anchor && share.myCaret->second == head
+        && (!share.doc
+            || (share.doc->resolvePosition(share.myAnchorPos) == anchor && share.doc->resolvePosition(share.myHeadPos) == head)))
         return;
     share.myCaret = std::pair(anchor, head);
+    share.myAnchorPos = share.doc ? share.doc->encodePosition(anchor) : QByteArray();
+    share.myHeadPos = share.doc ? share.doc->encodePosition(head) : QByteArray();
     share.caretDue = true;
     if (!m_presence.isActive())
         m_presence.start();
@@ -983,8 +1019,24 @@ void ShareEngine::sendCarets(bool all)
         notolith::share::Presence presence;
         presence.set_author(toS(m_me->publicKey()));
         presence.set_counter(++share.caretCounter);
-        presence.set_anchor(share.myCaret ? quint32(qMax<qsizetype>(0, share.myCaret->first)) : kCaretGone);
-        presence.set_head(share.myCaret ? quint32(qMax<qsizetype>(0, share.myCaret->second)) : kCaretGone);
+        if (share.myCaret) {
+            // Where the caret's characters are now: edits that arrived since
+            // setCaret() moved them, and an old build only reads the offsets.
+            qsizetype anchor = share.myCaret->first, head = share.myCaret->second;
+            if (share.doc) {
+                if (const qsizetype at = share.doc->resolvePosition(share.myAnchorPos); at >= 0)
+                    anchor = at;
+                if (const qsizetype at = share.doc->resolvePosition(share.myHeadPos); at >= 0)
+                    head = at;
+            }
+            presence.set_anchor(quint32(qMax<qsizetype>(0, anchor)));
+            presence.set_head(quint32(qMax<qsizetype>(0, head)));
+            presence.set_anchor_pos(toS(share.myAnchorPos));
+            presence.set_head_pos(toS(share.myHeadPos));
+        } else {
+            presence.set_anchor(kCaretGone);
+            presence.set_head(kCaretGone);
+        }
         const QByteArray bytes = toQ(presence.SerializeAsString());
         for (const Share::Member &m : std::as_const(share.members))
             if (m.key != m_me->publicKey() && keyedWith(share, m.key))
@@ -1006,8 +1058,12 @@ void ShareEngine::onPresence(Share &share, const QByteArray &from, const QByteAr
     if (presence.counter() <= seen.counter)
         return; // a copy that came round another way, or a late one
     const bool gone = presence.head() == kCaretGone;
-    seen = {qsizetype(presence.anchor()), qsizetype(presence.head()), presence.counter(),
-            QDateTime::currentMSecsSinceEpoch(), gone};
+    // A position is a few bytes; anything longer is not one of ours.
+    const auto position = [](const std::string &bytes) {
+        return bytes.size() <= kMaxPositionBytes ? toQ(bytes) : QByteArray();
+    };
+    seen = {qsizetype(presence.anchor()), qsizetype(presence.head()), position(presence.anchor_pos()),
+            position(presence.head_pos()), presence.counter(), QDateTime::currentMSecsSinceEpoch(), gone};
     // Members need not be connected to each other: pass it on, once.
     for (const Share::Member &m : std::as_const(share.members))
         if (m.key != m_me->publicKey() && m.key != from && m.key != author && keyedWith(share, m.key))
@@ -1022,8 +1078,18 @@ QList<ShareEngine::Caret> ShareEngine::carets(const QByteArray &shareID) const
     if (it == m_shares.constEnd())
         return out;
     for (auto entry = (*it)->carets.constBegin(); entry != (*it)->carets.constEnd(); ++entry)
-        if (const Share::Member *m = (*it)->member(entry.key()); m && !entry->gone)
-            out.append({entry.key(), m->name, entry->anchor, entry->head});
+        if (const Share::Member *m = (*it)->member(entry.key()); m && !entry->gone) {
+            // By characters when the author sent them and this replica has them, else by offset.
+            const CrdtDoc *doc = (*it)->doc.get();
+            qsizetype anchor = entry->anchor, head = entry->head;
+            if (doc && !entry->anchorPos.isEmpty())
+                if (const qsizetype at = doc->resolvePosition(entry->anchorPos); at >= 0)
+                    anchor = at;
+            if (doc && !entry->headPos.isEmpty())
+                if (const qsizetype at = doc->resolvePosition(entry->headPos); at >= 0)
+                    head = at;
+            out.append({entry.key(), m->name, anchor, head});
+        }
     return out;
 }
 

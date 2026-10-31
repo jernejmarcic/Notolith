@@ -1,11 +1,15 @@
 #include "NoteHistory.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
+#include <QThread>
+
+#include <atomic>
 
 #include <git2.h>
 
@@ -57,37 +61,49 @@ git_blob *onlyBlob(git_repository *repo, const git_tree *tree)
 struct NoteHistory::Repository {
     git_repository *repo = nullptr;
     QString path;
+    bool attempted = false; ///< open() ran
     ~Repository()
     {
         git_repository_free(repo);
     }
 };
 
+namespace {
+std::atomic<int> gMainThreadSetups{0};
+} // namespace
+
 /// Once per process, and never shut down: a history's last owner can be a
 /// save still running on the history pool, and its git_libgit2_shutdown()
 /// there tore OpenSSL down while the next vault's init on the UI thread
 /// was loading the system's certificates - a crash one test run in six.
-/// The init is the 5 ms of a cold start that loads those certificates, so
-/// warmUp() lets a worker pay it while the window is built; a static's init
-/// is thread-safe, and whoever needs it first waits for it.
+/// The init loads OpenSSL (3-4 ms, +6 MB RSS), so it waits for the first
+/// call that needs it (open()); a static's init is thread-safe.
 static void initLibgit2()
 {
+    if (QCoreApplication::instance() && QThread::currentThread() == QCoreApplication::instance()->thread())
+        ++gMainThreadSetups;
     static const int initialised = git_libgit2_init();
     Q_UNUSED(initialised);
 }
 
-void NoteHistory::warmUp()
+int NoteHistory::mainThreadSetupsForTests()
 {
-    initLibgit2();
+    return gMainThreadSetups.load();
 }
 
 NoteHistory::NoteHistory(const QString &vaultRoot)
     : m_repo(std::make_unique<Repository>())
 {
-    initLibgit2();
     m_repo->path = repositoryPathFor(vaultRoot);
-    // Only opened here: a vault that is merely looked at leaves nothing on
-    // disk. The repository is created by the first record().
+}
+
+void NoteHistory::open() const
+{
+    if (m_repo->attempted)
+        return;
+    m_repo->attempted = true;
+    initLibgit2();
+    // Only opened here: the repository is created by the first record().
     if (QFileInfo::exists(m_repo->path)
         && git_repository_open_bare(&m_repo->repo, m_repo->path.toUtf8().constData()) != 0) {
         m_error = lastError();
@@ -109,6 +125,7 @@ QString NoteHistory::repositoryPathFor(const QString &vaultRoot)
 
 bool NoteHistory::isOpen() const
 {
+    open();
     // Usable: opened, or not created yet (record() makes it). Only an
     // existing repository that failed to open is not.
     return m_repo->repo != nullptr || m_error.isEmpty();
@@ -127,6 +144,7 @@ bool NoteHistory::create()
 
 bool NoteHistory::record(const QString &relativePath, const QString &text, const QDateTime &when)
 {
+    open();
     if (relativePath.isEmpty() || (!m_repo->repo && !m_error.isEmpty()) || (!m_repo->repo && !create()))
         return false;
     git_repository *repo = m_repo->repo;
@@ -192,6 +210,7 @@ bool NoteHistory::record(const QString &relativePath, const QString &text, const
 
 QList<NoteHistory::Version> NoteHistory::versions(const QString &relativePath) const
 {
+    open();
     QList<Version> out;
     git_repository *repo = m_repo->repo;
     git_oid id;
@@ -217,6 +236,7 @@ QList<NoteHistory::Version> NoteHistory::versions(const QString &relativePath) c
 
 QString NoteHistory::read(const QString &relativePath, const QString &version) const
 {
+    open();
     Q_UNUSED(relativePath); // each commit holds the one note, whatever its name was then
     git_repository *repo = m_repo->repo;
     git_oid id;
@@ -239,6 +259,7 @@ QString NoteHistory::read(const QString &relativePath, const QString &version) c
 
 bool NoteHistory::rename(const QString &oldRelative, const QString &newRelative)
 {
+    open();
     git_repository *repo = m_repo->repo;
     git_reference *old = nullptr;
     if (!repo || git_reference_lookup(&old, repo, refFor(oldRelative).constData()) != 0)
@@ -255,6 +276,7 @@ bool NoteHistory::rename(const QString &oldRelative, const QString &newRelative)
 
 bool NoteHistory::pack()
 {
+    open();
     git_repository *repo = m_repo->repo;
     if (!repo)
         return false;

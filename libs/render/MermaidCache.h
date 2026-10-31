@@ -16,24 +16,28 @@ namespace noteAppC {
 ///
 /// PlantUML, TikZ and Graphviz fences are kept the same way, each kind in a
 /// directory of its own; the mermaid* functions are the Mermaid case of the
-/// diagram* ones.
+/// diagram* ones. A ```` ```markmap ```` fence is the odd one out: no tool, its
+/// SVG is made in-process (Markmap.h), so diagramCachedSVG draws it from the
+/// source, in the theme asked, and nothing of it is kept on disk.
 
-enum class DiagramKind { Mermaid, PlantUML, TikZ, Graphviz };
+enum class DiagramKind { Mermaid, PlantUML, TikZ, Graphviz, Markmap };
 
 /// The fence languages a kind answers to (lower case).
 QStringList diagramLanguages(DiagramKind kind);
 
 /// What a kind's cache key and tool are given of `theme`: Mermaid's
-/// mermaidConfig; for the others {"dark", "text", "background"} as JSON.
+/// mermaidConfig; for the others {"dark", "text", "background"} as JSON, and
+/// for Markmap also the colours and fonts of its map (Markmap.h's MarkmapLook).
 QByteArray diagramConfig(DiagramKind kind, const Theme &theme);
 
-/// $XDG_CACHE_HOME/noteAppC/<mermaid|plantuml|tikz|graphviz>.
+/// $XDG_CACHE_HOME/noteAppC/<mermaid|plantuml|tikz|dot> (a mind map is drawn from its text, never cached).
 QString diagramCacheDirectory(DiagramKind kind);
 
 /// mermaidCachePath for any kind.
 QString diagramCachePath(DiagramKind kind, const QString &source, const QByteArray &config);
 
-/// mermaidCachedSVG(source, theme) for any kind.
+/// mermaidCachedSVG(source, theme) for any kind; for Markmap the map drawn
+/// from `source` in `theme`'s colours (needs a QGuiApplication, for the fonts).
 QByteArray diagramCachedSVG(DiagramKind kind, const QString &source, const Theme &theme);
 
 /// The config JSON handed to `mmdr -c`: Mermaid's own `theme` and

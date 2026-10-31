@@ -47,17 +47,24 @@ class QTreeView;
 namespace noteAppC {
 
 class SpellChecker;
+class SingleInstance;
 class DictClient;
 class NoteHistory;
 class PluginRegistry;
 class SyncEngine;
 class ShareSession;
 class AudioRecorder;
+namespace pandoc {
+class Runner;
+}
 namespace crypt {
 class EncryptionSession;
 }
 namespace notebook {
 class NotebookController;
+class IpynbPictures;
+struct IpynbRuns;
+struct NotebookRunResult;
 }
 
 class BacklinksPane;
@@ -107,6 +114,8 @@ public:
     void setLookupFunction(LookupFunction lookup) { m_lookupFunction = std::move(lookup); }
 
     void openVault(const QString &path);
+    /// Drops the open vault: back to the empty-window state, chrome intact.
+    void closeVault();
     /// Returns false when `path` was not opened - not a note, unsaved changes
     /// declined, or (only tolerated for NavSource::History, where the entry
     /// is simply skipped rather than erroring) deleted or renamed since it was
@@ -133,6 +142,12 @@ public:
     /// vault before there is something on screen. Call it instead of
     /// openTarget() at startup, after show().
     void openWhenShown(const LaunchTarget &target);
+
+    /// The instance that serves this window to other launches (main() owns it).
+    /// With one set, the socket the window serves follows its vault: opening
+    /// another vault moves it, opening one that another Notolith process has
+    /// hands the vault to that process and leaves this window as it is.
+    void setSingleInstance(SingleInstance *instance) { m_instance = instance; }
 
     const Theme &theme() const { return m_theme; }
     void setThemeMode(Theme::Mode mode);
@@ -173,6 +188,12 @@ public:
     void setEncryptionPromptForTests(std::function<QString(bool creating, bool retry)> prompt);
     /// The autosave pause and its longest wait, in ms. For the tests.
     void setAutosaveIntervalsForTests(int pause, int maxWait);
+    /// Whether an open file's tab has lost it: -1 not lost, 0 gone and in the grace before it is looked for
+    /// elsewhere, 1 gone and not found. For the tests.
+    int lostStateForTests(const QString &path) const;
+    /// How many open or opened notebooks hold their attachment pictures. For the tests.
+    qsizetype notebookPictureSetsForTests() const;
+    qsizetype notebookRunSetsForTests() const; ///< notebooks holding runs that await their save
     /// Runs on the save thread at the start of every background commit, before
     /// anything is read or written: a test holds a commit open with it.
     void setSaveJobHookForTests(std::function<void()> hook);
@@ -613,8 +634,19 @@ private:
     /// Any note, read or written: an encrypted one is decrypted into `out`
     /// in memory only, asking for the password if the session is locked,
     /// and sealed again on write. Cancelling the password fails quietly.
-    bool readNote(const QString &path, Note &out, QString *error);
+    /// `seedOutputs`: a notebook's stored outputs go into the output cache (opening it); a mere look at the file
+    /// leaves the cache alone.
+    bool readNote(const QString &path, Note &out, QString *error, bool seedOutputs = false);
     bool writeNote(const QString &path, const Note &note, QString *error);
+    /// A cell of the notebook at `path` ran (or, with a result that has not run, was cleared): its tab is modified
+    /// and the next save writes `result` into the cell that ran under `cacheKey`.
+    void notebookOutputsChanged(const QString &path, const QString &cacheKey, const notebook::NotebookRunResult &result);
+    /// What a notebook's state (the runs awaiting a save, its pictures) was kept under, kept under its new name.
+    void moveNotebookState(const QString &from, const QString &to);
+    /// Lets go of the pictures of every notebook no tab shows any more.
+    void pruneNotebookImages();
+    /// `editor` shows the pictures of the notebook at `path`, each cell its own; none for any other note.
+    void showNotebookPictures(MarkdownEditor *editor, const QString &path);
     /// The bytes of an encrypted note of this vault, preferring `path`: what
     /// a typed password is checked against. Empty when there is none yet.
     QByteArray encryptionSample(const QString &path = QString()) const;
@@ -656,6 +688,34 @@ private:
     class DailyNotes dailyNotes() const;
     /// Obsidian's Export to PDF, for the open note.
     void exportPdf();
+    /// The `markmap` plugin's "Show as mind map": the open note's headings as a
+    /// mind map in a window of its own (a reading-view editor holding a markmap
+    /// fence, so folding by a click and the theme come with it).
+    void showAsMindMap();
+#ifdef NOTEAPPC_HAVE_PANDOC
+    // --- pandoc (MainWindowPandoc.cpp) ---
+    /// The pandoc commands, as actions of the "pandoc" core plugin.
+    void buildPandocActions();
+    /// The program to run, looked up now (never earlier): empty after telling the person it is missing.
+    QString pandocProgram();
+    /// A dialog: pandoc was not found, how to get it, and a button to its path in Settings.
+    void showPandocMissing();
+    /// Marks the pandoc commands that cannot run (no pandoc) in the palette; looks pandoc up only when the plugin is on.
+    void refreshPandocCommands();
+    /// `formatID`: one of pandoc::exportFormats(), "other" (asks which) or "other:name". `notePath` is a note of
+    /// the vault; `outputPath` is where to write, empty to ask. Invokable, so a test can drive it past the dialogs.
+    Q_INVOKABLE void exportWithPandoc(const QString &notePath, const QString &formatID, const QString &outputPath = {});
+    /// Makes a note in `folderRelative` from `file`, which is never written to; the note never replaces another.
+    Q_INVOKABLE void importWithPandoc(const QString &file, const QString &folderRelative);
+    void importWithPandocChosen();
+    /// A pandoc run with a cancel button. `done` runs when it succeeds; a failure shows pandoc's own words, a cancel nothing.
+    void runPandoc(const QString &program, const QStringList &arguments, const QByteArray &input,
+                   const QString &workingDirectory, const QString &title,
+                   std::function<void()> done);
+    pandoc::Runner *m_pandocRunner = nullptr;
+    /// Imports asked for while one runs (several files dropped at once): file and folder, taken in order as each finishes.
+    QList<QPair<QString, QString>> m_pandocQueue;
+#endif
     /// Puts a snapshot back as `notePath`'s content, keeping what it held as
     /// a snapshot of its own first.
     void restoreSnapshot(const QString &notePath, const QString &text);
@@ -717,6 +777,9 @@ private:
     /// Where the vault now holds `known` (what `lost` held), or nothing when
     /// that is not exactly one file.
     QString findMovedNote(const QString &lost, const Note &known);
+    /// The same for a module's view: the one other file of that name in the vault.
+    QString findMovedFile(const QString &lost);
+    void rememberViewStamp(const QString &path);
     /// An open note changed on disk - sync, a plugin, a link update, another
     /// editor: its tabs show the change, so no autosave writes over it.
     void reloadChangedNotes();
@@ -750,8 +813,6 @@ void updateVimStatus();
     void openRelative(const QString &relativePath);
     void openRelativeInNewTab(const QString &relativePath); ///< the graph's node menu
     void openSingleFile(const QString &path);
-    /// Drops the open vault: back to the empty-window state, chrome intact.
-    void closeVault();
     /// Resets the editor, tab and both panes to "nothing open", without
     /// touching the vault itself. Shared by vault switching, the tab's close
     /// button, and deleting the open note.
@@ -803,6 +864,9 @@ void updateVimStatus();
     /// another, and on quit - never on every caret move, which is why this is
     /// its own function rather than something hung off a cursor signal.
     void rememberCurrentPosition();
+/// Settings::save(), then applies what it took over from another window (a feature it switched, an editor
+/// option): the file holds that value, so this window must run it too, not only hold it.
+void saveSettings();
     /// Expands `path`'s ancestors, selects it and scrolls it into view.
     /// QFileSystemModel fills a directory lazily on a worker thread, so a note
     /// revealed right after a vault switch may have no index yet; this waits
@@ -824,6 +888,7 @@ void updateVimStatus();
     Indexer *m_indexer = nullptr;
     /// What openWhenShown() is waiting to open, cleared by the first paint.
     std::optional<LaunchTarget> m_pendingOpen;
+    SingleInstance *m_instance = nullptr;
 
     /// Live reload for the selected colour scheme and the directories it can
     /// be picked from; owned because MainWindow is what applies the theme.
@@ -836,7 +901,12 @@ void updateVimStatus();
     LookupFunction m_lookupFunction;
     /// Resolves a link as the open note sees it; the editor, the preview and
     /// PDF export all use it.
-    std::function<QString(const QString &)> m_resolveLink;
+    std::function<QString(const QString &)> m_resolveLink; ///< as seen from the active note
+    /// `target` as seen from the note at `notePath`: each editor asks about its own note, not the active one's.
+    QString resolveLinkFrom(const QString &target, const QString &notePath) const;
+    void refreshOpenVaultFiles();
+    bool m_vaultDirty = false; ///< files came or went since the open notes were last refreshed
+    QElapsedTimer m_vaultPendingSince; ///< the first unanswered event, for the debounce's longest wait
 #ifdef NOTEAPPC_HAVE_CANVAS
     /// One hidden, never-shown CanvasView per `.canvas` embed an open editor
     /// asked to draw, keyed by that editor and the file/subpath it embeds -
@@ -898,6 +968,8 @@ void updateVimStatus();
     /// only when its own "diagramKey<kind>" differs.
     QString m_diagramKey[4];
     MarkdownEditor::CodeBlockRenderer m_diagramRenderer[4];
+    /// The `markmap` core plugin's renderer (MarkmapBlock.h), made the first time an editor wants it.
+    MarkdownEditor::CodeBlockRenderer m_markmapRenderer;
     bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
     bool m_painted = false;     ///< optional work waits for the first paint
     bool m_narrow = false;      ///< the sidebars are folded for want of width
@@ -955,6 +1027,13 @@ QLabel *m_vimStatus = nullptr;
     /// Whether anything can run a code block's language, asked once each
     /// (MarkdownEditor::setNotebookRunnable).
     QHash<QString, bool> m_runnableLanguages;
+    /// What the cells of each open .ipynb that ran, or were cleared, since it was read or saved, produced,
+    /// by the output-cache key they ran under: what the next save writes back. Kept here, as each run lands,
+    /// because the output cache is shared by every notebook with a cell that reads the same.
+    QHash<QString, std::shared_ptr<notebook::IpynbRuns>> m_notebookDirty;
+    /// The pictures the markdown cells of each open .ipynb carry, as read when it was opened
+    /// (MarkdownEditor::setInlineImages); a notebook with none has no entry.
+    QHash<QString, std::shared_ptr<notebook::IpynbPictures>> m_notebookImages;
     crypt::EncryptionSession *m_encryption = nullptr; ///< null in a build without encryption
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;
@@ -1016,7 +1095,11 @@ QLabel *m_vimStatus = nullptr;
     QFileSystemWatcher *m_noteWatcher = nullptr; ///< the open notes' files
     QSet<QString> m_changedNotes;                ///< what it reported, read when m_noteChanges fires
     QTimer m_noteChanges;
+    QTimer m_vaultFiles; ///< debounces Indexer::vaultFilesChanged
     QHash<QString, bool> m_lostNotes; ///< open notes whose file is gone -> reported
+    /// A file view's file as the tab last saw it (size and modification time): a move keeps both, so a file that has
+    /// them is the one that went. Filled by watchOpenNotes(), after each save of the view.
+    QHash<QString, QString> m_viewStamps;
     QTimer m_lostRetry;               ///< one more look before reporting
 
     QWidget *m_headerBar = nullptr;

@@ -36,6 +36,8 @@
 //  6. Deletes are idempotent: a range over a deleted run changes nothing, so
 //     the full delete set a diff carries yields zero edits when known.
 //
+// Positions (encodePosition) are their own small format, described there.
+//
 // Wire format, all integers LEB128 varints of at most 10 bytes (u32 fields
 // are rejected above UINT32_MAX), nothing trails:
 //   update := 'N' 0x01  runCount  run*  dsClientCount  (client rangeCount (clock len)*)*
@@ -443,6 +445,56 @@ public:
     }
 
     QByteArray encodeState() const override { return diffSince({}); }
+
+    // A position is 'P' 0x01 kind, kind 0: the start of the note, kind 1 then
+    // `client clock`: right after that item (a varint and a u32, like a run's).
+    // ponytail: both walk the runs from the head, O(runs); a caret goes out at
+    // most ten times a second, so a long note is fine, an order-statistics
+    // tree over the runs (see locate) would make it O(log runs) if a profile asks.
+    QByteArray encodePosition(qsizetype offset) const override
+    {
+        QByteArray out("P\x01", 2);
+        if (offset < 0 || offset > m_visibleLen)
+            return {};
+        if (offset == 0)
+            return out + char(0);
+        qsizetype before = 0;
+        for (const Run *r = m_head; r; r = r->next) {
+            if (r->deleted)
+                continue;
+            if (offset <= before + qsizetype(r->len())) {
+                out += char(1);
+                putVarint(out, r->client);
+                putVarint(out, r->clock + quint32(offset - before - 1));
+                return out;
+            }
+            before += r->len();
+        }
+        return {};
+    }
+
+    qsizetype resolvePosition(const QByteArray &position) const override
+    {
+        Reader in(position);
+        uchar magic, version, kind;
+        if (!in.byte(magic) || magic != 'P' || !in.byte(version) || version != 1 || !in.byte(kind) || kind > 1)
+            return -1;
+        if (kind == 0)
+            return in.remaining() == 0 ? 0 : -1;
+        quint64 client;
+        quint32 clock;
+        qsizetype off;
+        if (!in.varint(client) || !in.u32(clock) || in.remaining() != 0)
+            return -1;
+        const Run *item = findRun(client, clock, &off);
+        if (!item)
+            return -1;
+        qsizetype before = 0;
+        for (const Run *r = m_head; r != item; r = r->next)
+            if (!r->deleted)
+                before += r->len();
+        return item->deleted ? before : before + off + 1;
+    }
 
     bool loadState(const QByteArray &state) override
     {

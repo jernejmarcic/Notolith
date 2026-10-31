@@ -42,10 +42,10 @@ namespace noteAppC {
 bool MarkdownEditor::layoutTextPanel(BlockView &view, const QString &label, const QString &body,
                                      bool monospace)
 {
-    view.embedLabel = label;
-    view.embedPanel = true;
+    view.extrasMut().embedLabel = label;
+    view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = label.isEmpty() ? 0 : codeHeaderHeight();
 
     QString trimmed = body;
@@ -206,21 +206,21 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     if (!noteEmbedContent(path, embed.subpath, label, slice, key, image))
         return false;
     if (!key.isEmpty())
-        view.imagePath = path; // deliverFileEmbed's way back to this block
+        view.extrasMut().imagePath = path; // deliverFileEmbed's way back to this block
     if (image.isNull())
         return layoutTextPanel(view, label, slice, false);
 
-    view.embedLabel = label;
-    view.embedPanel = true;
+    view.extrasMut().embedLabel = label;
+    view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = label.isEmpty() ? 0 : codeHeaderHeight();
     hideWholeBlockText(view);
     const QPixmap pixmap = QPixmap::fromImage(image);
     const qreal ratio = pixmap.devicePixelRatio();
-    view.image = pixmap;
-    view.imageSize = QSize(qRound(pixmap.width() / ratio), qRound(pixmap.height() / ratio));
-    view.height = view.imageSize.height() + view.textTop;
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(qRound(pixmap.width() / ratio), qRound(pixmap.height() / ratio));
+    view.height = view.x().imageSize.height() + view.textTop;
     view.laidOut = true;
     return true;
 }
@@ -300,20 +300,20 @@ bool MarkdownEditor::layoutFileCard(BlockView &view, const EmbedSpan &embed, con
     if (!info.exists())
         return false;
 
-    view.isFileCard = true;
-    view.fileCardPath = path;
-    view.fileCardLabel = info.fileName();
-    view.fileCardSize = QLocale().formattedDataSize(info.size());
-    view.image = QPixmap();
+    view.extrasMut().isFileCard = true;
+    view.extrasMut().fileCardPath = path;
+    view.extrasMut().fileCardLabel = info.fileName();
+    view.extrasMut().fileCardSize = QLocale().formattedDataSize(info.size());
+    view.extrasMut().image = QPixmap();
     view.layout.reset();
-    view.cells.clear();
-    view.embedPanel = false;
-    view.fileCardCover = QPixmap();
+    view.extrasMut().cells.clear();
+    view.extrasMut().embedPanel = false;
+    view.extrasMut().fileCardCover = QPixmap();
     if (path.endsWith(QLatin1String(".epub"), Qt::CaseInsensitive))
-        view.fileCardCover = ensureEpubCoverAsync(path, info.lastModified().toMSecsSinceEpoch(), info.size());
+        view.extrasMut().fileCardCover = ensureEpubCoverAsync(path, info.lastModified().toMSecsSinceEpoch(), info.size());
     // A book with a cover gets a taller card: a cover is a portrait, an icon a square.
-    const qreal kCardHeight = view.fileCardCover.isNull() ? 52 : 96;
-    view.fileCardRect = QRectF(0, 0, contentWidth(), kCardHeight);
+    const qreal kCardHeight = view.x().fileCardCover.isNull() ? 52 : 96;
+    view.extrasMut().fileCardRect = QRectF(0, 0, contentWidth(), kCardHeight);
     view.height = kCardHeight;
     hideWholeBlockText(view);
     view.laidOut = true;
@@ -323,7 +323,7 @@ bool MarkdownEditor::layoutFileCard(BlockView &view, const EmbedSpan &embed, con
 void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qreal left,
                                    qreal top) const
 {
-    const QRectF card = view.fileCardRect.translated(left, top);
+    const QRectF card = view.x().fileCardRect.translated(left, top);
     painter.save();
     QPainterPath rounded;
     rounded.addRoundedRect(card, 6, 6);
@@ -333,13 +333,13 @@ void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qre
     const QColor text = d->m_theme.color(QStringLiteral("--text-normal"));
     const qreal iconSize = card.height() - 20;
     QRectF iconRect(card.left() + 12, card.top() + 10, iconSize, iconSize);
-    if (!view.fileCardCover.isNull()) {
+    if (!view.x().fileCardCover.isNull()) {
         // The cover, fitted into the icon's square and centred in it.
-        const QSizeF fitted = view.fileCardCover.deviceIndependentSize().scaled(iconRect.size(), Qt::KeepAspectRatio);
+        const QSizeF fitted = view.x().fileCardCover.deviceIndependentSize().scaled(iconRect.size(), Qt::KeepAspectRatio);
         const QRectF target(iconRect.center().x() - fitted.width() / 2, iconRect.top(), fitted.width(),
                             fitted.height());
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        painter.drawPixmap(target, view.fileCardCover, QRectF(view.fileCardCover.rect()));
+        painter.drawPixmap(target, view.x().fileCardCover, QRectF(view.x().fileCardCover.rect()));
         iconRect.setWidth(fitted.width());
         iconRect.moveLeft(target.left());
     } else {
@@ -353,7 +353,7 @@ void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qre
     painter.setFont(name);
     painter.setPen(text);
     painter.drawText(QRectF(textLeft, card.top() + 6, card.width() - textLeft - 12, card.height() / 2),
-                     Qt::AlignVCenter | Qt::AlignLeft, view.fileCardLabel);
+                     Qt::AlignVCenter | Qt::AlignLeft, view.x().fileCardLabel);
 
     QFont small = d->m_theme.uiFont();
     small.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
@@ -361,7 +361,7 @@ void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qre
     painter.setPen(muted);
     painter.drawText(QRectF(textLeft, card.top() + card.height() / 2, card.width() - textLeft - 12,
                             card.height() / 2),
-                     Qt::AlignVCenter | Qt::AlignLeft, view.fileCardSize);
+                     Qt::AlignVCenter | Qt::AlignLeft, view.x().fileCardSize);
     painter.restore();
 }
 
@@ -398,7 +398,8 @@ void MarkdownEditor::deliverEpubCover(const QString &key, const QString &path, Q
         return; // the card stays as laid out
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isFileCard || block.fileCardPath != path)
+        const BlockExtras &e = block.x(); // once per block, not once per field
+        if (!e.isFileCard || e.fileCardPath != path)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -414,11 +415,11 @@ void MarkdownEditor::deliverEpubCover(const QString &key, const QString &path, Q
 bool MarkdownEditor::handleFileCardClick(const BlockView &view, const QPoint &point, qreal left,
                                          qreal top) const
 {
-    if (!view.isFileCard)
+    if (!view.x().isFileCard)
         return false;
-    if (!view.fileCardRect.translated(left, top).contains(point))
+    if (!view.x().fileCardRect.translated(left, top).contains(point))
         return false;
-    QDesktopServices::openUrl(QUrl::fromLocalFile(view.fileCardPath));
+    QDesktopServices::openUrl(QUrl::fromLocalFile(view.x().fileCardPath));
     return true;
 }
 
@@ -465,17 +466,17 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
         });
     }
 
-    view.embedLabel = QFileInfo(path).fileName();
-    view.embedPanel = true;
+    view.extrasMut().embedLabel = QFileInfo(path).fileName();
+    view.extrasMut().embedPanel = true;
     view.layout.reset();
-    view.cells.clear();
+    view.extrasMut().cells.clear();
     view.textTop = codeHeaderHeight();
-    view.imagePath = path; // deliverFileEmbed's own way to find this block again
-    view.embedSubpath = embed.subpath;
+    view.extrasMut().imagePath = path; // deliverFileEmbed's own way to find this block again
+    view.extrasMut().embedSubpath = embed.subpath;
     hideWholeBlockText(view);
 
     if (it->pending || it->image.isNull()) {
-        view.image = QPixmap();
+        view.extrasMut().image = QPixmap();
         view.height = view.textTop + 140; // a placeholder box until the renderer answers
         view.laidOut = true;
         return true;
@@ -483,8 +484,8 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
 
     const QPixmap pixmap = QPixmap::fromImage(it->image);
     const int height = int(qreal(width) * pixmap.height() / qMax(1, pixmap.width()));
-    view.image = pixmap;
-    view.imageSize = QSize(width, height);
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(width, height);
     view.height = height + view.textTop;
     view.laidOut = true;
     return true;
@@ -501,10 +502,10 @@ void MarkdownEditor::deliverFileEmbed(const QString &key, quint64 generation, QI
     const QString path = key.section(QLatin1Char('|'), 0, 0);
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        const bool inlineCell = std::any_of(block.embedCells.begin(), block.embedCells.end(),
+        const BlockExtras &e = block.x(); // once per block, not once per field
+        const bool inlineCell = std::any_of(e.embedCells.begin(), e.embedCells.end(),
                                             [&](const EmbedCell &cell) { return cell.cacheKey == key; });
-        if (!inlineCell && (block.imagePath != path || block.isPdfEmbed || block.isFileCard
-                            || !block.mediaPath.isEmpty()))
+        if (!inlineCell && (e.imagePath != path || e.isPdfEmbed || e.isFileCard || !e.mediaPath.isEmpty()))
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -522,7 +523,7 @@ void MarkdownEditor::deliverFileEmbed(const QString &key, quint64 generation, QI
 QRectF MarkdownEditor::hookedEmbedImageRect(const BlockView &view) const
 {
     const qreal top = view.y - verticalScrollBar()->value();
-    return QRectF(contentLeft(), top + view.textTop, view.imageSize.width(), view.imageSize.height());
+    return QRectF(contentLeft(), top + view.textTop, view.x().imageSize.width(), view.x().imageSize.height());
 }
 
 QRect MarkdownEditor::hookedEmbedImageRectAt(qsizetype offset) const
@@ -531,7 +532,7 @@ QRect MarkdownEditor::hookedEmbedImageRectAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
-    if (!view.embedPanel || view.image.isNull() || view.imagePath.isEmpty())
+    if (!view.x().embedPanel || view.x().image.isNull() || view.x().imagePath.isEmpty())
         return {};
     return hookedEmbedImageRect(view).toRect();
 }
@@ -540,10 +541,10 @@ qsizetype MarkdownEditor::hookedEmbedBlockAt(const QPoint &viewportPoint) const
 {
     for (qsizetype i = 0; i < qsizetype(d->m_blocks.size()); ++i) {
         const BlockView &view = d->m_blocks[size_t(i)];
-        if (!view.embedPanel || view.image.isNull() || view.imagePath.isEmpty()
-            || view.isPdfEmbed || view.isFileCard || !view.mediaPath.isEmpty())
+        if (!view.x().embedPanel || view.x().image.isNull() || view.x().imagePath.isEmpty()
+            || view.x().isPdfEmbed || view.x().isFileCard || !view.x().mediaPath.isEmpty())
             continue;
-        if (!d->m_fileEmbedInputHandlers.contains(QFileInfo(view.imagePath).suffix().toLower()))
+        if (!d->m_fileEmbedInputHandlers.contains(QFileInfo(view.x().imagePath).suffix().toLower()))
             continue;
         if (hookedEmbedImageRect(view).contains(viewportPoint))
             return i;
@@ -561,19 +562,19 @@ bool MarkdownEditor::applyFileEmbedInput(qsizetype blockIndex, const FileEmbedIn
     if (blockIndex < 0 || size_t(blockIndex) >= d->m_blocks.size())
         return false; // the gesture outlived a relayout - vanishingly rare, and harmless to drop
     BlockView &view = d->m_blocks[size_t(blockIndex)];
-    auto it = d->m_fileEmbedInputHandlers.find(QFileInfo(view.imagePath).suffix().toLower());
+    auto it = d->m_fileEmbedInputHandlers.find(QFileInfo(view.x().imagePath).suffix().toLower());
     if (it == d->m_fileEmbedInputHandlers.end())
         return false;
 
-    const FileEmbedInputResult result = it.value()(view.imagePath, view.embedSubpath, event);
+    const FileEmbedInputResult result = it.value()(view.x().imagePath, view.x().embedSubpath, event);
     if (!result.image.isNull()) {
-        view.image = QPixmap::fromImage(result.image);
+        view.extrasMut().image = QPixmap::fromImage(result.image);
         // Kept in the same cache entry layoutHookedFileEmbed reads from, so
         // an unrelated edit elsewhere in the note - which rebuilds every
         // BlockView from scratch - relays this one out from the view state
         // just interacted with, not the stale image it was cold-rendered
         // with.
-        const QString key = fileEmbedCacheKey(view.imagePath, view.embedSubpath, view.imageSize.width());
+        const QString key = fileEmbedCacheKey(view.x().imagePath, view.x().embedSubpath, view.x().imageSize.width());
         if (auto cacheIt = d->m_fileEmbedCache.find(key); cacheIt != d->m_fileEmbedCache.end())
             cacheIt->image = result.image;
         viewport()->update();
@@ -621,7 +622,10 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     EmbedCell cell;
     cell.source = embed.range;
 
-    const QString path = m_resolver ? m_resolver(embed.target) : QString();
+    QString path = attachmentPathOf(embed);
+    const bool attached = !path.isEmpty();
+    if (!attached && m_resolver)
+        path = m_resolver(embed.target);
     // An `<img>` whose file is not there says what its author wrote in `alt`,
     // on a card no wider than a caption needs.
     const auto missingCard = [&](const QString &name) {
@@ -644,7 +648,7 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8())) {
         QPixmap pixmap = d->m_images.value(path);
         if (pixmap.isNull()) {
-            pixmap = QPixmap(path);
+            pixmap = loadEmbedPixmap(path);
             if (!pixmap.isNull())
                 d->m_images.insert(path, pixmap);
         }
@@ -659,7 +663,8 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
             const qreal height = size.height();
             cell.image = pixmap;
             cell.rect = QRectF(0, 0, width, height);
-            cell.openPath = path;
+            if (!attached)
+                cell.openPath = path; // an attachment is no file to open
             return cell;
         }
     }
@@ -734,7 +739,8 @@ static qreal cellHeight(const Cell &cell)
 void MarkdownEditor::prepareTextEmbeds(BlockView &view, const QList<const EmbedSpan *> &embeds,
                                        QList<QTextLayout::FormatRange> &formats)
 {
-    view.embedCells.clear();
+    if (view.extras)
+        view.extras->embedCells.clear();
     if (embeds.isEmpty())
         return;
 
@@ -753,14 +759,14 @@ void MarkdownEditor::prepareTextEmbeds(BlockView &view, const QList<const EmbedS
         format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
         format.setFontLetterSpacing(cell.rect.width() - carrier);
         formats.append({int(view.map.toDisplay(embed->range.start)), 1, format});
-        view.embedCells.push_back(std::move(cell));
+        view.extrasMut().embedCells.push_back(std::move(cell));
     }
 }
 
 qreal MarkdownEditor::textEmbedHeightOn(const BlockView &view, const QTextLine &line) const
 {
     qreal tallest = 0;
-    for (const EmbedCell &cell : view.embedCells) {
+    for (const EmbedCell &cell : view.x().embedCells) {
         const qsizetype carrier = view.map.toDisplay(cell.source.start);
         if (carrier >= line.textStart() && carrier < line.textStart() + line.textLength())
             tallest = qMax(tallest, cellHeight(cell));
@@ -770,9 +776,11 @@ qreal MarkdownEditor::textEmbedHeightOn(const BlockView &view, const QTextLine &
 
 void MarkdownEditor::placeTextEmbeds(BlockView &view, qreal lineHeight)
 {
+    if (!view.extras) // no embed cell was made: nothing to place, and no allocation for a plain block
+        return;
     // The same origin the paint step draws the text at.
-    const qreal indent = view.callout ? 14 : (view.embedPanel ? 2 : 0);
-    for (EmbedCell &cell : view.embedCells) {
+    const qreal indent = view.callout ? 14 : (view.x().embedPanel ? 2 : 0);
+    for (EmbedCell &cell : view.extrasMut().embedCells) {
         const int carrier = int(view.map.toDisplay(cell.source.start));
         const QTextLine line = view.layout->lineForTextPosition(carrier);
         if (!line.isValid())
@@ -789,7 +797,7 @@ void MarkdownEditor::placeTextEmbeds(BlockView &view, qreal lineHeight)
 void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top) const
 {
-    paintEmbedCellList(painter, view.embedCells, left, top);
+    paintEmbedCellList(painter, view.x().embedCells, left, top);
 }
 
 void MarkdownEditor::paintEmbedCellList(QPainter &painter, const std::vector<EmbedCell> &cells,
@@ -856,10 +864,10 @@ const MarkdownEditor::EmbedCell *MarkdownEditor::embedCellOf(const BlockView &vi
     origin = {};
     if (cell < 0)
         return nullptr;
-    if (size_t(cell) < view.embedCells.size())
-        return &view.embedCells[size_t(cell)];
-    size_t rest = size_t(cell) - view.embedCells.size();
-    for (const Cell &tableCell : view.cells) {
+    if (size_t(cell) < view.x().embedCells.size())
+        return &view.x().embedCells[size_t(cell)];
+    size_t rest = size_t(cell) - view.x().embedCells.size();
+    for (const Cell &tableCell : view.x().cells) {
         if (rest < tableCell.embeds.size()) {
             origin = cellTextOrigin(view, tableCell);
             return &tableCell.embeds[rest];
@@ -894,19 +902,19 @@ bool MarkdownEditor::isFileCardAt(qsizetype offset) const
     const qsizetype index = blockAt(offset);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return false;
-    return d->m_blocks[size_t(index)].isFileCard;
+    return d->m_blocks[size_t(index)].x().isFileCard;
 }
 
 bool MarkdownEditor::fileCardHasCoverAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].fileCardCover.isNull();
+    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].x().fileCardCover.isNull();
 }
 
 bool MarkdownEditor::isMediaCardAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].mediaPath.isEmpty();
+    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].x().mediaPath.isEmpty();
 }
 
 int MarkdownEditor::embedCellCountAt(qsizetype offset) const
@@ -915,8 +923,8 @@ int MarkdownEditor::embedCellCountAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return 0;
     const BlockView &view = d->m_blocks[size_t(index)];
-    size_t count = view.embedCells.size();
-    for (const Cell &cell : view.cells)
+    size_t count = view.x().embedCells.size();
+    for (const Cell &cell : view.x().cells)
         count += cell.embeds.size();
     return int(count);
 }
@@ -933,7 +941,7 @@ QString MarkdownEditor::panelTextAt(qsizetype offset) const
 QString MarkdownEditor::panelLabelAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    return index < 0 || index >= qsizetype(d->m_blocks.size()) ? QString() : d->m_blocks[size_t(index)].embedLabel;
+    return index < 0 || index >= qsizetype(d->m_blocks.size()) ? QString() : d->m_blocks[size_t(index)].x().embedLabel;
 }
 
 QImage MarkdownEditor::embedImageAt(qsizetype offset) const
@@ -942,7 +950,7 @@ QImage MarkdownEditor::embedImageAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
-    return view.embedPanel ? view.image.toImage() : QImage();
+    return view.x().embedPanel ? view.x().image.toImage() : QImage();
 }
 
 QSize MarkdownEditor::embedImageSizeAt(qsizetype offset) const
@@ -951,13 +959,13 @@ QSize MarkdownEditor::embedImageSizeAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
-    return view.embedPanel && !view.image.isNull() ? view.imageSize : QSize();
+    return view.x().embedPanel && !view.x().image.isNull() ? view.x().imageSize : QSize();
 }
 
 bool MarkdownEditor::handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,
                                           qreal top)
 {
-    for (const EmbedCell &cell : view.embedCells) {
+    for (const EmbedCell &cell : view.x().embedCells) {
         if (!cell.rect.translated(left, top).contains(point))
             continue;
         if (cell.isNote)

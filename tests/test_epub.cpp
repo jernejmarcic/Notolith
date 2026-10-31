@@ -137,6 +137,55 @@ QString makeEpub3(const QString &dir)
     return path;
 }
 
+/// Two chapters of many short paragraphs, each taller than a 500x400 view
+/// once rendered. makeEpub3's chapters fit on one page together, so a test
+/// that needs to scroll there only works while the heights are still the
+/// 600 px guess - i.e. until the background renders land.
+QString makeTallEpub3(const QString &dir)
+{
+    const QString path = QDir(dir).filePath(QStringLiteral("tall.epub"));
+    const QByteArray opf = QByteArrayLiteral(R"(<?xml version='1.0'?>
+<package xmlns='http://www.idpf.org/2007/opf' version='3.0' unique-identifier='id'>
+  <metadata xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title>Tall</dc:title></metadata>
+  <manifest>
+    <item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' properties='nav'/>
+    <item id='c1' href='ch1.xhtml' media-type='application/xhtml+xml'/>
+    <item id='c2' href='ch2.xhtml' media-type='application/xhtml+xml'/>
+  </manifest>
+  <spine><itemref idref='c1'/><itemref idref='c2'/></spine>
+</package>)");
+    const QByteArray nav = QByteArrayLiteral(R"(<?xml version='1.0'?>
+<html xmlns='http://www.w3.org/1999/xhtml' xmlns:epub='http://www.idpf.org/2007/ops'>
+<body><nav epub:type='toc'><ol>
+  <li><a href='ch1.xhtml'>One</a></li><li><a href='ch2.xhtml'>Two</a></li>
+</ol></nav></body></html>)");
+    QByteArray chapter = "<?xml version='1.0'?><html xmlns='http://www.w3.org/1999/xhtml'><body>";
+    for (int i = 0; i < 40; ++i)
+        chapter += "<p>A paragraph of filler text.</p>";
+    chapter += "</body></html>";
+
+    writeZip(path, {{QStringLiteral("mimetype"), QByteArrayLiteral("application/epub+zip")},
+                    {QStringLiteral("META-INF/container.xml"), QByteArray(kContainerXML)},
+                    {QStringLiteral("OEBPS/content.opf"), opf},
+                    {QStringLiteral("OEBPS/nav.xhtml"), nav},
+                    {QStringLiteral("OEBPS/ch1.xhtml"), chapter},
+                    {QStringLiteral("OEBPS/ch2.xhtml"), chapter}});
+    return path;
+}
+
+/// Shows the view and waits until every chapter has rendered, so its height
+/// is exact rather than the 600 px guess - otherwise the scroll range a test
+/// sees depends on how far the background renders got under load.
+void showAndSettle(EpubView &view)
+{
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    view.requestChapterForTest(0);
+    view.requestChapterForTest(1);
+    WAIT_TRUE(view.chapterCachedForTest(0) && view.chapterCachedForTest(1) && view.pendingRenderCountForTest() == 0,
+              5000);
+}
+
 /// A minimal EPUB 2: toc.ncx instead of nav.xhtml, spine@toc pointing at it.
 QString makeEpub2(const QString &dir)
 {
@@ -780,9 +829,8 @@ TEST(EpubViewTest, MarginClicksTurnPagesOnlyInPagedMode)
     QTemporaryDir dir;
     EpubView view;
     view.resize(500, 400);
-    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
-    view.show();
-    QTest::qWait(10);
+    ASSERT_TRUE(view.load(makeTallEpub3(dir.path())));
+    ASSERT_NO_FATAL_FAILURE(showAndSettle(view));
 
     // Continuous mode: a margin click is just a click, never a page turn.
     EXPECT_FALSE(view.marginClickForTest(2, 50));
@@ -800,9 +848,8 @@ TEST(EpubViewTest, SwitchingToPagedModePreservesTheReadingPositionApproximately)
     QTemporaryDir dir;
     EpubView view;
     view.resize(500, 400);
-    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
-    view.show();
-    QTest::qWait(10);
+    ASSERT_TRUE(view.load(makeTallEpub3(dir.path())));
+    ASSERT_NO_FATAL_FAILURE(showAndSettle(view));
 
     ASSERT_TRUE(view.navigateToFragment(QStringLiteral("1"))); // spine index 1
     const qint64 before = view.scrollValueForTest();

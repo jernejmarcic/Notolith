@@ -118,6 +118,12 @@ if(TARGET noteAppC_publish)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_PUBLISH)
 endif()
 
+if(TARGET noteAppC_pandoc)
+    target_sources(noteAppC_ui PRIVATE MainWindowPandoc.cpp)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_pandoc)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_PANDOC)
+endif()
+
 if(TARGET noteAppC_imageview)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_imageview)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_IMAGEVIEW)

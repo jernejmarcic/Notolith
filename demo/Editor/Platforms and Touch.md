@@ -7,13 +7,15 @@ tags: [demo, editor, platforms]
 What to look for: how the app starts, and what changes on a touchscreen or a
 narrow window. Nothing here needs a setting.
 
-## One window per user
+## One window per vault
 
-Launching `notolith some-note.md` while Notolith is already running does not
-open a second window: the running one opens the file and comes to the front. A
-note inside the open vault replaces the current tab; a note outside it opens
-beside, the vault staying open; a folder opens as a vault. `notolith note.md`
-with nothing running opens that one file with no vault.
+Launching `notolith some-note.md` while Notolith already has that note's vault
+open does not open a second window: the running one opens the file and comes to
+the front. A note inside the open vault replaces the current tab; a note
+outside it opens beside, the vault staying open. A different vault gets a
+window of its own, so two vaults are two windows. Choosing a vault that is
+already open in another window brings that window forward instead. `notolith
+note.md` with nothing running opens that one file with no vault.
 
 ## Touch
 

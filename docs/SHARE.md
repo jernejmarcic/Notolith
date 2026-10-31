@@ -19,12 +19,48 @@ the updates arrived:
   `CrdtEdit {at, removed, inserted}` records, UTF-16 offsets, each applied to
   the text the previous one left, so they feed `MarkdownEditor::applyExternalEdit`
   directly;
+- `encodePosition()` / `resolvePosition()` name a place in the text by its
+  character, so it survives other members' edits (carets, below);
 - `stateVector()` / `diffSince()` are how two peers that were apart find what
   the other lacks; `encodeState()` / `loadState()` are the on-disk form.
 
 Updates are opaque bytes. Nothing about the engine behind the interface appears
 in it, but every replica of a note must use the same backend: a Yrs update (Yjs
 v1 encoding) and a Native one (its own format, below) do not read each other.
+
+## Carets that stay on their characters
+
+A member's caret goes out twice over: as UTF-16 offsets (what the first
+builds sent) and as *positions* (`CrdtDoc::encodePosition(offset)`), a few bytes
+naming the character just before the caret (the start of the note for offset
+0) in the CRDT's own terms. `resolvePosition(bytes)` turns one back into an
+offset in the receiver's text, -1 when it does not decode or names a character
+that receiver has not seen yet. With two members offsets are enough; with three
+or more, a caret from B reaches A through the owner after C's edit has
+already reached A, and an offset counted in B's older text lands on the wrong
+character. A position does not depend on which edits the receiver holds.
+
+- `share.proto`: `Presence` gains `bytes anchor_pos = 5; bytes head_pos = 6`;
+  `anchor`/`head` (3, 4) stay and are always filled. An old build sends offsets
+  only and ignores 5 and 6; a new one places a caret from either. A relaying
+  member forwards the message bytes unchanged, so the positions survive an old
+  build in the middle.
+- The receiver keeps the bytes and resolves them when asked
+  (`ShareEngine::carets`), so a remote edit that arrived since has already moved
+  the caret; `ShareSession` redraws after every remote edit. Where a position
+  does not resolve (a character not received yet) the offsets it came with are
+  used, and the caret corrects itself when the edit arrives.
+- Typing at the caret itself leaves it ahead of the new text; deleting its
+  character closes it up on the hole. The sender also re-resolves its own
+  positions when the heartbeat goes out, so the offsets an old build reads are
+  as fresh as the document.
+- Native: `'P' 0x01`, then `0` (start of the note) or `1 client clock` (right
+  after that item), varints as in an update; resolving finds the run and counts
+  the visible units before it (O(runs), a `ponytail:` in the code). Yrs: a yrs
+  sticky index (`Assoc::Before`) in its own v1 encoding, made and read by
+  `ncrdt_encode_position` / `ncrdt_resolve_position` in `yrs-ffi`; bytes from a
+  peer must be at most 64, decode, re-encode to the same bytes and name the
+  note's text, or they are refused.
 
 ## Backends
 
@@ -267,6 +303,16 @@ What the engine refuses (each case is a test in `tests/test_share.cpp`):
 | `Rekey` | from the owner, list verifies, epoch not older, key opens for the same epoch | dropped |
 | invite code | prefix, version, sizes, not expired, a backend this build has, private hosts | `join()` false with the reason |
 | strangers | never sent anything, frames from non-members dropped; the link itself is identity-authenticated, so ignoring them (not closing) is complete | counted |
+
+A device is online once per machine. Notolith runs one process per vault, and every
+process would carry the same device keys: a peer keeps one connection per identity, so a
+second link would split its peers between the two, and both would publish one mDNS name.
+`start()` therefore takes a lock per identity key (`link-<id>.lock`, in the share
+directory, or in `Config::storeDirectory` when a test gives one; a dead owner frees it) and
+a process that cannot get it fails with "Sharing is already running in another Notolith
+window", shown in the status bar. The first process keeps its port, name and shares; the
+other opens no link, and can share once that window's vault is closed or its sharing is
+off and this vault is reopened (the window does not retry by itself). The lock never goes stale by age, so the share directory (`~/.local/share/noteAppC/share`) must stay machine-local: never part of a synced tree. The stores are per vault, so nothing else is shared.
 
 Tests: `ctest -R '^share$'` - loopback only, mDNS off, port 0, an in-memory secret
 store, temporary store directories.
