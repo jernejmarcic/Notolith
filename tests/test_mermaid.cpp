@@ -34,6 +34,7 @@
 #include "MermaidCache.h"
 #include "Settings.h"
 #include "Theme.h"
+#include "BubblewrapProbe.h"
 #include "WaitFor.h"
 
 using noteAppC::MainWindow;
@@ -81,14 +82,14 @@ protected:
     }
 
     /// The tests of the sandbox: nothing of the test directory is writable, and a PATH that finds bwrap, skipping
-    /// (failing under NOTEAPPC_REQUIRE_TOOLS=1) without it.
+    /// (failing under NOTEAPPC_REQUIRE_TOOLS=1) without it or where it cannot make a user namespace.
     bool withBubblewrap()
     {
         qunsetenv("NOTEAPPC_SANDBOX_TEST_BINDS");
         qputenv("PATH", oldPath);
-        if (!QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        if (bubblewrapUsable())
             return true;
-        EXPECT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1")) << "NOTEAPPC_REQUIRE_TOOLS=1 and bwrap is missing";
+        EXPECT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1")) << "NOTEAPPC_REQUIRE_TOOLS=1 and bubblewrap is missing or cannot make a user namespace";
         return false;
     }
 

@@ -71,6 +71,7 @@
 #include <QWheelEvent>
 
 #include "Perf.h"
+#include "BubblewrapProbe.h"
 #include "WaitFor.h"
 #include "ConfigFile.h"
 #include "SingleInstance.h"
@@ -6591,7 +6592,7 @@ bool notebookCellsCanRun()
 {
     return !QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
                                       QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
-           && !QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty();
+           && bubblewrapUsable();
 }
 
 /// Three code cells and a marker no earlier run of this test shares, so the output cache holds nothing of them.
@@ -7387,8 +7388,8 @@ TEST_F(WindowTest, ANotesBlocksShareOneKernelWhenTheSettingIsOn)
 {
     if (QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
                                   QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
-        || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+        || !bubblewrapUsable())
+        GTEST_SKIP() << "no Jupyter python kernel, or bubblewrap is missing or cannot make a user namespace here";
     Settings config = Settings::load();
     config.setValue(QStringLiteral("notebooks.sharedKernel"), true);
     ASSERT_TRUE(config.save());
@@ -7432,10 +7433,10 @@ TEST_F(WindowTest, InputInABlockIsAskedUnderItAndAnsweredWithReturnOrInterrupted
 {
     if (QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
                                   QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
-        || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty()) {
+        || !bubblewrapUsable()) {
         ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1"))
-            << "NOTEAPPC_REQUIRE_TOOLS=1 and no Jupyter python kernel, or no bubblewrap";
-        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+            << "NOTEAPPC_REQUIRE_TOOLS=1 and no Jupyter python kernel, or no usable bubblewrap";
+        GTEST_SKIP() << "no Jupyter python kernel, or bubblewrap is missing or cannot make a user namespace here";
     }
     Settings config = Settings::load();
     config.setValue(QStringLiteral("notebooks.sharedKernel"), true);
@@ -7496,8 +7497,8 @@ TEST_F(WindowTest, CtrlSpaceCompletesFromTheNotesKernelOnceOneIsRunning)
 {
     if (QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
                                   QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
-        || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+        || !bubblewrapUsable())
+        GTEST_SKIP() << "no Jupyter python kernel, or bubblewrap is missing or cannot make a user namespace here";
     Settings config = Settings::load();
     config.setValue(QStringLiteral("notebooks.sharedKernel"), true);
     ASSERT_TRUE(config.save());
@@ -10847,7 +10848,7 @@ TEST_F(WindowTest, AnOpenPdfSavesToTheNewPathAfterItsFileOrFolderIsRenamed)
 namespace {
 bool bubblewrapCanRunBlocks()
 {
-    return !QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty();
+    return bubblewrapUsable();
 }
 
 QString outputOf(MarkdownEditor *editor, qsizetype offset)

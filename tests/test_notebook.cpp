@@ -26,6 +26,7 @@
 #include <QTest>
 #include <QTimer>
 
+#include "BubblewrapProbe.h"
 #include "Bubblewrap.h"
 #include "DirectRunner.h"
 #include "Ipynb.h"
@@ -1163,8 +1164,8 @@ TEST(DirectRunnerTest, ARunawayBlockIsStoppedAndAnUnknownLanguageSaysSo)
 
 TEST(DirectRunnerTest, TheSandboxKeepsOtherFilesOut)
 {
-    if (!DirectRunner::canRun(QStringLiteral("bash")) || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "bash or bwrap is not installed";
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || !bubblewrapUsable())
+        GTEST_SKIP() << "bash is not installed, or bubblewrap is missing or cannot make a user namespace here";
     // A host /tmp file: the sandbox's /tmp is a fresh empty one, and nothing
     // outside the block's own directory is bound in.
     QTemporaryDir outside;

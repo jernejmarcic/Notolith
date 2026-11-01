@@ -33,6 +33,7 @@
 #include "SyscallFilter.h"
 #include "Theme.h"
 #include "DiagramRetry.h"
+#include "BubblewrapProbe.h"
 #include "WaitFor.h"
 
 using noteAppC::DiagramKind;
@@ -70,14 +71,14 @@ protected:
     static bool have(const char *tool)
     {
         const bool present = !QStandardPaths::findExecutable(QString::fromLatin1(tool)).isEmpty()
-                             && !QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty();
+                             && bubblewrapUsable();
         if (!present && qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS") == QLatin1String("1"))
-            ADD_FAILURE() << "NOTEAPPC_REQUIRE_TOOLS=1 and " << tool << " or bwrap is missing";
+            ADD_FAILURE() << "NOTEAPPC_REQUIRE_TOOLS=1 and " << tool << " is missing, or bubblewrap is missing or cannot make a user namespace";
         return present;
     }
 #define NEED(tool) \
     if (!have(tool)) \
-    GTEST_SKIP() << tool << " (or bwrap) is not installed"
+    GTEST_SKIP() << tool << " is not installed, or bubblewrap is missing or cannot make a user namespace here"
 
     struct Answer {
         std::atomic<bool> done{false};
@@ -341,8 +342,8 @@ TEST_F(DiagramTest, TikZCannotReadFilesUnderEtc)
 // latex reports the variable in the "! ..." line TeX's own errors start with.
 TEST_F(DiagramTest, TheTikZRunIsToldToWriteOnlyBesideTheDocument)
 {
-    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "bwrap is not installed";
+    if (!bubblewrapUsable())
+        GTEST_SKIP() << "bubblewrap is missing, or user namespaces are denied here";
     QTemporaryDir bin;
     ASSERT_TRUE(bin.isValid());
     for (const auto &[name, body] : {std::pair{"latex", "#!/bin/sh\necho \"! openout_any=$openout_any\"\nexit 1\n"},
@@ -363,9 +364,9 @@ TEST_F(DiagramTest, TheTikZRunIsToldToWriteOnlyBesideTheDocument)
 // The sandbox itself, whatever tool runs in it.
 TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
 {
-    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty()) {
-        ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1")) << "bwrap is missing";
-        GTEST_SKIP() << "bwrap is not installed";
+    if (!bubblewrapUsable()) {
+        ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1")) << "bubblewrap is missing or cannot make a user namespace";
+        GTEST_SKIP() << "bubblewrap is missing, or user namespaces are denied here";
     }
     QTemporaryDir work, outside;
     ASSERT_TRUE(work.isValid() && outside.isValid());

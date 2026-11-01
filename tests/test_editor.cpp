@@ -49,6 +49,7 @@
 #include <memory>
 
 #include "Perf.h"
+#include "BubblewrapProbe.h"
 #include "WaitFor.h"
 #include "DisplayMap.h"
 
@@ -5441,8 +5442,8 @@ TEST(TexCompilerTest, NeverRunsWrite18)
 
 TEST(TexCompilerTest, ADocumentCannotReadAFileOutsideItsOwnDirectory)
 {
-    if (!TexCompiler::isAvailable() || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "needs pdflatex and bubblewrap";
+    if (!TexCompiler::isAvailable() || !bubblewrapUsable())
+        GTEST_SKIP() << "needs pdflatex and a usable bubblewrap (installed, user namespaces allowed)";
 
     // A file the user can read, somewhere a document has no business in.
     QTemporaryDir elsewhere;
@@ -5469,8 +5470,8 @@ TEST(TexCompilerTest, ADocumentCannotReadAFileOutsideItsOwnDirectory)
 // link standing in for it (made here by a stand-in engine; the real one cannot) must not be followed.
 TEST(TexCompilerTest, AnOutputThatIsALinkToAUsersFileIsNotCached)
 {
-    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "needs bubblewrap";
+    if (!bubblewrapUsable())
+        GTEST_SKIP() << "needs a usable bubblewrap (installed, user namespaces allowed)";
     QTemporaryDir bin;
     QTemporaryDir secretDir;
     QTemporaryDir dir;

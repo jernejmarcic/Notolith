@@ -20,6 +20,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include "BubblewrapProbe.h"
 #include "PluginHost.h"
 #include "PluginManifest.h"
 #include "PluginProtocol.h"
@@ -465,8 +466,8 @@ TEST_F(PluginHostTest, ACrashingCommandDoesNotTakeThisProcessDownWithIt)
 
 TEST_F(PluginHostTest, TheSandboxDeniesAFileOutsideThePluginsOwnDirectory)
 {
-    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "bubblewrap not installed on this machine";
+    if (!bubblewrapUsable())
+        GTEST_SKIP() << "bubblewrap is missing, or user namespaces are denied here";
 
     QTemporaryDir homeLike;
     ASSERT_TRUE(homeLike.isValid());
@@ -489,8 +490,8 @@ TEST_F(PluginHostTest, TheSandboxDeniesAFileOutsideThePluginsOwnDirectory)
 
 TEST_F(PluginHostTest, APluginReadsItsOwnConfigAndNoneOfTheAppsOwn)
 {
-    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "bubblewrap not installed on this machine";
+    if (!bubblewrapUsable())
+        GTEST_SKIP() << "bubblewrap is missing, or user namespaces are denied here";
 
     QTemporaryDir configHome;
     ASSERT_TRUE(configHome.isValid());
@@ -522,8 +523,8 @@ TEST_F(PluginHostTest, APluginReadsItsOwnConfigAndNoneOfTheAppsOwn)
 
 TEST_F(PluginHostTest, OnlyAPluginWithTheNetworkSeesWhatNameResolutionReadsInEtc)
 {
-    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        GTEST_SKIP() << "bubblewrap not installed on this machine";
+    if (!bubblewrapUsable())
+        GTEST_SKIP() << "bubblewrap is missing, or user namespaces are denied here";
 
     const auto readAs = [this](const QSet<PluginPermission> &permissions, const QString &path) {
         QString notice;
