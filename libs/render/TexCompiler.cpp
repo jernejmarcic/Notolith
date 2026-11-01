@@ -8,16 +8,15 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryDir>
-
-#include <sys/resource.h>
-#include <unistd.h>
 
 namespace noteAppC {
 
 namespace {
+
+constexpr qint64 kMaxPDFBytes = 64LL * 1024 * 1024; ///< the biggest PDF a document may make
+constexpr qint64 kMaxLogBytes = 4LL * 1024 * 1024;  ///< and the most it may print
 
 /// `$XDG_CACHE_HOME/notolith/tex`, or `~/.cache/notolith/tex`.
 QString cacheRoot()
@@ -106,48 +105,30 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
     }
     input.close();
 
-    QProcess process;
-    process.setWorkingDirectory(work.path());
-    process.setStandardInputFile(QProcess::nullDevice());
-    process.setProcessChannelMode(QProcess::MergedChannels);
+    // -no-shell-escape stops \write18, -halt-on-error and nonstopmode end a document that errors, and
+    // -no-parse-first-line keeps the file's own first line from setting options. None of that confines
+    // \input, which reads any file the user can and sets it into the PDF, nor a TeX that never errors:
+    // the sandbox does - the system and the build directory and nothing else: no home, no other drive, no
+    // socket, no network - and the limits below, on the whole job. Without bubblewrap the run is refused.
     const QStringList arguments = {QStringLiteral("-no-shell-escape"), QStringLiteral("-interaction=nonstopmode"),
-                                   QStringLiteral("-halt-on-error"), QStringLiteral("-jobname=") + jobName,
-                                   inputPath};
-    // The engine sees the system and its own directory and nothing else: no
-    // home, no other drive, no socket, no network. -no-shell-escape stops
-    // \write18, but \input can still read any file the user can and set it
-    // into the PDF - so without bubblewrap the run is refused, not bare.
-    const sandbox::Command wrapped = sandbox::bubblewrapCommand(work.path(), engine, arguments);
+                                   QStringLiteral("-halt-on-error"), QStringLiteral("-no-parse-first-line"),
+                                   QStringLiteral("-jobname=") + jobName, inputPath};
+    const sandbox::Command wrapped = sandbox::bubblewrapCommand(work.path(), engine, arguments, {QStringLiteral("openout_any=p")});
     if (wrapped.program.isEmpty()) {
         result.error = QStringLiteral("TeX runs only inside bubblewrap's sandbox; install bubblewrap");
         return result;
     }
-    const int filterFD = wrapped.filterFD;
-    // A memory and CPU ceiling in the child, applied between fork and exec -
-    // a runaway or hostile document is capped before it can touch the
-    // machine noteAppC runs on, not after.
-    process.setChildProcessModifier([filterFD] {
-        rlimit memory{2ULL * 1024 * 1024 * 1024, 2ULL * 1024 * 1024 * 1024};
-        setrlimit(RLIMIT_AS, &memory);
-        rlimit cpu{25, 30};
-        setrlimit(RLIMIT_CPU, &cpu);
-        sandbox::keepInChild(filterFD);
-    });
-    process.start(wrapped.program, wrapped.arguments);
-    // The fork has happened; bwrap holds its own copy of the filter.
-    if (filterFD >= 0)
-        close(filterFD);
-
-    bool finished = process.waitForFinished(30000);
-    if (!finished) {
-        process.kill();
-        process.waitForFinished(2000);
-    }
-
-    const QString log = QString::fromUtf8(process.readAll());
+    sandbox::Limits limits;
+    limits.cpuSeconds = 25;
+    limits.addressSpace = 2ULL * 1024 * 1024 * 1024;
+    limits.fileSize = kMaxPDFBytes;
+    limits.openFiles = 256;
+    const sandbox::Outcome ran = sandbox::run(wrapped, limits, {}, 30000, kMaxLogBytes, /*mergeChannels=*/true);
+    const bool finished = ran.failure.isEmpty();
+    const QString log = QString::fromUtf8(ran.out);
     const QString producedPdf = work.filePath(jobName + QStringLiteral(".pdf"));
-    const bool succeeded = finished && process.exitStatus() == QProcess::NormalExit
-                           && process.exitCode() == 0 && QFile::exists(producedPdf);
+    const bool succeeded = finished && ran.code == 0 && QFile::exists(producedPdf)
+                           && QFileInfo(producedPdf).size() <= kMaxPDFBytes;
 
     ensurePrivateDir(outDir);
     if (succeeded) {
@@ -161,7 +142,7 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
         return result;
     }
 
-    result.log = tail(log, 25);
+    result.log = ran.failure.isEmpty() ? tail(log, 25) : ran.failure;
     QFile failLog(failPath);
     if (failLog.open(QIODevice::WriteOnly))
         failLog.write(result.log.toUtf8());

@@ -3,10 +3,11 @@
 // its own and through the editor and the window's `render.mermaid` setting.
 // Only TheInstalledMmdrDrawsADarkDiagram needs the real tool: it is skipped
 // when `mmdr` is absent, and fails instead when NOTEAPPC_REQUIRE_TOOLS=1.
-// mmdr runs in bubblewrap's sandbox where bwrap is installed and as a plain
-// process where not: the fake keeps its books in files outside its own
-// directory, which the sandbox hides, so the fixture hides bwrap from PATH
-// (the unsandboxed run) and the tests of the sandbox put it back.
+// mmdr runs only inside bubblewrap's sandbox: where bwrap is missing nothing
+// runs. The fake keeps its books in files outside its own directory, which
+// the sandbox hides, so the fixture hands the test directory to the sandbox
+// as writable (NOTEAPPC_SANDBOX_TEST_BINDS, honoured in test builds only);
+// the tests of the sandbox itself take that away again.
 
 #include <gtest/gtest.h>
 
@@ -52,18 +53,36 @@ protected:
         ASSERT_TRUE(dir.isValid());
         // The disk cache is per test: an earlier test's diagram must not answer for this one.
         qputenv("XDG_CACHE_HOME", dir.filePath(QStringLiteral("cache")).toUtf8());
-        // A PATH of what the fake script runs (sh, cat, cp, sleep) and no bwrap: see the top of the file.
+        // The test directory is writable inside the sandbox: see the top of the file.
         oldPath = qgetenv("PATH");
+        qputenv("NOTEAPPC_SANDBOX_TEST_BINDS", dir.path().toUtf8());
+    }
+    void TearDown() override
+    {
+        qputenv("PATH", oldPath);
+        qunsetenv("NOTEAPPC_SANDBOX_TEST_BINDS");
+    }
+
+    /// A PATH without bwrap: nothing may run.
+    void withoutBubblewrap()
+    {
         ASSERT_TRUE(QDir().mkpath(dir.filePath(QStringLiteral("bin"))));
-        for (const QString &name : {QStringLiteral("sh"), QStringLiteral("cat"), QStringLiteral("cp"), QStringLiteral("sleep")})
-            ASSERT_TRUE(QFile::link(QStandardPaths::findExecutable(name), dir.filePath(QStringLiteral("bin/") + name)));
         qputenv("PATH", dir.filePath(QStringLiteral("bin")).toUtf8());
     }
-    void TearDown() override { qputenv("PATH", oldPath); }
 
-    /// The tests of the sandbox: a PATH that finds bwrap, skipping (failing under NOTEAPPC_REQUIRE_TOOLS=1) without it.
+    /// A PATH with bwrap and nothing else, so that a tool found on it is the test's own.
+    void onlyBubblewrapOnPath()
+    {
+        ASSERT_TRUE(QDir().mkpath(dir.filePath(QStringLiteral("bin"))));
+        ASSERT_TRUE(QFile::link(QStandardPaths::findExecutable(QStringLiteral("bwrap")), dir.filePath(QStringLiteral("bin/bwrap"))));
+        qputenv("PATH", dir.filePath(QStringLiteral("bin")).toUtf8());
+    }
+
+    /// The tests of the sandbox: nothing of the test directory is writable, and a PATH that finds bwrap, skipping
+    /// (failing under NOTEAPPC_REQUIRE_TOOLS=1) without it.
     bool withBubblewrap()
     {
+        qunsetenv("NOTEAPPC_SANDBOX_TEST_BINDS");
         qputenv("PATH", oldPath);
         if (!QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
             return true;
@@ -220,10 +239,10 @@ TEST_F(MermaidTest, TheSourceGoesInOnStdinAndTheToolsSVGIsCachedAsItIs)
     EXPECT_TRUE(cached.contains("#ECECFF")) << "mmdr honours the colours it is given, so the SVG is not re-coloured";
 }
 
-TEST_F(MermaidTest, WithoutBubblewrapTheToolKeepsTheSandboxsLimitsAndNoneOfTheEnvironment)
+TEST_F(MermaidTest, TheToolKeepsTheSandboxsLimitsAndNoneOfTheEnvironment)
 {
-    // The plain-process fallback is what a shared note's fence reaches where bwrap is missing: it must not be
-    // a way round the limits, nor see this process's variables. The fake records what it was given.
+    // A fence is a stranger's input: the tool must not see this process's variables, and runs under the limits.
+    // The fake records what it was given.
     qputenv("NOTEAPPC_TEST_SECRET", "hunter2");
     const QString books = dir.filePath(QStringLiteral("seen"));
     ask(rendererFor(fake(QStringLiteral("mmdr"), QStringLiteral("0"),
@@ -250,6 +269,7 @@ TEST_F(MermaidTest, WithoutBubblewrapTheToolKeepsTheSandboxsLimitsAndNoneOfTheEn
 TEST_F(MermaidTest, ResolvesTheToolFromTheCargoHomeBin)
 {
     // A launcher's PATH has no cargo bin: the stub is only in $CARGO_HOME/bin.
+    onlyBubblewrapOnPath();
     const QByteArray oldCargo = qgetenv("CARGO_HOME");
     qputenv("CARGO_HOME", dir.filePath(QStringLiteral("cargo")).toUtf8());
     fake(QStringLiteral("cargo/bin/mmdr"));
@@ -472,14 +492,15 @@ TEST_F(MermaidTest, InTheSandboxTheToolCannotReadTheHomeOrWriteOutsideItsDirecto
     EXPECT_FALSE(QFile::exists(written)) << "the tool wrote outside its directory";
 }
 
-TEST_F(MermaidTest, WithoutBubblewrapTheDiagramIsStillDrawnByAPlainProcess)
+TEST_F(MermaidTest, WithoutBubblewrapNothingIsRunAndTheFenceShowsItsSource)
 {
-    // The fixture's PATH has no bwrap: unlike the other tools, Mermaid is not refused (it is on by default).
-    ASSERT_TRUE(QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty());
+    // No unsandboxed fallback: with no bwrap on PATH the tool is never started, even where it is on PATH too.
+    withoutBubblewrap();
     const auto answer = ask(rendererFor(fake(QStringLiteral("mmdr"))), QStringLiteral("graph TD\nA-->N"));
-    EXPECT_FALSE(answer->result.isMarkdown) << answer->result.text.toStdString();
-    EXPECT_EQ(runs(), 1);
-    EXPECT_FALSE(noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->N"), Theme::builtin(Theme::Mode::Dark)).isEmpty());
+    EXPECT_TRUE(answer->result.isMarkdown);
+    EXPECT_TRUE(answer->result.text.contains(QLatin1String("A-->N")));
+    EXPECT_EQ(runs(), 0);
+    EXPECT_TRUE(noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->N"), Theme::builtin(Theme::Mode::Dark)).isEmpty());
 }
 
 // --- the window's setting ---------------------------------------------------

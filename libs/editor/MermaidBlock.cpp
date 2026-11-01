@@ -42,6 +42,7 @@ namespace {
 constexpr int kRunMilliseconds = 5000; ///< a diagram that takes longer is killed
 constexpr int kSandboxedMilliseconds = 20000; ///< ... for the tools that start slowly (a JVM, TeX), and each of TeX's two steps
 constexpr rlim_t kAddressSpaceBytes = 4ULL * 1024 * 1024 * 1024; ///< the tools' RLIMIT_AS
+constexpr rlim_t kOutputBytes = 16ULL * 1024 * 1024; ///< the most a render may write or print: a bigger SVG is not a diagram
 constexpr rlim_t kJVMDataBytes = 2ULL * 1024 * 1024 * 1024;      ///< the JVM's RLIMIT_DATA: heap 512 MB, metaspace 256 MB, code cache, malloc
 /// The JVM's own caps (JAVA_TOOL_OPTIONS reaches any java the launcher script runs): a diagram needs well under 100 MB.
 const char kJVMOptions[] = "JAVA_TOOL_OPTIONS=-Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=128m";
@@ -102,98 +103,39 @@ struct Made {
     QString error;
 };
 
-/// A CPU ceiling in the child, and a memory one: address space, except for a JVM, which reserves far more
-/// than it uses (RLIMIT_AS breaks it); its data segment counts what it commits, with the heap flags on top.
-void limitChild(bool jvm)
-{
-    rlimit cpu{25, 30};
-    setrlimit(RLIMIT_CPU, &cpu);
-    rlimit memory{jvm ? kJVMDataBytes : kAddressSpaceBytes, jvm ? kJVMDataBytes : kAddressSpaceBytes};
-    setrlimit(jvm ? RLIMIT_DATA : RLIMIT_AS, &memory);
-}
-
-/// mmdr as a plain process: the way it runs where there is no bubblewrap (see
-/// runMermaid). A shared note's fence reaches it, so it gets the sandbox's
-/// limits and none of this process's environment (tokens, session variables):
-/// PATH, and HOME in the temporary directory `dir`.
-Made runMermaidUnsandboxed(const QString &dir, const QString &tool, const QString &configPath, const QString &source)
-{
-    QProcess process;
-    QProcessEnvironment environment;
-    environment.insert(QStringLiteral("PATH"), qEnvironmentVariable("PATH"));
-    environment.insert(QStringLiteral("HOME"), dir);
-    process.setProcessEnvironment(environment);
-    process.setChildProcessModifier([] { limitChild(false); });
-    process.start(tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath});
-    if (!process.waitForStarted(kRunMilliseconds))
-        return {{}, QCoreApplication::translate("MermaidBlock", "could not start %1").arg(tool)};
-    process.write(source.toUtf8());
-    process.closeWriteChannel();
-    if (!process.waitForFinished(kRunMilliseconds)) {
-        process.kill();
-        process.waitForFinished(1000);
-        return {{}, QCoreApplication::translate("MermaidBlock", "timed out after %1 s").arg(kRunMilliseconds / 1000)};
-    }
-    const QByteArray svg = process.readAllStandardOutput();
-    if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && !svg.isEmpty())
-        return {svg, QString()};
-    const QString message = firstLine(QString::fromUtf8(process.readAllStandardError()));
-    return {{}, !message.isEmpty() ? message : QCoreApplication::translate("MermaidBlock", "exit code %1").arg(process.exitCode())};
-}
-
 /// One run of a tool inside bubblewrap's sandbox (sandbox/Bubblewrap.h), in
 /// `dir`, the only place it can write. `failure` says why it did not run to
-/// the end (no bwrap, no start, timed out); else `code` is its exit code.
+/// the end (no bwrap, no start, timed out, too much output); else `code` is its exit code.
 struct Ran {
     int code = -1;
     QByteArray out, err;
     QString failure;
 };
 
+/// A CPU ceiling, a memory one (address space, except for a JVM, which reserves far more than it uses:
+/// RLIMIT_AS breaks it, so its data segment, which counts what it commits, with the heap flags on top), a
+/// file size and a count of open files, in the child; a wall-clock limit and an output cap in run().
+sandbox::Limits limitsFor(bool jvm)
+{
+    sandbox::Limits limits;
+    limits.cpuSeconds = 25;
+    (jvm ? limits.data : limits.addressSpace) = jvm ? kJVMDataBytes : kAddressSpaceBytes;
+    limits.fileSize = kOutputBytes;
+    limits.openFiles = 256;
+    return limits;
+}
+
+/// No bubblewrap (or no syscall filter), no run: the tool is a parser of a note's text, and a note is anyone's.
 Ran runSandboxed(const QString &dir, const QString &program, const QStringList &arguments, const QStringList &environment,
                  const QByteArray &input, bool jvm, int milliseconds = kSandboxedMilliseconds)
 {
+    const sandbox::Command command = sandbox::bubblewrapCommand(dir, program, arguments, environment);
+    const sandbox::Outcome outcome = sandbox::run(command, limitsFor(jvm), input, milliseconds, kOutputBytes);
     Ran ran;
-    // A tool outside /usr (a path in the setting, a symlink into a home) is not in the sandbox: bind what it
-    // really is, read-only, and run that, as the notebook runner does. Inside /usr it keeps its own name:
-    // TeX picks its format by the name it is run as (latex -> pdftex).
-    QStringList binds;
-    QString runPath = program;
-    const QString real = QFileInfo(program).canonicalFilePath();
-    const auto inUsr = [](const QString &path) { return path.startsWith(QLatin1String("/usr/")); };
-    if (!real.isEmpty() && !(inUsr(program) && inUsr(real))) {
-        runPath = real;
-        if (!inUsr(real))
-            binds << real;
-    }
-    const sandbox::Command command = sandbox::bubblewrapCommand(dir, runPath, arguments, environment, binds);
-    if (command.program.isEmpty()) {
-        ran.failure = QCoreApplication::translate("MermaidBlock", "it runs only inside bubblewrap's sandbox; install bubblewrap");
-        return ran;
-    }
-    QProcess process;
-    process.setChildProcessModifier([fd = command.filterFD, jvm] {
-        limitChild(jvm);
-        sandbox::keepInChild(fd);
-    });
-    process.start(command.program, command.arguments);
-    if (command.filterFD >= 0)
-        close(command.filterFD); // the fork has happened; bwrap holds its own copy
-    if (!process.waitForStarted(milliseconds)) {
-        ran.failure = QCoreApplication::translate("MermaidBlock", "could not start %1").arg(program);
-        return ran;
-    }
-    process.write(input);
-    process.closeWriteChannel();
-    if (!process.waitForFinished(milliseconds)) {
-        process.kill();
-        process.waitForFinished(1000);
-        ran.failure = QCoreApplication::translate("MermaidBlock", "timed out after %1 s").arg(milliseconds / 1000);
-        return ran;
-    }
-    ran.out = process.readAllStandardOutput();
-    ran.err = process.readAllStandardError();
-    ran.code = process.exitStatus() == QProcess::NormalExit ? process.exitCode() : -1;
+    ran.code = outcome.code;
+    ran.out = outcome.out;
+    ran.err = outcome.err;
+    ran.failure = outcome.failure;
     return ran;
 }
 
@@ -209,10 +151,8 @@ Made fromRan(const Ran &ran, const QString &message)
 /// `mmdr -i - -c config.json`: the source on stdin, the SVG on stdout, so the
 /// only file is the config (which mmdr takes by path alone; the sandbox binds
 /// its directory at the same path). Not `-o -`: 0.3.1 writes that to a file
-/// named "-". In the sandbox like the other tools, as a shared note's fence
-/// is its input; where there is no bubblewrap it still runs, unsandboxed
-/// (mmdr is a parser of data, like poppler and QSvg in this process, and
-/// Mermaid is on by default, so refusing would silently remove it).
+/// named "-". In the sandbox like the other tools, as a note's fence is its
+/// input; where there is no bubblewrap it does not run, and the fence shows its source.
 Made runMermaid(const QString &tool, const QString &source, const QByteArray &config)
 {
     QTemporaryDir dir;
@@ -223,8 +163,6 @@ Made runMermaid(const QString &tool, const QString &source, const QByteArray &co
     if (!file.open(QIODevice::WriteOnly) || file.write(config) != config.size())
         return {{}, QCoreApplication::translate("MermaidBlock", "no temporary file")};
     file.close();
-    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        return runMermaidUnsandboxed(dir.path(), tool, configPath, source);
     const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath}, {},
                                  source.toUtf8(), false, kRunMilliseconds);
     return fromRan(ran, firstLine(QString::fromUtf8(ran.err)));
@@ -349,7 +287,7 @@ Made runTikZ(const QString &tool, const QString &source, const QByteArray &confi
 
     const Ran tex = runSandboxed(dir.path(), tool,
                                  {QStringLiteral("-interaction=nonstopmode"), QStringLiteral("-halt-on-error"),
-                                  QStringLiteral("-no-shell-escape"), QStringLiteral("cell.tex")},
+                                  QStringLiteral("-no-shell-escape"), QStringLiteral("-no-parse-first-line"), QStringLiteral("cell.tex")},
                                  {}, {}, false);
     if (!tex.failure.isEmpty() || tex.code != 0) {
         // The log's first "! ..." line is TeX's own error.
