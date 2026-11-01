@@ -11,11 +11,13 @@ software centres.
 
 `cmake --install <build> --prefix /usr` puts the binary (`notolith`) in `bin/`,
 the desktop file in `share/applications/`, the metainfo in `share/metainfo/`,
-the licence and third-party notices in `share/licenses/notolith/` and the demo
-asset notice in `share/doc/notolith/`.
+the licence and third-party notices in `share/licenses/notolith/`, the demo
+asset notice in `share/doc/notolith/` and the plugin host (`notolith-plugin-host`)
+in `<libexecdir>/notolith/`. The modules go to `<libdir>/notolith/modules/`.
 
-Arch (the PKGBUILD) is the supported package. It builds the source tree it
-sits in and passes no `-march` and no `target-cpu=native`: a package has to run
+Arch (the PKGBUILD) is the supported package. It builds the tagged source and
+its dependencies from git, each at a pinned commit and with no network in
+`build()`, and passes no `-march` and no `target-cpu=native`: a package has to run
 on any x86-64 machine (`docs/PLATFORMS.md`). Earlier Flatpak and AppImage
 recipes were untested and were removed; they are in the git history.
 
