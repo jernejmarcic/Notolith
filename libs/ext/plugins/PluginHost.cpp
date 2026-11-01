@@ -47,6 +47,8 @@ constexpr qint64 kSlowRenderMs = 1000;
 // extras, not a full TeX engine.
 [[maybe_unused]] constexpr rlim_t kMemoryLimitBytes = 256ULL * 1024 * 1024;
 constexpr rlim_t kOpenFileLimit = 64;
+// The task cap every other sandboxed run has (256, threads included), set by prlimit inside the sandbox.
+constexpr int kTaskLimit = 256;
 
 QString permissionLabel(PluginPermission permission)
 {
@@ -248,9 +250,14 @@ void PluginHost::ensureStarted()
     }
     m_startError.clear();
     QStringList sandboxed = arguments;
-    const int filterFD = sandbox::addSyscallFilter(sandboxed);
-    if (filterFD < 0) { // no syscall filter, no plugin
-        m_startError = QStringLiteral("plugins run only with the syscall filter (libseccomp); it could not be built");
+    // Same task cap as bubblewrapCommand and the notebook sandbox: a plugin cannot fork without bound. Set inside
+    // the new user namespace, where only the plugin's own tasks count. No limit, no plugin.
+    const bool limited = sandbox::limitProcesses(sandboxed, kTaskLimit);
+    const int filterFD = limited ? sandbox::addSyscallFilter(sandboxed) : -1;
+    if (filterFD < 0) { // no task limit or no syscall filter, no plugin
+        m_startError = limited
+            ? QStringLiteral("plugins run only with the syscall filter (libseccomp); it could not be built")
+            : QStringLiteral("plugins run only with a task limit (prlimit, from util-linux); it is not installed");
         if (m_callbacks.log)
             m_callbacks.log(m_manifest.id(), m_startError);
         m_process.reset();
