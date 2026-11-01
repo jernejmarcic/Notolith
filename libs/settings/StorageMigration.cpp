@@ -56,15 +56,35 @@ QString failure(const QString &what)
     return what + QStringLiteral(" (") + QString::fromLocal8Bit(std::strerror(errno)) + QLatin1Char(')');
 }
 
+/// Why a file did not move. `permanent`: something is in its way that another start cannot change (a file at
+/// the destination, a FIFO), so only the person can settle it. `copied`: it did get to its new place, but the
+/// original could not be removed, so there is one in each.
+struct Refusal {
+    QString why;
+    bool permanent = false;
+    bool copied = false;
+    bool moved() const { return why.isEmpty(); }
+};
+
+Refusal inTheWay(const QString &why) { return {why, true, false}; }
+
+/// Removes the original once its copy is in place; a directory this user cannot write keeps it.
+Refusal removeOriginal(const QByteArray &source)
+{
+    if (::unlink(source.constData()) == 0)
+        return {};
+    return {failure(QStringLiteral("the copy is in place, but the original could not be removed")), true, true};
+}
+
 /// Moves a symbolic link as a link, never what it points at. The text of the link goes along unless it is
 /// relative and would point somewhere else from the new directory; then it becomes the path it meant.
-QString moveLink(const QString &from, const QString &to)
+Refusal moveLink(const QString &from, const QString &to)
 {
     const QByteArray source = from.toLocal8Bit();
     char buffer[PATH_MAX];
     const ssize_t length = ::readlink(source.constData(), buffer, sizeof buffer - 1);
     if (length < 0)
-        return failure(QStringLiteral("the link cannot be read"));
+        return {failure(QStringLiteral("the link cannot be read"))};
     QString target = QString::fromLocal8Bit(buffer, length);
     if (QDir::isRelativePath(target)) {
         const QString meant = QDir::cleanPath(QFileInfo(from).absolutePath() + QLatin1Char('/') + target);
@@ -73,63 +93,65 @@ QString moveLink(const QString &from, const QString &to)
     }
     const QByteArray destination = to.toLocal8Bit();
     if (::symlink(target.toLocal8Bit().constData(), destination.constData()) != 0)
-        return errno == EEXIST ? QStringLiteral("it already exists at the destination")
-                               : failure(QStringLiteral("the link cannot be made"));
+        return errno == EEXIST ? inTheWay(QStringLiteral("it already exists at the destination"))
+                               : Refusal{failure(QStringLiteral("the link cannot be made"))};
     if (!syncDirectory(QFileInfo(to).absolutePath())) {
         ::unlink(destination.constData());
-        return QStringLiteral("it could not be written to disk");
+        return {QStringLiteral("it could not be written to disk")};
     }
-    ::unlink(source.constData());
-    return {};
+    return removeOriginal(source);
 }
 
-/// Moves one file to `to`, which must not exist; empty when it moved, else why it did not (and it is then
-/// exactly where it was). A hard link and an unlink are an atomic rename that refuses to replace anything;
+/// Moves one file to `to`, which must not exist; says why when it did not (and it is then exactly where it
+/// was). A hard link and an unlink are an atomic rename that refuses to replace anything;
 /// across file systems it is a copy, an fsync of the copy and of its directory, and a rename into place, and
 /// only then does the original go. Only regular files and symbolic links move: a FIFO, a socket or a device
 /// is none of the app's, and opening one to copy it could wait forever.
-QString moveFile(const QString &from, const QString &to)
+Refusal moveFile(const QString &from, const QString &to)
 {
     const QByteArray source = from.toLocal8Bit();
     const QByteArray target = to.toLocal8Bit();
     struct stat info;
     if (::lstat(source.constData(), &info) != 0)
-        return failure(QStringLiteral("it cannot be read"));
+        return {failure(QStringLiteral("it cannot be read"))};
     if (!S_ISREG(info.st_mode) && !S_ISLNK(info.st_mode))
-        return QStringLiteral("it is not a regular file");
+        return inTheWay(QStringLiteral("it is not a regular file"));
     if (lexists(to))
-        return QStringLiteral("it already exists at the destination");
+        return inTheWay(QStringLiteral("it already exists at the destination"));
     if (!ensurePrivateDir(QFileInfo(to).absolutePath()))
-        return QStringLiteral("the destination directory cannot be made");
+        return {QStringLiteral("the destination directory cannot be made")};
     if (S_ISLNK(info.st_mode))
         return moveLink(from, to);
-    if (::link(source.constData(), target.constData()) == 0) {
-        ::unlink(source.constData());
-        return {};
-    }
+    if (::link(source.constData(), target.constData()) == 0)
+        return removeOriginal(source);
     if (errno == EEXIST)
-        return QStringLiteral("it already exists at the destination");
+        return inTheWay(QStringLiteral("it already exists at the destination"));
     const QString partial = to + QStringLiteral(".migrating");
     QFile::remove(partial);
     QFile original(from);
     if (!original.copy(partial)) {
         QFile::remove(partial);
-        return QStringLiteral("it could not be copied: ") + original.errorString();
+        return {QStringLiteral("it could not be copied: ") + original.errorString()};
     }
     if (!syncFile(partial)) {
         QFile::remove(partial);
-        return QStringLiteral("the copy could not be written to disk");
+        return {QStringLiteral("the copy could not be written to disk")};
     }
-    if (lexists(to) || ::rename(partial.toLocal8Bit().constData(), target.constData()) != 0) {
+    if (lexists(to)) {
         QFile::remove(partial);
-        return QStringLiteral("it already exists at the destination");
+        return inTheWay(QStringLiteral("it already exists at the destination"));
+    }
+    if (::rename(partial.toLocal8Bit().constData(), target.constData()) != 0) {
+        const int why = errno;
+        QFile::remove(partial);
+        errno = why;
+        return {failure(QStringLiteral("the copy could not be put in place"))};
     }
     if (!syncDirectory(QFileInfo(to).absolutePath())) {
         ::unlink(target.constData());
-        return QStringLiteral("the copy could not be written to disk");
+        return {QStringLiteral("the copy could not be written to disk")};
     }
-    ::unlink(source.constData());
-    return {};
+    return removeOriginal(source);
 }
 
 /// What to do with one file of an old directory.
@@ -144,9 +166,14 @@ Route keep() { return {{}, Route::Keep}; }
 
 struct Mover {
     int moved = 0;
-    int kept = 0;
+    int kept = 0; // not moved, and another start may manage it
     QStringList *lines = nullptr;
     QStringList *warnings = nullptr;
+    /// What an earlier start found in its way and told the person about: path -> why. Left alone from then on.
+    QHash<QString, QString> told;
+    /// What is in the way as of this start: the first time said, after that carried over silently.
+    QHash<QString, QString> inTheWay;
+    int newlyInTheWay = 0;
 
     void say(const QString &line)
     {
@@ -165,9 +192,18 @@ struct Mover {
     }
 
     /// `path` stays where it is, and the person is told: nothing is moved to a place it is not read from.
-    void keep(const QString &path, const QString &why)
+    /// What is `permanent` is told once and then left alone; the rest is tried again at the next start.
+    void keep(const QString &path, const QString &why, bool permanent = false)
     {
-        ++kept;
+        if (!permanent) {
+            ++kept;
+        } else if (told.contains(path)) {
+            inTheWay.insert(path, told.value(path));
+            return;
+        } else {
+            inTheWay.insert(path, why);
+            ++newlyInTheWay;
+        }
         warn(QStringLiteral("storage: kept %1 where it is: %2").arg(path, why));
     }
 
@@ -175,13 +211,17 @@ struct Mover {
     {
         if (!lexists(from))
             return; // another start moved it first
-        const QString why = moveFile(from, to);
-        if (why.isEmpty()) {
+        if (told.contains(from)) {
+            keep(from, {}, true);
+            return;
+        }
+        const Refusal refusal = moveFile(from, to);
+        if (refusal.moved() || refusal.copied) {
             ++moved;
             say(QStringLiteral("storage: moved %1 to %2").arg(from, to));
-        } else {
-            keep(from, why);
         }
+        if (!refusal.moved())
+            keep(from, refusal.why, refusal.permanent);
     }
 
     /// Every file under `from`, to `route(relative path)`.
@@ -261,6 +301,23 @@ QString markerPath()
     return appDir(XDGroot::State, QStringLiteral(".migrated"));
 }
 
+/// The files an earlier start left alone, from the lines under the marker's first: "path<TAB>why".
+QHash<QString, QString> readAttention()
+{
+    QHash<QString, QString> told;
+    QFile marker(markerPath());
+    if (!marker.open(QIODevice::ReadOnly))
+        return told;
+    marker.readLine();
+    while (!marker.atEnd()) {
+        const QString line = QString::fromUtf8(marker.readLine()).trimmed();
+        const qsizetype tab = line.lastIndexOf(QLatin1Char('\t'));
+        if (tab > 0)
+            told.insert(line.left(tab), line.mid(tab + 1));
+    }
+    return told;
+}
+
 } // namespace
 
 MigrationNeed storageMigrationNeed()
@@ -293,14 +350,17 @@ int migrateStorage(QStringList *lines, QStringList *warnings)
     Mover mover;
     mover.lines = lines;
     mover.warnings = warnings;
+    mover.told = readAttention();
 
     // A directory that is a symbolic link (a synced dotfiles folder) is the person's arrangement: its files
     // are not pulled out of it, and the person is told what is left to do.
     const auto owned = [&](const QString &directory) {
         if (!QFileInfo(directory).isSymLink())
             return true;
-        mover.keep(directory, QStringLiteral("it is a symbolic link, and its files are not moved out of it; "
-                                             "move them to the notolith directories by hand"));
+        mover.keep(directory,
+                   QStringLiteral("it is a symbolic link, and its files are not moved out of it; move them to the "
+                                  "notolith directories by hand"),
+                   true);
         return false;
     };
     const bool configMoves = owned(oldConfig);
@@ -380,13 +440,29 @@ int migrateStorage(QStringList *lines, QStringList *warnings)
             removeEmptyTree(old);
     }
 
-    // The marker says whether a later start has anything to try again.
+    // The marker says whether a later start has anything to try again, and what it is to leave alone.
+    const QString where = [&] {
+        QStringList names;
+        for (auto it = mover.inTheWay.cbegin(); it != mover.inTheWay.cend(); ++it)
+            names.append(it.key() + QLatin1Char('\t') + it.value());
+        names.sort();
+        return names.join(QLatin1Char('\n'));
+    }();
+    QByteArray status;
+    if (mover.kept)
+        status = "incomplete: some files stayed in the old directories, tried again at the next start";
+    else if (!mover.inTheWay.isEmpty())
+        status = "attention: files stay in the old directories for the person to settle; Notolith does not try them "
+                 "again";
+    else
+        status = "complete: the older noteAppC directories were moved here by this build";
     bool written = false;
     if (ensurePrivateDir(newState)) {
         QSaveFile mark(markerPath());
         if (mark.open(QIODevice::WriteOnly)) {
-            mark.write(mover.kept ? "incomplete: some files stayed in the old directories, tried again at the next start\n"
-                                  : "complete: the older noteAppC directories were moved here by this build\n");
+            mark.write(status + '\n');
+            if (!where.isEmpty())
+                mark.write(where.toUtf8() + '\n');
             written = mark.commit();
         }
     }
@@ -397,6 +473,14 @@ int migrateStorage(QStringList *lines, QStringList *warnings)
     } else if (!written) {
         mover.warn(QStringLiteral("storage: the migration marker could not be written; Notolith checks again at "
                                   "the next start"));
+    }
+    if (mover.newlyInTheWay) {
+        mover.warn(QStringLiteral("storage: %1 file(s) of the previous version stay in the old noteAppC directories, "
+                                  "and Notolith will not touch them or try them again; the lines above say where and "
+                                  "why. Settle each by hand (keep what you want, delete the rest); the list is also "
+                                  "in %2")
+                       .arg(mover.newlyInTheWay)
+                       .arg(markerPath()));
     }
     return mover.moved;
 }

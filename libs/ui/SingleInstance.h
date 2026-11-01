@@ -68,6 +68,10 @@ public:
     /// live owner does. Empty when `$NOTEAPPC_INSTANCE_SOCKET` is set.
     static QStringList previousBuildSockets();
 
+    /// The sockets of windows of this build that are open (their lock is held by a live process); empty when
+    /// none is, and when no socket directory can be had.
+    static QStringList ownSockets();
+
     /// Gives `argument` to the window of such a build that holds what `launch` names, the way handOver()
     /// would to one of this build; a launch whose vault is not known yet goes to any of them. Its wire
     /// protocol is the same. True when one took it.
@@ -123,5 +127,14 @@ private:
     QLocalServer m_server{this};
     MainWindow *m_window = nullptr;
 };
+
+/// What a start does about files of the layout before the XDG one (migrateStorage), decided where it can
+/// see the windows that are open: migrated and carried on (Carry); the launch given to a window that has it
+/// (HandedOver); or refused because a window of the older build is still open and holds none of it
+/// (OlderWindowOpen). With a window of this build open the launch goes to it if it is the one for this vault,
+/// else it carries on with nothing moved: the window writes its files back and would overwrite them. The
+/// files wait for a start with no window open. Nothing at all when there is nothing to migrate.
+enum class StorageSettled { Carry, HandedOver, OlderWindowOpen };
+StorageSettled settleStorage(const QString &argument, QStringList *lines = nullptr, QStringList *warnings = nullptr);
 
 } // namespace noteAppC

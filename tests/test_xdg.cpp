@@ -23,6 +23,7 @@
 #include <QCryptographicHash>
 
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 using namespace noteAppC;
@@ -351,7 +352,7 @@ TEST(StorageMigration, ADestinationThatExistsIsNeverOverwritten)
     EXPECT_EQ(warnings.filter(QStringLiteral("settings.ini")).size(), 1);
     EXPECT_EQ(warnings.filter(QStringLiteral("already exists")).size(), 2);
     EXPECT_EQ(warnings.size(), 3);
-    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Retry) << "a later start tries again";
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None) << "nothing a later start could change: it is not tried again";
     EXPECT_EQ(read(machine.config + QStringLiteral("/notolith/settings.ini")), QByteArray("[editor]\ntab-width = 8\n"));
     EXPECT_EQ(read(machine.data + QStringLiteral("/notolith/recovery/n1/path")), QByteArray("/mine/Note.md"));
     // What could not move stays where it was, for the person to look at.
@@ -360,16 +361,72 @@ TEST(StorageMigration, ADestinationThatExistsIsNeverOverwritten)
     // Everything else did move.
     EXPECT_TRUE(QFileInfo::exists(machine.config + QStringLiteral("/notolith/themes/Mine.json")));
     EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/noteAppC/themes")));
+    // The exact paths are on record, once, for the person to act on.
+    const QByteArray marker = read(machine.state + QStringLiteral("/notolith/.migrated"));
+    EXPECT_TRUE(marker.startsWith("attention")) << marker.toStdString();
+    EXPECT_TRUE(marker.contains((machine.config + QStringLiteral("/noteAppC/settings.ini\t")).toUtf8()));
+    EXPECT_TRUE(marker.contains((machine.data + QStringLiteral("/noteAppC/recovery/n1/path\t")).toUtf8()));
 
-    // The person sorts the clash out; the next start finishes the job and ends it.
-    QFile::remove(machine.config + QStringLiteral("/notolith/settings.ini"));
-    QFile::remove(machine.data + QStringLiteral("/notolith/recovery/n1/path"));
+    // The next start has nothing to do and nothing to say, though the clash is still there.
     warnings.clear();
-    EXPECT_EQ(migrateStorage(nullptr, &warnings), 2);
+    EXPECT_EQ(migrateStorage(nullptr, &warnings), 0);
     EXPECT_TRUE(warnings.isEmpty());
+    EXPECT_EQ(read(machine.config + QStringLiteral("/noteAppC/settings.ini")), QByteArray("[editor]\ntab-width = 2\n"));
+}
+
+TEST(StorageMigration, AFileInTheWayIsSaidOnceWhileOneThatMayStillMoveIsTriedAgain)
+{
+    if (::geteuid() == 0)
+        GTEST_SKIP() << "a directory closed to the owner is open to root";
+    OldLayout machine;
+    ASSERT_NO_FATAL_FAILURE(machine.populate());
+    write(machine.config + QStringLiteral("/notolith/settings.ini"), "[editor]\ntab-width = 8\n");
+    // The data directory refuses writes for this one start: those files may move at the next.
+    const QString data = machine.data + QStringLiteral("/notolith");
+    ASSERT_TRUE(QDir().mkpath(data));
+    ASSERT_TRUE(QFile::setPermissions(data, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+    QStringList warnings;
+    migrateStorage(nullptr, &warnings);
+    EXPECT_EQ(warnings.filter(QStringLiteral("settings.ini")).size(), 1);
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Retry);
+    const QByteArray marker = read(machine.state + QStringLiteral("/notolith/.migrated"));
+    EXPECT_TRUE(marker.startsWith("incomplete")) << marker.toStdString();
+    EXPECT_TRUE(marker.contains((machine.config + QStringLiteral("/noteAppC/settings.ini\t")).toUtf8()))
+        << "what is in the way is kept on record while the rest is retried";
+
+    ASSERT_TRUE(QFile::setPermissions(data, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    warnings.clear();
+    EXPECT_GT(migrateStorage(nullptr, &warnings), 0);
+    EXPECT_TRUE(warnings.filter(QStringLiteral("settings.ini")).isEmpty()) << "said once, not at every start";
+    EXPECT_TRUE(QFileInfo::exists(data + QStringLiteral("/recovery/n1/path")));
     EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
-    EXPECT_EQ(read(machine.config + QStringLiteral("/notolith/settings.ini")), QByteArray("[editor]\ntab-width = 2\n"));
-    EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/noteAppC")));
+    EXPECT_TRUE(read(machine.state + QStringLiteral("/notolith/.migrated")).contains("settings.ini\t"))
+        << "still on record after the retry finished";
+    EXPECT_EQ(read(machine.config + QStringLiteral("/noteAppC/settings.ini")), QByteArray("[editor]\ntab-width = 2\n"));
+}
+
+TEST(StorageMigration, ACopyInPlaceWhoseOriginalCannotGoIsSaidNotCalledMoved)
+{
+    if (::geteuid() == 0)
+        GTEST_SKIP() << "a directory closed to the owner is open to root";
+    OldLayout machine;
+    ASSERT_NO_FATAL_FAILURE(machine.populate());
+    // A directory of the old tree this user cannot write (left by a run under sudo): its files can be copied, not removed.
+    const QString closed = machine.data + QStringLiteral("/noteAppC/recovery/n1");
+    ASSERT_TRUE(QFile::setPermissions(closed, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+    QStringList lines, warnings;
+    migrateStorage(&lines, &warnings);
+    ASSERT_TRUE(QFile::setPermissions(closed, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+
+    EXPECT_EQ(read(machine.data + QStringLiteral("/notolith/recovery/n1/path")), QByteArray("/x/Note.md"));
+    EXPECT_TRUE(QFileInfo::exists(closed + QStringLiteral("/path"))) << "the original is still there";
+    const QStringList said = warnings.filter(QStringLiteral("recovery/n1/path"));
+    ASSERT_EQ(said.size(), 1);
+    EXPECT_TRUE(said.first().contains(QStringLiteral("original could not be removed"))) << said.first().toStdString();
+    EXPECT_TRUE(read(machine.state + QStringLiteral("/notolith/.migrated")).startsWith("attention"));
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
 }
 
 TEST(MessageLog, AProcessThatStartsWhileAnotherIsWritingDoesNotTakeItsLogAway)
@@ -490,7 +547,7 @@ TEST(StorageMigration, AnIndexAlreadyInTheNewPlaceCostsNeitherTheOldOneNorAGraph
     const QSettings window(machine.state + QStringLiteral("/notolith/window.ini"), QSettings::IniFormat);
     EXPECT_EQ(window.value(QStringLiteral("publish/") + machine.digest + QStringLiteral("/folder")).toString(),
               QStringLiteral("Public"));
-    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Retry);
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None) << "the clash is told once, not retried";
 }
 
 TEST(StorageMigration, ALinkMovesAsALinkWhateverTheDepthOfTheNewRoot)
@@ -563,7 +620,7 @@ TEST(StorageMigration, ANamedPipeIsLeftAloneAndSaid)
     EXPECT_TRUE(QFileInfo::exists(pipe));
     EXPECT_FALSE(QFileInfo::exists(machine.data + QStringLiteral("/notolith/vaults/") + machine.digest + QStringLiteral("/pipe.json")));
     EXPECT_EQ(warnings.filter(QStringLiteral("not a regular file")).size(), 1);
-    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Retry);
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None) << "a start cannot make it a file: said once";
 }
 
 TEST(StorageMigration, ADirectoryThatIsALinkIsNotEmptiedIntoTheNewOne)
@@ -581,6 +638,11 @@ TEST(StorageMigration, ADirectoryThatIsALinkIsNotEmptiedIntoTheNewOne)
     EXPECT_TRUE(QFileInfo(machine.config + QStringLiteral("/noteAppC")).isSymLink());
     EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/notolith/hotkeys.json")));
     EXPECT_FALSE(warnings.filter(QStringLiteral("symbolic link")).isEmpty());
+    // Nothing a later start could do about it, so it does not keep coming back.
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
+    warnings.clear();
+    EXPECT_EQ(migrateStorage(nullptr, &warnings), 0);
+    EXPECT_TRUE(warnings.isEmpty());
 }
 
 TEST(StorageMigration, NothingOlderHereMeansNothingToDo)
@@ -682,6 +744,137 @@ TEST(SingleInstance, AnOpenWindowOfTheBuildBeforeIsFoundAndGivenTheLaunch)
     held.unlock();
     window.close();
     EXPECT_TRUE(SingleInstance::previousBuildSockets().isEmpty()) << "no owner, no window";
+}
+
+namespace {
+
+/// A message handler that keeps what it is given, for a test that expects a warning.
+QStringList heardMessages;
+void hear(QtMsgType, const QMessageLogContext &, const QString &message)
+{
+    heardMessages.append(message);
+}
+
+} // namespace
+
+TEST(SingleInstance, ALaunchWithNoPrivateDirectoryForItsSocketSaysSo)
+{
+    int argc = 1;
+    char name[] = "test_xdg";
+    char *argv[] = {name, nullptr};
+    QCoreApplication app(argc, argv);
+    Environment environment;
+    QTemporaryDir home;
+    qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    qputenv("HOME", home.path().toUtf8());
+    qputenv("XDG_STATE_HOME", home.filePath(QStringLiteral("state")).toUtf8());
+    qputenv("XDG_CONFIG_HOME", home.filePath(QStringLiteral("config")).toUtf8());
+    const QString run = home.filePath(QStringLiteral("run"));
+    ASSERT_TRUE(QDir().mkpath(run));
+    qputenv("XDG_RUNTIME_DIR", run.toUtf8());
+    // Both places exist already, and are open to others: a restored backup, a hand-made chmod.
+    const auto open = QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner | QFileDevice::ReadOther
+                      | QFileDevice::ExeOther;
+    for (const QString &directory : {run + QStringLiteral("/notolith"), home.filePath(QStringLiteral("state/notolith"))}) {
+        ASSERT_TRUE(QDir().mkpath(directory));
+        ASSERT_TRUE(QFile::setPermissions(directory, open));
+    }
+    ASSERT_TRUE(SingleInstance::baseName().isEmpty());
+
+    SingleInstance instance(SingleInstance::launchFor(QString()));
+    heardMessages.clear();
+    const QtMessageHandler before = qInstallMessageHandler(hear);
+    instance.serve(nullptr);
+    qInstallMessageHandler(before);
+
+    ASSERT_EQ(heardMessages.filter(QStringLiteral("no private directory")).size(), 1);
+}
+
+TEST(SingleInstance, ALockItsOwnerLeftIsStaleEvenWhereItCannotBeCleared)
+{
+    if (::geteuid() == 0)
+        GTEST_SKIP() << "a directory closed to the owner is open to root";
+    Environment environment;
+    QTemporaryDir dir;
+    // The override is a prefix: `<dir>/win-<id>.sock` and its `.lock`.
+    qputenv("NOTEAPPC_INSTANCE_SOCKET", (dir.path() + QStringLiteral("/win")).toUtf8());
+    const QString dead = dir.path() + QStringLiteral("/win-dead.sock");
+    const QString alive = dir.path() + QStringLiteral("/win-alive.sock");
+    // A process that took the lock and ended without giving it back.
+    const pid_t child = ::fork();
+    if (child == 0) {
+        QLockFile lock(dead + QStringLiteral(".lock"));
+        lock.setStaleLockTime(0);
+        ::_exit(lock.tryLock() ? 0 : 1);
+    }
+    ASSERT_GT(child, 0);
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+    ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    QLockFile held(alive + QStringLiteral(".lock"));
+    held.setStaleLockTime(0);
+    ASSERT_TRUE(held.tryLock());
+
+    // The directory takes no writes (a full or read-only runtime directory): the stale lock cannot be cleared
+    // away, and that is not a window.
+    ASSERT_TRUE(QFile::setPermissions(dir.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const QStringList open = SingleInstance::ownSockets();
+    ASSERT_TRUE(QFile::setPermissions(dir.path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    EXPECT_TRUE(QFileInfo::exists(dead + QStringLiteral(".lock"))) << "it could not be cleared, as the test set up";
+    EXPECT_EQ(open, (QStringList{alive})) << "the live lock is still a window";
+}
+
+TEST(StorageSettle, NothingMovesUnderAWindowOfThisBuild)
+{
+    int argc = 1;
+    char name[] = "test_xdg";
+    char *argv[] = {name, nullptr};
+    QCoreApplication app(argc, argv);
+    OldLayout machine;
+    ASSERT_NO_FATAL_FAILURE(machine.populate());
+    QTemporaryDir run, other;
+    ASSERT_TRUE(QDir(machine.vaultPath).mkpath(QStringLiteral(".obsidian")));
+    ASSERT_TRUE(QDir(other.path()).mkpath(QStringLiteral(".obsidian")));
+    qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    qputenv("XDG_RUNTIME_DIR", run.path().toUtf8());
+
+    // A window of this build on the vault, up before the old directories arrived (a restored backup).
+    const QString socket = SingleInstance::nameForVault(machine.vaultPath);
+    QLockFile held(socket + QStringLiteral(".lock"));
+    held.setStaleLockTime(0);
+    ASSERT_TRUE(held.tryLock());
+    QLocalServer window;
+    ASSERT_TRUE(window.listen(socket));
+    const QString oldSettings = machine.config + QStringLiteral("/noteAppC/settings.ini");
+    const auto untouched = [&] {
+        EXPECT_TRUE(QFileInfo::exists(oldSettings));
+        EXPECT_TRUE(QFileInfo::exists(machine.data + QStringLiteral("/noteAppC/recovery/n1/path")));
+        EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/notolith/settings.ini")));
+        EXPECT_FALSE(QFileInfo::exists(machine.data + QStringLiteral("/notolith/vaults")));
+        EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Fresh);
+    };
+
+    // A launch for that vault goes to the window, and moves nothing.
+    QStringList lines, warnings;
+    EXPECT_EQ(settleStorage(machine.vaultPath, &lines, &warnings), StorageSettled::HandedOver);
+    ASSERT_TRUE(window.waitForNewConnection(1000));
+    QLocalSocket *got = window.nextPendingConnection();
+    ASSERT_TRUE(got->waitForReadyRead(1000));
+    EXPECT_TRUE(got->readLine().endsWith(machine.vaultPath.toUtf8() + "\n"));
+    untouched();
+    // A launch for another vault starts a window of its own, and moves nothing either: the first one is open.
+    EXPECT_EQ(settleStorage(other.path(), &lines, &warnings), StorageSettled::Carry);
+    untouched();
+    EXPECT_TRUE(lines.isEmpty());
+    EXPECT_TRUE(warnings.isEmpty());
+
+    // With no window open the next start does it.
+    held.unlock();
+    window.close();
+    EXPECT_EQ(settleStorage(machine.vaultPath, &lines, &warnings), StorageSettled::Carry);
+    EXPECT_EQ(read(machine.config + QStringLiteral("/notolith/settings.ini")), QByteArray("[editor]\ntab-width = 2\n"));
+    EXPECT_FALSE(lines.isEmpty());
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
 }
 
 TEST(MessageLog, TheFileIsPrivateFromTheMomentItExistsWhateverTheUmask)

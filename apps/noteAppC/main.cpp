@@ -158,26 +158,25 @@ QString handOverArgument(const QStringList &args)
 
 constexpr int kOlderWindowOpen = 3;
 
-// Moves the files of a build from before the XDG layout to where they belong, once, when a start follows.
-// Before anything reads the settings. Not for --help and --version, and not for a launch that only hands
-// its path to a window that is running. An older build's window that is still open keeps writing in its
-// own directories, so nothing moves while one is: the launch goes to that window, or is refused.
+// Moves the files of a build from before the XDG layout to where they belong, once, when a start follows
+// (noteAppC::settleStorage decides, with the windows that are open in view). Before anything reads the
+// settings. Not for --help and --version. Once per process: the pass before the window system and the one
+// after it would otherwise both walk the old directories and say the same things twice.
 // Returns the exit code when the process is done, nothing when it carries on.
 std::optional<int> settleStorage(const QString &argument)
 {
-    const noteAppC::MigrationNeed need = noteAppC::storageMigrationNeed();
-    if (need == noteAppC::MigrationNeed::None)
+    static bool settled = false;
+    if (settled)
         return std::nullopt;
-    const auto launch = [&] { return noteAppC::SingleInstance::launchFor(argument); };
-    // An earlier start left files behind: a window of this build may be up, and a launch for it moves nothing.
-    if (need == noteAppC::MigrationNeed::Retry && noteAppC::SingleInstance(launch()).handOver(argument))
+    settled = true;
+    switch (noteAppC::settleStorage(argument, &migrationLines, &migrationWarnings)) {
+    case noteAppC::StorageSettled::HandedOver:
         return 0;
-    if (!noteAppC::SingleInstance::previousBuildSockets().isEmpty()) {
-        if (noteAppC::SingleInstance::handOverToPreviousBuild(launch(), argument))
-            return 0;
+    case noteAppC::StorageSettled::OlderWindowOpen:
         return kOlderWindowOpen;
+    case noteAppC::StorageSettled::Carry:
+        break;
     }
-    noteAppC::migrateStorage(&migrationLines, &migrationWarnings);
     return std::nullopt;
 }
 
