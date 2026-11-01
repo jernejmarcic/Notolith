@@ -7,11 +7,7 @@
 #include <QFileInfo>
 #include <QDateTime>
 #include <QDir>
-#include <QFile>
 #include <QIcon>
-#include <QMutex>
-#include <QMutexLocker>
-#include <QStandardPaths>
 #include <QTimer>
 
 #include <thread>
@@ -23,9 +19,12 @@
 #include <QtPlugin>
 #endif
 
+#include "ConfigFile.h"
 #include "MainWindow.h"
+#include "MessageLog.h"
 #include "PopupStyle.h"
 #include "SingleInstance.h"
+#include "StorageMigration.h"
 
 // The modules built in as Qt static plugins (NOTEAPPC_STATIC_MODULES; apps/noteAppC/CMakeLists.txt sets one define each):
 // importing one is what makes the linker keep it, and ModuleRegistry::scan list it.
@@ -66,58 +65,34 @@ struct FirstPaintLog : QObject {
     }
 };
 
+// What migrateStorage() did, told once the log file is open.
+QStringList migrationLines;
+
 void setApplicationNames()
 {
-    // The product is Notolith; the organisation and application names stay
-    // noteAppC, its code name, because they name the directories under
-    // ~/.config, ~/.cache and ~/.local/share that hold everything a person
-    // has set and saved - renaming them would strand all of it.
-    QCoreApplication::setOrganizationName(QStringLiteral("noteAppC"));
-    QCoreApplication::setApplicationName(QStringLiteral("noteAppC"));
+    // The product is Notolith. No directory is named after these: every path goes through appDir()
+    // (libs/markdown/ConfigFile.h).
+    QCoreApplication::setOrganizationName(QStringLiteral("notolith"));
+    QCoreApplication::setApplicationName(QStringLiteral("notolith"));
     QCoreApplication::setApplicationVersion(QStringLiteral(NOTEAPPC_VERSION));
 }
 
-// Every Qt message is also appended to <state dir>/noteAppC/notolith.log, one
-// line each, so a bug report can carry what the terminal showed. The previous
-// run's file is kept as notolith.log.old (one generation); past 5 MB the
-// running file moves to .old the same way, so the newest lines always survive.
+// Every Qt message is also appended to $XDG_STATE_HOME/notolith/notolith.log, one
+// line each, so a bug report can carry what the terminal showed. Each line names
+// its process: every vault runs as its own and they share the file (MessageLog).
 // The earlier handler (Qt's own, when none was set) still runs, so terminal and journal output is unchanged.
-struct MessageLog {
-    QMutex mutex; // messages arrive from any thread
-    QFile file;
-    QtMessageHandler previous = nullptr;
-};
-MessageLog *messageLog = nullptr; // never freed: a message may come during static destruction
-constexpr qint64 kMaxLogBytes = 5 << 20;
-
-void openMessageLog(MessageLog &log)
-{
-    if (log.file.open(QIODevice::WriteOnly | QIODevice::Append))
-        log.file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-}
+noteAppC::MessageLog *messageLog = nullptr; // never freed: a message may come during static destruction
+QtMessageHandler previousHandler = nullptr;
 
 void logMessage(QtMsgType type, const QMessageLogContext &context, const QString &message)
 {
     static const char *const levels[] = {"debug", "warning", "critical", "fatal", "info"};
-    const QString line = QDateTime::currentDateTime().toString(Qt::ISODateWithMs) + QLatin1Char(' ')
-        + QLatin1String(levels[type]) + QLatin1Char(' ') + QString(message).replace(QLatin1Char('\n'), QLatin1Char(' '))
-        + QLatin1Char('\n');
-    {
-        const QMutexLocker lock(&messageLog->mutex);
-        if (messageLog->file.isOpen()) {
-            if (messageLog->file.size() > kMaxLogBytes) {
-                const QString old = messageLog->file.fileName() + QStringLiteral(".old");
-                messageLog->file.close();
-                QFile::remove(old);
-                messageLog->file.rename(old);
-                openMessageLog(*messageLog);
-            }
-            messageLog->file.write(line.toUtf8());
-            messageLog->file.flush(); // a crash is what the log is for
-        }
-    }
-    if (messageLog->previous) {
-        messageLog->previous(type, context, message);
+    messageLog->append(QDateTime::currentDateTime().toString(Qt::ISODateWithMs) + QStringLiteral(" [")
+                       + QString::number(QCoreApplication::applicationPid()) + QStringLiteral("] ")
+                       + QLatin1String(levels[type]) + QLatin1Char(' ')
+                       + QString(message).replace(QLatin1Char('\n'), QLatin1Char(' ')) + QLatin1Char('\n'));
+    if (previousHandler) {
+        previousHandler(type, context, message);
         return;
     }
     // Qt's own handler is private API: its stderr line, and its abort for qFatal, are redone here.
@@ -129,22 +104,18 @@ void logMessage(QtMsgType type, const QMessageLogContext &context, const QString
 
 void installMessageLog()
 {
-    // GenericStateLocation is Qt 6.7+; the project minimum is 6.5.
-#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
-    const QString state = QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation);
-#else
-    const QString state = qEnvironmentVariable("XDG_STATE_HOME", QDir::homePath() + QStringLiteral("/.local/state"));
-#endif
-    const QString directory = state + QStringLiteral("/noteAppC");
-    if (!QDir().mkpath(directory))
+    const QString directory = noteAppC::appDir(noteAppC::XDGroot::State);
+    if (directory.isEmpty() || !noteAppC::ensurePrivateDir(directory))
         return;
-    const QString path = directory + QStringLiteral("/notolith.log");
-    QFile::remove(path + QStringLiteral(".old"));
-    QFile::rename(path, path + QStringLiteral(".old"));
-    messageLog = new MessageLog;
-    messageLog->file.setFileName(path);
-    openMessageLog(*messageLog);
-    messageLog->previous = qInstallMessageHandler(logMessage);
+    // The lock goes in the runtime directory, which is gone with the session; without one, beside the log.
+    const QString runtime = noteAppC::appDir(noteAppC::XDGroot::Runtime);
+    if (!runtime.isEmpty())
+        noteAppC::ensurePrivateDir(runtime);
+    const QString lockPath = (runtime.isEmpty() ? directory : runtime) + QStringLiteral("/notolith.log.lock");
+    messageLog = new noteAppC::MessageLog(directory + QStringLiteral("/notolith.log"), lockPath);
+    previousHandler = qInstallMessageHandler(logMessage);
+    for (const QString &line : std::as_const(migrationLines))
+        qInfo().noquote() << line;
 }
 
 struct Options {
@@ -179,6 +150,8 @@ bool answeredWithoutGUI(int argc, char *argv[])
 {
     QCoreApplication core(argc, argv);
     setApplicationNames();
+    // Before anything reads the settings: a build from before the XDG layout kept its files elsewhere.
+    noteAppC::migrateStorage(&migrationLines);
     Options options;
     if (!options.parser.parse(core.arguments()))
         return false;
