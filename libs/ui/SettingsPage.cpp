@@ -41,6 +41,9 @@
 #include "BulletGlyphs.h"
 #include "FormatColours.h"
 #include "Parser.h"
+#ifdef NOTEAPPC_HAVE_NETWORK
+#include "RemoteImages.h"
+#endif
 #include "Hotkeys.h"
 #include "MediaPlayback.h"
 #include "Scheme.h"
@@ -791,6 +794,20 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Let a reference block (```reference with a link: of http or https) download the file "
                    "it shows, and let an icon given as a link load it. Off, a reference "
                    "block shows a notice and a link, an icon is blank, and nothing is sent."));
+    {
+        // Remote images ask first (docs/OFFLINE.md): this row is only the list of origins "Always load from" kept.
+        auto *forget = new QPushButton(tr("Clear list"));
+        forget->setObjectName(QStringLiteral("settingsRemoteImagesClear"));
+        forget->setEnabled(remoteimage::RemoteImages::instance().allowedCount() > 0);
+        connect(forget, &QPushButton::clicked, this, [forget] {
+            remoteimage::RemoteImages::instance().clearAllowlist();
+            forget->setEnabled(false);
+        });
+        addRow(layout, {}, tr("Remote images"),
+               tr("An image in a note given as an https link is loaded when you click it. Sites you chose "
+                  "\"Always load from\" load without a click; this forgets them."),
+               forget, {});
+    }
 #endif
     addComboRow(layout, QStringLiteral("editor.listNumberStyle"), tr("Numbered lists"),
                 tr("Draw nested ordered items as written (1. 2.) or hierarchically (1.1. 1.2. "

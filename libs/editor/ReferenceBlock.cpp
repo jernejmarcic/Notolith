@@ -34,6 +34,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include "RemoteImagePolicy.h"
 #endif
 #include <QRegularExpression>
 #include <QThread>
@@ -103,48 +104,12 @@ void rememberRemote(const QString &key, RemoteCopy copy)
     copies.insert(key, std::move(copy));
 }
 
-/// An address that is not the internet: this machine, its network, link-local
-/// (cloud metadata is 169.254.169.254), private, unique-local, shared (CGNAT),
-/// multicast, unspecified. A note must not make the machine ask them.
-bool isInternalV4(quint32 v4)
-{
-    // Qt's isSiteLocal/isGlobal know no private IPv4: the ranges are spelled out
-    const auto in = [v4](quint32 net, int bits) { return (v4 >> (32 - bits)) == (net >> (32 - bits)); };
-    return in(0x00000000, 8) || in(0x0A000000, 8) || in(0x64400000, 10) || in(0x7F000000, 8)
-           || in(0xA9FE0000, 16) || in(0xAC100000, 12) || in(0xC0000000, 24) || in(0xC0A80000, 16)
-           || in(0xC6120000, 15) || v4 >= 0xE0000000; // multicast, reserved, broadcast
-}
-
+/// The shared check (libs/remoteimage/RemoteImagePolicy.h), apart from the tests' one allowed address.
 bool isInternalAddress(const QHostAddress &address)
 {
     if (!gAllowedAddress.isEmpty() && gAllowedAddress.split(QLatin1Char(',')).contains(address.toString()))
         return false;
-    bool isV4 = false;
-    const quint32 v4 = address.toIPv4Address(&isV4); // also an IPv4-mapped IPv6 address
-    if (isV4)
-        return isInternalV4(v4);
-    // IPv4 carried inside IPv6 reaches the same hosts: ::a.b.c.d (compatible),
-    // 64:ff9b::a.b.c.d (NAT64 on a network that has a gateway) and 2002:a.b:c.d:: (6to4)
-    const Q_IPV6ADDR six = address.toIPv6Address();
-    const auto low = [&six] {
-        return (quint32(six[12]) << 24) | (quint32(six[13]) << 16) | (quint32(six[14]) << 8) | quint32(six[15]);
-    };
-    bool zeros = true;
-    for (int n = 0; n < 12; ++n)
-        zeros = zeros && six[n] == 0;
-    static const uchar nat64[12] = {0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0};
-    if ((zeros && address.protocol() == QAbstractSocket::IPv6Protocol && low() > 1)
-        || std::equal(nat64, nat64 + 12, six.c)) {
-        if (isInternalV4(low()))
-            return true;
-    }
-    if (six[0] == 0x20 && six[1] == 0x02) {
-        const quint32 embedded = (quint32(six[2]) << 24) | (quint32(six[3]) << 16) | (quint32(six[4]) << 8) | quint32(six[5]);
-        if (isInternalV4(embedded))
-            return true;
-    }
-    return address.isNull() || !address.isGlobal() || address.isLoopback() || address.isLinkLocal()
-           || address.isSiteLocal() || address.isUniqueLocalUnicast() || address.isMulticast();
+    return remoteimage::isInternalAddress(address);
 }
 
 /// The address a hosting site's page for a file is a view of: GitHub's

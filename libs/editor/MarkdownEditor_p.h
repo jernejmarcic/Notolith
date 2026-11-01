@@ -197,6 +197,11 @@ struct MarkdownEditor::EmbedCell {
     QString openPath;  ///< what a click opens - the resolved file, or a note target
     bool isNote = false; ///< opens through linkActivated rather than QDesktopServices
     QString cacheKey; ///< a note's card, until its drawing lands in this m_fileEmbedCache entry
+#ifdef NOTEAPPC_HAVE_NETWORK
+    QString remoteURL;    ///< set on the placeholder of a remote image (RemoteImageBlock.cpp)
+    QString remoteNotice; ///< what the placeholder says besides the host
+    bool remoteCanLoad = false;
+#endif
 };
 
 /// One cell of a rendered table.
@@ -295,6 +300,11 @@ struct MarkdownEditor::BlockExtras {
     bool isFileCard = false;
     QString fileCardPath;
     QString fileCardLabel;
+#ifdef NOTEAPPC_HAVE_NETWORK
+    QString remoteURL;    ///< set when the card is a remote image's placeholder (RemoteImageBlock.cpp)
+    QString remoteNotice; ///< what it says besides the host
+    bool remoteCanLoad = false;
+#endif
     QString fileCardSize;
     QRectF fileCardRect; ///< block-local; the whole card is the click target
     QPixmap fileCardCover; ///< an EPUB's cover, when it has one and it has been read
@@ -1039,6 +1049,11 @@ struct MarkdownEditor::Private {
 #ifdef NOTEAPPC_HAVE_NETWORK
     QNetworkAccessManager *m_referenceNet = nullptr; ///< made with the first fetch
     bool m_remoteReferences = false;
+    // Remote images (RemoteImageBlock.cpp), by normalised URL.
+    QHash<QString, QPixmap> m_remoteImages; ///< decoded; shown only for an URL asked for or an allowed origin
+    QHash<QString, QString> m_remoteErrors; ///< why it is not there
+    QSet<QString> m_remoteSession;          ///< clicked in this note; forgotten when another note is opened
+    bool m_remoteConnected = false;
 #endif
     std::function<QString()> m_vaultRoot;
     QSet<QString> m_referenceWatched; ///< the paths already handed to the watcher

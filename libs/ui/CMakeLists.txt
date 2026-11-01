@@ -87,6 +87,7 @@ endif()
 
 if(NOTEAPPC_WITH_NETWORK)
     target_sources(noteAppC_ui PRIVATE DictClient.cpp DictClient.h)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_remoteimage)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_NETWORK)
 endif()
 

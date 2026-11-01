@@ -166,6 +166,8 @@ struct CalloutSpan {
 struct EmbedSpan {
     Range range;
     QString target;
+    /// The target as written, not percent-decoded: what a URL is asked for by. `target` is for a vault path.
+    QString raw;
     QString subpath;
     QString alias;
     int width = 0;  ///< 0 means "as wide as it wants, capped by the column"
