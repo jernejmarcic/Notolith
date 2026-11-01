@@ -137,18 +137,36 @@ QByteArray EpubArchive::read(const QString &entryName, QString *error) const
             archive_read_data_skip(stream.handle());
             continue;
         }
+        // Inflated in pieces: the size in the header is never what decides the allocation.
         QByteArray bytes;
-        const qint64 size = archive_entry_size(entry);
-        if (size > 0)
-            bytes.resize(int(size));
-        qint64 got = 0;
-        while (got < bytes.size()) {
-            const auto n = archive_read_data(stream.handle(), bytes.data() + got, size_t(bytes.size() - got));
+        constexpr qint64 chunk = 64 * 1024;
+        for (;;) {
+            const qint64 room = qMin(chunk, m_entryLimit + 1 - bytes.size()); // one past the limit shows an overrun
+            const qsizetype at = bytes.size();
+            bytes.resize(at + room);
+            const auto n = archive_read_data(stream.handle(), bytes.data() + at, size_t(room));
+            bytes.resize(at + qMax<qint64>(n, 0));
             if (n <= 0)
-                break;
-            got += n;
+                break; // the end, or a damaged entry: what was inflated is kept, as before
+            if (bytes.size() > m_entryLimit) {
+                if (error)
+                    *error = QStringLiteral("%1 in %2 is larger than %3 MiB inflated, so it was not read")
+                                 .arg(entryName, m_path).arg(m_entryLimit >> 20);
+                return {};
+            }
         }
-        bytes.resize(int(got));
+        QMutexLocker lock(&m_budget->mutex);
+        m_budget->sizes.insert(entryName, bytes.size());
+        qint64 total = 0;
+        for (const qint64 each : std::as_const(m_budget->sizes))
+            total += each;
+        if (total > m_bookLimit) {
+            m_budget->sizes.remove(entryName);
+            if (error)
+                *error = QStringLiteral("%1 is larger than %2 MiB inflated, so %3 was not read")
+                             .arg(m_path).arg(m_bookLimit >> 20).arg(entryName);
+            return {};
+        }
         return bytes;
     }
     if (error)

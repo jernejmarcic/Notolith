@@ -7,6 +7,10 @@
 #include <QString>
 #include <QStringList>
 
+#include <QHash>
+#include <QMutex>
+
+#include <memory>
 #include <optional>
 
 namespace noteAppC {
@@ -47,7 +51,22 @@ public:
     /// permissions changed, between open() and this call).
     QByteArray read(const QString &entryName, QString *error = nullptr) const;
 
+    /// What one entry may inflate to, and what all the entries of one book read so far may add up to
+    /// (each entry counted once, however often it is read). A zip says how big an entry is, and may lie:
+    /// read() inflates in pieces and stops at the limit, whatever the header says.
+    static constexpr qint64 kMaxEntryBytes = qint64(64) << 20;
+    static constexpr qint64 kMaxBookBytes = qint64(512) << 20;
+    /// Lower limits, for a test.
+    void setLimits(qint64 entryBytes, qint64 bookBytes) { m_entryLimit = entryBytes; m_bookLimit = bookBytes; }
+
 private:
+    struct Budget {
+        QMutex mutex;
+        QHash<QString, qint64> sizes; ///< entry name -> bytes it inflated to
+    };
+    std::shared_ptr<Budget> m_budget = std::make_shared<Budget>(); ///< shared by copies: one book
+    qint64 m_entryLimit = kMaxEntryBytes;
+    qint64 m_bookLimit = kMaxBookBytes;
     QString m_path;
     QStringList m_names;   // archive order
     QSet<QString> m_nameSet;

@@ -342,6 +342,39 @@ TEST(EpubArchiveTest, IndexesAndReadsEntries)
     EXPECT_EQ(css, QByteArrayLiteral("body { color: rgb(10, 20, 30); }"));
 }
 
+TEST(EpubArchiveTest, AnEntryThatInflatesPastTheLimitIsNotRead)
+{
+    // 65 MiB of zeros is a few dozen KiB in the zip: the size that matters is the inflated one.
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("big.epub"));
+    writeZip(path, {{QStringLiteral("small.txt"), QByteArray("fine")},
+                    {QStringLiteral("big.xhtml"), QByteArray((qint64(64) << 20) + 1, '\0')}});
+    EpubArchive archive;
+    QString error;
+    ASSERT_TRUE(archive.open(path, &error)) << error.toStdString();
+    EXPECT_EQ(archive.read(QStringLiteral("small.txt")), QByteArrayLiteral("fine"));
+    const QByteArray big = archive.read(QStringLiteral("big.xhtml"), &error);
+    EXPECT_TRUE(big.isEmpty());
+    EXPECT_TRUE(error.contains(QStringLiteral("64 MiB"))) << error.toStdString();
+}
+
+TEST(EpubArchiveTest, TheEntriesOfOneBookAddUpToALimit)
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("many.epub"));
+    const QByteArray mebibyte(1 << 20, 'x');
+    writeZip(path, {{QStringLiteral("a"), mebibyte}, {QStringLiteral("b"), mebibyte}, {QStringLiteral("c"), QByteArray("s")}});
+    EpubArchive archive;
+    QString error;
+    ASSERT_TRUE(archive.open(path, &error)) << error.toStdString();
+    archive.setLimits(1 << 20, (1 << 20) + (1 << 19)); // an entry may be 1 MiB, the book 1.5
+    EXPECT_EQ(archive.read(QStringLiteral("a")).size(), 1 << 20);
+    EXPECT_EQ(archive.read(QStringLiteral("a")).size(), 1 << 20) << "reading an entry again adds nothing";
+    EXPECT_TRUE(archive.read(QStringLiteral("b"), &error).isEmpty());
+    EXPECT_TRUE(error.contains(QStringLiteral("MiB"))) << error.toStdString();
+    EXPECT_EQ(archive.read(QStringLiteral("c")), QByteArrayLiteral("s")) << "a small entry still fits";
+}
+
 TEST(EpubArchiveTest, RefusesANonZipFile)
 {
     QTemporaryDir dir;
