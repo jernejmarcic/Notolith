@@ -273,6 +273,8 @@ void BaseView::onHeaderSortChanged(int column, Qt::SortOrder order)
     const std::optional<QString> rewritten = BaseFile::rewriteViewSort(m_yamlText, m_currentView, propertyReference, direction);
     if (!rewritten)
         return; // this .base file's shape can't be edited safely; the on-screen sort still applies
+    if (QFileInfo(m_path).isSymLink())
+        return; // a link is not written through, so the on-screen sort is all there is
     QSaveFile file(m_path);
     if (!file.open(QIODevice::WriteOnly))
         return;

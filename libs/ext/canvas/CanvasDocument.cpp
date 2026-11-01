@@ -4,6 +4,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
+#include <QFileInfo>
 #include <QSaveFile>
 #include <QUuid>
 
@@ -290,6 +291,11 @@ bool CanvasDocument::save(const QString &path, QString *error)
     if (target.isEmpty()) {
         if (error)
             *error = QStringLiteral("no path to save to");
+        return false;
+    }
+    if (QFileInfo(target).isSymLink()) { // QSaveFile would write the link's target
+        if (error)
+            *error = QStringLiteral("%1 is a link, so it was not written").arg(target);
         return false;
     }
     QSaveFile file(target);
