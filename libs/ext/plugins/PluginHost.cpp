@@ -100,11 +100,17 @@ QString PluginHost::hostBinaryPath()
     if (const QString overridden = qEnvironmentVariable("NOTEAPPC_PLUGIN_HOST"); !overridden.isEmpty())
         return overridden;
 #endif
-    const QString sibling =
-        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("noteAppC-plugin-host"));
-    if (QFileInfo::exists(sibling))
-        return sibling;
-    return QStandardPaths::findExecutable(QStringLiteral("noteAppC-plugin-host"));
+    // The same three places as the image decoder: beside the app (a build tree), the installed libexec directory
+    // relative to it, and the one compiled in. No PATH search: a binary this app runs plugins under is never
+    // taken from wherever PATH happens to point.
+    const QString name = QStringLiteral("notolith-plugin-host");
+    const QDir app(QCoreApplication::applicationDirPath());
+    for (const QString &candidate : {app.filePath(name), app.filePath(QStringLiteral("../libexec/notolith/") + name),
+                                     QStringLiteral(NOTEAPPC_LIBEXECDIR "/") + name}) {
+        if (QFileInfo(candidate).isExecutable())
+            return QFileInfo(candidate).canonicalFilePath();
+    }
+    return {};
 }
 
 QStringList PluginHost::sandboxArguments(QString *program) const
@@ -113,15 +119,15 @@ QStringList PluginHost::sandboxArguments(QString *program) const
     const QString pluginDir = m_manifest.directory();
     const QString bwrap = QStandardPaths::findExecutable(QStringLiteral("bwrap"));
 
-    if (bwrap.isEmpty()) {
-        // No bubblewrap on this system: the plugin does not run at all.
+    if (bwrap.isEmpty() || hostBinary.isEmpty()) {
+        // No bubblewrap on this system, or no plugin host binary: the plugin does not run at all.
         // Running it bare would hand third-party code the whole home
         // directory; ensureStarted says why instead.
         program->clear();
         return {};
     }
 
-    // An installed noteAppC-plugin-host lives under /usr and is already
+    // An installed notolith-plugin-host lives under /usr and is already
     // covered by the /usr bind below; a build-tree one (every dev/test run,
     // since builds go under /tmp) does not, so its own
     // directory is bound read-only too - the same reasoning as the plugin's
@@ -227,7 +233,9 @@ void PluginHost::ensureStarted()
     QString program;
     const QStringList arguments = sandboxArguments(&program);
     if (program.isEmpty()) {
-        m_startError = QStringLiteral("plugins run only inside bubblewrap's sandbox; install bubblewrap");
+        m_startError = hostBinaryPath().isEmpty()
+            ? QStringLiteral("the plugin host (notolith-plugin-host) is not installed")
+            : QStringLiteral("plugins run only inside bubblewrap's sandbox; install bubblewrap");
         if (m_callbacks.log)
             m_callbacks.log(m_manifest.id(), m_startError);
         m_process.reset();

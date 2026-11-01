@@ -1,4 +1,4 @@
-// noteAppC-plugin-host --plugin <dir>
+// notolith-plugin-host --plugin <dir>
 //
 // One process per enabled plugin (docs/PLUGINS.md, Tier 2), spawned by
 // libs/ext/plugins/PluginHost.cpp, usually under bubblewrap. Everything this
@@ -233,7 +233,7 @@ int main(int argc, char **argv)
             pluginDirectory = QString::fromLocal8Bit(argv[++i]);
     }
     if (pluginDirectory.isEmpty()) {
-        std::fprintf(stderr, "usage: noteAppC-plugin-host --plugin <directory>\n");
+        std::fprintf(stderr, "usage: notolith-plugin-host --plugin <directory>\n");
         return 2;
     }
 
@@ -259,7 +259,7 @@ int main(int argc, char **argv)
     // error message on the settings page than the real one.
     PluginMessage initRequest;
     if (!io.readMessage(&initRequest) || initRequest.method != QLatin1String("init")) {
-        std::fprintf(stderr, "noteAppC-plugin-host: expected an init request first\n");
+        std::fprintf(stderr, "notolith-plugin-host: expected an init request first\n");
         return 1;
     }
     if (!engine) {

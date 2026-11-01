@@ -1,5 +1,5 @@
 // Runtime plugin host (docs/PLUGINS.md, Tier 2): protocol framing on its
-// own, then a real noteAppC-plugin-host process loading the word-stats
+// own, then a real notolith-plugin-host process loading the word-stats
 // example/fixture plugin end to end - permission enforcement, a hang killed
 // by the per-request timeout and restarted, a crash that does not take this
 // test process down, the sandbox actually denying a file outside the
@@ -265,7 +265,7 @@ TEST(PluginHeaderOnlyWrapper, DispatchesCommandsAndCodeBlocksThroughTheCABI)
     EXPECT_EQ(table->render_code_block("no-such-language", "x", 100, 1.0f, &missing), 1);
 }
 
-// --- end to end through a real noteAppC-plugin-host process ----------------
+// --- end to end through a real notolith-plugin-host process ----------------
 
 class PluginHostTest : public ::testing::Test {
 protected:

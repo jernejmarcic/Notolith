@@ -64,7 +64,7 @@ scans the module directory on a thread-pool thread after the first window is pai
 loads a module the first time it is used: a file of its suffix opens, or one of its commands runs. Indexing never loads
 one.
 
-- **Where modules live.** `<libdir>/noteAppC/modules/`, that is `/usr/lib/noteAppC/modules/` on Arch. It holds
+- **Where modules live.** `<libdir>/notolith/modules/`, that is `/usr/lib/notolith/modules/` on Arch. It holds
   `libnotolith-inkcore.so`, `notolith-ink.so` and `notolith-hwfont.so`; the two modules find the core library next to
   themselves (RPATH `$ORIGIN`).
 - **`NOTEAPPC_MODULE_DIRS`.** Only in a build configured with `-DNOTEAPPC_DEV_ENV_OVERRIDES=ON` (the default for test builds, off in release): when set (colon-separated directories), it replaces that

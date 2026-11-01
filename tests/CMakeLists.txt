@@ -592,7 +592,7 @@ if(TARGET noteAppC_pdfview)
 endif()
 
 # The runtime plugin host (docs/PLUGINS.md, Tier 2) - libs/ext/plugins plus a
-# real noteAppC-plugin-host process and the word-stats example/fixture
+# real notolith-plugin-host process and the word-stats example/fixture
 # plugin, built by the tree only when NOTEAPPC_WITH_PLUGINS is on.
 if(TARGET noteAppC_plugins)
     add_executable(test_plugins_host test_plugins_host.cpp)

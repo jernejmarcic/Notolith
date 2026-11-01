@@ -265,7 +265,7 @@ dependency.
 **Modules as Qt static plugins (`NOTEAPPC_STATIC_MODULES`).** Android loads only
 native libraries packaged in the APK, so the loadable modules of
 [PLUGINS.md](PLUGINS.md) "Tier 1b" cannot be `dlopen`'ed from
-`<libdir>/noteAppC/modules` there. The CMake option `NOTEAPPC_STATIC_MODULES`
+`<libdir>/notolith/modules` there. The CMake option `NOTEAPPC_STATIC_MODULES`
 (default `OFF`; `ON` when `ANDROID`) builds a module as a static library
 instead (`noteappc_add_static_module` in `libs/modules/CMakeLists.txt`: its one
 source compiled with `QT_STATICPLUGIN`, `notolith-ink-static`,

@@ -44,4 +44,4 @@ set_target_properties(notolith-share PROPERTIES
     BUILD_WITH_INSTALL_RPATH ON)
 target_include_directories(notolith-share PRIVATE ${CMAKE_CURRENT_BINARY_DIR}) # manifest.json for Q_PLUGIN_METADATA
 target_link_libraries(notolith-share PRIVATE noteAppC_shareengine noteAppC_modules_headers)
-install(TARGETS notolith-share LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+install(TARGETS notolith-share LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/notolith/modules)

@@ -311,7 +311,7 @@ TEST(ModuleRegistryTest, DefaultDirectoriesAreTheOverrideOrTheLibdirAlone)
     EnvGuard unset("NOTEAPPC_MODULE_DIRS", QByteArray());
     const QStringList dirs = ModuleRegistry::defaultDirectories();
     ASSERT_EQ(dirs.size(), 1);
-    EXPECT_TRUE(dirs.first().endsWith(QStringLiteral("/noteAppC/modules")));
+    EXPECT_TRUE(dirs.first().endsWith(QStringLiteral("/notolith/modules")));
     EXPECT_FALSE(dirs.first().startsWith(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)))
         << "$XDG_DATA_HOME is not searched";
 }

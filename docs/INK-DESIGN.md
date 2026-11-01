@@ -155,7 +155,7 @@ paint, and a pipe cannot do that inside the 10 ms rule.
 
 ### Discovery and loading
 
-1. **Directories.** `<libdir>/noteAppC/modules/` only. The environment
+1. **Directories.** `<libdir>/notolith/modules/` only. The environment
    variable `NOTEAPPC_MODULE_DIRS` replaces it (used by tests; only in `-DNOTEAPPC_DEV_ENV_OVERRIDES=ON` builds). A vault
    switch does not rescan: the scan is once per window (the registry is a `MainWindow` member), by design. On Android
    the modules are linked in as Qt static plugins (`Q_IMPORT_PLUGIN`) and
@@ -213,7 +213,7 @@ That is a separate decision.
 **Packaging.** The Arch PKGBUILD grows split packages: `notolith`,
 `notolith-ink` (core library and ink module) and `notolith-hwfont`, which
 depends on `notolith-ink`. The plain CMake install puts modules in
-`<libdir>/noteAppC/modules/`. A module object is shared by every window of
+`<libdir>/notolith/modules/`. A module object is shared by every window of
 a process and `attach()` runs once per registry, so a real module is
 stateless or keeps its state per host.
 

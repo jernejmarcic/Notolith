@@ -35,7 +35,7 @@ target_include_directories(notolith-pdfpage
     PRIVATE ${CMAKE_BINARY_DIR}/generated
             $<TARGET_PROPERTY:noteAppC_render,INTERFACE_INCLUDE_DIRECTORIES>) # PdfPageFace.h, headers only
 target_link_libraries(notolith-pdfpage PUBLIC Qt6::Gui PRIVATE PkgConfig::POPPLER_QT6)
-install(TARGETS notolith-pdfpage LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+install(TARGETS notolith-pdfpage LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/notolith/modules)
 
 # The tab as a static library the module links; test_pdfview and the bench link it too, without dlopen.
 # Headers only from the host's static libraries: a second copy of Settings, or of PdfPage, inside the
@@ -78,4 +78,4 @@ set_target_properties(notolith-pdfview PROPERTIES
     BUILD_WITH_INSTALL_RPATH ON)
 target_include_directories(notolith-pdfview PRIVATE ${CMAKE_CURRENT_BINARY_DIR}) # manifest.json for Q_PLUGIN_METADATA
 target_link_libraries(notolith-pdfview PRIVATE noteAppC_pdfview)
-install(TARGETS notolith-pdfview LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+install(TARGETS notolith-pdfview LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/notolith/modules)

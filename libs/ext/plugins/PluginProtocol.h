@@ -8,7 +8,7 @@
 
 namespace noteAppC {
 
-/// The wire format between the app and one `noteAppC-plugin-host` process
+/// The wire format between the app and one `notolith-plugin-host` process
 /// (docs/PLUGINS.md, Tier 2): a 4-byte big-endian length prefix followed by
 /// that many bytes of compact UTF-8 JSON. Big-endian so a frame's first
 /// bytes are legible in a hex dump without remembering the machine's

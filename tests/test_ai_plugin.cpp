@@ -10,7 +10,7 @@
 //    the event loop - otherwise the in-process fake server, which needs
 //    that same loop to accept the connection, would never answer.
 // 2. AiPluginEndToEndTest loads the real libai.so inside a real
-//    noteAppC-plugin-host process (the same shape as
+//    notolith-plugin-host process (the same shape as
 //    tests/test_plugins_host.cpp's word-stats suite), proving what only a
 //    real sandboxed process can prove: bwrap's network namespace actually
 //    gates the HTTP call, PluginHost forwards the declared env var through
