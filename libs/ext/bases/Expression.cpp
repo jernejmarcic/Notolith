@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <optional>
 
@@ -571,10 +572,21 @@ QString titleCase(const QString &s)
     return out;
 }
 
+/// A number out of an expression as an int within [low, high]; NaN is 0. A plain int(number) is
+/// undefined for a number that does not fit, and a formula can write any number.
+int clampedInt(double value, int low, int high)
+{
+    return std::isnan(value) ? std::clamp(0, low, high) : int(std::clamp(value, double(low), double(high)));
+}
+
+/// The longest string repeat() makes: a formula in a .base file is a vault's, and "x".repeat(1e9) is not a filter.
+constexpr qsizetype kMaxRepeatedLength = 1 << 22;
+
 /// Negative indices count from the end, the way `slice()` is documented to.
 qsizetype normaliseIndex(double raw, qsizetype length)
 {
-    qsizetype i = qsizetype(raw);
+    // The cast of a number too big for the type (or NaN) is undefined, so the range is applied first.
+    qsizetype i = std::isnan(raw) ? 0 : qsizetype(std::clamp(raw, -1e15, 1e15));
     if (i < 0) i += length;
     return std::clamp<qsizetype>(i, 0, length);
 }
@@ -1049,8 +1061,13 @@ private:
             std::reverse(r.begin(), r.end());
             return Value::ofString(r);
         }
-        if (name == QLatin1String("repeat"))
-            return needArgs(args, 1, name) ? Value::ofString(text.repeated(int(args[0].number))) : Value::empty();
+        if (name == QLatin1String("repeat")) {
+            if (!needArgs(args, 1, name)) return Value::empty();
+            const int times = clampedInt(args[0].number, 0, std::numeric_limits<int>::max());
+            if (!text.isEmpty() && times > kMaxRepeatedLength / text.size())
+                return fail(QStringLiteral("repeat() would make a string over %1 characters").arg(kMaxRepeatedLength));
+            return Value::ofString(text.repeated(times));
+        }
         if (name == QLatin1String("replace")) {
             if (!needArgs(args, 2, name)) return Value::empty();
             QString r = text;
@@ -1075,12 +1092,12 @@ private:
         if (name == QLatin1String("ceil")) return Value::ofNumber(std::ceil(number));
         if (name == QLatin1String("floor")) return Value::ofNumber(std::floor(number));
         if (name == QLatin1String("round")) {
-            const int digits = args.isEmpty() ? 0 : int(args[0].number);
+            const int digits = args.isEmpty() ? 0 : clampedInt(args[0].number, -20, 20);
             const double factor = std::pow(10, digits);
             return Value::ofNumber(std::round(number * factor) / factor);
         }
         if (name == QLatin1String("toFixed")) {
-            const int precision = needArgs(args, 1, name) ? int(args[0].number) : 0;
+            const int precision = needArgs(args, 1, name) ? clampedInt(args[0].number, 0, 100) : 0; // JavaScript's range
             return Value::ofString(QString::number(number, 'f', precision));
         }
         return fail(QStringLiteral("no function 'number.%1'").arg(name));

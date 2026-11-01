@@ -77,6 +77,23 @@ TEST(ExpressionTest, Literals)
     EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2.5)"), row).number, 2.5);
 }
 
+// A number a formula writes is any double: the casts to int and to an index were undefined for one that does not
+// fit (found by tools/fuzz), and repeat() made whatever length it was asked for.
+TEST(ExpressionTest, HugeNumbersAreClampedNotCast)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    EXPECT_EQ(evalText(QStringLiteral("(2.5).toFixed(1000000000000000000)"), row).text.size(), 102); // "2." and 100 digits
+    EXPECT_EQ(evalText(QStringLiteral("(2.5).toFixed(-5)"), row).text, QStringLiteral("3"));
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2.567).round(1000000000000000000)"), row).number, 2.567);
+    EXPECT_EQ(evalText(QStringLiteral("\"abc\".slice(1000000000000000000000000000000)"), row).text, QString());
+    EXPECT_EQ(evalText(QStringLiteral("\"abc\".slice(0 - 1000000000000000000000000000000, 2)"), row).text, QStringLiteral("ab"));
+    EXPECT_EQ(evalText(QStringLiteral("\"ab\".repeat(3)"), row).text, QStringLiteral("ababab"));
+    QString error;
+    EXPECT_TRUE(evalText(QStringLiteral("\"abc\".repeat(1000000000)"), row, nullptr, &error).type == Value::Type::Empty);
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(evalText(QStringLiteral("\"abc\".repeat(-5)"), row).text, QString());
+}
+
 TEST(ExpressionTest, FilePropertyAccess)
 {
     Row row = makeRow(QStringLiteral("Home"), QStringLiteral("Projects"));
