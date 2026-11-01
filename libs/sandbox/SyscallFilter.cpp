@@ -79,7 +79,7 @@ static int compileSyscallFilter()
     // record of bugs, and AF_BLUETOOTH is the host's radio. Docker and Flatpak deny the same set.
     // EAFNOSUPPORT, "this kernel has no such family": what a program that probes for one expects.
     for (const int family : {AF_VSOCK, AF_ALG, AF_KEY, AF_PACKET, AF_RDS, AF_TIPC, AF_XDP, AF_BLUETOOTH})
-        ok = ok && seccomp_rule_add(filter, SCMP_ACT_ERRNO(EAFNOSUPPORT), SCMP_SYS(socket), 1, SCMP_A0(SCMP_CMP_EQ, family)) == 0;
+        ok = ok && seccomp_rule_add(filter, SCMP_ACT_ERRNO(EAFNOSUPPORT), SCMP_SYS(socket), 1, SCMP_A0(SCMP_CMP_EQ, static_cast<scmp_datum_t>(family))) == 0;
     // Netlink is the exception that proves a use: getifaddrs(3) asks the kernel for the interface list by
     // NETLINK_ROUTE (protocol 0), and libzmq, which every Jupyter kernel runs on, aborts when that socket cannot
     // be made. So protocol 0 stays (read-only in effect: the capability to change anything is dropped, and the
