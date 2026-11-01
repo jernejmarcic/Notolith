@@ -9,8 +9,8 @@ CMake file given; none of it is copied into this repository.
 
 | component | licence | pinned in | used for |
 |---|---|---|---|
-| md4qt 5.1.4 (Igor Mironchik) | MIT | `CMakeLists.txt` | Markdown parser |
-| MicroTeX (Nano Michael), commit 0e3707f | MIT | `CMakeLists.txt` | LaTeX maths rendering |
+| md4qt 5.1.4 (Igor Mironchik) | MIT | `CMakeLists.txt` | Markdown parser; patched at configure time by `cmake/patch-md4qt.sh` |
+| MicroTeX (Nano Michael), commit 0e3707f | MIT | `CMakeLists.txt` | LaTeX maths rendering; patched at configure time by `cmake/patch-microtex.sh` |
 | MicroTeX fonts, compiled into the binary | Knuth licence, dsrom licence, SIL OFL 1.1 | MicroTeX `res/fonts` | maths glyphs |
 | tinyxml2 10.0.0 (Lee Thomason) | zlib | `CMakeLists.txt` | MicroTeX's XML reader |
 | yaml-cpp 0.8.0 (Jesse Beder) | MIT | `CMakeLists.txt` | only when no system yaml-cpp is found |
@@ -20,7 +20,7 @@ CMake file given; none of it is copied into this repository.
 
 | component | licence | where |
 |---|---|---|
-| Lucide icons | ISC | `libs/theme/icons/` (notice in `libs/theme/icons/LICENSE`) |
+| Lucide icons | ISC | `libs/theme/icons/` (notice in `libs/theme/icons/LICENSE`; the app icon `noteAppC.svg` is the project's own, GPL-3.0-or-later) |
 | Code ported from Rnote (the Rnote contributors) | GPL-3.0-or-later | `libs/ext/ink/core/`; each ported function names its Rnote source file |
 | Peer-to-peer link layer (the author's Hearth project) | GPL-3.0-or-later | `libs/ext/link/` |
 | Demo vault assets | per file, see `docs/DEMO-ASSETS.md` | `demo/Embeds/assets/` |
@@ -35,15 +35,60 @@ Built only with their CMake options (`docs/OFFLINE.md`).
 - Note sharing (`NOTEAPPC_WITH_SHARE`) links libdatachannel (MPL-2.0),
   libsodium, avahi, protobuf and nlohmann_json from the system.
 
-Libraries Notolith links from the system (Qt, hunspell, libgit2, poppler-qt6 and
-the rest) are not part of this repository or of the packages and keep their own
-licences.
+## System libraries
+
+The runtime dependencies of the Arch packages (`depends` in
+`packaging/arch/PKGBUILD`). They are not part of this repository or of the
+packages; pacman installs them, and each keeps its own licence. Licences are
+as `pacman -Qi` reports them (checked 2026-11-01).
+
+| library | licence |
+|---|---|
+| Qt 6 (`qt6-base`, `qt6-svg`, `qt6-multimedia`) | GPL-3.0-only, LGPL-3.0-only, Qt commercial licence, Qt GPL exception 1.0 |
+| yaml-cpp | MIT |
+| hunspell | LGPL-2.1-or-later OR GPL-2.0-or-later OR MPL-1.1 |
+| KSyntaxHighlighting (`syntax-highlighting`) | MIT |
+| litehtml | BSD-3-Clause |
+| libgit2 | GPL-2.0-only with a linking exception |
+| libarchive | BSD-2-Clause, BSD-4-Clause-UC, and Apache-2.0 OR CC0-1.0 OR OpenSSL |
+| zeromq | MPL-2.0 |
+| libseccomp | LGPL-2.1-only |
+| bubblewrap | LGPL-2.1-or-later |
+| util-linux (`prlimit`) | BSD-2-Clause, BSD-3-Clause, BSD-4-Clause-UC, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-or-later, ISC, LGPL-2.1-or-later, public domain (varies by tool) |
+| abseil-cpp (`notolith-ink`) | Apache-2.0 |
+| poppler-qt6 (`notolith-pdfview`) | GPL-2.0-only, GPL-3.0-or-later, LGPL-2.0-or-later, LGPL-2.1-or-later, MIT |
+
+Libraries that only an optional build links (libdatachannel, libsodium, avahi,
+protobuf, nlohmann_json) are named under "Optional builds". All of them keep
+their own licences.
 
 ## Licence texts
 
-The MIT and Apache texts below are as shipped by each project. MicroTeX does
+The MIT, ISC and Apache texts below are as shipped by each project. MicroTeX does
 not say which licence covers which font file; the three texts are reproduced as
 it ships them. The SIL OFL names `eufb10`, `eufm10`, `msam10` and `msbm10`.
+
+### Lucide icons (ISC)
+
+```text
+ISC License
+
+Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part
+of Feather (MIT). All other copyright (c) for Lucide are held by Lucide
+Contributors 2022.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+```
 
 ### MicroTeX (MIT)
 
