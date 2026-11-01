@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Tests for libs/ext/publish/: privacy (the first correctness property, per
 // the task), link/anchor resolution, escaping, maths, attachments and the
 // incremental republish. Each test builds its own throwaway vault under a

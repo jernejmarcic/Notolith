@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Icon resolution: a Lucide id from the bundled resource, a local file named
 // by an absolute or file:// path, and a remote URL that must never block a
 // repaint even when nothing is cached yet.

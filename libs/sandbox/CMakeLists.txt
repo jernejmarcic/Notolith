@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # The syscall filter the bubblewrap sandboxes share (SyscallFilter.h) and the TeX/diagram command line (Bubblewrap.h).
 add_library(noteAppC_sandbox STATIC SyscallFilter.h SyscallFilter.cpp Bubblewrap.h Bubblewrap.cpp)
 target_include_directories(noteAppC_sandbox PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

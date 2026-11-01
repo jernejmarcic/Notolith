@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 /// ```mermaid fences, drawn by an external tool (MermaidBlock.h has the
 /// contract). Everything here runs off the UI thread except the closure
 /// that CodeBlockHook.cpp calls, which only reads the theme, takes two

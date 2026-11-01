@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # Encrypted notes (docs/ENCRYPTION.md), a Tier 1 module: `.mdlock` files
 # sealed with Argon2id and XChaCha20-Poly1305 through libsodium, decrypted
 # in memory only. Built with NOTEAPPC_WITH_ENCRYPTION on and libsodium found.

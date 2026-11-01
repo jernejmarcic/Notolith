@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // ```markmap fences, the pure part: libs/render/Markmap.cpp's tree (headings, lists, inline Markdown, the fold
 // comment, the options, the cap) and the SVG it draws (well-formed, folding, colours, wrapping). The editor's
 // renderer and the window's core plugin are test_markmap_block.cpp's.

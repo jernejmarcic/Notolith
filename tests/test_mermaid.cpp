@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // ```mermaid fences: MermaidBlock.cpp's renderer, driven with a fake `mmdr`
 // (a shell script that counts its runs in a file and writes a fixed SVG), on
 // its own and through the editor and the window's `render.mermaid` setting.

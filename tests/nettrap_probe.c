@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Makes one call that tests/nettrap.c must stop, or the AF_UNIX one it must let through (the argument names it).
 // Run under the trap: the first four exit 86, "unix" exits 0.
 #define _GNU_SOURCE

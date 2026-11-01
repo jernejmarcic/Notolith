@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # Pandoc export and import. pandoc is an optional runtime tool, never a build
 # dependency: this library only prepares a note's Markdown for it, builds its
 # argument lists and runs it as a QProcess. Always built; with the "pandoc"

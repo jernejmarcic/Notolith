@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // The pandoc core plugin's side of the window: its commands, the dialogs and the two jobs (export a note,
 // import a file). What the Markdown becomes, the argument lists and the process are libs/ext/pandoc's; this
 // file only asks the vault and the index what they know and shows the outcome.

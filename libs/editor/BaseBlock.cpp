@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 /// The ```` ```base ```` block (obsidian.md/help/bases, "Embed a base"): a
 /// fenced code block whose language is `base` shows its `.base` YAML as a
 /// table - one row per matching note, one column per the shown view's

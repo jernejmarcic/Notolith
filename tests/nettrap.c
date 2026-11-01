@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // An LD_PRELOAD library for the tests of the default build (tests/CMakeLists.txt): the process exits with status
 // 86, with a line and a backtrace on stderr, the moment it reaches for the network. The default build has no
 // networking (docs/OFFLINE.md), and the link-time checks cannot see a socket made by code that is loaded later or

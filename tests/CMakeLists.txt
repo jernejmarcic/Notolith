@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 find_package(GTest REQUIRED)
 
 add_executable(test_vault test_vault.cpp)
@@ -692,7 +692,7 @@ endif()
 # --version prints the version, the copyright line and the GPL notice (libs/ui/LicenseText.h).
 add_test(NAME cli_version COMMAND noteAppC --version)
 set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
-    "Notolith [0-9][^\n]*\nCopyright \\(C\\) 2026 Jernej\nNotolith comes with ABSOLUTELY NO WARRANTY\\. It is free software, and you are welcome to redistribute it under the terms of the GNU General Public License, version 3 or \\(at your option\\) any later version\\.")
+    "Notolith [0-9][^\n]*\nCopyright \\(C\\) 2026 Jernej Marčič\nNotolith comes with ABSOLUTELY NO WARRANTY\\. It is free software, and you are welcome to redistribute it under the terms of the GNU General Public License, version 3 or \\(at your option\\) any later version\\.")
 
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none
 # sees the modules installed on the machine (NOTEAPPC_MODULE_DIRS, below).

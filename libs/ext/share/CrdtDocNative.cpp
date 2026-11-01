@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // The Native CrdtDoc backend: a run-length RGA with Lamport timestamps, plain
 // C++ on Qt6::Core, no Rust. See docs/SHARE.md for the why and the limits.
 //

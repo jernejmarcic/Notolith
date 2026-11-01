@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Settings live in ~/.config, a vault only layers over them, and opening a
 // stray Markdown file must leave nothing behind.
 

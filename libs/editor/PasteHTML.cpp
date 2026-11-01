@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 /// Rich-text paste. QTextDocument::setHtml + toMarkdown(GitHub) does the real
 /// work and is already linked; what it gets wrong is patched here:
 ///  - <pre> comes out with a blank line between every line, so each <pre> is

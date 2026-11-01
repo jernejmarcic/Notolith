@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Where Notolith keeps its files: the XDG helper, the migration from the old noteAppC directories, and the
 // log file two vault processes share.
 

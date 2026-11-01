@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // The test suite's module: discovered by metadata, loaded only on first use.
 // Its static initializer leaves a mark, so a test can prove that reading the
 // manifest did not load the library (spec section 4, "Gate").

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 /// A ```` ```reference ```` block (Code Styler's file reference, found by the
 /// parser only when the advanced-code-blocks plugin is on): a vault file or an
 /// `http(s)` URL shown as a highlighted listing under the file's name, the

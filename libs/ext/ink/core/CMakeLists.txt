@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # The ink core (spec section 7): the model, the .ink format, pen input through
 # ink-stroke-modeler, the outline renderer and the canvas widget. A SHARED
 # library on purpose: notolith-ink.so and notolith-hwfont.so both link it and

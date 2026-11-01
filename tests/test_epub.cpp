@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // EPUB reader: archive access, EPUB2 (NCX) and EPUB3 (nav) parsing, spine
 // order, the archive-path sandbox (../ escapes and remote URLs refused),
 // script stripping, a highlight locator's round trip through the sidecar,

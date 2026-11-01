@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // The handwriting-font studio module (spec section 9): what Notolith dlopens when the
 // "Open glyph studio" command runs. Only this file knows it is a plugin; GlyphStudio is plain Qt.
 #include <QDir>

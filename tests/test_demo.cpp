@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Regression test for demo/: opens the whole demo vault in a real MainWindow
 // and walks every note, canvas and base file, painting each so a parser or
 // layout crash shows up as a test failure instead of something a person has

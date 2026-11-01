@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # Two changes MicroTeX's Qt backend needs, and upstream's other backends do not.
 #
 # 1. Font merging. TeX fonts are symbol-encoded, so Qt substitutes another font

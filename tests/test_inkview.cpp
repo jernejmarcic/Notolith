@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // InkView without dlopen (the static noteAppC_ink linked in, as the other ink tests do): what the tab does
 // about a file that changes under it (a vault may be synced between machines) and about a newer file's read-only
 // state. The window-level behaviour of the same view is in test_window.cpp.

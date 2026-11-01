@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 /// A fenced code block in a language a runtime plugin renders (docs/PLUGINS.md,
 /// Tier 2). libs/editor does not know plugins exist: the window registers a
 /// renderer per language (setCodeBlockRenderer), the same shape as

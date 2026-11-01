@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Note history in git: libs/ext/history. Every test gets its own data home,
 // so nothing reaches ~/.local/share.
 

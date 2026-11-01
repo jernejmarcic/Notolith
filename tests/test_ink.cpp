@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // The ink core (docs/INK-DESIGN.md section 7
 // and 12): model and history, the .ink format, the outline composer, input,
 // the canvas. Pure functions and widgets on the offscreen platform.

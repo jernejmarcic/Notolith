@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Mouse and keyboard handling: selection, drag-to-move, drag-to-resize,
 // drag-from-a-side-handle to connect, rubber-band selection, panning, and the
 // small amount of hit-testing geometry all of those share with painting the

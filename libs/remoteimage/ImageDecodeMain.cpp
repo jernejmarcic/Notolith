@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // notolith-imagedecode: decodes one remote image so the app never does.
 //
 // Run by the app under bubblewrap (no network, no home, the syscall filter, rlimits). Reads the image's bytes

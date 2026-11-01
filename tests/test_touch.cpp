@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // The editor on a touchscreen. Its own binary: a test touch device is
 // registered for the whole process, and every editor made after it would
 // grab the touch gesture - not what the rest of the editor tests are about.

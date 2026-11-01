@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # The sharing engine (docs/SHARE.md "The engine"): device keys, the wire format,
 # and the engine that speaks to other devices over the link layer, on top of the
 # CRDT. No editor and no window in here. It is the notolith-share loadable module

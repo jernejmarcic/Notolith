@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 /// HTML in live preview edited where it is drawn. HTML renders like in
 /// Obsidian but, unlike there, is editable inline just like the Markdown, and
 /// an HTML table is editable like an actual table element (like in a

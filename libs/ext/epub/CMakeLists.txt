@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # EPUB reader, a Tier 1 module (docs/PLUGINS.md): parses EPUB 2/3 (libarchive
 # for the zip container, QXmlStreamReader for container.xml/OPF/NCX/nav) and
 # renders each chapter's XHTML through litehtml via HtmlRenderer

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # The text CRDT behind note sharing (docs/SHARE.md). The Native backend is
 # plain C++ on Qt6::Core and is always built; the Yrs backend is added when
 # NOTEAPPC_WITH_SHARE_YRS is on and cargo was found - see the root

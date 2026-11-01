@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 
 # The link layer for note sharing (docs/SHARE.md): device identity and a
 # peer-to-peer Node (libdatachannel, mDNS over avahi). No Qt. core/, net/ and

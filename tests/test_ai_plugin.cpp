@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // The AI plugin (plugins/ai, docs/PLUGINS.md's "AI plugin") - two layers:
 //
 // 1. AiProviderTest links plugins/ai's request/response logic directly (no

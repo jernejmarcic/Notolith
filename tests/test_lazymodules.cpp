@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // What a start maps, and what a module costs until it is wanted: poppler and the share stack live in
 // loadable modules (libs/ext/pdfview, libs/ext/shareengine), so a session that never meets a PDF, and one that never
 // shares, maps none of their libraries. Each test is its own ctest entry (tests/CMakeLists.txt): what is mapped is a

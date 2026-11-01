@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 add_library(noteAppC_vault STATIC
     Snapshots.cpp
     Snapshots.h

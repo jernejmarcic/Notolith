@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // The PDF viewer module: what Notolith dlopens when a .pdf is opened in a tab or the
 // "Extract annotations" command runs. Only this file knows it is a plugin; PdfView is plain Qt.
 // PDF embeds in a note do not come through here: they use libnotolith-pdfpage.so by itself

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // A Qt plugin that carries a Notolith manifest and the Notolith IID but does not
 // implement NotolithModule: ModuleRegistry::ensureLoaded must say so (M6).
 #include <QObject>

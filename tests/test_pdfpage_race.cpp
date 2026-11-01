@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // Regression test for a crash seen once in test_demo, in poppler: a
 // SIGSEGV, jumping to a garbage address inside poppler's own
 // GfxXYZ2DisplayTransforms, that showed up once under a parallel ctest run

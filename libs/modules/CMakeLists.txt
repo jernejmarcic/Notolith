@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej
+# Copyright (C) 2026 Jernej Marčič
 # The loadable-module tier (docs/PLUGINS.md, "Tier 1.5"; spec section 4):
 # the plugin interface a module implements, the ModuleHost seam struct the
 # window fills, the ModuleView widget base, and the registry that discovers

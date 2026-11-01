@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 
 // The link layer's wire format: what core/identity and net/node speak, and
 // nothing else. A one-time copy from the author's Hearth project, which

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 // safeSvg() / decodeImage(): an SVG may draw nothing of the disk but itself. Qt's SVG plugin loads an
 // <image href> from any file, so each reference a vault's SVG can make is tried raw (what Qt does) and
 // through the helper (what the app now does).

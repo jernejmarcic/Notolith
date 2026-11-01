@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej
+// Copyright (C) 2026 Jernej Marčič
 /// Runnable code-file embeds: `![[script.py]]`
 /// gets the same run control and output NotebookBlock.cpp already gives a
 /// fenced block - notebookEligible, appendNotebookOutput, the paint and
