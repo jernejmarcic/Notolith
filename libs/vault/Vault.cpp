@@ -677,6 +677,10 @@ bool Vault::readInside(const QString &path, Note &out, QString *error, bool *lea
             return fail(QStringLiteral("%1 is a link, and where it leads cannot be checked").arg(path));
         }
     }
+    const QString tooLarge =
+        QStringLiteral("%1 is too large to open (over %2 MiB)").arg(path).arg(kMaxNoteBytes >> 20);
+    if (info.st_size > kMaxNoteBytes)
+        return fail(tooLarge);
     QByteArray bytes;
     for (;;) {
         char buffer[1 << 16];
@@ -688,6 +692,8 @@ bool Vault::readInside(const QString &path, Note &out, QString *error, bool *lea
         if (n == 0)
             break;
         bytes.append(buffer, n);
+        if (bytes.size() > kMaxNoteBytes)
+            return fail(tooLarge);
     }
     out = decode(bytes);
     return true;

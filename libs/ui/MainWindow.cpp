@@ -7961,9 +7961,9 @@ void MainWindow::changeEncryptionPassword()
     QDirIterator files(m_vault.root(), {QStringLiteral("*.mdlock")}, QDir::Files, QDirIterator::Subdirectories);
     while (files.hasNext()) {
         const QString path = files.next();
-        QFile file(path);
-        std::optional<QByteArray> plain = file.open(QIODevice::ReadOnly) ? m_encryption->open(file.readAll())
-                                                                         : std::nullopt;
+        QByteArray sealed;
+        std::optional<QByteArray> plain = Vault::readBytes(path, &sealed) ? m_encryption->open(sealed)
+                                                                          : std::nullopt;
         if (!plain) {
             for (auto &[_, text] : notes)
                 crypt::wipe(text);
