@@ -26,9 +26,11 @@ runs without a click. Details: `docs/NOTEBOOKS.md#sandbox`.
   bug that escapes namespaces or the filter escapes it.
 - A trusted vault, or a block you choose to run, can still burn CPU and memory
   within the limits, and write inside its own temporary directory.
-- Opening a link, a file card or "Open in default app" hands the target to your
-  desktop, which is outside the sandbox. Notolith asks first in an untrusted
-  vault and never hands over executables.
+- Opening a link, a file card or a file with the default app hands the target
+  to your desktop, which is outside the sandbox. In an untrusted vault, a file
+  card or link inside a note asks before it opens a file; the file tree's
+  "Open in default app" is your own request and does not ask. Nothing that is
+  a program or a launcher is ever opened, trusted vault or not.
 - Tools you point it at (`pandoc`, `latex`, a Jupyter kernel) are as safe as
   their own parsers; the sandbox limits the damage, not the bug.
 - Plugins are a preview and the plugin format may change.

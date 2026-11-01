@@ -207,7 +207,8 @@ vault" in the command palette); the choice is kept in your own settings,
 never in the vault. In an untrusted vault the vault's own `hotkeys.json` and
 any vault setting that would switch a feature on are ignored, each block asks
 before it runs (Run, Trust this vault, Cancel), and opening a file from a
-file card or "Open in default app" asks first, naming the file and its type.
+file card or link inside a note asks first, naming the file and its type (the
+file tree's "Open in default app" is the person's own request and does not).
 Executables and `.desktop` files are never handed to the desktop, trusted
 vault or not.
 
