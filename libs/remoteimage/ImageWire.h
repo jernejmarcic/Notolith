@@ -28,6 +28,8 @@ constexpr qsizetype kHeaderSize = 20;
 
 /// The format the first bytes say it is (PNG, JPEG, GIF, WebP), None for anything
 /// else. Never the Content-Type or the file name.
+/// imageFormat (libs/theme/ImageLoad.h) is the wider copy for local files (adds bmp, avif, svg); it is not called
+/// from here because the sandboxed helper and the default build must not link each other's code.
 ImageFormat sniffFormat(const QByteArray &bytes);
 
 /// The name QImageReader takes for the format, empty for None.

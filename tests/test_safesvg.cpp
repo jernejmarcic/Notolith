@@ -221,6 +221,11 @@ TEST(ImageFormat, OnlyObsidiansSetIsRecognised)
     EXPECT_EQ(imageFormat("\xef\xbb\xbf  \n<?xml version='1.0'?><svg/>"), QByteArray("svg"));
     EXPECT_EQ(imageFormat(QByteArray("\0\0\0\x1c" "ftypavif\0\0\0\0avifmif1", 20)), QByteArray("avif"));
     EXPECT_EQ(imageFormat(QByteArray("\0\0\0\x18" "ftypavis\0\0\0\0", 16)), QByteArray("avif"));
+    // major brand mif1, avif among the compatible brands
+    EXPECT_EQ(imageFormat(QByteArray("\0\0\0\x18" "ftypmif1\0\0\0\0" "heicavif", 24)), QByteArray("avif"));
+    // mif1 with no avif is HEIC; and brands past the size the box gives are not read
+    EXPECT_TRUE(imageFormat(QByteArray("\0\0\0\x18" "ftypmif1\0\0\0\0" "heicmiaf", 24)).isEmpty());
+    EXPECT_TRUE(imageFormat(QByteArray("\0\0\0\x10" "ftypmif1\0\0\0\0" "avif", 20)).isEmpty());
     for (const QByteArray &other : {kEPS, QByteArray("8BPS\0\x01\0\0\0\0\0\0"), QByteArray("II*\0\x08\0\0\0"), QByteArray("MM\0*\0\0\0\x08"),
                                     QByteArray("%PDF-1.7\n"), QByteArray("\0\0\0\x18" "ftypheic\0\0\0\0", 16), QByteArray("gimp xcf file"),
                                     QByteArray("RIFF\0\0\0\0WAVE"), QByteArray("GIF"), QByteArray("\x76\x2f\x31\x01"), QByteArray("")})

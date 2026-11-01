@@ -19,6 +19,28 @@ bool looksLikeSVG(const QByteArray &b)
     return i < b.size() && b[i] == '<';
 }
 
+/// An ISO BMFF `ftyp` box whose major brand is avif or avis, or whose compatible brands (the 4-byte entries
+/// after the major brand and minor version, up to the size the box gives, and no further than `b`) name one:
+/// a file with the major brand mif1 still lists avif.
+bool isAVIF(const QByteArray &b)
+{
+    if (b.size() < 12 || b.mid(4, 4) != "ftyp")
+        return false;
+    const auto brand = [&b](qsizetype at) { return b.mid(at, 4); };
+    if (brand(8) == "avif" || brand(8) == "avis")
+        return true;
+    const auto be32 = [&b](qsizetype at) {
+        return (quint32(quint8(b[at])) << 24) | (quint32(quint8(b[at + 1])) << 16) | (quint32(quint8(b[at + 2])) << 8)
+               | quint32(quint8(b[at + 3]));
+    };
+    const qsizetype end = qMin<qsizetype>(be32(0), b.size());
+    for (qsizetype at = 16; at + 4 <= end; at += 4) {
+        if (brand(at) == "avif" || brand(at) == "avis")
+            return true;
+    }
+    return false;
+}
+
 /// A reader that tries `format` and nothing else.
 QImage readAs(QIODevice *device, const QByteArray &format, bool autoTransform, int maxWidth = 0)
 {
@@ -46,7 +68,7 @@ QByteArray imageFormat(const QByteArray &b)
         return "bmp";
     if (b.size() >= 12 && b.startsWith("RIFF") && b.mid(8, 4) == "WEBP")
         return "webp";
-    if (b.size() >= 12 && b.mid(4, 4) == "ftyp" && (b.mid(8, 4) == "avif" || b.mid(8, 4) == "avis"))
+    if (isAVIF(b))
         return "avif";
     if (looksLikeSVG(b))
         return "svg";

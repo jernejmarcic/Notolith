@@ -6092,6 +6092,17 @@ TEST(GIFtest, AStillGIFAndAPngNeverStartAMovie)
     EXPECT_EQ(plain->GIFmovieCount(), 0);
 }
 
+TEST(GIFtest, AFileNamedGIFThatIsNotOneNeverStartsAMovie)
+{
+    GIFfixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    QImage red(8, 8, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    ASSERT_TRUE(red.save(fixture.path(0), "PNG")); // PNG bytes under a .gif name
+    auto editor = shownEditorWith(QStringLiteral("![[g0.gif]]\n"), fixture);
+    EXPECT_EQ(editor->GIFmovieCount(), 0);
+}
+
 TEST(GIFtest, TheSameFileTwiceIsOneMovie)
 {
     GIFfixture fixture(1, true);

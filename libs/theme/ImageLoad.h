@@ -9,6 +9,8 @@ namespace noteAppC {
 /// The picture format `bytes` start like, by the bytes and never by a file name: png, jpeg, gif, bmp,
 /// webp, avif or svg (Obsidian's set), empty for anything else. Only these are ever decoded, so a file
 /// that an installed Qt image plugin could read (eps, psd, tiff, raw, pdf...) never reaches that plugin.
+/// remoteimage::sniffFormat (libs/remoteimage/ImageWire.h) is the narrower copy for remote images; it stays apart
+/// so the sandboxed decode helper does not link this library.
 QByteArray imageFormat(const QByteArray &bytes);
 
 /// Whether a file suffix (lower case, no dot) is a picture: Obsidian's png, jpg, jpeg, gif, bmp, svg, webp,

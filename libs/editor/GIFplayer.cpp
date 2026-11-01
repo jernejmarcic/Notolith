@@ -22,8 +22,10 @@
 /// and m_GIFinfo stay empty.
 
 #include "MarkdownEditor.h"
+#include "ImageLoad.h"
 #include "MarkdownEditor_p.h"
 
+#include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
 #include <QPaintEngine>
@@ -73,13 +75,20 @@ QPixmap MarkdownEditor::GIFframe(const QPainter &painter, const QString &path, c
         info = {};
         info.known = true;
         info.mtime = mtime;
-        info.animated = QImageReader(path, "gif").imageCount() > 1;
+        // Only a file whose bytes say GIF plays, whatever its name; the reader gets no other format to try.
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly) && imageFormat(file.peek(512)) == "gif") {
+            QImageReader reader(&file, "gif");
+            reader.setAutoDetectImageFormat(false);
+            info.animated = reader.imageCount() > 1;
+        }
     }
     if (!info.ended.isNull())
         return info.ended;
     if (!info.animated || info.broken || d->m_GIFs.size() >= kMaxGIFmovies)
         return still;
 
+    // QMovie has no switch for autodetection; the file is a GIF by its bytes (above), so "gif" is what it tries.
     auto movie = std::make_shared<QMovie>(path, QByteArrayLiteral("gif"));
     if (!movie->isValid()) {
         info.broken = true;
