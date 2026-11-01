@@ -249,7 +249,8 @@ Outcome run(const Command &command, const Limits &limits, const QByteArray &inpu
     clock.start();
     const auto drain = [&] {
         outcome.out += process.readAllStandardOutput();
-        outcome.err += process.readAllStandardError();
+        if (!mergeChannels) // Qt warns when stderr is read from a merged channel
+            outcome.err += process.readAllStandardError();
     };
     for (;;) {
         const bool done = process.waitForFinished(20);
