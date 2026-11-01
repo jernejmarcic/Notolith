@@ -1,6 +1,5 @@
 #include "FileIcons.h"
 
-#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -9,7 +8,7 @@
 #include <QSaveFile>
 #include <QTextBoundaryFinder>
 
-#include "Settings.h"
+#include "ConfigFile.h"
 
 namespace noteAppC {
 
@@ -29,12 +28,8 @@ FileIcons::FileIcons(const QString &vaultRoot)
 
 QString FileIcons::storagePathFor(const QString &vaultRoot)
 {
-    // The digest Bookmarks uses, so a vault's files sit in one directory.
-    const QString root = QDir(vaultRoot).absolutePath();
-    const QByteArray digest =
-        QCryptographicHash::hash(root.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
-    return QDir(Settings::configDirectory())
-        .filePath(QStringLiteral("vaults/%1/icons.json").arg(QString::fromLatin1(digest)));
+    // The directory Bookmarks uses, so a vault's files sit together.
+    return appDir(XDGroot::Data, QStringLiteral("vaults/%1/icons.json").arg(vaultDigest(vaultRoot)));
 }
 
 bool FileIcons::isGlyph(const QString &text)
@@ -61,7 +56,7 @@ void FileIcons::load()
 bool FileIcons::save(QString *error) const
 {
     const QString path = storagePathFor(m_root);
-    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+    if (!ensurePrivateDir(QFileInfo(path).absolutePath())) {
         if (error)
             *error = QStringLiteral("cannot create %1").arg(QFileInfo(path).absolutePath());
         return false;

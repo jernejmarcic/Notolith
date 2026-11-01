@@ -1,4 +1,5 @@
 #include "SyncJournal.h"
+#include "ConfigFile.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -6,7 +7,6 @@
 #include <QSaveFile>
 #include <QSqlError>
 #include <QSqlQuery>
-#include <QStandardPaths>
 #include <QUuid>
 
 #include <atomic>
@@ -28,18 +28,7 @@ bool exec(QSqlQuery &query, const QString &sql)
 
 QString SyncJournal::dataDirectoryFor(const QString &vaultRoot)
 {
-    // Same digest shape as NoteHistory::repositoryPathFor (SHA-256 of the
-    // absolute path, hex, first 16 chars) - not shared code, because
-    // libs/ext/history is a separate optional module that may not be built
-    // at all, but the two are meant to agree on which directory names a
-    // vault, so the three lines are duplicated deliberately rather than
-    // coupled.
-    const QByteArray digest =
-        QCryptographicHash::hash(QDir(vaultRoot).absolutePath().toUtf8(), QCryptographicHash::Sha256)
-            .toHex()
-            .left(16);
-    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-         + QStringLiteral("/noteAppC/sync/") + QString::fromLatin1(digest);
+    return appDir(XDGroot::Data, QStringLiteral("sync/") + vaultDigest(vaultRoot));
 }
 
 SyncJournal::SyncJournal(const QString &vaultRoot)
@@ -57,8 +46,7 @@ SyncJournal::~SyncJournal()
 void SyncJournal::open(const QString &vaultRoot)
 {
     m_dataDirectory = dataDirectoryFor(vaultRoot);
-    QDir().mkpath(m_dataDirectory);
-    QDir().mkpath(m_dataDirectory + QStringLiteral("/base"));
+    ensurePrivateDir(m_dataDirectory + QStringLiteral("/base"));
 
     m_connectionName = QStringLiteral("noteAppC-sync-%1")
                            .arg(reinterpret_cast<quintptr>(this), 0, 16);

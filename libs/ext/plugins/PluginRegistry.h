@@ -50,11 +50,15 @@ public:
     explicit PluginRegistry(QObject *parent = nullptr);
     ~PluginRegistry() override;
 
-    /// `~/.local/share/noteAppC/plugins` (XDG_DATA_HOME-relative, like every
-    /// other noteAppC data path).
+    /// `~/.local/share/notolith/plugins`: where a plugin is installed for the
+    /// user.
     static QString pluginsRoot();
+    /// Every directory scan() reads plugins from: pluginsRoot() first, then
+    /// `notolith/plugins` under each `$XDG_DATA_DIRS` entry, where a package
+    /// installs one for everybody. The first plugin of an id wins.
+    static QStringList pluginsRoots();
     /// The registry's own small store of per-plugin enabled/granted state,
-    /// `~/.config/noteAppC/plugins.ini` - never the vault, matching
+    /// `~/.config/notolith/plugins.ini` - never the vault, matching
     /// docs/PLUGINS.md's "Granted permissions are stored in the user's
     /// config... never in the vault".
     static QString configPath();

@@ -1,5 +1,7 @@
 #include "NotebookCache.h"
 
+#include "ConfigFile.h"
+
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -12,10 +14,7 @@ namespace noteAppC::notebook {
 
 QString notebookCacheRoot()
 {
-    QString base = qEnvironmentVariable("XDG_CACHE_HOME");
-    if (base.isEmpty())
-        base = QDir::homePath() + QStringLiteral("/.cache");
-    return base + QStringLiteral("/noteAppC/notebook");
+    return appDir(XDGroot::Cache, QStringLiteral("notebook"));
 }
 
 QString notebookCacheKey(const QString &language, const QString &source, SandboxTier tier,
@@ -174,7 +173,7 @@ void writeNotebookCache(const QString &key, NotebookRunResult result)
     takeSeed(key); // a run's own output supersedes what the file had
     result.hasRun = true;
     const QString dir = entryDir(key);
-    QDir().mkpath(dir);
+    ensurePrivateDir(dir);
 
     QJsonArray outputs;
     int imageIndex = 0;

@@ -1,4 +1,5 @@
 #include "EpubView.h"
+#include "ConfigFile.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -66,12 +67,9 @@ QString EpubView::cacheRootForBook() const
                             .arg(info.absoluteFilePath())
                             .arg(info.size())
                             .arg(info.lastModified().toMSecsSinceEpoch());
-    const QByteArray xdg = qgetenv("XDG_CACHE_HOME");
-    const QString base =
-        xdg.isEmpty() ? QDir::homePath() + QStringLiteral("/.cache") : QString::fromLocal8Bit(xdg);
     const QString hash =
         QString::fromLatin1(QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex());
-    return QDir(base).filePath(QStringLiteral("noteAppC/epub/%1").arg(hash));
+    return appDir(XDGroot::Cache, QStringLiteral("epub/%1").arg(hash));
 }
 
 QString EpubView::resourceCachePath(const QString &archivePath) const
@@ -88,7 +86,7 @@ QString EpubView::extractToCache(const QString &archivePath) const
     const QString cachePath = resourceCachePath(archivePath);
     if (!QFileInfo::exists(cachePath)) {
         const QByteArray bytes = m_document.readEntry(archivePath);
-        if (bytes.isEmpty() || !QDir().mkpath(QFileInfo(cachePath).absolutePath()))
+        if (bytes.isEmpty() || !ensurePrivateDir(QFileInfo(cachePath).absolutePath()))
             return {};
         QFile file(cachePath);
         if (!file.open(QIODevice::WriteOnly))

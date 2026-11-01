@@ -4,7 +4,7 @@
 // a block's last outputs, keyed by a hash of its source and language, kept
 // outside the note so opening one never runs anything and the .md stays
 // clean text. Same cache root convention as libs/render/TexCompiler.cpp's
-// `$XDG_CACHE_HOME/noteAppC/tex` - `$XDG_CACHE_HOME/noteAppC/notebook` here
+// `$XDG_CACHE_HOME/notolith/tex` - `$XDG_CACHE_HOME/notolith/notebook` here
 // - chosen for the same reason and not the vault: XDG_CACHE_HOME is
 // explicitly "safe to delete", which output the kernel can always
 // regenerate is, and it keeps binary/PNG cache files out of a vault
@@ -104,7 +104,7 @@ void removeNotebookCache(const QString &key);
 /// are looked up (Ipynb.cpp). A write or removal of `key` first drops it.
 void seedNotebookCache(const QString &key, std::function<NotebookRunResult()> result);
 
-/// `$XDG_CACHE_HOME/noteAppC/notebook`, or `~/.cache/noteAppC/notebook` when
+/// `$XDG_CACHE_HOME/notolith/notebook`, or `~/.cache/notolith/notebook` when
 /// unset - exposed for the tests, which redirect XDG_CACHE_HOME rather than
 /// touching the user's own cache.
 QString notebookCacheRoot();

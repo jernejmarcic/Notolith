@@ -31,13 +31,17 @@
 int main(int argc, char *argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
-    // A screenshot must not touch the real ~/.config/noteAppC: the window
-    // saves settings when it closes, and a review run would quietly rewrite
-    // whoever is looking at it. Point the whole config tree at a temporary
-    // directory unless the caller has already redirected it.
-    QTemporaryDir configHome;
-    if (configHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
-        qputenv("XDG_CONFIG_HOME", configHome.path().toLocal8Bit());
+    // A screenshot must not touch the real XDG directories: the window saves
+    // settings and state when it closes, and a review run would quietly rewrite
+    // whoever is looking at it. Point all five at temporary directories unless
+    // the caller has already redirected them.
+    QTemporaryDir homes[5];
+    const char *const variables[5] = {"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
+                                      "XDG_RUNTIME_DIR"};
+    for (int i = 0; i < 5; ++i) {
+        if (homes[i].isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
+            qputenv(variables[i], homes[i].path().toLocal8Bit());
+    }
     // A command-line tool talks on stderr. Without this Qt 6 sends qWarning
     // to the systemd journal whenever stderr is not a terminal - piped, run
     // from a script, run by an agent - and every error the tool reports simply

@@ -1046,7 +1046,7 @@ struct MarkdownEditor::Private {
     bool m_touchHandles = false;   ///< the selection came from a finger, so it has handles
     int m_draggingHandle = 0;      ///< -1 the start handle, 1 the end one, 0 none
     Theme m_theme = Theme::builtin(Theme::Mode::Dark);
-    /// `~/.config/noteAppC/callouts.ini` and `codeblocks.ini`, reread the
+    /// `~/.config/notolith/callouts.ini` and `codeblocks.ini`, reread the
     /// moment either changes on disk - they are the way a person restyles
     /// these, so an edit has to show without a restart.
     CalloutStyles m_calloutStyles = CalloutStyles::load();

@@ -14,7 +14,7 @@ namespace noteAppC {
 /// The local half of the entity-change journal (docs/SYNC.md "The journal
 /// protocol"): what has been synced, what is waiting to be pushed, the
 /// itemsKeys this device holds, and the three-way merge base for every
-/// note. Lives under $XDG_DATA_HOME/noteAppC/sync/<vault digest>/ - never
+/// note. Lives under $XDG_DATA_HOME/notolith/sync/<vault digest>/ - never
 /// inside the vault, mirroring libs/ext/history's own rule (and reusing
 /// NoteHistory::repositoryPathFor's digest so the two never disagree about
 /// which directory names a vault).

@@ -62,7 +62,7 @@ struct LanguageStyle {
     bool hasColours() const { return bg.isValid() || fg.isValid() || border.isValid() || !syntax.isEmpty(); }
 };
 
-/// `~/.config/noteAppC/codeblocks.ini`: one section per language, reachable
+/// `~/.config/notolith/codeblocks.ini`: one section per language, reachable
 /// through other info-string spellings via `aliases`.
 ///
 ///     [python]

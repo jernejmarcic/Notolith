@@ -30,7 +30,7 @@ protobuf_generate(TARGET noteAppC_shareengine IMPORT_DIRS ${CMAKE_CURRENT_SOURCE
 # binary that links this library - test_share - names noteAppC_sharebase, noteAppC_share_crdt and
 # noteAppC_sync itself.
 target_link_libraries(noteAppC_shareengine
-    PUBLIC Qt6::Core Qt6::Network noteAppC_sharebase_headers noteAppC_link)
+    PUBLIC Qt6::Core Qt6::Network noteAppC_sharebase_headers noteAppC_link noteAppC_xdg_headers)
 
 configure_file(manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/manifest.json @ONLY)
 # BUILD_WITH_INSTALL_RPATH for the reason the executable gives (apps/noteAppC/CMakeLists.txt): CMake's

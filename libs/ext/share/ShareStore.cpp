@@ -1,4 +1,5 @@
 #include "ShareStore.h"
+#include "ConfigFile.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -7,7 +8,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
-#include <QStandardPaths>
 
 namespace noteAppC {
 
@@ -45,10 +45,7 @@ ShareStore::ShareStore(QString directory)
 
 QString ShareStore::directoryFor(const QString &vaultRoot)
 {
-    const QByteArray digest =
-        QCryptographicHash::hash(QDir(vaultRoot).absolutePath().toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
-    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share/")
-         + QString::fromLatin1(digest);
+    return appDir(XDGroot::Data, QStringLiteral("share/") + vaultDigest(vaultRoot));
 }
 
 QString ShareStore::shareDirectory(const QByteArray &shareID) const
@@ -87,7 +84,7 @@ QList<ShareRecord> ShareStore::all() const
 bool ShareStore::save(const ShareRecord &r, const QByteArray &state, const QString &base)
 {
     const QString dir = shareDirectory(r.shareID);
-    if (!QDir().mkpath(dir))
+    if (!ensurePrivateDir(dir))
         return false;
     QFile::setPermissions(m_directory, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);

@@ -1,4 +1,5 @@
 #include "Icons.h"
+#include "ConfigFile.h"
 
 #include <QByteArray>
 #include <QCryptographicHash>
@@ -74,17 +75,10 @@ QString localPathOf(const QString &name)
     return isFileURL(name) ? QUrl(name).toLocalFile() : name;
 }
 
-// The same XDG rule Settings::configDirectory uses for config, spelled out
-// again here so libs/theme does not have to depend on libs/settings for one
-// path - straight from the environment rather than QStandardPaths, which
-// needs an application name set and so answers differently in a test than in
-// the app. This is the cache root, not the config one, so XDG_CACHE_HOME.
+// Remote icons are re-fetched at will, so they are cache.
 QString cacheDirectory()
 {
-    const QByteArray xdg = qgetenv("XDG_CACHE_HOME");
-    const QString base = xdg.isEmpty() ? QDir::homePath() + QStringLiteral("/.cache")
-                                       : QString::fromLocal8Bit(xdg);
-    return QDir(base).filePath(QStringLiteral("noteAppC/icons"));
+    return appDir(XDGroot::Cache, QStringLiteral("icons"));
 }
 
 // Keyed by a hash of the URL, not the URL itself, since a URL can be longer
@@ -210,7 +204,7 @@ void startFetch(const QString &url)
 
         const QByteArray bytes = reply->readAll();
         const QString path = cacheFilePath(url);
-        QDir().mkpath(QFileInfo(path).absolutePath());
+        ensurePrivateDir(QFileInfo(path).absolutePath());
         // Through a temporary file and rename(2), like every other write in
         // this codebase (Vault, Scheme::save) - a reader must never see a
         // half-written cache file.

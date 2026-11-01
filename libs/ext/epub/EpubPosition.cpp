@@ -1,22 +1,18 @@
 #include "EpubPosition.h"
 
+#include "ConfigFile.h"
+
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFileInfo>
 #include <QSettings>
 
 namespace noteAppC {
 
 QString EpubPositionStore::iniPath()
 {
-    // Same rule Settings::configDirectory() uses, deliberately duplicated
-    // rather than called: XDG straight from the environment, not
-    // QStandardPaths (which needs an application name set and so answers
-    // differently in a test binary than in the app - the exact trap that
-    // rule avoids). Same directory as settings.ini/vaults.ini either way.
-    const QByteArray xdg = qgetenv("XDG_CONFIG_HOME");
-    const QString base =
-        xdg.isEmpty() ? QDir::homePath() + QStringLiteral("/.config") : QString::fromLocal8Bit(xdg);
-    return QDir(base).filePath(QStringLiteral("noteAppC/epub-positions.ini"));
+    // A reading position is state, beside vaults.ini.
+    return appDir(XDGroot::State, QStringLiteral("epub-positions.ini"));
 }
 
 std::optional<EpubPosition> EpubPositionStore::get(const QString &bookPath)
@@ -43,6 +39,7 @@ std::optional<EpubPosition> EpubPositionStore::get(const QString &bookPath)
 
 void EpubPositionStore::set(const QString &bookPath, const EpubPosition &position)
 {
+    ensurePrivateDir(QFileInfo(iniPath()).absolutePath());
     QSettings settings(iniPath(), QSettings::IniFormat);
     const QString group =
         QStringLiteral("book_%1")

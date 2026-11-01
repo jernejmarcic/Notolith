@@ -1,5 +1,6 @@
 #include "Hotkeys.h"
 
+#include "ConfigFile.h"
 #include "Settings.h"
 
 #include <QDir>
@@ -77,7 +78,7 @@ bool Hotkeys::save(const Bindings &bindings)
     for (auto it = bindings.constBegin(); it != bindings.constEnd(); ++it)
         object.insert(it.key(), toJSON(it.value()));
     const QString path = filePath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
+    ensurePrivateDir(QFileInfo(path).absolutePath());
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly))
         return false;

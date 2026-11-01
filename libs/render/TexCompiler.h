@@ -41,7 +41,7 @@ public:
     /// the cache key is always the file exactly as it now stands - in a
     /// temporary directory outside the vault, never next to the note, with
     /// no shell escape and a time and memory limit. Cached under
-    /// `$XDG_CACHE_HOME/noteAppC/tex/<hash of the bytes>`; a second call with
+    /// `$XDG_CACHE_HOME/notolith/tex/<hash of the bytes>`; a second call with
     /// unchanged bytes returns the cached result (success or the same
     /// failure) without running the engine again.
     static Result compile(const QString &texPath);

@@ -1,6 +1,5 @@
 #include "Bookmarks.h"
 
-#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -11,7 +10,7 @@
 #include <QUuid>
 #include <optional>
 
-#include "Settings.h"
+#include "ConfigFile.h"
 
 namespace noteAppC {
 
@@ -121,11 +120,7 @@ const BookmarkItem *Bookmarks::find(const QString &id) const
 
 QString Bookmarks::storagePathFor(const QString &vaultRoot)
 {
-    const QString root = QDir(vaultRoot).absolutePath();
-    const QByteArray digest =
-        QCryptographicHash::hash(root.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
-    return QDir(Settings::configDirectory())
-        .filePath(QStringLiteral("vaults/%1/bookmarks.json").arg(QString::fromLatin1(digest)));
+    return appDir(XDGroot::Data, QStringLiteral("vaults/%1/bookmarks.json").arg(vaultDigest(vaultRoot)));
 }
 
 Bookmarks::Bookmarks(const QString &vaultRoot)
@@ -153,7 +148,7 @@ void Bookmarks::load()
 bool Bookmarks::save(QString *error) const
 {
     const QString path = storagePathFor(m_vaultRoot);
-    if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
+    if (!ensurePrivateDir(QFileInfo(path).absolutePath())) {
         if (error)
             *error = QStringLiteral("cannot create %1").arg(QFileInfo(path).absolutePath());
         return false;

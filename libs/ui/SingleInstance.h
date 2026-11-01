@@ -42,8 +42,8 @@ public:
     };
 
     /// `$NOTEAPPC_INSTANCE_SOCKET` when set (benchmarks and tests that must
-    /// not reach a Notolith someone is using), else `notolith` in the runtime
-    /// directory: the part every per-vault socket name starts with. The
+    /// not reach a Notolith someone is using), else `instance` in
+    /// `$XDG_RUNTIME_DIR/notolith` (made 0700): the part every per-vault socket name starts with. The
     /// override is a prefix, not a socket - a directory plus the start of a
     /// file name, `/tmp/run/bench`, gives `/tmp/run/bench-<id>.sock` - so an
     /// isolated run keeps every vault's name apart from the real ones too.

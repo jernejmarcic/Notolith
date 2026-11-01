@@ -499,8 +499,8 @@ TEST_F(PluginHostTest, APluginReadsItsOwnConfigAndNoneOfTheAppsOwn)
         QFile file(path);
         return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
     };
-    const QString own = configHome.filePath(QStringLiteral("noteAppC/plugins/word-stats/own.ini"));
-    const QString apps = configHome.filePath(QStringLiteral("noteAppC/settings.ini"));
+    const QString own = configHome.filePath(QStringLiteral("notolith/plugins/word-stats/own.ini"));
+    const QString apps = configHome.filePath(QStringLiteral("notolith/settings.ini"));
     ASSERT_TRUE(writeFile(own, "mine"));
     ASSERT_TRUE(writeFile(apps, "sync.email=me@example.invalid"));
 

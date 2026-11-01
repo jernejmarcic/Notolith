@@ -15,7 +15,6 @@
 #include <QBuffer>
 #include <QCommandLineParser>
 #include <QDir>
-#include <QStandardPaths>
 #include <QDirIterator>
 #include <QDialog>
 #include <QElapsedTimer>
@@ -52,6 +51,7 @@
 
 #include <QSurfaceFormat>
 
+#include "ConfigFile.h"
 #include "Index.h"
 #include "Indexer.h"
 #include "Vault.h"
@@ -2578,7 +2578,7 @@ int main(int argc, char *argv[])
         QSurfaceFormat::setDefaultFormat(format);
     }
     // As in tools/shot.cpp: a benchmark run must not read or write the real
-    // ~/.config/noteAppC, and must not silently auto-open whatever vault the
+    // XDG directories, and must not silently auto-open whatever vault the
     // real app last had open (MainWindow's constructor does exactly that
     // when it finds one in Settings).
     QTemporaryDir configHome;
@@ -2593,6 +2593,13 @@ int main(int argc, char *argv[])
     QTemporaryDir cacheHome;
     if (cacheHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
         qputenv("XDG_CACHE_HOME", cacheHome.path().toLocal8Bit());
+    // Window state, recent vaults, the log: the state home. The runtime directory holds the locks and sockets.
+    QTemporaryDir stateHome;
+    if (stateHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
+        qputenv("XDG_STATE_HOME", stateHome.path().toLocal8Bit());
+    QTemporaryDir runtimeHome;
+    if (runtimeHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
+        qputenv("XDG_RUNTIME_DIR", runtimeHome.path().toLocal8Bit());
 
     // A command-line tool talks on stderr. Without this Qt 6 sends qWarning
     // to the systemd journal whenever stderr is not a terminal - piped, run
@@ -2609,13 +2616,15 @@ int main(int argc, char *argv[])
     // HOME and checks nothing when HOME is / or unset). Stops the run if a QTemporaryDir failed or Qt ignored a variable.
     if (!qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG")) {
         const struct {
-            QStandardPaths::StandardLocation location;
+            XDGroot root;
             const QTemporaryDir &home;
-        } checks[] = {{QStandardPaths::AppConfigLocation, configHome},
-                      {QStandardPaths::AppDataLocation, dataHome},
-                      {QStandardPaths::CacheLocation, cacheHome}};
+        } checks[] = {{XDGroot::Config, configHome},
+                      {XDGroot::Data, dataHome},
+                      {XDGroot::State, stateHome},
+                      {XDGroot::Cache, cacheHome},
+                      {XDGroot::Runtime, runtimeHome}};
         for (const auto &check : checks) {
-            const QString path = QDir::cleanPath(QStandardPaths::writableLocation(check.location));
+            const QString path = xdgRoot(check.root);
             const QString home = QDir::cleanPath(check.home.path());
             if (!check.home.isValid() || home.isEmpty() || !(path == home || path.startsWith(home + QLatin1Char('/')))) {
                 qCritical().noquote() << "bench would write outside its temporary home:" << path << "is not inside" << home;

@@ -85,7 +85,7 @@ TEST_F(SpellTest, AnAddedWordIsKeptForNextTime)
         spell.addWord(QStringLiteral("noteAppC"));
         EXPECT_TRUE(spell.isCorrect(QStringLiteral("noteAppC")));
     }
-    EXPECT_TRUE(QFile::exists(QDir(m_config.path()).filePath(QStringLiteral("noteAppC/dictionary.txt"))));
+    EXPECT_TRUE(QFile::exists(QDir(m_config.path()).filePath(QStringLiteral("notolith/dictionary.txt"))));
     EXPECT_TRUE(SpellChecker({QStringLiteral("xx_TEST")}).isCorrect(QStringLiteral("noteAppC")));
 }
 

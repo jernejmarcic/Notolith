@@ -7,4 +7,4 @@ add_library(noteAppC_history STATIC
 target_include_directories(noteAppC_history PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_history
     PUBLIC Qt6::Core
-    PRIVATE PkgConfig::LIBGIT2)
+    PRIVATE PkgConfig::LIBGIT2 noteAppC_xdg)

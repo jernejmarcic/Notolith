@@ -1,4 +1,5 @@
 #include "KernelSpec.h"
+#include "ConfigFile.h"
 
 #include <QDir>
 #include <QFile>
@@ -22,10 +23,7 @@ QStringList kernelSpecRoots()
 
     QString dataDir = qEnvironmentVariable("JUPYTER_DATA_DIR");
     if (dataDir.isEmpty()) {
-        QString xdgData = qEnvironmentVariable("XDG_DATA_HOME");
-        if (xdgData.isEmpty())
-            xdgData = QDir::homePath() + QStringLiteral("/.local/share");
-        dataDir = xdgData + QStringLiteral("/jupyter");
+        dataDir = xdgRoot(XDGroot::Data) + QStringLiteral("/jupyter");
     }
     roots << dataDir + QStringLiteral("/kernels");
 

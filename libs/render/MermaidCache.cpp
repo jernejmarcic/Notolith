@@ -1,4 +1,5 @@
 #include "MermaidCache.h"
+#include "ConfigFile.h"
 
 #include "Markmap.h"
 
@@ -83,12 +84,7 @@ QByteArray diagramConfig(DiagramKind kind, const Theme &theme)
 
 QString diagramCacheDirectory(DiagramKind kind)
 {
-    // The same spelling as TexCompiler.cpp's: QStandardPaths folds the
-    // application name in, and the cache should survive how noteAppC is run.
-    QString base = qEnvironmentVariable("XDG_CACHE_HOME");
-    if (base.isEmpty())
-        base = QDir::homePath() + QStringLiteral("/.cache");
-    return base + QStringLiteral("/noteAppC/") + diagramLanguages(kind).constFirst();
+    return appDir(XDGroot::Cache, diagramLanguages(kind).constFirst());
 }
 
 QString mermaidCacheDirectory()
@@ -147,7 +143,7 @@ QByteArray mermaidCachedSVG(const QString &source, const Theme &theme)
 
 bool mermaidCacheStore(const QString &path, const QByteArray &svg)
 {
-    if (!QDir().mkpath(QFileInfo(path).path()))
+    if (!ensurePrivateDir(QFileInfo(path).path()))
         return false;
     QSaveFile file(path);
     return file.open(QIODevice::WriteOnly) && file.write(svg) == svg.size() && file.commit();

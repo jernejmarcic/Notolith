@@ -11,6 +11,7 @@
 #include <QTemporaryDir>
 
 #include "FileIcons.h"
+#include "ConfigFile.h"
 #include "Settings.h"
 #include "Vault.h"
 
@@ -700,7 +701,7 @@ TEST(FileIconsTest, RoundTripAndStoragePathIsOutsideTheVault)
     EXPECT_TRUE(again.iconFor(QStringLiteral("Daily")).isEmpty()) << "an empty icon removes it";
 
     const QString stored = noteAppC::FileIcons::storagePathFor(vault.path());
-    EXPECT_TRUE(stored.startsWith(noteAppC::Settings::configDirectory()));
+    EXPECT_TRUE(stored.startsWith(noteAppC::appDir(noteAppC::XDGroot::Data)));
     EXPECT_FALSE(stored.startsWith(vault.path()));
     EXPECT_EQ(listing(vault.path()), before) << "nothing written into the vault";
 }

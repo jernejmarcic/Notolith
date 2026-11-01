@@ -7066,8 +7066,8 @@ TEST(StyleFilesTest, EditingCalloutsIniRestylesWithoutARestart)
     ASSERT_TRUE(home.isValid());
     const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
     qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
-    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
-    const QString ini = QDir(home.path()).filePath(QStringLiteral("noteAppC/callouts.ini"));
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("notolith")));
+    const QString ini = QDir(home.path()).filePath(QStringLiteral("notolith/callouts.ini"));
     writeAtomically(ini, "[note]\nbar = #FF0000ff\n");
 
     auto editor = editorWith(QStringLiteral("> [!note] Title\n> Body.\n"));
@@ -7101,17 +7101,16 @@ TEST(StyleFilesTest, SavingOtherFilesInTheConfigDirectoryDoesNotLayTheNoteOutAga
     ASSERT_TRUE(home.isValid());
     const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
     qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
-    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
-    const QString ini = QDir(home.path()).filePath(QStringLiteral("noteAppC/callouts.ini"));
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("notolith")));
+    const QString ini = QDir(home.path()).filePath(QStringLiteral("notolith/callouts.ini"));
     writeAtomically(ini, "[note]\nbar = #FF0000ff\n");
 
     auto editor = editorWith(QStringLiteral("> [!note] Title\n> Body.\n"));
     QTest::qWait(100);
     const quint64 before = editor->layoutCount();
 
-    for (const char *other : {"noteAppC/settings.ini", "noteAppC/vaults.ini", "noteAppC/.save.lock"})
+    for (const char *other : {"notolith/settings.ini", "notolith/hotkeys.json", "notolith/plugins.ini"})
         writeAtomically(QDir(home.path()).filePath(QString::fromLatin1(other)), "[state]\nrecent-vaults = /x\n");
-    QFile::remove(QDir(home.path()).filePath(QStringLiteral("noteAppC/.save.lock")));
     QTest::qWait(400);
     EXPECT_EQ(editor->layoutCount(), before) << "a settings save laid the note out again";
 
@@ -7339,8 +7338,8 @@ TEST(CodeLabelTest, TheFenceItselfOverridesCodeblocksIni)
     ASSERT_TRUE(home.isValid());
     const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
     qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
-    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
-    writeAtomically(QDir(home.path()).filePath(QStringLiteral("noteAppC/codeblocks.ini")),
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("notolith")));
+    writeAtomically(QDir(home.path()).filePath(QStringLiteral("notolith/codeblocks.ini")),
                     "[python]\nname = Python\ncolor = #0000FFff\n");
 
     // The file's colour, then the fence's own, the same three layers a
@@ -7370,8 +7369,8 @@ TEST(ShiftTest, ACalloutBelowTheCaretKeepsItsPanelWhileTyping)
     ASSERT_TRUE(home.isValid());
     const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
     qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
-    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
-    writeAtomically(QDir(home.path()).filePath(QStringLiteral("noteAppC/callouts.ini")),
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("notolith")));
+    writeAtomically(QDir(home.path()).filePath(QStringLiteral("notolith/callouts.ini")),
                     "[note]\nbar = #FF0000ff\n");
 
     auto editor = editorWith(QStringLiteral("Typing here.\n\n> [!note] Title\n> Body.\n"));
@@ -7888,9 +7887,9 @@ struct CodeblocksHome {
     explicit CodeblocksHome(const QByteArray &ini = {})
     {
         qputenv("XDG_CONFIG_HOME", dir.path().toUtf8());
-        QDir(dir.path()).mkpath(QStringLiteral("noteAppC"));
+        QDir(dir.path()).mkpath(QStringLiteral("notolith"));
         if (!ini.isEmpty())
-            writeAtomically(QDir(dir.path()).filePath(QStringLiteral("noteAppC/codeblocks.ini")), ini);
+            writeAtomically(QDir(dir.path()).filePath(QStringLiteral("notolith/codeblocks.ini")), ini);
     }
     ~CodeblocksHome() { qputenv("XDG_CONFIG_HOME", previous); }
 };

@@ -1,4 +1,5 @@
 #include "ShareEngine.h"
+#include "ConfigFile.h"
 
 #include <algorithm>
 #include <format>
@@ -13,7 +14,6 @@
 #include <QJsonObject>
 #include <QNetworkInterface>
 #include <QRandomGenerator>
-#include <QStandardPaths>
 #include <QSysInfo>
 
 #include "ShareFrame.h"
@@ -254,10 +254,14 @@ bool ShareEngine::start()
     // both would publish one mDNS name. The first keeps the link; the others say so. The lock
     // is per identity key and, with a store directory of its own (tests), lives in it.
     if (!m_linkLock) {
-        const QString directory = m_config.storeDirectory.isEmpty()
-            ? QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share")
-            : m_config.storeDirectory;
-        QDir().mkpath(directory);
+        // A lock is held by a live process, so it belongs in the runtime directory; the share directory only
+        // when the session has none.
+        QString directory = m_config.storeDirectory;
+        if (directory.isEmpty())
+            directory = appDir(XDGroot::Runtime);
+        if (directory.isEmpty())
+            directory = appDir(XDGroot::Data, QStringLiteral("share"));
+        ensurePrivateDir(directory);
         const QByteArray id =
             QCryptographicHash::hash(m_config.identityKey.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
         auto lock = std::make_unique<QLockFile>(directory + QStringLiteral("/link-") + QString::fromLatin1(id)
@@ -278,14 +282,8 @@ bool ShareEngine::start()
     m_me = ShareIdentity::load(m_config.identityKey);
     if (!m_me)
         return fail(tr("The keyring would not keep this device's sharing keys."));
-    // A log belongs in the state directory (XDG), beside notolith.log; GenericStateLocation is Qt 6.7+.
-#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
-    const QString state = QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation);
-#else
-    const QString state = qEnvironmentVariable("XDG_STATE_HOME", QDir::homePath() + QStringLiteral("/.local/state"));
-#endif
-    hearth::setDebugLogPath((state + QStringLiteral("/noteAppC/link.log")).toStdString());
-    QFile::remove(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share/link.log")); // the old place
+    // A log belongs in the state directory (XDG), beside notolith.log.
+    hearth::setDebugLogPath(appDir(XDGroot::State, QStringLiteral("link.log")).toStdString());
 
     // Callbacks run on the link's threads and hand their arguments over by value
     // (the span is only valid inside the callback).

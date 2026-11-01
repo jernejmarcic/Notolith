@@ -18,8 +18,6 @@ using namespace noteAppC;
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
-    QCoreApplication::setOrganizationName(QStringLiteral("noteAppC"));
-    QCoreApplication::setApplicationName(QStringLiteral("noteAppC"));
 
     QCommandLineParser parser;
     parser.addHelpOption();

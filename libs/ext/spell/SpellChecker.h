@@ -17,7 +17,7 @@ namespace noteAppC {
 ///
 /// A word is correct when any loaded dictionary accepts it, so a note that
 /// mixes two languages is checked against both. Words the person added live
-/// in `~/.config/noteAppC/dictionary.txt`, one per line.
+/// in `~/.config/notolith/dictionary.txt`, one per line.
 ///
 /// Loading a dictionary takes tens of milliseconds, so the window builds one
 /// of these off the UI thread, after the first paint. After that it is used

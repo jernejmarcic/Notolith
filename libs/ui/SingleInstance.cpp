@@ -4,9 +4,11 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QLocalSocket>
-#include <QStandardPaths>
 #include <QThread>
 
+#include <unistd.h>
+
+#include "ConfigFile.h"
 #include "MainWindow.h"
 #include "Settings.h"
 
@@ -36,7 +38,13 @@ QString SingleInstance::baseName()
     const QByteArray override = qgetenv("NOTEAPPC_INSTANCE_SOCKET");
     if (!override.isEmpty())
         return QString::fromLocal8Bit(override);
-    return QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + QStringLiteral("/notolith");
+    // $XDG_RUNTIME_DIR/notolith/instance-<id>.sock; a session without a runtime directory gets a private one
+    // of its own under the temporary directory.
+    QString directory = appDir(XDGroot::Runtime);
+    if (directory.isEmpty())
+        directory = QDir::tempPath() + QStringLiteral("/notolith-") + QString::number(getuid());
+    ensurePrivateDir(directory);
+    return directory + QStringLiteral("/instance");
 }
 
 QString SingleInstance::nameForVault(const QString &vaultRoot)

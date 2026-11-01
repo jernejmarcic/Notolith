@@ -1,5 +1,7 @@
 #include "AiConfig.h"
 
+#include "ConfigFile.h"
+
 #include <QDir>
 #include <QSettings>
 
@@ -7,10 +9,7 @@ namespace noteAppC::ai {
 
 QString AiConfig::path()
 {
-    QString base = qEnvironmentVariable("XDG_CONFIG_HOME");
-    if (base.isEmpty())
-        base = QDir::homePath() + QStringLiteral("/.config");
-    return base + QStringLiteral("/noteAppC/plugins/ai/ai.ini"); // the only config a plugin sees
+    return appDir(XDGroot::Config, QStringLiteral("plugins/ai/ai.ini")); // the only config a plugin sees
 }
 
 AiConfig AiConfig::load()

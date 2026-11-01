@@ -67,6 +67,7 @@
 #include <numeric>
 
 #include "BacklinksPane.h"
+#include "ConfigFile.h"
 #include "Hotkeys.h"
 #include "FileTree.h"
 #include "Icons.h"
@@ -245,6 +246,14 @@ constexpr auto kGeometry = "window/geometry";
 constexpr int kNarrowWidth = 720;
 constexpr auto kSplitter = "window/splitter";
 constexpr auto kRightSidebar = "window/rightSidebar";
+
+/// What the window remembers about itself - geometry, splitter, the publish dialog's choices - an INI file
+/// in the state directory, shared by every window.
+QSettings windowSettings()
+{
+    ensurePrivateDir(appDir(XDGroot::State));
+    return QSettings(appDir(XDGroot::State, QStringLiteral("window.ini")), QSettings::IniFormat);
+}
 
 /// Obsidian's file explorer is text only; QFileSystemModel wants to draw
 /// desktop icons, so hand it a provider that draws nothing.
@@ -635,7 +644,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_settingsPage->setContext(&m_settings, QString());
     resize(1180, 760);
 
-    QSettings settings;
+    QSettings settings = windowSettings();
     restoreGeometry(settings.value(kGeometry).toByteArray());
     splitter->restoreState(settings.value(kSplitter).toByteArray());
     if (splitter->sizes().value(0) <= 0)
@@ -3918,7 +3927,7 @@ void MainWindow::toggleRightSidebar()
         return;
     }
     m_rightSidebar->setVisible(!m_rightSidebar->isVisible());
-    QSettings().setValue(kRightSidebar, m_rightSidebar->isVisible());
+    windowSettings().setValue(kRightSidebar, m_rightSidebar->isVisible());
     m_layoutSave.start();
 }
 
@@ -4021,9 +4030,7 @@ void MainWindow::openGraph()
 
 QString MainWindow::graphOptionsPath() const
 {
-    const QString key = QString::fromLatin1(
-        QCryptographicHash::hash(m_vault.root().toUtf8(), QCryptographicHash::Sha1).toHex());
-    return QDir(Settings::configDirectory()).filePath(QStringLiteral("vaults/%1/graph.json").arg(key));
+    return appDir(XDGroot::State, QStringLiteral("vaults/%1/graph.json").arg(vaultDigest(m_vault.root())));
 }
 
 void MainWindow::wireGraphOptions(GraphView *view)
@@ -4066,7 +4073,7 @@ void MainWindow::saveGraphOptions()
         options.localOutgoing = m_localGraph->options().localOutgoing;
     }
     const QString path = graphOptionsPath();
-    QDir().mkpath(QFileInfo(path).path());
+    ensurePrivateDir(QFileInfo(path).path());
     QSaveFile file(path);
     if (file.open(QIODevice::WriteOnly)) {
         file.write(QJsonDocument(options.toJson()).toJson());
@@ -5169,10 +5176,8 @@ void MainWindow::publishSite()
     // The last choices for this vault, kept with the window's own state, not
     // in the vault. Obsidian Publish shares nothing until it is picked, so
     // neither does a first publish here: marked notes only.
-    QSettings state;
-    const QString group = QStringLiteral("publish/")
-                          + QString::fromLatin1(QCryptographicHash::hash(m_vault.root().toUtf8(),
-                                                                         QCryptographicHash::Sha1).toHex());
+    QSettings state = windowSettings();
+    const QString group = QStringLiteral("publish/") + vaultDigest(m_vault.root());
     PublishDialog::Choices remembered;
     remembered.folder = state.value(group + QStringLiteral("/folder")).toString();
     remembered.siteName = state.value(group + QStringLiteral("/siteName"), m_vault.name()).toString();
@@ -5424,7 +5429,7 @@ void MainWindow::watchThemeFiles()
     if (!current.isEmpty())
         m_themeWatcher->removePaths(current);
 
-    // Nothing is created here. ~/.config/noteAppC appears only when something
+    // Nothing is created here. ~/.config/notolith appears only when something
     // is saved - opening a stray note must leave nothing behind - so a themes
     // directory that does not exist yet is simply not watched; the settings
     // page lists what is there whenever it opens.
@@ -8654,7 +8659,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     while (!m_popouts.empty())
         deletePopout(m_popouts.back().get());
     m_settings.save();
-    QSettings settings;
+    QSettings settings = windowSettings();
     settings.setValue(kGeometry, saveGeometry());
     if (auto *splitter = findChild<QSplitter *>(QStringLiteral("mainSplitter")))
         settings.setValue(kSplitter, splitter->saveState());

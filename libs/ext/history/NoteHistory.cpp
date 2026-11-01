@@ -1,4 +1,5 @@
 #include "NoteHistory.h"
+#include "ConfigFile.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -6,7 +7,6 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
-#include <QStandardPaths>
 #include <QThread>
 
 #include <atomic>
@@ -115,12 +115,7 @@ NoteHistory::~NoteHistory() = default;
 
 QString NoteHistory::repositoryPathFor(const QString &vaultRoot)
 {
-    const QByteArray digest = QCryptographicHash::hash(QDir(vaultRoot).absolutePath().toUtf8(),
-                                                       QCryptographicHash::Sha256)
-                                  .toHex()
-                                  .left(16);
-    return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-         + QStringLiteral("/noteAppC/history/") + QString::fromLatin1(digest) + QStringLiteral(".git");
+    return appDir(XDGroot::Data, QStringLiteral("history/") + vaultDigest(vaultRoot) + QStringLiteral(".git"));
 }
 
 bool NoteHistory::isOpen() const
@@ -133,7 +128,7 @@ bool NoteHistory::isOpen() const
 
 bool NoteHistory::create()
 {
-    QDir().mkpath(m_repo->path);
+    ensurePrivateDir(m_repo->path);
     if (git_repository_init(&m_repo->repo, m_repo->path.toUtf8().constData(), 1) != 0) {
         m_error = lastError();
         m_repo->repo = nullptr;

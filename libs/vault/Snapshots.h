@@ -11,7 +11,7 @@ namespace noteAppC {
 ///
 /// A snapshot is taken when a note is saved, at most once per interval per
 /// note (Obsidian's defaults: five minutes apart, kept for seven days). They
-/// live under `$XDG_DATA_HOME/noteAppC/recovery`, one directory per note
+/// live under `$XDG_DATA_HOME/notolith/recovery`, one directory per note
 /// keyed by its absolute path - which, as in Obsidian, means a vault moved
 /// elsewhere leaves its old snapshots behind. Plain files: a `path` file
 /// naming the note, and one `<milliseconds>.md` per version.

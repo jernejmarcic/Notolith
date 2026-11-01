@@ -3,6 +3,8 @@
 #include <QJsonObject>
 #include <QString>
 
+#include "ConfigFile.h"
+
 namespace noteAppC {
 
 /// Obsidian's workspace layouts, in its own JSON shape: `workspace.json`,
@@ -10,8 +12,10 @@ namespace noteAppC {
 /// (`{"workspaces": {name: layout}, "active": name}`).
 ///
 /// Like bookmarks, both are read from the vault's `.obsidian/` only until
-/// noteAppC has saved its own copy, which lives beside its bookmarks under
-/// `~/.config/noteAppC/vaults/<hash>/`. The vault's files are never written.
+/// Notolith has saved its own copy. The open layout is state, under
+/// `~/.local/state/notolith/vaults/<digest>/`; the named ones are the user's
+/// own, beside the bookmarks in `~/.local/share/notolith/vaults/<digest>/`.
+/// The vault's files are never written.
 class Workspaces {
 public:
     /// The layout to reopen `vaultRoot` with; empty when there is none.
@@ -22,8 +26,8 @@ public:
     static bool saveNamed(const QString &vaultRoot, const QJsonObject &all);
 
 private:
-    static QJsonObject read(const QString &vaultRoot, const QString &fileName);
-    static bool write(const QString &vaultRoot, const QString &fileName, const QJsonObject &json);
+    static QJsonObject read(const QString &vaultRoot, const QString &fileName, XDGroot root);
+    static bool write(const QString &vaultRoot, const QString &fileName, XDGroot root, const QJsonObject &json);
 };
 
 } // namespace noteAppC

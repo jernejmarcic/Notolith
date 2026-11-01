@@ -1,4 +1,5 @@
 #include "MathRenderer.h"
+#include "ConfigFile.h"
 
 #include <QBuffer>
 #include <QDir>
@@ -6,7 +7,6 @@
 #include <QPainter>
 #include <QRegularExpression>
 #include <QCoreApplication>
-#include <QStandardPaths>
 #include <QSvgGenerator>
 
 #include <latex.h>
@@ -28,12 +28,9 @@ QString resourceRoot()
         candidates << QStringLiteral(NOTEAPPC_MICROTEX_RES);
 #endif
         candidates << QCoreApplication::applicationDirPath()
-                          + QStringLiteral("/../share/noteAppC/microtex/res");
-        const QString data = QStandardPaths::locate(QStandardPaths::AppDataLocation,
-                                                    QStringLiteral("microtex/res"),
-                                                    QStandardPaths::LocateDirectory);
-        if (!data.isEmpty())
-            candidates << data;
+                          + QStringLiteral("/../share/notolith/microtex/res");
+        for (const QString &data : xdgSearchDirs(XDGroot::Data))
+            candidates << data + QLatin1Char('/') + kAppDirName + QStringLiteral("/microtex/res");
 
         for (const QString &path : std::as_const(candidates)) {
             if (QFileInfo::exists(path + QStringLiteral("/base.xml"))

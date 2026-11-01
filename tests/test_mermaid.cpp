@@ -148,7 +148,7 @@ protected:
 // one test that must see it happen.
 TEST_F(MermaidTest, TheCachePrunesOnFirstUseAndNotBefore)
 {
-    const QString cache = dir.filePath(QStringLiteral("cache/noteAppC/mermaid"));
+    const QString cache = dir.filePath(QStringLiteral("cache/notolith/mermaid"));
     ASSERT_TRUE(QDir().mkpath(cache));
     const auto seed = [&](const QString &name, int daysOld) {
         QFile file(cache + QLatin1Char('/') + name);

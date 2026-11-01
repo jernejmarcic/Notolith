@@ -1,4 +1,5 @@
 #include "Index.h"
+#include "ConfigFile.h"
 
 #include <algorithm>
 #include <future>
@@ -15,7 +16,6 @@
 #include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
-#include <QStandardPaths>
 #include <QUrl>
 #include <QUuid>
 #include <QVariant>
@@ -254,11 +254,7 @@ Index::~Index()
 
 QString Index::cachePathFor(const QString &vaultRoot)
 {
-    const QString root = QDir(vaultRoot).absolutePath();
-    const QByteArray digest =
-        QCryptographicHash::hash(root.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
-    return QStringLiteral("%1/vaults/%2/index.db").arg(base, QString::fromLatin1(digest));
+    return appDir(XDGroot::Cache, QStringLiteral("vaults/%1/index.db").arg(vaultDigest(vaultRoot)));
 }
 
 bool Index::open(const QString &vaultRoot)
@@ -267,7 +263,7 @@ bool Index::open(const QString &vaultRoot)
 
     m_vaultRoot = QDir(vaultRoot).absolutePath();
     m_databasePath = cachePathFor(m_vaultRoot);
-    if (!QDir().mkpath(QFileInfo(m_databasePath).absolutePath())) {
+    if (!ensurePrivateDir(QFileInfo(m_databasePath).absolutePath())) {
         m_error = QStringLiteral("cannot create %1").arg(QFileInfo(m_databasePath).absolutePath());
         return false;
     }

@@ -15,7 +15,7 @@ set_target_properties(word-stats PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/examples/plugins/word-stats)
 
 # plugin.ini sits next to the built library, the same layout as an installed
-# `~/.local/share/noteAppC/plugins/<id>/` directory - PluginManifest and the
+# `~/.local/share/notolith/plugins/<id>/` directory - PluginManifest and the
 # tests both point straight at this build-tree directory with --plugin.
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/plugin.ini
     ${CMAKE_BINARY_DIR}/examples/plugins/word-stats/plugin.ini COPYONLY)

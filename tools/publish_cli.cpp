@@ -31,8 +31,6 @@ using namespace noteAppC::publish;
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-    QCoreApplication::setOrganizationName(QStringLiteral("noteAppC"));
-    QCoreApplication::setApplicationName(QStringLiteral("noteAppC"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("Export a vault as a static website."));

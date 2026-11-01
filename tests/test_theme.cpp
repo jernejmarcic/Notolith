@@ -178,14 +178,14 @@ TEST(Scheme, findsThemesInTheDirectorySettingsDocuments)
     const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
     qputenv("XDG_CONFIG_HOME", xdgHome.path().toUtf8());
 
-    // Settings::themesDirectory() documents ~/.config/noteAppC/themes (or
+    // Settings::themesDirectory() documents ~/.config/notolith/themes (or
     // $XDG_CONFIG_HOME/noteAppC/themes if that is set). Scheme::searchPaths()
     // used to ask QStandardPaths::AppConfigLocation instead, which - since
     // main.cpp sets both the organisation and the application name to
     // "noteAppC" - names .../noteAppC/noteAppC/themes, one directory too deep.
     // A theme placed exactly where the docs say must be found here, not just
     // in a directory nobody was told about.
-    const QString documented = QDir(xdgHome.path()).filePath(QStringLiteral("noteAppC/themes"));
+    const QString documented = QDir(xdgHome.path()).filePath(QStringLiteral("notolith/themes"));
     writeFile(QDir(documented).filePath(QStringLiteral("Mine.json")),
               QStringLiteral(R"({"name":"Mine","dark":{"--color-base-00":"#0f1419"}})"));
 

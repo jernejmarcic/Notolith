@@ -23,7 +23,7 @@ add_library(noteAppC_sharebase STATIC
 set_target_properties(noteAppC_sharebase PROPERTIES AUTOMOC ON)
 # Whole archive: the share module resolves CrdtDoc (create, available) from the executable, which itself
 # calls only the virtuals, so a plain archive link would leave the factory and both backends out of it.
-target_link_libraries(noteAppC_sharebase PUBLIC noteAppC_sharebase_headers
+target_link_libraries(noteAppC_sharebase PUBLIC noteAppC_sharebase_headers noteAppC_xdg
     "$<LINK_LIBRARY:WHOLE_ARCHIVE,noteAppC_share_crdt>")
 
 if(NOTEAPPC_WITH_SHARE_YRS AND NOTEAPPC_CARGO)

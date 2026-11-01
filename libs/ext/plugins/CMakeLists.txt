@@ -31,4 +31,4 @@ add_library(noteAppC_plugins STATIC
 # needs moc, the same as every other Q_OBJECT library in libs/ (see
 # noteAppC_ui, noteAppC_editor, noteAppC_index's CMakeLists.txt).
 set_target_properties(noteAppC_plugins PROPERTIES AUTOMOC ON)
-target_link_libraries(noteAppC_plugins PUBLIC noteAppC_plugin_protocol Qt6::Core PRIVATE noteAppC_sandbox)
+target_link_libraries(noteAppC_plugins PUBLIC noteAppC_plugin_protocol Qt6::Core PRIVATE noteAppC_sandbox noteAppC_xdg)

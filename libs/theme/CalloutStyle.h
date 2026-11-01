@@ -76,7 +76,7 @@ struct CalloutStyle {
 /// Loading a file that is not there is not an error; it is the normal case.
 class CalloutStyles {
 public:
-    /// `~/.config/noteAppC/callouts.ini` unless `path` says otherwise.
+    /// `~/.config/notolith/callouts.ini` unless `path` says otherwise.
     static CalloutStyles load(const QString &path = {});
     static QString defaultPath();
 

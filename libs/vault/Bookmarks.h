@@ -30,8 +30,8 @@ struct BookmarkItem {
 ///
 /// When noteAppC's own copy for this vault has never been saved, load() seeds
 /// it once from the vault's own `.obsidian/bookmarks.json`, if there is one.
-/// Every change after that lives only in noteAppC's own file under
-/// `~/.config/noteAppC`; the vault's copy is never written to, so opening a
+/// Every change after that lives only in Notolith's own file under
+/// `~/.local/share/notolith/vaults/<digest>/`; the vault's copy is never written to, so opening a
 /// vault that already has Obsidian's bookmarks never creates a dotfile change
 /// and never needs Obsidian's format to be writable, only readable.
 ///
@@ -64,7 +64,7 @@ public:
     /// True when `id` names an existing group, which is then retitled.
     bool renameGroup(const QString &id, const QString &newTitle);
 
-    /// noteAppC's own storage path for this vault - public so the tests can
+    /// Notolith's own storage path for this vault - public so the tests can
     /// point isolated fixtures at it without a whole vault on disk.
     static QString storagePathFor(const QString &vaultRoot);
 

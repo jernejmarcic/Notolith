@@ -1,4 +1,5 @@
 #include "TexCompiler.h"
+#include "ConfigFile.h"
 
 #include "Bubblewrap.h"
 #include "SyscallFilter.h"
@@ -18,16 +19,10 @@ namespace noteAppC {
 
 namespace {
 
-/// `$XDG_CACHE_HOME/noteAppC/tex`, or `~/.cache/noteAppC/tex` when the
-/// variable is unset - the same fallback QStandardPaths itself uses, spelled
-/// out because GenericCacheLocation folds in the application name and this
-/// cache is meant to survive switching how noteAppC is invoked.
+/// `$XDG_CACHE_HOME/notolith/tex`, or `~/.cache/notolith/tex`.
 QString cacheRoot()
 {
-    QString base = qEnvironmentVariable("XDG_CACHE_HOME");
-    if (base.isEmpty())
-        base = QDir::homePath() + QStringLiteral("/.cache");
-    return base + QStringLiteral("/noteAppC/tex");
+    return appDir(XDGroot::Cache, QStringLiteral("tex"));
 }
 
 /// The last `maxLines` non-empty lines of pdflatex's log - enough to show
@@ -154,9 +149,9 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
     const bool succeeded = finished && process.exitStatus() == QProcess::NormalExit
                            && process.exitCode() == 0 && QFile::exists(producedPdf);
 
-    QDir().mkpath(outDir);
+    ensurePrivateDir(outDir);
     if (succeeded) {
-        QFile::remove(pdfPath); // mkpath already ensured outDir exists
+        QFile::remove(pdfPath); // ensurePrivateDir already ensured outDir exists
         if (QFile::copy(producedPdf, pdfPath)) {
             result.ok = true;
             result.pdfPath = pdfPath;

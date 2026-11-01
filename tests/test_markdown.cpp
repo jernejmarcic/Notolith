@@ -1592,8 +1592,8 @@ TEST(TaskStatesTest, CurrentReadsTasksIniOnFirstUseWithoutAnEditor)
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     QTemporaryDir config;
     ASSERT_TRUE(config.isValid());
-    ASSERT_TRUE(QDir(config.path()).mkpath(QStringLiteral("noteAppC")));
-    QFile ini(config.filePath(QStringLiteral("noteAppC/tasks.ini")));
+    ASSERT_TRUE(QDir(config.path()).mkpath(QStringLiteral("notolith")));
+    QFile ini(config.filePath(QStringLiteral("notolith/tasks.ini")));
     ASSERT_TRUE(ini.open(QIODevice::WriteOnly));
     ini.write("[waiting]\nchar = w\ntype = todo\n");
     ini.close();

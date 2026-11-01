@@ -27,7 +27,7 @@ struct SchemeInfo {
 class Scheme {
 public:
     /// Directories searched for schemes, vault first so a vault can carry its
-    /// own. `~/.config/noteAppC/themes` is the user-wide one.
+    /// own. `~/.config/notolith/themes` is the user-wide one.
     static QStringList searchPaths(const QString &vaultRoot = {});
 
     /// Every scheme found, including Obsidian themes under

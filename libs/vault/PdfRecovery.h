@@ -11,7 +11,7 @@ namespace noteAppC {
 /// about to overwrite it, so the user's file is never the only copy of
 /// itself. Not the same store as `Snapshots` - that one takes `QString`
 /// note text, and a PDF is binary - but the same directory shape and the
-/// same recovery page would read it: `$XDG_DATA_HOME/noteAppC/pdf-recovery/
+/// same recovery page would read it: `$XDG_DATA_HOME/notolith/pdf-recovery/
 /// <sha1 of the absolute path>/<milliseconds>.pdf`, plus a `path` file
 /// naming the original.
 class PdfRecovery {

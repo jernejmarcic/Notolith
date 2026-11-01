@@ -161,7 +161,7 @@ TEST_F(IconsTest, RemoteCacheKeyIsStableSoAPrecachedFileIsPickedUp)
         QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha256).toHex();
     const QString cachePath =
         QDir(cacheHome.path())
-            .filePath(QStringLiteral("noteAppC/icons/%1.svg").arg(QString::fromLatin1(hash)));
+            .filePath(QStringLiteral("notolith/icons/%1.svg").arg(QString::fromLatin1(hash)));
     writeFile(cachePath, glyphSVG());
 
     const QIcon first = Icons::icon(url, QColor(0, 0, 255), 32);

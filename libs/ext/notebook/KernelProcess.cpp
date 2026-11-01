@@ -1,4 +1,5 @@
 #include "KernelProcess.h"
+#include "ConfigFile.h"
 
 #include "SyscallFilter.h"
 
@@ -54,14 +55,17 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     // two kernels, two runtime dirs) and never under the vault or
     // the home directory (nothing here is a durable artifact: a kernel's
     // live sockets belong in a runtime dir). `JUPYTER_RUNTIME_DIR`
-    // is honoured when set, the same variable jupyter_client itself reads,
+    // is honoured when it is an absolute path, the same variable jupyter_client itself reads,
     // which is also how the tests point this at a temp dir without loading
-    // any of the user's own jupyter runtime state.
+    // any of the user's own jupyter runtime state. Else $XDG_RUNTIME_DIR/notolith, and only a
+    // session with none falls back on the temporary directory.
     QString root = qEnvironmentVariable("JUPYTER_RUNTIME_DIR");
+    if (!QDir::isAbsolutePath(root))
+        root = appDir(XDGroot::Runtime);
     if (root.isEmpty())
         root = QDir::tempPath();
-    QDir().mkpath(root);
-    m_runtimeDir = std::make_unique<QTemporaryDir>(root + QStringLiteral("/noteAppC-kernel-XXXXXX"));
+    ensurePrivateDir(root);
+    m_runtimeDir = std::make_unique<QTemporaryDir>(root + QStringLiteral("/notolith-kernel-XXXXXX"));
     if (!m_runtimeDir->isValid()) {
         m_error = QStringLiteral("could not create a kernel runtime directory under %1").arg(root);
         return false;

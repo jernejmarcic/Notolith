@@ -33,7 +33,7 @@ void writeFile(const QString &path, const QString &text)
 
 /// Every test in this binary starts from an empty, private config directory.
 /// Without it, anything that calls Settings::load() reads the developer's own
-/// ~/.config/noteAppC - which is how defaultsAreCompiledIn came to fail the
+/// ~/.config/notolith - which is how defaultsAreCompiledIn came to fail the
 /// moment someone picked the OLED theme in the real app. Tests that need a
 /// config of their own still point XDG_CONFIG_HOME somewhere else themselves.
 class PrivateConfigHome : public ::testing::Environment {
@@ -42,13 +42,20 @@ public:
     {
         ASSERT_TRUE(m_home.isValid());
         m_previous = qgetenv("XDG_CONFIG_HOME");
+        m_previousState = qgetenv("XDG_STATE_HOME");
         qputenv("XDG_CONFIG_HOME", m_home.path().toUtf8());
+        qputenv("XDG_STATE_HOME", m_home.path().toUtf8());
     }
-    void TearDown() override { qputenv("XDG_CONFIG_HOME", m_previous); }
+    void TearDown() override
+    {
+        qputenv("XDG_CONFIG_HOME", m_previous);
+        qputenv("XDG_STATE_HOME", m_previousState);
+    }
 
 private:
     QTemporaryDir m_home;
     QByteArray m_previous;
+    QByteArray m_previousState;
 };
 
 [[maybe_unused]] const auto *privateConfigHome =
@@ -83,7 +90,7 @@ TEST(Settings, whatRunsAnotherPersonsCodeIsOffUntilAskedFor)
 
 TEST(Settings, configLivesUnderXDG)
 {
-    EXPECT_TRUE(Settings::configDirectory().contains(QStringLiteral("noteAppC")));
+    EXPECT_TRUE(Settings::configDirectory().contains(QStringLiteral("notolith")));
     EXPECT_TRUE(Settings::configFile().endsWith(QStringLiteral(".ini")));
 }
 
@@ -307,8 +314,8 @@ TEST(Settings, theConfigDirectoryHasAShape)
     settings.setValue(QStringLiteral("editor.contentWidth"), 820);
     ASSERT_TRUE(settings.save());
 
-    EXPECT_TRUE(Settings::configFile().endsWith(QStringLiteral("noteAppC/settings.ini")));
-    EXPECT_TRUE(Settings::indexFile().endsWith(QStringLiteral("noteAppC/vaults.ini")));
+    EXPECT_TRUE(Settings::configFile().endsWith(QStringLiteral("notolith/settings.ini")));
+    EXPECT_TRUE(Settings::indexFile().endsWith(QStringLiteral("notolith/vaults.ini")));
     EXPECT_TRUE(QFileInfo(Settings::themesDirectory()).isDir());
     EXPECT_TRUE(QFileInfo(Settings::templatesDirectory()).isDir());
 }
@@ -582,7 +589,7 @@ TEST(Settings, formattingColoursRoundTripAndDefaultToTheTheme)
     EXPECT_TRUE(again.text(QStringLiteral("appearance.boldColorLight")).isEmpty());
     EXPECT_EQ(again.text(QStringLiteral("appearance.textHighlightBgDark")), QStringLiteral("rgba(255, 0, 0, 0.500)"));
 
-    QFile ini(QDir(home.path()).filePath(QStringLiteral("noteAppC/settings.ini")));
+    QFile ini(QDir(home.path()).filePath(QStringLiteral("notolith/settings.ini")));
     ASSERT_TRUE(ini.open(QIODevice::ReadOnly));
     const QByteArray written = ini.readAll();
     EXPECT_TRUE(written.contains("bold-color-dark")) << written.toStdString();
@@ -655,12 +662,18 @@ namespace {
 struct SharedConfig {
     QTemporaryDir home;
     QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    QByteArray previousState = qgetenv("XDG_STATE_HOME");
     SharedConfig()
     {
         QStandardPaths::setTestModeEnabled(false);
         qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+        qputenv("XDG_STATE_HOME", home.path().toUtf8());
     }
-    ~SharedConfig() { qputenv("XDG_CONFIG_HOME", previous); }
+    ~SharedConfig()
+    {
+        qputenv("XDG_CONFIG_HOME", previous);
+        qputenv("XDG_STATE_HOME", previousState);
+    }
 };
 
 } // namespace
@@ -713,8 +726,8 @@ TEST(Settings, ASaveThatMustNotStallGivesUpOnTheLockQuickly)
 {
     SharedConfig config;
     Settings settings = Settings::load();
-    ASSERT_TRUE(settings.save()); // makes the folder
-    QLockFile held(QDir(Settings::configDirectory()).filePath(QStringLiteral(".save.lock")));
+    ASSERT_TRUE(settings.save()); // makes the folders
+    QLockFile held(Settings::lockFile());
     ASSERT_TRUE(held.tryLock(0));
     settings.setValue(QStringLiteral("editor.tabWidth"), 2);
     QElapsedTimer timer;

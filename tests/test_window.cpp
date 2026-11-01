@@ -71,6 +71,7 @@
 #include "InkTestSupport.h"
 #include "Perf.h"
 #include "WaitFor.h"
+#include "ConfigFile.h"
 #include "SingleInstance.h"
 #include "FileTree.h"
 #include "MarkdownEditor.h"
@@ -187,12 +188,27 @@ QByteArray readAll(const QString &path)
     return file.readAll();
 }
 
+/// What the window saved about itself (geometry, splitter), in the state directory.
+QSettings windowState()
+{
+    return QSettings(noteAppC::appDir(noteAppC::XDGroot::State, QStringLiteral("window.ini")), QSettings::IniFormat);
+}
+
 /// A private settings directory for a test that flips switches, put back after.
 struct PrivateConfig {
     QTemporaryDir dir;
     QByteArray previous = qgetenv("XDG_CONFIG_HOME");
-    PrivateConfig() { qputenv("XDG_CONFIG_HOME", dir.path().toUtf8()); }
-    ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
+    QByteArray previousState = qgetenv("XDG_STATE_HOME");
+    PrivateConfig()
+    {
+        qputenv("XDG_CONFIG_HOME", dir.path().toUtf8());
+        qputenv("XDG_STATE_HOME", dir.path().toUtf8());
+    }
+    ~PrivateConfig()
+    {
+        qputenv("XDG_CONFIG_HOME", previous);
+        qputenv("XDG_STATE_HOME", previousState);
+    }
 };
 
 /// A settings directory as every real user has one: it exists and holds what the app remembers.
@@ -203,6 +219,7 @@ struct PrivateConfig {
 void useAConfigDirectory()
 {
     ASSERT_TRUE(QDir().mkpath(Settings::configDirectory()));
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(Settings::indexFile()).path()));
     QFile remembered(Settings::indexFile());
     ASSERT_TRUE(remembered.open(QIODevice::WriteOnly));
     ASSERT_GT(remembered.write("[state]\nrecent-vaults = /nowhere\n"), 0);
@@ -701,13 +718,15 @@ TEST_F(WindowTest, TheHeaderGraphButtonOpensTheGraph)
     EXPECT_EQ(window.findChild<QStackedWidget *>(QStringLiteral("mainStack"))->currentWidget(), graph);
 }
 
-// The graph controls are the app's own copy under the config directory; the
+// The graph controls are the app's own copy under the state directory; the
 // vault's .obsidian/graph.json is read, never written.
 TEST_F(WindowTest, GraphControlsSurviveARestartInTheAppsOwnCopy)
 {
     QTemporaryDir config;
     const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    const QByteArray previousState = qgetenv("XDG_STATE_HOME");
     qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    qputenv("XDG_STATE_HOME", config.path().toUtf8());
     write(QStringLiteral("A.md"), "[[B]]\n");
     write(QStringLiteral("B.md"), "b\n");
     {
@@ -722,7 +741,7 @@ TEST_F(WindowTest, GraphControlsSurviveARestartInTheAppsOwnCopy)
         options.search = QStringLiteral("path:A");
         graph->setOptions(options);
         emit graph->optionsChanged(); // what a control does
-        QDir saved(config.path() + QStringLiteral("/noteAppC/vaults"));
+        QDir saved(config.path() + QStringLiteral("/notolith/vaults"));
         ASSERT_TRUE(QTest::qWaitFor([&] { return !saved.entryList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty(); }, 3000));
     }
     EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral(".obsidian/graph.json")))) << "the vault's file is never written";
@@ -736,6 +755,7 @@ TEST_F(WindowTest, GraphControlsSurviveARestartInTheAppsOwnCopy)
         EXPECT_EQ(graph->options().search, QStringLiteral("path:A"));
     }
     qputenv("XDG_CONFIG_HOME", previous);
+    qputenv("XDG_STATE_HOME", previousState);
 }
 
 // The save is debounced 500 ms; opening another vault inside that window used
@@ -745,7 +765,9 @@ TEST_F(WindowTest, AGraphChangeJustBeforeAVaultSwitchIsSavedForItsOwnVault)
     QTemporaryDir config;
     QTemporaryDir other;
     const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    const QByteArray previousState = qgetenv("XDG_STATE_HOME");
     qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    qputenv("XDG_STATE_HOME", config.path().toUtf8());
     write(QStringLiteral("A.md"), "a\n");
     {
         MainWindow window;
@@ -760,12 +782,11 @@ TEST_F(WindowTest, AGraphChangeJustBeforeAVaultSwitchIsSavedForItsOwnVault)
         window.openVault(other.path()); // well inside the 500 ms
         QTest::qWait(900);
     }
-    const QString key = QString::fromLatin1(QCryptographicHash::hash(QDir(dir.path()).absolutePath().toUtf8(),
-                                                                     QCryptographicHash::Sha1).toHex());
-    QFile saved(config.path() + QStringLiteral("/noteAppC/vaults/%1/graph.json").arg(key));
+    QFile saved(config.path() + QStringLiteral("/notolith/vaults/%1/graph.json").arg(noteAppC::vaultDigest(dir.path())));
     ASSERT_TRUE(saved.open(QIODevice::ReadOnly)) << "the first vault's change was never written";
     EXPECT_EQ(QJsonDocument::fromJson(saved.readAll()).object().value(QStringLiteral("repelStrength")).toDouble(), 42.0);
     qputenv("XDG_CONFIG_HOME", previous);
+    qputenv("XDG_STATE_HOME", previousState);
 }
 
 TEST_F(WindowTest, LocalGraphFollowsTheOpenNote)
@@ -1156,7 +1177,7 @@ TEST_F(WindowTest, ClosingTheMainWindowClosesEveryPopout)
         EXPECT_FALSE(popout->isVisible());
     // The splitter state saved is the three-child main one (the sidebar was docked
     // before it was saved), which a fresh window restores.
-    QDataStream saved(QSettings().value(QStringLiteral("window/splitter")).toByteArray());
+    QDataStream saved(windowState().value(QStringLiteral("window/splitter")).toByteArray());
     qint32 magic = 0, version = 0;
     QList<int> sizes;
     saved >> magic >> version >> sizes; // what QSplitter::saveState() starts with
@@ -1165,7 +1186,7 @@ TEST_F(WindowTest, ClosingTheMainWindowClosesEveryPopout)
     auto *splitter = fresh.findChild<QSplitter *>(QStringLiteral("mainSplitter"));
     ASSERT_NE(splitter, nullptr);
     EXPECT_EQ(splitter->count(), 3);
-    EXPECT_TRUE(splitter->restoreState(QSettings().value(QStringLiteral("window/splitter")).toByteArray()));
+    EXPECT_TRUE(splitter->restoreState(windowState().value(QStringLiteral("window/splitter")).toByteArray()));
 }
 
 TEST_F(WindowTest, HotkeysWorkInsideAPopout)
@@ -4420,7 +4441,7 @@ int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     // noteAppC::Settings::configDirectory() is deliberately fixed to
-    // ~/.config/noteAppC regardless of QCoreApplication's org/app name (a
+    // ~/.config/notolith regardless of QCoreApplication's org/app name (a
     // vault or single file must not gain its own copy), so MainWindow now
     // reads and can save() there too. Every test here builds a MainWindow,
     // so without this the suite would read the developer's real settings
@@ -5069,7 +5090,7 @@ TEST_F(WindowTest, EverySaveIsInTheNotesHistoryAndOneCanBePutBack)
         EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("# Welcome\n\nBody.\none"));
     }
     // The history lives in the data home, and the vault gained nothing.
-    EXPECT_TRUE(QDir(data.path() + QStringLiteral("/noteAppC/history")).exists());
+    EXPECT_TRUE(QDir(data.path() + QStringLiteral("/notolith/history")).exists());
     EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral(".git"))));
     qputenv("XDG_DATA_HOME", previous);
 }
@@ -5079,7 +5100,7 @@ TEST_F(WindowTest, NoteHistoryCreatesItsRepositoryOnTheFirstSaveNotWhenTheVaultO
     QTemporaryDir data;
     const QByteArray previous = qgetenv("XDG_DATA_HOME");
     qputenv("XDG_DATA_HOME", data.path().toUtf8());
-    const QDir histories(data.path() + QStringLiteral("/noteAppC/history"));
+    const QDir histories(data.path() + QStringLiteral("/notolith/history"));
     {
         MainWindow window;
         window.openVault(dir.path());
@@ -5107,7 +5128,7 @@ TEST_F(WindowTest, NoteHistoryNeverSetsUpLibgit2OnTheWindowsThread)
         window.openNote(path(QStringLiteral("Welcome.md")));
         QTest::keyClicks(window.editor(), QStringLiteral("x"));
         ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
-        const QDir histories(data.path() + QStringLiteral("/noteAppC/history"));
+        const QDir histories(data.path() + QStringLiteral("/notolith/history"));
         WAIT_TRUE(histories.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1, 5000);
         EXPECT_EQ(NoteHistory::mainThreadSetupsForTests(), before);
     }
@@ -5129,7 +5150,7 @@ TEST_F(WindowTest, NoteHistoryOffMeansNoRepositoryAtAll)
         QTest::keyClicks(window.editor(), QStringLiteral("x"));
         ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
     }
-    EXPECT_FALSE(QDir(data.path() + QStringLiteral("/noteAppC/history")).exists());
+    EXPECT_FALSE(QDir(data.path() + QStringLiteral("/notolith/history")).exists());
     Settings on = Settings::load();
     on.setValue(QStringLiteral("plugins.noteHistory"), true);
     ASSERT_TRUE(on.save());
@@ -5173,11 +5194,11 @@ TEST_F(WindowTest, AnEnabledPluginsCommandIsAnActionAndItsFenceIsDrawn)
     const QByteArray previous = qgetenv("XDG_DATA_HOME");
     qputenv("XDG_DATA_HOME", data.path().toUtf8());
     qputenv("NOTEAPPC_PLUGIN_HOST", NOTEAPPC_PLUGIN_HOST_PATH);
-    const QString installed = data.path() + QStringLiteral("/noteAppC/plugins/word-stats");
+    const QString installed = data.path() + QStringLiteral("/notolith/plugins/word-stats");
     ASSERT_TRUE(QDir().mkpath(installed));
     for (const QString file : {QStringLiteral("plugin.ini"), QStringLiteral("libword-stats.so")})
         ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_WORD_STATS_PLUGIN_DIR "/") + file, installed + u'/' + file));
-    const QString grants = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/noteAppC/plugins.ini");
+    const QString grants = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/notolith/plugins.ini");
     {
         QSettings config(grants, QSettings::IniFormat);
         config.setValue(QStringLiteral("word-stats/enabled"), true);
@@ -7862,11 +7883,11 @@ TEST_F(WindowTest, APluginsQuestionIsADialogThatOKEscAndTheTimeoutAllAnswer)
     const QByteArray previous = qgetenv("XDG_DATA_HOME");
     qputenv("XDG_DATA_HOME", data.path().toUtf8());
     qputenv("NOTEAPPC_PLUGIN_HOST", NOTEAPPC_PLUGIN_HOST_PATH);
-    const QString installed = data.path() + QStringLiteral("/noteAppC/plugins/ai");
+    const QString installed = data.path() + QStringLiteral("/notolith/plugins/ai");
     ASSERT_TRUE(QDir().mkpath(installed));
     for (const QString file : {QStringLiteral("plugin.ini"), QStringLiteral("libai.so")})
         ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_AI_PLUGIN_DIR "/") + file, installed + u'/' + file));
-    const QString configHome = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/noteAppC");
+    const QString configHome = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/notolith");
     const QString grants = configHome + QStringLiteral("/plugins.ini");
     const QString aiConfig = configHome + QStringLiteral("/plugins/ai/ai.ini");
     ASSERT_TRUE(QDir().mkpath(QFileInfo(aiConfig).absolutePath()));
@@ -7939,11 +7960,11 @@ TEST_F(WindowTest, APluginReadsNothingOfAnEncryptedNote)
     const QByteArray previous = qgetenv("XDG_DATA_HOME");
     qputenv("XDG_DATA_HOME", data.path().toUtf8());
     qputenv("NOTEAPPC_PLUGIN_HOST", NOTEAPPC_PLUGIN_HOST_PATH);
-    const QString installed = data.path() + QStringLiteral("/noteAppC/plugins/word-stats");
+    const QString installed = data.path() + QStringLiteral("/notolith/plugins/word-stats");
     ASSERT_TRUE(QDir().mkpath(installed));
     for (const QString file : {QStringLiteral("plugin.ini"), QStringLiteral("libword-stats.so")})
         ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_WORD_STATS_PLUGIN_DIR "/") + file, installed + u'/' + file));
-    const QString grants = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/noteAppC/plugins.ini");
+    const QString grants = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/notolith/plugins.ini");
     {
         QSettings config(grants, QSettings::IniFormat);
         config.setValue(QStringLiteral("word-stats/enabled"), true);
@@ -9615,8 +9636,8 @@ TEST_F(InstanceTest, AVaultsSocketNameFollowsTheVaultAndTheOverride)
     EXPECT_EQ(SingleInstance::nameForVault(link), name);
 
     qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
-    const QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-    EXPECT_TRUE(SingleInstance::nameForVault(dir.path()).startsWith(runtime + QStringLiteral("/notolith-")));
+    const QString runtime = noteAppC::appDir(noteAppC::XDGroot::Runtime);
+    EXPECT_TRUE(SingleInstance::nameForVault(dir.path()).startsWith(runtime + QStringLiteral("/instance-")));
 }
 
 // Two vaults, two processes, each serving its own: a launch goes to the one that has its vault.

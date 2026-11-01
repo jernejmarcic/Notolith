@@ -38,8 +38,9 @@ LaunchTarget resolveLaunchTarget(const QString &argument);
 /// live.
 ///
 /// The defaults are compiled in. The user's own settings are read from
-/// `~/.config/noteAppC/noteAppC.conf` and are the only thing ever written, so
-/// running the app on a stray Markdown file leaves nothing behind. A vault may
+/// `~/.config/notolith/settings.ini`, and what the app remembers for itself in
+/// `~/.local/state/notolith/vaults.ini`; those two are the only things ever
+/// written, so running the app on a stray Markdown file leaves nothing behind. A vault may
 /// layer Obsidian's `app.json` and `appearance.json` on top, read-only, so an
 /// existing vault keeps its behaviour without being converted to anything.
 class Settings {
@@ -47,22 +48,25 @@ public:
     /// Defaults plus the user's config. `vaultRoot` adds the vault layer.
     static Settings load(const QString &vaultRoot = {});
 
-    /// The configuration directory, `~/.config/noteAppC`, created only when
+    /// The configuration directory, `~/.config/notolith`, created only when
     /// something is actually saved. Its shape:
     ///
-    ///     ~/.config/noteAppC/
+    ///     ~/.config/notolith/
     ///       settings.ini    what a person sets, grouped and commented
-    ///       vaults.ini      what the app remembers: known vaults, last note
     ///       themes/         colour schemes, one file each
     ///       templates/      note templates
     ///
-    /// Settings and memory are kept apart on purpose: `settings.ini` is meant
-    /// to be opened in an editor, and it would be unreadable if the app
-    /// rewrote it every time a note was opened.
+    /// What the app remembers for itself is state, not configuration, and goes
+    /// to `~/.local/state/notolith/vaults.ini`: known vaults, recent notes, the
+    /// last cursor in each. The two are kept apart on purpose: `settings.ini`
+    /// is meant to be opened in an editor, and it would be unreadable if the
+    /// app rewrote it every time a note was opened.
     static QString configDirectory();
     static QString configFile();
     /// Where the app's own memory goes, never the settings file.
     static QString indexFile();
+    /// The lock Settings::save() takes, in the runtime directory.
+    static QString lockFile();
     static QString themesDirectory();
     static QString templatesDirectory();
 
@@ -78,7 +82,7 @@ public:
     /// Drops the user's value, so the default (or the vault's) applies again.
     void reset(const QString &key);
 
-    /// Writes the user layer to `~/.config/noteAppC`. Never touches a vault.
+    /// Writes the user layer to `~/.config/notolith`. Never touches a vault.
     ///
     /// Several Notolith processes (one per vault) share those files, each
     /// holding the settings it loaded. So a save writes what this object changed since

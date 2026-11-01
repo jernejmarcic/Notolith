@@ -1,5 +1,6 @@
 #include "Settings.h"
 
+#include "ConfigFile.h"
 #include "FormatColours.h"
 
 #include <QColor>
@@ -381,7 +382,7 @@ bool writeINI(const QString &path, const QVariantMap &values, const QSet<QString
         lines = intro + lines;
     }
 
-    QDir().mkpath(QFileInfo(path).absolutePath());
+    ensurePrivateDir(QFileInfo(path).absolutePath());
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         if (error)
@@ -469,13 +470,7 @@ LaunchTarget resolveLaunchTarget(const QString &argument)
 
 QString Settings::configDirectory()
 {
-    // XDG straight from the environment rather than QStandardPaths, which
-    // needs an application name set and so answers differently in a tool or a
-    // test than it does in the app.
-    const QByteArray xdg = qgetenv("XDG_CONFIG_HOME");
-    const QString base = xdg.isEmpty() ? QDir::homePath() + QStringLiteral("/.config")
-                                       : QString::fromLocal8Bit(xdg);
-    return QDir(base).filePath(QStringLiteral("noteAppC"));
+    return appDir(XDGroot::Config);
 }
 
 QString Settings::configFile()
@@ -485,7 +480,16 @@ QString Settings::configFile()
 
 QString Settings::indexFile()
 {
-    return QDir(configDirectory()).filePath(QStringLiteral("vaults.ini"));
+    return appDir(XDGroot::State, QStringLiteral("vaults.ini"));
+}
+
+QString Settings::lockFile()
+{
+    // The runtime directory is gone with the login session, as a lock held by a process must be. Without
+    // one, the lock sits beside the file it guards.
+    const QString runtime = appDir(XDGroot::Runtime);
+    return runtime.isEmpty() ? indexFile() + QStringLiteral(".lock")
+                             : runtime + QStringLiteral("/settings.lock");
 }
 
 QString Settings::themesDirectory()
@@ -636,7 +640,7 @@ static QList<Settings::Feature> &mutableFeatures()
         {"canvas", QT_TRANSLATE_NOOP("Settings", "Canvas"),
          QT_TRANSLATE_NOOP("Settings", "Open .canvas files as boards of cards and connections."), true},
         {"community-plugins", QT_TRANSLATE_NOOP("Settings", "Community plugins"),
-         QT_TRANSLATE_NOOP("Settings", "Load plugins from ~/.local/share/noteAppC/plugins, each in its own "
+         QT_TRANSLATE_NOOP("Settings", "Load plugins from ~/.local/share/notolith/plugins, each in its own "
                                        "sandboxed process, with only the permissions you grant it."),
          false},
         {"daily-notes", QT_TRANSLATE_NOOP("Settings", "Daily notes"),
@@ -678,7 +682,7 @@ static QList<Settings::Feature> &mutableFeatures()
         {"task-states", QT_TRANSLATE_NOOP("Settings", "Checkbox states"),
          QT_TRANSLATE_NOOP("Settings", "Any character in a task's box is a state: [-] cancelled, [/] in progress, "
                                        "[~] dropped, [>] forwarded and more. A click cycles it, a right-click "
-                                       "picks one, and ~/.config/noteAppC/tasks.ini styles them."),
+                                       "picks one, and ~/.config/notolith/tasks.ini styles them."),
          false},
         {"graph", QT_TRANSLATE_NOOP("Settings", "Graph view"),
          QT_TRANSLATE_NOOP("Settings", "Show the links between notes as a graph, and the local graph in the "
@@ -968,14 +972,16 @@ void Settings::reset(const QString &key)
 
 bool Settings::save(QString *error, int lockWaitMs)
 {
-    QDir().mkpath(configDirectory());
-    QDir().mkpath(themesDirectory());
-    QDir().mkpath(templatesDirectory());
+    ensurePrivateDir(configDirectory());
+    ensurePrivateDir(themesDirectory());
+    ensurePrivateDir(templatesDirectory());
+    ensurePrivateDir(QFileInfo(indexFile()).absolutePath());
+    ensurePrivateDir(QFileInfo(lockFile()).absolutePath());
 
     // Another Notolith process may save between this one's read and its write, and it writes
     // what it merged from the same files: one at a time. Best effort - a lock that cannot be had
     // (a read-only directory fails below anyway) still gets the merge.
-    QLockFile lock(QDir(configDirectory()).filePath(QStringLiteral(".save.lock")));
+    QLockFile lock(lockFile());
     lock.setStaleLockTime(10000); // a save takes about 0.1 ms: 200 ms is long past a live owner
     lock.tryLock(lockWaitMs);
 
@@ -999,7 +1005,8 @@ bool Settings::save(QString *error, int lockWaitMs)
         "# about are kept when it writes this file.\n"
         "#\n"
         "# What the app remembers for itself - recent vaults and notes - lives\n"
-        "# in vaults.ini instead, so this file only changes when you do.\n");
+        "# in vaults.ini (in the XDG state directory) instead, so this file only\n"
+        "# changes when you do.\n");
     QSet<QString> known;
     for (const QString &key : keys())
         known.insert(key);

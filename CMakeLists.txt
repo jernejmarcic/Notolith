@@ -438,16 +438,19 @@ if(NOT ANDROID)
     install(FILES packaging/io.github.jernejmarcic.Notolith.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
     # The AI plugin ships as part of the package, the same layout
-    # ~/.local/share/noteAppC/plugins/ai/ uses (docs/PLUGINS.md) so a
-    # distribution can symlink or copy it into place post-install; the
-    # registry itself only ever scans $XDG_DATA_HOME today
-    # (PluginRegistry::pluginsRoot()), so this alone does not make a
-    # packaged install self-enable the plugin - that is still the user
-    # opting in from the Community plugins settings page, same as any
-    # plugin they installed by hand.
+    # ~/.local/share/notolith/plugins/ai/ uses (docs/PLUGINS.md). The registry
+    # scans every $XDG_DATA_HOME/$XDG_DATA_DIRS entry (PluginRegistry::pluginsRoots()),
+    # so a packaged install finds it, but it does not self-enable the plugin -
+    # that is still the user opting in from the Community plugins settings
+    # page, same as any plugin they installed by hand.
     if(TARGET ai)
-        install(TARGETS ai LIBRARY DESTINATION ${CMAKE_INSTALL_DATADIR}/noteAppC/plugins/ai)
+        install(TARGETS ai LIBRARY DESTINATION ${CMAKE_INSTALL_DATADIR}/notolith/plugins/ai)
         install(FILES plugins/ai/plugin.ini
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/noteAppC/plugins/ai)
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/notolith/plugins/ai)
     endif()
+    # MicroTeX's symbol tables, which MathRenderer finds under <data dir>/notolith/microtex/res. Its fonts
+    # are compiled in (libs/render/CMakeLists.txt).
+    install(DIRECTORY ${microtex_SOURCE_DIR}/res
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/notolith/microtex
+        PATTERN "fonts" EXCLUDE)
 endif()

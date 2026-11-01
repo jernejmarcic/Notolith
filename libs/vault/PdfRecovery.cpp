@@ -1,4 +1,5 @@
 #include "PdfRecovery.h"
+#include "ConfigFile.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -41,10 +42,7 @@ bool writeFile(const QString &path, const QByteArray &bytes)
 
 QString PdfRecovery::directory()
 {
-    const QString data = qEnvironmentVariableIsEmpty("XDG_DATA_HOME")
-                             ? QDir::homePath() + QStringLiteral("/.local/share")
-                             : qEnvironmentVariable("XDG_DATA_HOME");
-    return data + QStringLiteral("/noteAppC/pdf-recovery");
+    return appDir(XDGroot::Data, QStringLiteral("pdf-recovery"));
 }
 
 bool PdfRecovery::record(const QString &pdfPath, qint64 minimumIntervalMs, qint64 nowMs)
@@ -64,7 +62,7 @@ bool PdfRecovery::record(const QString &pdfPath, qint64 minimumIntervalMs, qint6
     }
 
     const QString dir = pdfDirectory(pdfPath);
-    if (!QDir().mkpath(dir))
+    if (!ensurePrivateDir(dir))
         return false;
     const QString pathFile = QDir(dir).filePath(QStringLiteral("path"));
     if (!QFileInfo::exists(pathFile)

@@ -6,8 +6,8 @@
 namespace noteAppC {
 
 /// Icons a writer gives files and folders in the file explorer and on tabs.
-/// UI only: kept in noteAppC's own `vaults/<digest>/icons.json` under the
-/// config directory, never in a file name and never in the vault. Keys are
+/// UI only: kept in Notolith's own `vaults/<digest>/icons.json` under the
+/// data directory (`~/.local/share/notolith`), never in a file name and never in the vault. Keys are
 /// vault-relative paths, files with their extension; a value is a bundled
 /// icon id or one character.
 class FileIcons {

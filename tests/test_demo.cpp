@@ -421,7 +421,7 @@ TEST(DemoVaultTest, EveryCommandRunsWithoutWarnings)
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
-    // Settings::configDirectory() is fixed to ~/.config/noteAppC regardless
+    // Settings::configDirectory() is fixed to ~/.config/notolith regardless
     // of QCoreApplication's org/app name, so every test that builds a
     // MainWindow needs its own XDG_CONFIG_HOME - otherwise this would read
     // and could write whoever runs it their real settings file.

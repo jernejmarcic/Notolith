@@ -1,4 +1,5 @@
 #include "Snapshots.h"
+#include "ConfigFile.h"
 #include "Vault.h"
 
 #include <QCryptographicHash>
@@ -48,10 +49,7 @@ QString Snapshots::directory()
 {
     // Data, not cache: a cache may be cleared at will, and these are the
     // copies someone reaches for after losing the original.
-    const QString data = qEnvironmentVariableIsEmpty("XDG_DATA_HOME")
-                             ? QDir::homePath() + QStringLiteral("/.local/share")
-                             : qEnvironmentVariable("XDG_DATA_HOME");
-    return data + QStringLiteral("/noteAppC/recovery");
+    return appDir(XDGroot::Data, QStringLiteral("recovery"));
 }
 
 bool Snapshots::record(const QString &notePath, const QString &text, qint64 minimumIntervalMs,
@@ -69,7 +67,7 @@ bool Snapshots::record(const QString &notePath, const QString &text, qint64 mini
             return false;
     }
     const QString dir = noteDirectory(notePath);
-    if (!QDir().mkpath(dir))
+    if (!ensurePrivateDir(dir))
         return false;
     const QString pathFile = QDir(dir).filePath(QStringLiteral("path"));
     if (!QFileInfo::exists(pathFile)

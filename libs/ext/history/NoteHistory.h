@@ -12,7 +12,7 @@ namespace noteAppC {
 /// with git's object store doing the diffing and packing.
 ///
 /// The repository is bare and lives outside the vault, under
-/// `$XDG_DATA_HOME/noteAppC/history/<vault digest>.git`, so the vault never
+/// `$XDG_DATA_HOME/notolith/history/<vault digest>.git`, so the vault never
 /// gains a dotfile and a vault that is itself a git repository is not
 /// touched. Each note has a ref of its own (`refs/notes/<digest of its
 /// vault-relative path>`) whose commits hold only that note: a save writes

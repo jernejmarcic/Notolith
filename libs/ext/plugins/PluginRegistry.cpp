@@ -3,6 +3,8 @@
 #include <QDir>
 #include <QSettings>
 
+#include "ConfigFile.h"
+
 #include <utility>
 
 namespace noteAppC {
@@ -38,18 +40,20 @@ PluginRegistry::~PluginRegistry()
 
 QString PluginRegistry::pluginsRoot()
 {
-    QString base = qEnvironmentVariable("XDG_DATA_HOME");
-    if (base.isEmpty())
-        base = QDir::homePath() + QStringLiteral("/.local/share");
-    return base + QStringLiteral("/noteAppC/plugins");
+    return appDir(XDGroot::Data, QStringLiteral("plugins"));
+}
+
+QStringList PluginRegistry::pluginsRoots()
+{
+    QStringList roots;
+    for (const QString &data : xdgSearchDirs(XDGroot::Data))
+        roots << data + QLatin1Char('/') + kAppDirName + QStringLiteral("/plugins");
+    return roots;
 }
 
 QString PluginRegistry::configPath()
 {
-    QString base = qEnvironmentVariable("XDG_CONFIG_HOME");
-    if (base.isEmpty())
-        base = QDir::homePath() + QStringLiteral("/.config");
-    return base + QStringLiteral("/noteAppC/plugins.ini");
+    return appDir(XDGroot::Config, QStringLiteral("plugins.ini"));
 }
 
 void PluginRegistry::loadConfig()
@@ -88,16 +92,19 @@ void PluginRegistry::scan(bool enabled)
     if (!enabled)
         return; // "off means no plugin.ini is even read" - not even the directory is opened
 
-    const QDir root(pluginsRoot());
-    for (const QString &entry :
-        root.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
-        PluginManifest manifest = PluginManifest::load(root.filePath(entry));
-        if (!manifest.isValid()) {
-            if (m_callbacks.log)
-                m_callbacks.log(entry, QStringLiteral("skipped: ") + manifest.error());
-            continue;
+    // The user's directory first: a plugin the user installed shadows a system-wide one of the same id.
+    for (const QString &rootPath : pluginsRoots()) {
+        const QDir root(rootPath);
+        for (const QString &entry : root.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+            PluginManifest manifest = PluginManifest::load(root.filePath(entry));
+            if (!manifest.isValid()) {
+                if (m_callbacks.log)
+                    m_callbacks.log(entry, QStringLiteral("skipped: ") + manifest.error());
+                continue;
+            }
+            if (!m_manifests.contains(manifest.id()))
+                m_manifests.insert(manifest.id(), manifest);
         }
-        m_manifests.insert(manifest.id(), manifest);
     }
     loadConfig();
 }

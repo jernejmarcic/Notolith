@@ -1,7 +1,7 @@
 // Linked into every test binary (tests/CMakeLists.txt). Points the XDG homes at
 // the build's isolated-home before main() runs, so a test binary started by
-// hand, not through ctest, still never touches the real ~/.config, ~/.cache or
-// ~/.local/share - a direct run once left thousands of history repos there.
+// hand, not through ctest, still never touches the real ~/.config, ~/.cache,
+// ~/.local/share or ~/.local/state - a direct run once left thousands of history repos there.
 #include <cstdlib>
 #include <filesystem>
 #include <string>
@@ -12,6 +12,7 @@ const bool isolatedHome = [] {
     setenv("XDG_CONFIG_HOME", (home + "/config").c_str(), 1);
     setenv("XDG_CACHE_HOME", (home + "/cache").c_str(), 1);
     setenv("XDG_DATA_HOME", (home + "/data").c_str(), 1);
+    setenv("XDG_STATE_HOME", (home + "/state").c_str(), 1);
     // No test process reaches a Notolith someone is using: its single-instance sockets are
     // named under a runtime directory of its own, whatever the person's $XDG_RUNTIME_DIR holds.
     // A directory per process, short enough for a unix socket path, removed when it ends.

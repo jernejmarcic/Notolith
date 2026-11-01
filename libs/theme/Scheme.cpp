@@ -241,13 +241,8 @@ QStringList Scheme::searchPaths(const QString &vaultRoot)
         paths << QDir(vaultRoot).filePath(QStringLiteral(".obsidian/noteAppC-themes"));
         paths << QDir(vaultRoot).filePath(QStringLiteral(".obsidian/themes"));
     }
-    // configFilePath(), not QStandardPaths::AppConfigLocation: the latter needs
-    // an application name to answer, so it names a different directory in a
-    // tool or a test than it does in the app - and here it named one directory
-    // too deep, noteAppC/noteAppC/themes, because main.cpp sets both the
-    // organisation and the application name to "noteAppC". configFilePath()
-    // is the same resolution Settings::themesDirectory() documents, so a theme
-    // put where the docs say is the theme found here.
+    // configFilePath() is the same resolution Settings::themesDirectory()
+    // documents, so a theme put where the docs say is the theme found here.
     paths << configFilePath(QStringLiteral("themes"));
     return paths;
 }

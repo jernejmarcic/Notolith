@@ -216,7 +216,7 @@ void SpellChecker::savePersonal() const
     // The whole list is rewritten, atomically: a file that is half written
     // when the power goes would lose every word in it.
     const QString path = personalDictionaryPath();
-    QDir().mkpath(QFileInfo(path).absolutePath());
+    ensurePrivateDir(QFileInfo(path).absolutePath());
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
         return;

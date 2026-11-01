@@ -1,4 +1,5 @@
 #include "PluginHost.h"
+#include "ConfigFile.h"
 
 #include "Bubblewrap.h"
 #include "SyscallFilter.h"
@@ -127,15 +128,13 @@ QStringList PluginHost::sandboxArguments(QString *program) const
     const QString hostBinaryDir = QFileInfo(hostBinary).absolutePath();
 
     // A plugin's own config, outside the vault: its own directory,
-    // $XDG_CONFIG_HOME/noteAppC/plugins/<id>, and nothing else of noteAppC's
+    // $XDG_CONFIG_HOME/notolith/plugins/<id>, and nothing else of Notolith's
     // - the app's settings name the vaults and the sync account, which is
-    // no plugin's business. Computed from the app's own environment, the
-    // same fallback PluginRegistry::configPath() uses, so the bind's source
-    // and the value handed to the sandboxed process below name one place.
-    QString configHome = qEnvironmentVariable("XDG_CONFIG_HOME");
-    if (configHome.isEmpty())
-        configHome = QDir::homePath() + QStringLiteral("/.config");
-    const QString noteAppCConfigDir = configHome + QStringLiteral("/noteAppC/plugins/") + m_manifest.id();
+    // no plugin's business. Computed from the same helper
+    // PluginRegistry::configPath() uses, so the bind's source and the value
+    // handed to the sandboxed process below name one place.
+    const QString configHome = xdgRoot(XDGroot::Config);
+    const QString noteAppCConfigDir = appDir(XDGroot::Config, QStringLiteral("plugins/") + m_manifest.id());
 
     *program = bwrap;
     // Not all of /etc (machine-id, hostname, user list): the sandbox's short list, and for a plugin that was

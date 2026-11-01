@@ -29,7 +29,7 @@ struct AiConfig {
     QString translateModel;      ///< empty: `model`
     int askTimeoutMs = 120000;   ///< how long "Ask a question" waits for the person to type
 
-    /// `$XDG_CONFIG_HOME/noteAppC/ai.ini` - the same fallback
+    /// `$XDG_CONFIG_HOME/notolith/plugins/ai/ai.ini` - the same helper
     /// PluginRegistry::configPath() uses, so this resolves to the directory
     /// PluginHost::sandboxArguments() bound read-only for every plugin.
     static QString path();

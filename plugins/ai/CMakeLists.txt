@@ -11,7 +11,7 @@
 # tests; only the sandbox/timeout/secret-handling tests need the real thing.
 add_library(noteAppC_ai_provider STATIC AiConfig.h AiConfig.cpp AiProvider.h AiProvider.cpp)
 target_include_directories(noteAppC_ai_provider PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_ai_provider PUBLIC Qt6::Core PkgConfig::CURL)
+target_link_libraries(noteAppC_ai_provider PUBLIC Qt6::Core PkgConfig::CURL noteAppC_xdg)
 
 # MODULE, not SHARED: loaded exclusively with dlopen() inside
 # noteAppC-plugin-host, the same as word-stats.
@@ -21,7 +21,7 @@ target_link_libraries(ai PRIVATE noteAppC_ai_provider Qt6::Core)
 set_target_properties(ai PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/plugins/ai)
 
 # plugin.ini sits next to the built library, the same layout as an installed
-# ~/.local/share/noteAppC/plugins/ai/ directory - PluginManifest and
+# ~/.local/share/notolith/plugins/ai/ directory - PluginManifest and
 # tests/test_ai_plugin.cpp both point straight at this build-tree directory.
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/plugin.ini
     ${CMAKE_BINARY_DIR}/plugins/ai/plugin.ini COPYONLY)

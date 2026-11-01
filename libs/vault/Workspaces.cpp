@@ -6,16 +6,17 @@
 #include <QJsonDocument>
 #include <QSaveFile>
 
-#include "Bookmarks.h"
+#include "ConfigFile.h"
 
 namespace noteAppC {
 
 namespace {
 
-/// The per-vault directory noteAppC keeps its own copies in.
-QString ownDirectory(const QString &vaultRoot)
+/// The per-vault directory Notolith keeps its own copies in: the layout being open right now is state, the
+/// named layouts a person made are data.
+QString ownDirectory(const QString &vaultRoot, XDGroot root)
 {
-    return QFileInfo(Bookmarks::storagePathFor(vaultRoot)).absolutePath();
+    return appDir(root, QStringLiteral("vaults/") + vaultDigest(vaultRoot));
 }
 
 QJsonObject readJSON(const QString &path)
@@ -28,18 +29,18 @@ QJsonObject readJSON(const QString &path)
 
 } // namespace
 
-QJsonObject Workspaces::read(const QString &vaultRoot, const QString &fileName)
+QJsonObject Workspaces::read(const QString &vaultRoot, const QString &fileName, XDGroot root)
 {
-    const QString own = QDir(ownDirectory(vaultRoot)).filePath(fileName);
+    const QString own = QDir(ownDirectory(vaultRoot, root)).filePath(fileName);
     if (QFileInfo::exists(own))
         return readJSON(own);
     return readJSON(QDir(vaultRoot).filePath(QStringLiteral(".obsidian/") + fileName));
 }
 
-bool Workspaces::write(const QString &vaultRoot, const QString &fileName, const QJsonObject &json)
+bool Workspaces::write(const QString &vaultRoot, const QString &fileName, XDGroot root, const QJsonObject &json)
 {
-    const QString dir = ownDirectory(vaultRoot);
-    if (!QDir().mkpath(dir))
+    const QString dir = ownDirectory(vaultRoot, root);
+    if (!ensurePrivateDir(dir))
         return false;
     QSaveFile file(QDir(dir).filePath(fileName));
     if (!file.open(QIODevice::WriteOnly))
@@ -50,22 +51,22 @@ bool Workspaces::write(const QString &vaultRoot, const QString &fileName, const 
 
 QJsonObject Workspaces::current(const QString &vaultRoot)
 {
-    return read(vaultRoot, QStringLiteral("workspace.json"));
+    return read(vaultRoot, QStringLiteral("workspace.json"), XDGroot::State);
 }
 
 bool Workspaces::saveCurrent(const QString &vaultRoot, const QJsonObject &layout)
 {
-    return write(vaultRoot, QStringLiteral("workspace.json"), layout);
+    return write(vaultRoot, QStringLiteral("workspace.json"), XDGroot::State, layout);
 }
 
 QJsonObject Workspaces::named(const QString &vaultRoot)
 {
-    return read(vaultRoot, QStringLiteral("workspaces.json"));
+    return read(vaultRoot, QStringLiteral("workspaces.json"), XDGroot::Data);
 }
 
 bool Workspaces::saveNamed(const QString &vaultRoot, const QJsonObject &all)
 {
-    return write(vaultRoot, QStringLiteral("workspaces.json"), all);
+    return write(vaultRoot, QStringLiteral("workspaces.json"), XDGroot::Data, all);
 }
 
 } // namespace noteAppC

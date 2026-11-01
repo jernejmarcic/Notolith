@@ -19,7 +19,7 @@ struct EpubPosition {
 
 /// Remembers a reading position per book, the way Settings::notePosition()
 /// remembers a note's caret and scroll - "outside the vault", in the same
-/// `~/.config/noteAppC` directory, never inside it. A plain, self-contained
+/// `~/.config/notolith` directory, never inside it. A plain, self-contained
 /// INI keyed by the book's own path rather than a new key in Settings
 /// itself: this module does not otherwise depend on libs/settings, and a
 /// second small file next to settings.ini/vaults.ini costs nothing that

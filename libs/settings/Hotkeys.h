@@ -14,7 +14,7 @@ namespace noteAppC {
 ///
 /// Two files, the later winning per command: the vault's
 /// `.obsidian/hotkeys.json`, read when present so an Obsidian user keeps their
-/// keys, and noteAppC's own `~/.config/noteAppC/hotkeys.json`, which is the
+/// keys, and Notolith's own `~/.config/notolith/hotkeys.json`, which is the
 /// only one ever written. A command in neither keeps its built-in keys.
 class Hotkeys {
 public:
