@@ -49,6 +49,8 @@ endif()
 # below that reaches the network or encrypts (NETWORK, AI_PLUGIN, SYNC, ENCRYPTION, SHARE_YRS, SHARE) is OFF; a
 # developer turns one on knowing what it adds. Docs: docs/OFFLINE.md.
 option(NOTEAPPC_WITH_NETWORK "Fetch remote content: reference blocks and icons from a URL, DICT word lookup (Qt6::Network clients)" OFF)
+# Defines BUILD_TESTING (default ON), which the default below reads.
+include(CTest)
 # Native code is loaded from places an environment variable could name only in a developer's build: the
 # NOTEAPPC_MODULE_DIRS list of module directories and the NOTEAPPC_PLUGIN_HOST binary are ignored unless this is
 # ON, which it is by default only when the tests are built (-DBUILD_TESTING=ON). A release leaves it OFF.
@@ -438,7 +440,6 @@ if(NOT ANDROID)
     endif()
 endif()
 
-include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
