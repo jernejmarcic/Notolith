@@ -73,8 +73,9 @@ the image cache and the reveal are shared with them:
 
 - `src` resolves as a Markdown image's does (vault-relative, note-relative,
   attachment folder, through the window's link resolver). Only a relative
-  path or an `http(s)` URL is an image at all, and a remote URL is the
-  resolver's call exactly as for `![](https://...)`: nothing is fetched here.
+  path or an `http(s)` URL is an image at all, and a remote URL is handled
+  exactly as for `![](https://...)`: nothing is fetched until it is asked
+  for (see "Remote images").
   `javascript:`, `data:`, `file:` and `//host` sources are never drawn; the
   tag stays as source text. A target that is not a decodable image (a PDF, a
   note) is a missing file, not an embed of it.
@@ -1654,6 +1655,18 @@ most 256 px) and kept per path, mtime and size; the card is laid out without it
 first and grows from 52 to 96 px when it lands. A book with no cover, or one
 that does not decode, stays the plain card. Built with the EPUB module
 (`NOTEAPPC_WITH_EPUB`); without it the card is always the plain one.
+
+## Remote images
+
+`![](https://host/x.png)` and `<img src="https://...">` show a placeholder (host, "Load image", and
+"Always load from <host>" when there is room) and fetch nothing until a click or an origin remembered by
+an earlier "Always". Only in a `NOTEAPPC_WITH_NETWORK=ON` build; the default build shows the text.
+`docs/OFFLINE.md` ("Remote images") has the rules for what is fetched, the sandboxed decoder, the cache and
+the allowlist. In the code: `libs/remoteimage` (fetch, cache, helper client, `RemoteImages`) and
+`libs/editor/RemoteImageBlock.cpp` (the placeholder and the swap for the picture). The placeholder is the
+file-card block; a loaded image goes through `layoutImage` like a local one. A note's "Load image" is
+forgotten by `setNoteText`; a decoded picture is kept, and shown again only for an image that was asked for
+or whose origin is allowed. Tests: `RemoteImageEditorTest.*` and the others in `tests/test_remote_images.cpp`.
 
 ## Renaming and links
 

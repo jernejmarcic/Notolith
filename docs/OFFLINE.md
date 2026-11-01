@@ -6,7 +6,7 @@ does is a CMake option, `OFF` by default:
 
 | option | what it adds | needs |
 |---|---|---|
-| `NOTEAPPC_WITH_NETWORK` | `reference` blocks that fetch a URL, remote icons, word lookup from a DICT server, and the network permission of a plugin | Qt6::Network |
+| `NOTEAPPC_WITH_NETWORK` | `reference` blocks that fetch a URL, remote icons, remote images, word lookup from a DICT server, and the network permission of a plugin | Qt6::Network, bubblewrap at run time for images |
 | `NOTEAPPC_WITH_AI_PLUGIN` | `plugins/ai` (turns `NOTEAPPC_WITH_NETWORK` on) | libcurl |
 | `NOTEAPPC_WITH_SYNC` | sync to a server (`SYNC.md`) | libsodium, Qt6Keychain |
 | `NOTEAPPC_WITH_ENCRYPTION` | encrypted notes, `.mdlock` (`ENCRYPTION.md`) | libsodium |
@@ -38,8 +38,9 @@ What remains, and why it is not the app talking to a network:
   click. The app sends nothing.
 - Notebook kernels talk over libzmq on `ipc://` sockets only, in a sandbox with
   its network namespace unshared.
-- Remote images in notes (`![](https://...)`) are not fetched in any build:
-  there is no fetching code for them.
+- Remote images in notes (`![](https://...)`, `<img src="https://...">`) are fetched only with
+  `NOTEAPPC_WITH_NETWORK=ON`, and only when asked (next section). The default build has no code for
+  them and shows the text.
 - With `NOTEAPPC_WITH_NETWORK=ON`, every fetch that exists (a `reference`
   block with a URL, an icon given as a link) is behind one setting,
   `editor.remote-references` (Settings > Editor > "Fetch remote content"),
@@ -64,3 +65,47 @@ single-instance socket, notebook `ipc://`) pass. The trap applies to the test
 process only, not to programs it starts (a Jupyter kernel binds its own
 loopback ports). The `nettrap_*` entries run a probe that makes each call, so
 the trap itself is tested.
+
+## Remote images
+
+Only a `NOTEAPPC_WITH_NETWORK=ON` build. Nothing in a vault makes a request or decodes an image on its own:
+
+- Opening a note draws a small placeholder for each remote image: the host and a "Load image" button.
+  A click loads that image for as long as the note is open. "Always load from <host>" also remembers the
+  origin (`https://host[:port]`), and images from it load without a click. The list is the file
+  `remote-image-hosts` in the application's state directory (`$XDG_STATE_HOME/notolith`), never in a vault.
+  Settings > Editor > "Remote images" > "Clear list" empties it. The row "Fetch remote content" does not
+  govern images: the click does.
+- Fetch: https only (http shows a notice). No `user:pass` in the URL. No `localhost`, `*.localhost`, and no
+  host that is, or resolves to, a loopback, private, link-local, shared (CGNAT) or unique-local address.
+  At most 3 redirects, each checked by the same rules and never to http. No cookies, no credentials, no
+  `Referer`, `User-Agent: Notolith`, no compression. At most 20 MiB (stopped on Content-Length or while
+  reading) and 30 s in all. DNS rebinding is not covered: a name is resolved for the check and again for the
+  request, as for `reference` blocks.
+- What the bytes are is told by their first bytes: PNG, JPEG, GIF or WebP, and nothing else (SVG, BMP, TIFF
+  and the rest are refused, whatever the Content-Type or the file name says).
+- Decode: out of process. `notolith-imagedecode` (installed in `<libexec>/notolith`) reads the bytes on
+  stdin and writes a 20-byte header (width, height, format) and raw pixels on stdout. The app starts it
+  under bubblewrap with no network, no home, the seccomp filter and CPU, memory and file-size limits
+  (`libs/sandbox`). Inside it, `QImageReader` has the allocation limit at 64 MiB and the pixel count from
+  the header is capped at 16 megapixels before any decoding. The app checks the reply (magic, status,
+  dimensions, the format it sniffed itself, exactly 4 bytes per pixel) before it makes a `QImage`. A GIF
+  shows its first frame. Without bubblewrap, or without the helper, nothing is downloaded or decoded and
+  the placeholder says so. One helper process per image: a hostile image never meets another one.
+- Cache: the original bytes in `$XDG_CACHE_HOME/notolith/remote-images/` (directory 0700, files 0600),
+  named by the SHA-256 of the URL, at most 100 MiB in all, the oldest removed first. They have no expiry,
+  and cached bytes go through the helper like fresh ones. A cached image still needs the click.
+- An image in a table cell stays source text.
+
+Measured on starbase-1 (median of 9, the helper under bubblewrap, at idle priority on 12 cores):
+
+| image | in-process decode | helper, new process | helper, kept running |
+|---|---|---|---|
+| 1 MP PNG | 11 ms | 27-37 ms | 14-18 ms |
+| 4 MP JPEG | 10 ms | 40-58 ms | 27-35 ms |
+
+Starting the sandbox and the helper with nothing to decode takes 9-13 ms; the rest is the decode and the
+pixels (4 MiB or 16 MiB) crossing a pipe and being copied. A helper kept running saves 12-24 ms an image and
+was left out: it would hold every image from every site in one process. Neither fits a 10 ms budget, and a
+local image does not go through the helper, so the budget does not apply; for a remote one the network is
+the cost. The numbers come from `ImageDecoderTest.DISABLED_Latency` in `tests/test_remote_images.cpp`.
