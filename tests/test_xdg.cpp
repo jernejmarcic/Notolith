@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QSettings>
@@ -16,26 +17,31 @@
 
 #include <QCryptographicHash>
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 using namespace noteAppC;
 
 namespace {
 
-/// Every variable the helper reads, put back after the test.
+/// Every variable the helper and the socket names read, put back after the test.
 struct Environment {
     static constexpr const char *names[] = {"HOME",           "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
-                                            "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS"};
-    QByteArray saved[8];
-    bool wasSet[8];
+                                            "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS",
+                                            "TMPDIR",         "NOTEAPPC_INSTANCE_SOCKET"};
+    static constexpr int count = sizeof names / sizeof names[0];
+    QByteArray saved[count];
+    bool wasSet[count];
     Environment()
     {
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < count; ++i) {
             wasSet[i] = qEnvironmentVariableIsSet(names[i]);
             saved[i] = qgetenv(names[i]);
         }
     }
     ~Environment()
     {
-        for (int i = 0; i < 8; ++i) {
+        for (int i = 0; i < count; ++i) {
             if (wasSet[i])
                 qputenv(names[i], saved[i]);
             else
@@ -114,6 +120,9 @@ TEST(XDGroot, EachBaseDirectoryIsTheAbsoluteVariableOrTheSpecDefault)
 TEST(XDGroot, TheRuntimeDirectoryIsTheAbsoluteVariableOrWhatQtMakes)
 {
     Environment environment;
+    // Qt makes $TMPDIR/runtime-<user> when there is no usable variable: here, never in the machine's /tmp.
+    QTemporaryDir tmp;
+    qputenv("TMPDIR", tmp.path().toUtf8());
     qputenv("XDG_RUNTIME_DIR", "/run/user/4242/");
     EXPECT_EQ(xdgRoot(XDGroot::Runtime), QStringLiteral("/run/user/4242"));
     EXPECT_EQ(appDir(XDGroot::Runtime), QStringLiteral("/run/user/4242/notolith"));
@@ -269,7 +278,8 @@ TEST(StorageMigration, EveryFileLandsWhereTheSpecPutsItAndTheOldDirectoriesGo)
     EXPECT_TRUE(QFileInfo::exists(s + QStringLiteral("vaults/") + machine.digest + QStringLiteral("/workspace.json")));
     EXPECT_EQ(read(s + QStringLiteral("vaults/") + machine.digest + QStringLiteral("/graph.json")), QByteArray("{\"graph\":1}"))
         << "re-keyed by the recent-vaults list";
-    EXPECT_FALSE(QFileInfo::exists(s + QStringLiteral("vaults/") + machine.strangerKey)) << "a vault nobody remembers";
+    EXPECT_EQ(read(s + QStringLiteral("vaults/") + machine.strangerKey + QStringLiteral("/graph.json")), QByteArray("{\"graph\":2}"))
+        << "a vault nobody remembers keeps its file under the key it had";
     EXPECT_TRUE(QFileInfo::exists(s + QStringLiteral("link.log")));
     // What a person made is data.
     for (const char *name : {"bookmarks.json", "icons.json", "workspaces.json"})
@@ -289,7 +299,8 @@ TEST(StorageMigration, EveryFileLandsWhereTheSpecPutsItAndTheOldDirectoriesGo)
     EXPECT_FALSE(window.value(QStringLiteral("window/rightSidebar")).toBool());
     EXPECT_EQ(window.value(QStringLiteral("publish/") + machine.digest + QStringLiteral("/folder")).toString(),
               QStringLiteral("Public"));
-    EXPECT_FALSE(window.contains(QStringLiteral("publish/") + machine.strangerKey + QStringLiteral("/folder")));
+    EXPECT_EQ(window.value(QStringLiteral("publish/") + machine.strangerKey + QStringLiteral("/folder")).toString(),
+              QStringLiteral("Lost"));
     EXPECT_FALSE(window.contains(QStringLiteral("publish/") + machine.oldKey + QStringLiteral("/folder")));
 
     // The recent vaults came along, and the cache is gone rather than moved.
@@ -301,6 +312,7 @@ TEST(StorageMigration, EveryFileLandsWhereTheSpecPutsItAndTheOldDirectoriesGo)
         EXPECT_FALSE(QFileInfo::exists(old + QStringLiteral("/noteAppC"))) << old.toStdString();
     // The directories it made are the user's alone.
     EXPECT_EQ(mode(s), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
 }
 
 TEST(StorageMigration, ARunThatHasHappenedIsNotRepeatedAndAFreshMachineIsLeftAlone)
@@ -327,8 +339,14 @@ TEST(StorageMigration, ADestinationThatExistsIsNeverOverwritten)
     write(machine.config + QStringLiteral("/notolith/settings.ini"), "[editor]\ntab-width = 8\n");
     write(machine.data + QStringLiteral("/notolith/recovery/n1/path"), "/mine/Note.md");
 
-    migrateStorage();
+    QStringList warnings;
+    migrateStorage(nullptr, &warnings);
 
+    // Said once per file, and once more in all.
+    EXPECT_EQ(warnings.filter(QStringLiteral("settings.ini")).size(), 1);
+    EXPECT_EQ(warnings.filter(QStringLiteral("already exists")).size(), 2);
+    EXPECT_EQ(warnings.size(), 3);
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Retry) << "a later start tries again";
     EXPECT_EQ(read(machine.config + QStringLiteral("/notolith/settings.ini")), QByteArray("[editor]\ntab-width = 8\n"));
     EXPECT_EQ(read(machine.data + QStringLiteral("/notolith/recovery/n1/path")), QByteArray("/mine/Note.md"));
     // What could not move stays where it was, for the person to look at.
@@ -337,6 +355,16 @@ TEST(StorageMigration, ADestinationThatExistsIsNeverOverwritten)
     // Everything else did move.
     EXPECT_TRUE(QFileInfo::exists(machine.config + QStringLiteral("/notolith/themes/Mine.json")));
     EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/noteAppC/themes")));
+
+    // The person sorts the clash out; the next start finishes the job and ends it.
+    QFile::remove(machine.config + QStringLiteral("/notolith/settings.ini"));
+    QFile::remove(machine.data + QStringLiteral("/notolith/recovery/n1/path"));
+    warnings.clear();
+    EXPECT_EQ(migrateStorage(nullptr, &warnings), 2);
+    EXPECT_TRUE(warnings.isEmpty());
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
+    EXPECT_EQ(read(machine.config + QStringLiteral("/notolith/settings.ini")), QByteArray("[editor]\ntab-width = 2\n"));
+    EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/noteAppC")));
 }
 
 TEST(MessageLog, AProcessThatStartsWhileAnotherIsWritingDoesNotTakeItsLogAway)
@@ -383,4 +411,178 @@ TEST(MessageLog, TheFileMovesToOldPastTheCapAndEveryProcessFollowsIt)
     second.append(QStringLiteral("other\n")); // its file is the one moved away: it follows, and does not rotate again
     EXPECT_EQ(read(path), QByteArray("after\nother\n"));
     EXPECT_EQ(read(path + QStringLiteral(".old")).size(), 82);
+}
+
+namespace {
+
+/// A directory on another file system than `like`, so that a move between them is a copy; empty when the
+/// machine has no second one at hand (/dev/shm is a tmpfs of its own on most).
+QString otherFilesystem(const QString &like, QTemporaryDir &holder)
+{
+    struct stat a, b;
+    if (::stat(like.toLocal8Bit().constData(), &a) != 0 || !QFileInfo(QStringLiteral("/dev/shm")).isWritable()
+        || !holder.isValid())
+        return {};
+    return ::stat(holder.path().toLocal8Bit().constData(), &b) == 0 && a.st_dev != b.st_dev ? holder.path() : QString();
+}
+
+} // namespace
+
+TEST(StorageMigration, FilesThatCannotMoveStayInTheOldPlaceAndTheNextStartMovesThem)
+{
+    if (::geteuid() == 0)
+        GTEST_SKIP() << "a directory closed to the owner is open to root";
+    OldLayout machine;
+    ASSERT_NO_FATAL_FAILURE(machine.populate());
+    const QString oldConfig = machine.config + QStringLiteral("/noteAppC/");
+    // The state directory refuses writes for this one start (a full disk, a mount that is not there yet).
+    const QString state = machine.state + QStringLiteral("/notolith");
+    ASSERT_TRUE(QDir().mkpath(state));
+    ASSERT_TRUE(QFile::setPermissions(state, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+    QStringList warnings;
+    migrateStorage(nullptr, &warnings);
+
+    // The two files with a single place that is not the config directory: nowhere else, nowhere wrong.
+    EXPECT_TRUE(QFileInfo::exists(oldConfig + QStringLiteral("vaults.ini")));
+    EXPECT_TRUE(QFileInfo::exists(oldConfig + QStringLiteral("noteAppC.conf")));
+    EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/notolith/vaults.ini")));
+    EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/notolith/noteAppC.conf")));
+    EXPECT_FALSE(warnings.filter(QStringLiteral("vaults.ini")).isEmpty());
+    EXPECT_FALSE(warnings.filter(QStringLiteral("noteAppC.conf")).isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(state + QStringLiteral("/.migrated"))) << "nothing says it is done";
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Fresh) << "so the next start does it all again";
+
+    ASSERT_TRUE(QFile::setPermissions(state, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    warnings.clear();
+    migrateStorage(nullptr, &warnings);
+    EXPECT_TRUE(warnings.isEmpty());
+    EXPECT_TRUE(QFileInfo::exists(state + QStringLiteral("/vaults.ini")));
+    EXPECT_TRUE(QFileInfo::exists(state + QStringLiteral("/window.ini")));
+    EXPECT_EQ(read(state + QStringLiteral("/vaults/") + machine.digest + QStringLiteral("/graph.json")),
+              QByteArray("{\"graph\":1}"))
+        << "re-keyed once the recent vaults are there";
+    EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/noteAppC")));
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
+}
+
+TEST(StorageMigration, AnIndexAlreadyInTheNewPlaceCostsNeitherTheOldOneNorAGraph)
+{
+    OldLayout machine;
+    ASSERT_NO_FATAL_FAILURE(machine.populate());
+    // The new build ran once before the old directory showed up (a restored backup, a synced folder).
+    write(machine.state + QStringLiteral("/notolith/vaults.ini"), "[state]\nrecent-vaults = /elsewhere\n");
+
+    QStringList warnings;
+    migrateStorage(nullptr, &warnings);
+
+    EXPECT_TRUE(QFileInfo::exists(machine.config + QStringLiteral("/noteAppC/vaults.ini"))) << "kept, not moved to a place nothing reads";
+    EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/notolith/vaults.ini")));
+    EXPECT_FALSE(warnings.filter(QStringLiteral("vaults.ini")).isEmpty());
+    // The vaults of the old index still key the graph and the publish choices.
+    EXPECT_EQ(read(machine.state + QStringLiteral("/notolith/vaults/") + machine.digest + QStringLiteral("/graph.json")),
+              QByteArray("{\"graph\":1}"));
+    const QSettings window(machine.state + QStringLiteral("/notolith/window.ini"), QSettings::IniFormat);
+    EXPECT_EQ(window.value(QStringLiteral("publish/") + machine.digest + QStringLiteral("/folder")).toString(),
+              QStringLiteral("Public"));
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Retry);
+}
+
+TEST(StorageMigration, ALinkMovesAsALinkWhateverTheDepthOfTheNewRoot)
+{
+    OldLayout machine;
+    machine.data = machine.root.filePath(QStringLiteral("deeper/than/config/data")); // a relative link means something else there
+    qputenv("XDG_DATA_HOME", machine.data.toUtf8());
+    const QString secret = machine.root.filePath(QStringLiteral("outside/secret.json"));
+    write(secret, "{\"secret\":1}");
+    const QString oldLink = machine.config + QStringLiteral("/noteAppC/vaults/") + machine.digest + QStringLiteral("/icons.json");
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(oldLink).absolutePath()));
+    ASSERT_EQ(::symlink("../../../../outside/secret.json", oldLink.toLocal8Bit().constData()), 0);
+    ASSERT_EQ(read(oldLink), QByteArray("{\"secret\":1}"));
+
+    QStringList warnings;
+    migrateStorage(nullptr, &warnings);
+
+    const QString moved = machine.data + QStringLiteral("/notolith/vaults/") + machine.digest + QStringLiteral("/icons.json");
+    EXPECT_TRUE(QFileInfo(moved).isSymLink());
+    EXPECT_EQ(read(moved), QByteArray("{\"secret\":1}")) << "still points at what it pointed at";
+    EXPECT_EQ(read(secret), QByteArray("{\"secret\":1}"));
+    EXPECT_TRUE(warnings.isEmpty());
+}
+
+TEST(StorageMigration, AcrossFileSystemsALinkIsNotFollowedAndAFileIsCompleteBeforeTheOriginalGoes)
+{
+    OldLayout machine;
+    QTemporaryDir fast(QStringLiteral("/dev/shm/nac-xdg-XXXXXX"));
+    const QString other = otherFilesystem(machine.root.path(), fast);
+    if (other.isEmpty())
+        GTEST_SKIP() << "no second file system";
+    machine.state = other + QStringLiteral("/state");
+    machine.data = other + QStringLiteral("/data");
+    qputenv("XDG_STATE_HOME", machine.state.toUtf8());
+    qputenv("XDG_DATA_HOME", machine.data.toUtf8());
+    ASSERT_NO_FATAL_FAILURE(machine.populate());
+    const QString secret = machine.root.filePath(QStringLiteral("outside/secret.json"));
+    write(secret, "{\"secret\":1}");
+    const QString vaultDir = machine.config + QStringLiteral("/noteAppC/vaults/") + machine.digest + QLatin1Char('/');
+    ASSERT_TRUE(QFile::remove(vaultDir + QStringLiteral("icons.json")));
+    ASSERT_TRUE(QFile::link(secret, vaultDir + QStringLiteral("icons.json")));
+
+    QStringList warnings;
+    migrateStorage(nullptr, &warnings);
+
+    const QString dataVault = machine.data + QStringLiteral("/notolith/vaults/") + machine.digest + QLatin1Char('/');
+    EXPECT_TRUE(QFileInfo(dataVault + QStringLiteral("icons.json")).isSymLink()) << "not a second copy of what it points at";
+    EXPECT_EQ(QFileInfo(dataVault + QStringLiteral("icons.json")).symLinkTarget(), secret);
+    EXPECT_EQ(read(secret), QByteArray("{\"secret\":1}"));
+    EXPECT_EQ(read(dataVault + QStringLiteral("workspaces.json")), QByteArray("{\"is\":\"workspaces.json\"}"));
+    EXPECT_FALSE(QFileInfo::exists(vaultDir + QStringLiteral("workspaces.json")));
+    EXPECT_TRUE(warnings.isEmpty()) << warnings.join(QLatin1Char('\n')).toStdString();
+    for (const QString &root : {machine.state, machine.data}) {
+        QDirIterator all(root, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+        while (all.hasNext())
+            EXPECT_FALSE(all.next().endsWith(QLatin1String(".migrating"))) << all.filePath().toStdString();
+    }
+}
+
+TEST(StorageMigration, ANamedPipeIsLeftAloneAndSaid)
+{
+    OldLayout machine;
+    ASSERT_NO_FATAL_FAILURE(machine.populate());
+    const QString pipe = machine.config + QStringLiteral("/noteAppC/vaults/") + machine.digest + QStringLiteral("/pipe.json");
+    ASSERT_EQ(::mkfifo(pipe.toLocal8Bit().constData(), 0600), 0);
+
+    QStringList warnings;
+    migrateStorage(nullptr, &warnings);
+
+    EXPECT_TRUE(QFileInfo::exists(pipe));
+    EXPECT_FALSE(QFileInfo::exists(machine.data + QStringLiteral("/notolith/vaults/") + machine.digest + QStringLiteral("/pipe.json")));
+    EXPECT_EQ(warnings.filter(QStringLiteral("not a regular file")).size(), 1);
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Retry);
+}
+
+TEST(StorageMigration, ADirectoryThatIsALinkIsNotEmptiedIntoTheNewOne)
+{
+    OldLayout machine;
+    const QString synced = machine.root.filePath(QStringLiteral("synced/noteAppC"));
+    write(synced + QStringLiteral("/hotkeys.json"), "{}");
+    ASSERT_TRUE(QDir().mkpath(machine.config));
+    ASSERT_TRUE(QFile::link(synced, machine.config + QStringLiteral("/noteAppC")));
+
+    QStringList warnings;
+    EXPECT_EQ(migrateStorage(nullptr, &warnings), 0);
+
+    EXPECT_TRUE(QFileInfo::exists(synced + QStringLiteral("/hotkeys.json")));
+    EXPECT_TRUE(QFileInfo(machine.config + QStringLiteral("/noteAppC")).isSymLink());
+    EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/notolith/hotkeys.json")));
+    EXPECT_FALSE(warnings.filter(QStringLiteral("symbolic link")).isEmpty());
+}
+
+TEST(StorageMigration, NothingOlderHereMeansNothingToDo)
+{
+    OldLayout fresh;
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
+    OldLayout machine;
+    machine.populate();
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Fresh);
 }

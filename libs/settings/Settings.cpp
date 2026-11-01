@@ -1039,6 +1039,12 @@ QStringList Settings::takeAdoptedKeys()
     return std::exchange(m_adopted, {});
 }
 
+QStringList Settings::recentVaultsFrom(const QString &indexPath)
+{
+    const QString key = QStringLiteral("state.recentVaults");
+    return valueOf(readINI(indexPath).value(key).toString(), QStringList()).toStringList();
+}
+
 QStringList Settings::recentVaults() const
 {
     return value(QStringLiteral("state.recentVaults")).toStringList();
