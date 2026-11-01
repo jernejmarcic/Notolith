@@ -7,9 +7,13 @@
 #include <QStandardPaths>
 #include <QThread>
 
+#include <cerrno>
+#include <csignal>
+
 #include "ConfigFile.h"
 #include "MainWindow.h"
 #include "Settings.h"
+#include "StorageMigration.h"
 
 namespace noteAppC {
 
@@ -53,13 +57,49 @@ bool deliver(const QString &name, const QString &argument, const QByteArray &tok
 }
 
 /// What the sockets of a build from before the `notolith` runtime directory start with, `$XDG_RUNTIME_DIR/notolith`;
-/// empty when `$NOTEAPPC_INSTANCE_SOCKET` names them, as it did for that build too.
+/// empty when `$NOTEAPPC_INSTANCE_SOCKET` names them, as it did for that build too. Only this launch's own
+/// runtime directory is looked in: a window of that build started from another login (ssh, cron: Qt's
+/// `/tmp/runtime-<user>`) lives in a directory this launch cannot name, and its later writes are not seen here.
 QString previousBase()
 {
     if (!qgetenv("NOTEAPPC_INSTANCE_SOCKET").isEmpty())
         return {};
     const QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
     return QDir::isAbsolutePath(runtime) ? QDir::cleanPath(runtime) + QStringLiteral("/notolith") : QString();
+}
+
+/// Whether a live process holds `lockFile`. A lock that cannot be taken is a live window's, except when its
+/// owner is gone and the lock could not be cleared away either (a full or read-only runtime directory), which
+/// the error code does not tell from the first.
+bool heldByLiveProcess(const QString &lockFile)
+{
+    // Those builds took the lock for as long as a window ran, and only a dead owner makes it stale.
+    QLockFile lock(lockFile);
+    lock.setStaleLockTime(0);
+    if (lock.tryLock(0))
+        return false;
+    if (lock.error() != QLockFile::LockFailedError)
+        return false;
+    qint64 pid = 0;
+    QString host, application;
+    if (!lock.getLockInfo(&pid, &host, &application))
+        return true; // being written right now: its owner is there
+    return pid > 0 && (::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM);
+}
+
+/// The sockets that start with `base` and whose lock a live process holds.
+QStringList openSockets(const QString &base)
+{
+    if (base.isEmpty())
+        return {};
+    const QFileInfo info(base);
+    const QDir directory(info.absolutePath());
+    QStringList open;
+    for (const QString &file : directory.entryList({info.fileName() + QStringLiteral("-*.sock.lock")}, QDir::Files)) {
+        if (heldByLiveProcess(directory.filePath(file)))
+            open.append(directory.filePath(file).chopped(QStringLiteral(".lock").size()));
+    }
+    return open;
 }
 
 } // namespace
@@ -128,20 +168,12 @@ bool SingleInstance::deliverTo(const QString &name, const QString &argument, con
 
 QStringList SingleInstance::previousBuildSockets()
 {
-    const QString base = previousBase();
-    if (base.isEmpty())
-        return {};
-    const QFileInfo info(base);
-    const QDir directory(info.absolutePath());
-    QStringList open;
-    for (const QString &file : directory.entryList({info.fileName() + QStringLiteral("-*.sock.lock")}, QDir::Files)) {
-        // That build took the lock for as long as a window ran, and only a dead owner makes it stale.
-        QLockFile lock(directory.filePath(file));
-        lock.setStaleLockTime(0);
-        if (!lock.tryLock(0))
-            open.append(directory.filePath(file).chopped(QStringLiteral(".lock").size()));
-    }
-    return open;
+    return openSockets(previousBase());
+}
+
+QStringList SingleInstance::ownSockets()
+{
+    return openSockets(baseName());
 }
 
 bool SingleInstance::handOverToPreviousBuild(const Launch &launch, const QString &argument, const QByteArray &token)
@@ -255,6 +287,10 @@ void SingleInstance::serve(MainWindow *window)
     // listen() replaces it.
     if (!m_name.isEmpty())
         listen();
+    else
+        qWarning("Notolith: no private directory for the single-instance sockets (the runtime directory and "
+                 "the state directory are not this user's own and closed to others): a launch for this vault "
+                 "will start another process");
 }
 
 void SingleInstance::listen()
@@ -268,6 +304,27 @@ void SingleInstance::listen()
     qWarning("Notolith: cannot listen on %s: %s", qPrintable(m_name), qPrintable(m_server.errorString()));
     m_lock.reset();
     m_name.clear();
+}
+
+StorageSettled settleStorage(const QString &argument, QStringList *lines, QStringList *warnings)
+{
+    if (storageMigrationNeed() == MigrationNeed::None)
+        return StorageSettled::Carry;
+    // Nothing moves under a window that is open: it keeps its files in memory and writes them back, so
+    // what was moved would be overwritten by its next save, or left behind it. The launch goes to it when
+    // it is the one for this vault. Settings are read only when there is a window to find (the files are not
+    // moved yet).
+    if (!SingleInstance::ownSockets().isEmpty()) {
+        const SingleInstance::Launch launch = SingleInstance::launchFor(argument);
+        return SingleInstance(launch).handOver(argument) ? StorageSettled::HandedOver : StorageSettled::Carry;
+    }
+    if (!SingleInstance::previousBuildSockets().isEmpty()) {
+        if (SingleInstance::handOverToPreviousBuild(SingleInstance::launchFor(argument), argument))
+            return StorageSettled::HandedOver;
+        return StorageSettled::OlderWindowOpen;
+    }
+    migrateStorage(lines, warnings);
+    return StorageSettled::Carry;
 }
 
 } // namespace noteAppC

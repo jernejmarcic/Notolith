@@ -23,11 +23,18 @@ namespace noteAppC {
 /// those of a vault not in it keep the key they have.
 ///
 /// A file that cannot be moved stays exactly where it is, with one warning line
-/// naming it and why; a directory that is a symbolic link is left alone. Such
-/// a run leaves an "incomplete" marker, and every later start tries again; a
-/// run that leaves nothing behind writes a "complete" one, which ends every
-/// later call at one read, and a machine with no old directory is left
-/// untouched. Run it before the first Settings::load().
+/// naming it and why. If another start may manage it (a disk that was full, a
+/// directory that could not be made) the run leaves an "incomplete" marker and
+/// every later start tries again. If something is in its way that only the
+/// person can settle (a file at the destination, a FIFO, a directory that is a
+/// symbolic link) it is said once, written under an "attention" marker with its
+/// path and the reason, and left alone from then on: no later start tries it
+/// or says it again. A run that leaves nothing behind writes a "complete"
+/// marker, which ends every later call at one read, and a machine with no old
+/// directory is left untouched. When the copy of a file is in place but the
+/// original cannot be removed (a directory this user cannot write), it counts
+/// as moved and the original is listed the same way. Run it before the first
+/// Settings::load().
 ///
 /// One info line per file moved goes to qInfo(), or is appended to `lines` when
 /// the caller has none to spare yet (the log file is opened after this runs);
@@ -36,7 +43,7 @@ namespace noteAppC {
 int migrateStorage(QStringList *lines = nullptr, QStringList *warnings = nullptr);
 
 /// What a start has to do about the old layout: nothing, the first migration, or
-/// the retry of one that left files behind. Cheap: one read, and a stat per old directory.
+/// the retry of one that left files behind that a retry can move. Cheap: one read, and a stat per old directory.
 enum class MigrationNeed { None, Fresh, Retry };
 MigrationNeed storageMigrationNeed();
 
