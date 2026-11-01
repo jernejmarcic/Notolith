@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
+
 // The link layer's wire format: what core/identity and net/node speak, and
-// nothing else. Hearth keeps the canonical copy; Notolith vendors it
-// (tools/link-files.txt). Same package as hearth.proto, so the two merge.
+// nothing else. A one-time copy from the author's Hearth project, which
+// Notolith now maintains on its own. The package is still named hearth.
 syntax = "proto3";
 
 package hearth;

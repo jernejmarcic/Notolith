@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
+
 #include "net/node.h"
 
 #include "core/debuglog.h"
@@ -726,7 +729,7 @@ struct Node::Impl {
             }
             if (!e.manual && e.pk && !(self.publicKey() < *e.pk))
                 continue;
-            // Addresses someone typed in stay eager; discovered ones may not run Hearth at all.
+            // Addresses someone typed in stay eager; discovered ones may not run Notolith at all.
             const auto cap = e.manual ? std::chrono::seconds(10) : std::chrono::seconds(300);
             if (now - e.lastDial < std::min(std::chrono::seconds(5) * (1 << std::min(e.failures, 6)), cap))
                 continue;
@@ -891,7 +894,7 @@ void Node::start()
     try {
         d_->server = std::make_unique<rtc::WebSocketServer>(conf);
     } catch (const std::exception&) {
-        throw std::runtime_error("port " + std::to_string(conf.port) + " is already in use (is Hearth already running?)");
+        throw std::runtime_error("port " + std::to_string(conf.port) + " is already in use (is another Notolith already using it?)");
     }
     auto accept = [d = d_.get(), gated](std::shared_ptr<rtc::WebSocket> ws) {
         auto h = std::make_shared<Handshake>();

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
+
 #pragma once
 
 #include "core/identity.h"
@@ -34,7 +37,7 @@ public:
     struct Config {
         std::uint16_t port = 47800; // 0 = any
         bool mDNS = true;
-        bool tailscale = false;      // dial Hearth on every online tailnet peer
+        bool tailscale = false;      // dial every online tailnet peer
         // HTTPS (wss) signaling, e.g. with the machine's Tailscale certificate.
         std::string TLScertFile, TLSkeyFile, TLShost;
         std::uint16_t TLSport = 47801;
