@@ -35,10 +35,10 @@ Built only with their CMake options (`docs/OFFLINE.md`).
 
 ## System libraries
 
-The runtime dependencies of the Arch packages (`depends` in
-`packaging/arch/PKGBUILD`). They are not part of this repository or of the
-packages; pacman installs them, and each keeps its own licence. Licences are
-as `pacman -Qi` reports them (checked 2026-11-01).
+The libraries Notolith links at run time, and the programs it needs to run
+sandboxed code. They are not part of this repository or of a Notolith build;
+your system provides them, and each keeps its own licence. Licences are as the
+distribution's package metadata reports them (checked 2026-11-01).
 
 | library | licence |
 |---|---|
@@ -53,7 +53,7 @@ as `pacman -Qi` reports them (checked 2026-11-01).
 | libseccomp | LGPL-2.1-only |
 | bubblewrap | LGPL-2.1-or-later |
 | util-linux (`prlimit`) | BSD-2-Clause, BSD-3-Clause, BSD-4-Clause-UC, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-or-later, ISC, LGPL-2.1-or-later, public domain (varies by tool) |
-| poppler-qt6 (`notolith-pdfview`) | GPL-2.0-only, GPL-3.0-or-later, LGPL-2.0-or-later, LGPL-2.1-or-later, MIT |
+| poppler-qt6 (PDF viewer module `notolith-pdfview`) | GPL-2.0-only, GPL-3.0-or-later, LGPL-2.0-or-later, LGPL-2.1-or-later, MIT |
 
 Libraries that only an optional build links (libdatachannel, libsodium, avahi,
 protobuf, nlohmann_json) are named under "Optional builds". All of them keep

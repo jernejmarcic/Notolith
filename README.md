@@ -77,34 +77,9 @@ only in a build with `NOTEAPPC_WITH_NETWORK`, and only if you grant it);
 
 ## Install
 
-### Arch Linux and CachyOS
-
-Arch (the PKGBUILD) is the supported package.
-
-```sh
-git clone https://github.com/jernejmarcic/Notolith
-cd Notolith/packaging/arch
-makepkg -si
-```
-
-This builds, runs the tests and installs two packages together: `notolith`
-and `notolith-pdfview`. `makepkg -si
---nocheck` skips the tests, which build the whole tree a second time. The first
-build needs network access to fetch its sources (see the header of
-`packaging/arch/PKGBUILD`); the installed app uses none.
-
-Update: `git pull`, then `makepkg -sif` in `packaging/arch`.
-
-Uninstall:
-
-```sh
-sudo pacman -Rns notolith notolith-pdfview
-```
-
-### Other Linux: build from source
-
-Needs Qt 6.7 or newer, a C++20 compiler, CMake 3.28 or newer, Ninja and git.
-The package names below are Arch's.
+Notolith is built from source with CMake. It needs Qt 6.7 or newer, a C++20
+compiler, CMake 3.28 or newer, Ninja and git. The names below are Arch's;
+other distributions name some of them differently.
 
 - **Always:** `qt6-base` `qt6-svg` `cmake` `ninja` `git` `python3`
   `pkgconf`, and a C++20 compiler. `python3` runs at configure time. `pkgconf` finds most of the optional libraries: without it
@@ -123,15 +98,40 @@ The package names below are Arch's.
   installed. Rust is needed only for the optional yrs sharing backend
   (`NOTEAPPC_WITH_SHARE_YRS`, off by default), and its build then downloads
   about 45 crates.
-- **Tests:** `gtest`. Configure with `-DBUILD_TESTING=OFF` to skip the tests;
-  a release build must, since a build with tests honours test-only
-  environment variables that load native code.
+- **Tests:** `gtest`, only when tests are on (see below).
 
 ```sh
+git clone https://github.com/jernejmarcic/Notolith
+cd Notolith
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cmake --build build
 sudo cmake --install build
 ```
+
+`-DBUILD_TESTING=OFF` is for an install: a build with tests honours test-only
+environment variables that load native code, which an installed app should not
+do. The default prefix is `/usr/local`; add `--prefix /usr` to the install
+command to use `/usr`. `notolith --version` checks the result.
+
+To run the tests, use a separate build directory with tests on:
+
+```sh
+cmake -B build-test -G Ninja
+cmake --build build-test
+QT_QPA_PLATFORM=offscreen ctest --test-dir build-test --output-on-failure
+```
+
+Update: `git pull`, then build and install again with the same commands. Keep
+the `build` directory: CMake writes `install_manifest.txt` there, which the
+uninstall below reads.
+
+Uninstall, from the `build` directory you installed from:
+
+```sh
+sudo xargs rm < build/install_manifest.txt
+```
+
+This removes the installed files and leaves any empty directories behind.
 
 The `android/` directory is an unsupported experiment, not a release target (see
 `docs/PLATFORMS.md`).

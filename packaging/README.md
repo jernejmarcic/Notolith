@@ -15,22 +15,14 @@ the licence and third-party notices in `share/licenses/notolith/`, the demo
 asset notice in `share/doc/notolith/` and the plugin host (`notolith-plugin-host`)
 in `<libexecdir>/notolith/`. The modules go to `<libdir>/notolith/modules/`.
 
-Arch (the PKGBUILD) is the supported package. It builds the tagged source and
-its dependencies from git, each at a pinned commit and with no network in
-`build()`, and passes no `-march` and no `target-cpu=native`: a package has to run
-on any x86-64 machine (`docs/PLATFORMS.md`). Earlier Flatpak and AppImage
-recipes were untested and were removed; they are in the git history.
+Earlier Flatpak and AppImage recipes were untested and were removed; they are
+in the git history. Notolith is installed with `cmake --install` from a source
+build (see the README).
 
-`arch/PKGBUILD`: `makepkg -si` in `arch/` builds, runs the test suites (in a
-second build directory with tests on) and installs; `--nocheck` skips the
-tests. One build, two packages: `notolith` (the application) and
-`notolith-pdfview` (PDF viewer module, needs `poppler-qt6`). The module
-package pins the exact `notolith` version, and both of one run are
-installed together. No package has a networking or encryption
-dependency (`docs/OFFLINE.md`).
-
-To publish to the AUR: the `v0.1.0-beta.1` tag must exist in the public repository,
-and `.SRCINFO` is regenerated with `makepkg --printsrcinfo > .SRCINFO` in `arch/`.
+The default build has no networking or encryption dependency (`docs/OFFLINE.md`).
+The PDF viewer is a separate module, `notolith-pdfview`, built when
+`poppler-qt6` is found; a module is only loaded by the build that made it (the
+ABI tag), so install the whole tree from one build.
 
 The icon is `libs/theme/icons/noteAppC.svg`, installed to
 `share/icons/hicolor/scalable/apps/` under the app id, and built into the

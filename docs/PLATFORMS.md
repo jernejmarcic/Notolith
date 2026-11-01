@@ -7,12 +7,13 @@ code, what has been checked, and what has not.
 ## The rules
 
 1. **No CPU-specific build flags, ever.** The project's CMake sets none, and
-   the default build is plain `-O2 -g`. Watch the packaging: CachyOS's
-   `/etc/makepkg.conf` sets `-march=native`, so a package built with `makepkg`
-   on a Zen 5 machine uses instructions an older Intel or AMD chip does not
-   have, and crashes there with an illegal instruction. `packaging/arch/PKGBUILD`
-   strips `-march` and `-mtune` from the C and C++ flags and `target-cpu` from
-   `RUSTFLAGS`, which leaves the compiler's baseline `x86-64`.
+   the default build is plain `-O2 -g`. A build made with
+   `-march=native` (set in `CXXFLAGS`, or by a distribution's default compiler
+   flags) on a Zen 5 machine uses instructions an older Intel or AMD chip does
+   not have, and crashes there with an illegal instruction. Build without
+   `-march`, `-mtune` and `target-cpu` in `CFLAGS`, `CXXFLAGS` and `RUSTFLAGS`
+   if the binary will run on another machine; that leaves the compiler's
+   baseline `x86-64`.
 2. **No architecture-specific code.** There are no SSE, AVX
    or other x86 intrinsics and no inline assembly anywhere in noteAppC or in
    the three libraries fetched at configure time (md4qt, MicroTeX, tinyxml2). An ARM build -

@@ -16,7 +16,6 @@ The first public release, a beta: expect bugs, and back up your vault.
   Sync, note sharing, encrypted notes, the AI plugin and remote content are
   CMake options (`docs/OFFLINE.md`).
 - Previews: plugins, sync, sharing and encrypted notes. Handwriting is not in this release.
-- Arch Linux package (`packaging/arch/PKGBUILD`).
 - Images are PNG, JPEG, GIF, BMP, WebP, AVIF and SVG, told by their bytes; other formats (HEIC, TIFF, PSD...) show as a missing attachment.
 - A note that is a symbolic link is not written through; saving from the editor replaces the link with a regular file.
-- Installed modules and helper programs live under the library directory (/usr/lib/notolith/ on Arch); custom themes in a vault go in .obsidian/notolith-themes (the old folder is still read).
+- Installed modules and helper programs live under the library directory (/usr/lib/notolith/ for a /usr install); custom themes in a vault go in .obsidian/notolith-themes (the old folder is still read).

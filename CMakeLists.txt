@@ -544,7 +544,7 @@ if(NOT ANDROID)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/notolith)
     install(FILES docs/DEMO-ASSETS.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/notolith)
-    # The AI plugin (off by default, built only with NOTEAPPC_WITH_AI_PLUGIN, never in the Arch package) installs
+    # The AI plugin (off by default, built only with NOTEAPPC_WITH_AI_PLUGIN, never installed by default) installs
     # its whole directory, library and plugin.ini, under the library directory: PluginRegistry::pluginsRoots()
     # also scans <libdir>/notolith/plugins. An install of it still does not enable it; that is the user opting
     # in from the Community plugins settings page, same as any plugin they installed by hand.
