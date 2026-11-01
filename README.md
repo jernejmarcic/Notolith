@@ -163,7 +163,8 @@ cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined" \
   -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address,undefined"
 cmake --build build-asan
-QT_QPA_PLATFORM=offscreen ASAN_OPTIONS=verify_asan_link_order=0:detect_odr_violation=0 \
+# EnterJitterTest's millisecond budget is for an uninstrumented build, so it is left out here
+QT_QPA_PLATFORM=offscreen GTEST_FILTER='-EnterJitterTest.*' ASAN_OPTIONS=verify_asan_link_order=0:detect_odr_violation=0 \
   LSAN_OPTIONS=suppressions=$PWD/tests/lsan.supp ctest --test-dir build-asan --output-on-failure
 
 # libFuzzer targets for what a vault's files feed the parsers (clang; never installed)
