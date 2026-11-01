@@ -18,8 +18,10 @@
 
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
+#include "MermaidBlock.h"
 
 #include "PdfPage.h"
+#include "Vault.h"
 
 #include <QApplication>
 #include <QDesktopServices>
@@ -122,6 +124,11 @@ bool MarkdownEditor::layoutTexEmbed(BlockView &view, const EmbedSpan &embed, con
         return true;
     }
 
+    // A vault that is not trusted does not get a process started by being looked at: the source, and a click.
+    const QString gateSource = QStringLiteral("%% %1\n").arg(path) + source;
+    if (d->m_processGate && !d->m_processGate(QStringLiteral("tex"), gateSource, false))
+        return layoutTexNotRun(view, info.fileName(), gateSource, source);
+
     if (!TexCompiler::isAvailable()) {
         return layoutTextPanel(
             view, info.fileName(),
@@ -143,6 +150,48 @@ bool MarkdownEditor::layoutTexEmbed(BlockView &view, const EmbedSpan &embed, con
 
     const PdfEmbedArgs args = parsePdfEmbedArgs(embed.subpath);
     return buildPdfBlock(view, entry.result.pdfPath, info.fileName(), args, embed.width);
+}
+
+bool MarkdownEditor::layoutTexNotRun(BlockView &view, const QString &name, const QString &gateSource,
+                                     const QString &source)
+{
+    const int width = contentWidth();
+    const QString key = codeBlockKeyFor(QStringLiteral("tex"), gateSource, width);
+    auto it = d->m_codeBlockCache.find(key);
+    if (it == d->m_codeBlockCache.end() || it->image.isNull()) {
+        CodeBlockResult shown = diagramNotRendered(tr("Render"), source, width, devicePixelRatioF(), d->m_theme);
+        CodeBlockCacheEntry entry;
+        entry.generation = ++d->m_codeBlockGeneration;
+        entry.pending = false;
+        entry.image = std::move(shown.image);
+        entry.hotspots = std::move(shown.hotspots);
+        // The answer is a relayout: the gate says yes now, so layoutTexEmbed compiles. No answer, no change.
+        entry.activate = [this, gateSource](int, const std::function<void(CodeBlockResult)> &deliver) {
+            if (!d->m_processGate || !d->m_processGate(QStringLiteral("tex"), gateSource, true))
+                return;
+            CodeBlockResult done;
+            done.isMarkdown = false;
+            deliver(std::move(done));
+        };
+        pruneCodeBlockCache(key);
+        it = d->m_codeBlockCache.insert(key, std::move(entry));
+    }
+    view.isPluginBlock = true;
+    view.extrasMut().codeBlockKey = key;
+    view.extrasMut().embedLabel = name;
+    view.extrasMut().embedPanel = true;
+    view.layout.reset();
+    view.extrasMut().cells.clear();
+    view.textTop = codeHeaderHeight();
+    hideWholeBlockText(view);
+    const QPixmap pixmap = QPixmap::fromImage(it->image);
+    const qreal ratio = pixmap.devicePixelRatio();
+    view.extrasMut().image = pixmap;
+    view.extrasMut().imageSize = QSize(qMin(width, int(pixmap.width() / ratio)), int(pixmap.height() / ratio));
+    view.extrasMut().imageCentred = false;
+    view.height = view.x().imageSize.height() + view.textTop;
+    view.laidOut = true;
+    return true;
 }
 
 void MarkdownEditor::pdfMetadata(const QString &path, qint64 mtime, int &count,

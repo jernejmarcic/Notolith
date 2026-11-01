@@ -33,9 +33,26 @@ void MarkdownEditor::setCodeBlockRenderer(const QStringList &languages, CodeBloc
     viewport()->update();
 }
 
+void MarkdownEditor::setProcessGate(ProcessGate gate)
+{
+    d->m_processGate = std::move(gate);
+    for (BlockView &block : d->m_blocks) {
+        block.layout.reset();
+        block.laidOut = false;
+        block.heightEstimated = false;
+    }
+    updateLayout();
+    viewport()->update();
+}
+
 QString MarkdownEditor::codeBlockKeyFor(const QString &language, const QString &source, int width) const
 {
     return language + QLatin1Char('|') + QString::number(width) + QLatin1Char('|') + embedThemeTag() + QLatin1Char('|') + source;
+}
+
+int MarkdownEditor::texCompilesForTest() const
+{
+    return int(d->m_texCache.size());
 }
 
 int MarkdownEditor::codeBlockCacheSizeForTest() const

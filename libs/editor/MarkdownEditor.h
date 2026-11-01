@@ -636,6 +636,14 @@ public:
                            const std::function<void(CodeBlockResult)> &deliver)>;
     void setCodeBlockRenderer(const QStringList &languages, CodeBlockRenderer renderer);
 
+    /// Whether an embed that starts a process (a full-document `![[x.tex]]`, which runs pdflatex) may do so.
+    /// `ask` false only looks (the vault is trusted, or this one was allowed already); `ask` true puts the
+    /// question to the person and answers it. `source` names what would run: the file, then its text. With
+    /// no gate set an embed starts as it always did; the window sets one, so a vault that is not trusted
+    /// gets the source and a "Render" button instead. Setting it lays every block out again.
+    using ProcessGate = std::function<bool(const QString &language, const QString &source, bool ask)>;
+    void setProcessGate(ProcessGate gate);
+
     /// One piece of a notebook block's output (NotebookBlock.cpp):
     /// a Jupyter kernel's stream/execute_result/display_data/error, already
     /// reduced to what this editor can draw without linking libs/ext -
@@ -980,6 +988,8 @@ public:
     int untouchedBlockExtrasCountForTest() const;
     /// How many diagrams the fence cache holds (drawn, pending or failed).
     int codeBlockCacheSizeForTest() const;
+    /// How many `.tex` documents this editor has started compiling (pdflatex runs, or replays from the cache).
+    int texCompilesForTest() const;
     /// Pretends the last parse took this long, which is what decides whether
     /// the next newline is parsed on the spot (applyEdit). For the tests.
     void setLastParseTimeForTest(qint64 nanoseconds);
@@ -1858,6 +1868,9 @@ private:
     /// even if it is only the reason.
     bool layoutTextPanel(BlockView &view, const QString &label, const QString &body,
                         bool monospace);
+    /// What a `.tex` document embed shows until the process gate lets it compile: its source and a Render
+    /// button (a hotspot of the same machinery a fence's picture uses).
+    bool layoutTexNotRun(BlockView &view, const QString &name, const QString &gateSource, const QString &source);
     /// The slice of `noteText` that `subpath` (empty, `#Heading` or
     /// `#^block-id`) asks for, and the label to show above it. `ok` is false
     /// when a `#Heading` or `#^block-id` was asked for and not found.

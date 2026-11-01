@@ -5551,6 +5551,97 @@ TEST(MarkdownEditorTest, TexMathsAloneRendersThroughMicroTeX)
     EXPECT_GT(editor->documentHeight(), 0);
 }
 
+// A document embed starts pdflatex: in a vault that is not trusted that waits for a click and a yes.
+TEST(TexGateTest, ADocumentEmbedCompilesNothingUntilTheGateAnswersYes)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("doc.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("\\documentclass{article}\\begin{document}Alpha\\end{document}\n");
+    }
+    int looked = 0;
+    int asked = 0;
+    bool allowed = false;
+    auto editor = editorWith(QStringLiteral("![[doc.tex]]\n\ntail\n"));
+    editor->setProcessGate([&](const QString &language, const QString &source, bool ask) {
+        EXPECT_EQ(language, QStringLiteral("tex"));
+        EXPECT_TRUE(source.contains(QStringLiteral("Alpha"))) << "the question names what would run";
+        EXPECT_TRUE(source.contains(path));
+        (ask ? asked : looked)++;
+        return allowed;
+    });
+    editor->setLinkResolver([&](const QString &) { return path; });
+    editor->setCursorOffset(editor->noteText().size());
+    WAIT_TRUE(!editor->codeBlockImageRectAt(0).isEmpty(), 3000);
+    QTest::qWait(200);
+    EXPECT_GT(looked, 0);
+    EXPECT_EQ(asked, 0) << "laying the note out asks nothing";
+    EXPECT_EQ(editor->texCompilesForTest(), 0) << "and starts nothing";
+
+    const QRect placeholder = editor->codeBlockImageRectAt(0);
+    const QPoint button = placeholder.bottomLeft() + QPoint(30, -22);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, button);
+    EXPECT_EQ(asked, 1);
+    EXPECT_EQ(editor->texCompilesForTest(), 0) << "a no starts nothing";
+    EXPECT_EQ(editor->codeBlockImageRectAt(0), placeholder);
+
+    allowed = true;
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, button);
+    EXPECT_EQ(asked, 2);
+    WAIT_TRUE(editor->codeBlockImageRectAt(0).isEmpty(), 3000); // the source panel is gone
+    if (TexCompiler::isAvailable())
+        EXPECT_EQ(editor->texCompilesForTest(), 1) << "the yes compiled it";
+}
+
+TEST(TexGateTest, MathsAloneNeedsNoGate)
+{
+    ASSERT_TRUE(MathRenderer::isAvailable());
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("formula.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("E = mc^2");
+    }
+    auto editor = editorWith(QStringLiteral("![[formula.tex]]\n"));
+    editor->setProcessGate([](const QString &, const QString &, bool) {
+        ADD_FAILURE() << "MicroTeX runs in this process: nothing to ask";
+        return false;
+    });
+    editor->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_TRUE(editor->codeBlockImageRectAt(0).isEmpty());
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("formula.tex"))) << "drawn, not left as the link";
+    EXPECT_GT(editor->documentHeight(), 0);
+}
+
+// A vault is untrusted: an embed of a file of any size reads at most what opening it would.
+TEST(EmbedSizeTest, AHugeFileIsNotReadByAnEmbed)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    for (const char *name : {"huge.md", "huge.base", "huge.tex"}) {
+        QFile file(dir.filePath(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(qint64(1) << 30)) << "a sparse gibibyte";
+    }
+    for (const char *name : {"huge", "huge.base", "huge.tex"}) {
+        const QString embed = QStringLiteral("![[%1]]\n").arg(QLatin1String(name));
+        const QString path = dir.filePath(QString::fromLatin1(name).contains(QLatin1Char('.')) ? QString::fromLatin1(name)
+                                                                                                : QStringLiteral("huge.md"));
+        auto editor = editorWith(embed);
+        editor->setLinkResolver([&](const QString &) { return path; });
+        QElapsedTimer timer;
+        timer.start();
+        editor->setCursorOffset(editor->noteText().size());
+        EXPECT_TRUE(editor->panelTextAt(0).contains(QStringLiteral("too large"))) << name << ": " << qPrintable(editor->panelTextAt(0));
+        EXPECT_LT(timer.elapsed(), 3000) << name << " was read";
+    }
+}
+
 // --- file cards and several embeds in one block -----------------------------
 
 TEST(FileEmbedTest, BinaryFileBecomesACardNotAWallOfBytes)

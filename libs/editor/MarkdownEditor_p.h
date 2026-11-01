@@ -991,6 +991,7 @@ struct MarkdownEditor::Private {
     QHash<QString, CodeBlockRenderer> m_codeBlockRenderers; ///< lowercase language -> renderer
     QHash<QString, CodeBlockCacheEntry> m_codeBlockCache; ///< "language|width|theme|source" -> result
     quint64 m_codeBlockGeneration = 0;
+    MarkdownEditor::ProcessGate m_processGate; ///< setProcessGate
     /// PreviewBelow.cpp: the last formula drawn under its source, so typing in
     /// it renders once per change and no image is kept per keystroke.
     struct PreviewMath {

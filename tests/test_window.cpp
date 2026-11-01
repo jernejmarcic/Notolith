@@ -121,6 +121,7 @@
 #include "PdfPage.h"
 #include "PublishDialog.h"
 #include "MainWindow.h"
+#include "TexCompiler.h"
 #include "PagePreview.h"
 #include "PopoutWindow.h"
 #include "OutlinePane.h"

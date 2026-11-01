@@ -241,6 +241,7 @@ QImage MarkdownEditor::renderNoteEmbed(const QString &slice, int width, const QS
     nested.setMode(Mode::Reading);
     nested.setReadableLineLength(false);
     nested.setFeatures(d->m_features);
+    nested.d->m_processGate = d->m_processGate; // an embed's embed starts nothing the note itself may not
     nested.setLinkResolver(m_resolver);
     nested.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     nested.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);

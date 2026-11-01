@@ -1683,6 +1683,17 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     features.mediaEmbeds = featureOn("media-embeds");
     features.notebooks = featureOn("notebooks");
     editor->setFeatures(features);
+    // A full-document `![[x.tex]]` runs pdflatex: in a vault that is not trusted it asks first. The gate reads
+    // the vault's trust when asked, so it is handed over again only when that changes (which lays the blocks out).
+    {
+        const QString state = vaultTrusted() ? QStringLiteral("trusted") : QStringLiteral("untrusted");
+        if (editor->property("processGate").toString() != state) {
+            editor->setProperty("processGate", state);
+            editor->setProcessGate([this](const QString &language, const QString &source, bool ask) {
+                return ask ? allowRun(language, source) : runAllowed(language, source);
+            });
+        }
+    }
     // Diagrams (Mermaid, PlantUML, TikZ, Graphviz): the renderer is the switch. Off, nothing is registered; on,
     // nothing is looked up or started until a fence is laid out. Handing it over resets an editor's code
     // blocks, so only when the setting or the tool changed since this editor last had it.
