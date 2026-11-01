@@ -654,6 +654,10 @@ TEST(SingleInstance, AnOpenWindowOfTheBuildBeforeIsFoundAndGivenTheLaunch)
     ASSERT_TRUE(QDir(vaultB.path()).mkpath(QStringLiteral(".obsidian")));
     qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
     qputenv("XDG_RUNTIME_DIR", run.path().toUtf8());
+    // The recent vaults decide where a bare launch goes: the test's own, not what other tests left in the shared home.
+    QTemporaryDir home;
+    qputenv("XDG_STATE_HOME", home.filePath(QStringLiteral("state")).toUtf8());
+    qputenv("XDG_CONFIG_HOME", home.filePath(QStringLiteral("config")).toUtf8());
     const QString id = SingleInstance::nameForVault(vaultA.path()).section(QLatin1String("instance-"), 1);
     const QString oldName = run.path() + QStringLiteral("/notolith-") + id; // where the build before listened
     EXPECT_TRUE(SingleInstance::previousBuildSockets().isEmpty());
