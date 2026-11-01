@@ -1,15 +1,31 @@
 #include "KernelClient.h"
 
 #include <QElapsedTimer>
+#include <QFile>
 #include <QJsonArray>
 #include <QMutexLocker>
 #include <QUuid>
 
 #include <zmq.h>
 
+#include <algorithm>
 #include <cerrno>
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 namespace noteAppC::notebook {
+
+EndpointState checkEndpoint(const QString &endpoint)
+{
+    static const QLatin1String scheme("ipc://");
+    if (!endpoint.startsWith(scheme))
+        return EndpointState::Plain;
+    struct stat info;
+    if (lstat(QFile::encodeName(endpoint.mid(scheme.size())).constData(), &info) != 0)
+        return EndpointState::Missing;
+    return S_ISSOCK(info.st_mode) && info.st_uid == geteuid() ? EndpointState::Plain : EndpointState::Refused;
+}
 
 namespace {
 
@@ -212,6 +228,36 @@ void KernelClient::dispatchIopub(const KernelMessage &message)
 
 void KernelClient::run()
 {
+    const QStringList endpoints = {m_info.shellEndpoint(), m_info.controlEndpoint(), m_info.stdinEndpoint(),
+                                   m_info.iopubEndpoint(), m_info.hbEndpoint()};
+    const auto replaced = [&endpoints] {
+        return std::ranges::any_of(endpoints, [](const QString &endpoint) { return checkEndpoint(endpoint) == EndpointState::Refused; });
+    };
+    bool rogue = false; // an endpoint was swapped for something that is not a socket of ours
+    // Connect only to what is there and is a socket: the kernel makes the files as it starts, so wait for all five,
+    // and refuse (and stop) at a link or anything else in their place. A swap later is caught in the loop below.
+    for (bool ready = false; !ready;) {
+        ready = true;
+        for (const QString &endpoint : endpoints) {
+            switch (checkEndpoint(endpoint)) {
+            case EndpointState::Refused:
+                qWarning("kernel: %s is not a socket of ours; not connecting", qPrintable(endpoint));
+                emit heartbeatAlive(false);
+                return;
+            case EndpointState::Missing:
+                ready = false;
+                break;
+            case EndpointState::Plain:
+                break;
+            }
+        }
+        if (!ready) {
+            if (m_stopRequested.load())
+                return;
+            msleep(10);
+        }
+    }
+
     void *ctx = zmq_ctx_new();
     void *shell = zmq_socket(ctx, ZMQ_DEALER);
     void *control = zmq_socket(ctx, ZMQ_DEALER);
@@ -219,8 +265,13 @@ void KernelClient::run()
     void *iopub = zmq_socket(ctx, ZMQ_SUB);
     void *hb = zmq_socket(ctx, ZMQ_REQ);
     const int linger = 0;
-    for (void *socket : {shell, control, stdinSocket, iopub, hb})
+    // A dropped connection is retried after a second, not a tenth of one: the loop below looks at the five
+    // paths every tick, so a link put in place of a socket that went away is seen before it is followed.
+    const int reconnect = 1000;
+    for (void *socket : {shell, control, stdinSocket, iopub, hb}) {
         zmq_setsockopt(socket, ZMQ_LINGER, &linger, sizeof(linger));
+        zmq_setsockopt(socket, ZMQ_RECONNECT_IVL, &reconnect, sizeof(reconnect));
+    }
     // One identity on every DEALER, as jupyter_client gives them: the kernel
     // answers an execute_request's input() on its stdin ROUTER to the identity
     // the request came from, which only reaches the stdin socket if that is the same.
@@ -269,6 +320,8 @@ void KernelClient::run()
         bool sawWelcome = false;
         bool stdinReady = false;
         while ((!sawWelcome || !stdinReady) && readyClock.elapsed() < 3000 && !m_stopRequested.load()) {
+            if ((rogue = replaced()))
+                break;
             zmq_pollitem_t readyItems[] = {{iopub, 0, ZMQ_POLLIN, 0}, {stdinMonitor, 0, ZMQ_POLLIN, 0}};
             const int rc = zmqRetryEINTR([&] { return zmq_poll(readyItems, 2, 100); });
             if (rc <= 0)
@@ -298,7 +351,9 @@ void KernelClient::run()
     // thing that keeps both outgoing sends and the heartbeat's 1 s cadence
     // well within an interactive feel; add an eventfd/pair-socket wakeup if
     // sub-50ms send latency ever matters.
-    while (!m_stopRequested.load()) {
+    while (!m_stopRequested.load() && !rogue) {
+        if ((rogue = replaced()))
+            break;
         {
             QMutexLocker lock(&m_mutex);
             for (const PendingSend &pending : m_outbox) {
@@ -402,6 +457,11 @@ void KernelClient::run()
             zmq_close(hb);
             hb = zmq_socket(ctx, ZMQ_REQ);
             zmq_setsockopt(hb, ZMQ_LINGER, &linger, sizeof(linger));
+            zmq_setsockopt(hb, ZMQ_RECONNECT_IVL, &reconnect, sizeof(reconnect));
+            if (checkEndpoint(m_info.hbEndpoint()) == EndpointState::Refused) {
+                rogue = true; // never connected to; the other four are closed below
+                break;
+            }
             zmq_connect(hb, hbEp.constData());
             hbAwaiting = false;
             sinceHeartbeat.restart();
@@ -412,6 +472,10 @@ void KernelClient::run()
         }
     }
 
+    if (rogue) {
+        qWarning("kernel: an endpoint was replaced by something that is not a socket of ours; disconnected");
+        emit heartbeatAlive(false);
+    }
     zmq_close(shell);
     zmq_close(control);
     zmq_socket_monitor(stdinSocket, nullptr, 0);

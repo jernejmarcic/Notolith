@@ -2783,3 +2783,136 @@ TEST(KernelProcessTest, InterruptReachesTheProcessInsideThePidNamespace)
     qunsetenv("JUPYTER_RUNTIME_DIR");
 }
 
+// --- the kernel's sockets are the kernel's to make, and the app's to check -----------------
+
+#include <cstring>
+#include <sys/socket.h>
+#include <sys/un.h>
+
+namespace {
+
+/// A unix socket listening at `path`, nonblocking: the stand-in for something of the user's the app must never
+/// connect to (the session bus, an agent), or for one of a kernel's five.
+int listenAt(const QString &path)
+{
+    const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    strncpy(address.sun_path, QFile::encodeName(path).constData(), sizeof(address.sun_path) - 1);
+    if (fd < 0 || bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0 || listen(fd, 8) != 0) {
+        if (fd >= 0)
+            close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/// How many connections have arrived at `listening` since the last call.
+int arrivals(int listening)
+{
+    int count = 0;
+    for (;;) {
+        const int accepted = accept4(listening, nullptr, nullptr, SOCK_NONBLOCK);
+        if (accepted < 0)
+            return count;
+        close(accepted);
+        ++count;
+    }
+}
+
+KernelConnectionInfo infoIn(const QString &dir)
+{
+    KernelConnectionInfo info;
+    info.ip = dir + QStringLiteral("/kernel");
+    info.key = QByteArrayLiteral("secret");
+    return info;
+}
+
+} // namespace
+
+TEST(KernelClientTest, AnEndpointIsCheckedWithoutFollowingALink)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString real = dir.filePath(QStringLiteral("real"));
+    const int server = listenAt(real);
+    ASSERT_GE(server, 0);
+    ASSERT_TRUE(QFile::link(real, dir.filePath(QStringLiteral("link"))));
+    ASSERT_TRUE(QFile::link(dir.filePath(QStringLiteral("nowhere")), dir.filePath(QStringLiteral("dangling"))));
+    QFile plain(dir.filePath(QStringLiteral("plain")));
+    ASSERT_TRUE(plain.open(QIODevice::WriteOnly));
+    plain.close();
+    const auto state = [&](const char *name) { return checkEndpoint(QStringLiteral("ipc://") + dir.filePath(QLatin1String(name))); };
+    EXPECT_EQ(state("real"), EndpointState::Plain);
+    EXPECT_EQ(state("link"), EndpointState::Refused) << "a link to a socket is not a socket";
+    EXPECT_EQ(state("dangling"), EndpointState::Refused);
+    EXPECT_EQ(state("plain"), EndpointState::Refused);
+    EXPECT_EQ(state("absent"), EndpointState::Missing);
+    EXPECT_EQ(checkEndpoint(QStringLiteral("tcp://127.0.0.1:5555")), EndpointState::Plain) << "nothing to check";
+    close(server);
+}
+
+TEST(KernelClientTest, ALinkPlantedWhereASocketBelongsIsNeverConnectedTo)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const KernelConnectionInfo info = infoIn(dir.path());
+    // Something of the user's, outside the kernel's directory, that the kernel's "shell" socket now points at.
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(elsewhere.isValid());
+    const int target = listenAt(elsewhere.filePath(QStringLiteral("bus")));
+    ASSERT_GE(target, 0);
+    QList<int> sockets;
+    for (const int port : {info.iopubPort, info.stdinPort, info.controlPort, info.hbPort}) {
+        sockets << listenAt(dir.filePath(QStringLiteral("kernel-%1").arg(port)));
+        ASSERT_GE(sockets.last(), 0);
+    }
+    ASSERT_TRUE(QFile::link(elsewhere.filePath(QStringLiteral("bus")), dir.filePath(QStringLiteral("kernel-%1").arg(info.shellPort))));
+
+    KernelClient client;
+    client.startClient(info, QStringLiteral("session"), QStringLiteral("user"));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return client.isFinished(); }, 5000)) << "the client stops at a link";
+    QTest::qWait(300);
+    EXPECT_EQ(arrivals(target), 0) << "the app connected through a link";
+    for (const int socket : std::as_const(sockets))
+        EXPECT_EQ(arrivals(socket), 0) << "it connects to none of the five once one is refused";
+    for (const int socket : std::as_const(sockets))
+        close(socket);
+    close(target);
+}
+
+TEST(KernelClientTest, ASocketSwappedForALinkAfterTheConnectIsNotFollowedOnReconnect)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const KernelConnectionInfo info = infoIn(dir.path());
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(elsewhere.isValid());
+    const int target = listenAt(elsewhere.filePath(QStringLiteral("bus")));
+    ASSERT_GE(target, 0);
+    QHash<int, int> sockets; // by port
+    for (const int port : {info.shellPort, info.iopubPort, info.stdinPort, info.controlPort, info.hbPort}) {
+        sockets[port] = listenAt(dir.filePath(QStringLiteral("kernel-%1").arg(port)));
+        ASSERT_GE(sockets[port], 0);
+    }
+    KernelClient client;
+    client.startClient(info, QStringLiteral("session"), QStringLiteral("user"));
+    // It is connected to the real shell socket once a connection arrives there.
+    int shellArrivals = 0;
+    ASSERT_TRUE(QTest::qWaitFor([&] { return (shellArrivals += arrivals(sockets[info.shellPort])) > 0; }, 5000));
+
+    // The kernel closes its shell socket and puts a link to the target in its place.
+    const QString shell = dir.filePath(QStringLiteral("kernel-%1").arg(info.shellPort));
+    close(sockets[info.shellPort]);
+    ASSERT_TRUE(QFile::remove(shell));
+    ASSERT_TRUE(QFile::link(elsewhere.filePath(QStringLiteral("bus")), shell));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return client.isFinished(); }, 5000)) << "the client sees the link and disconnects";
+    QTest::qWait(1500); // past libzmq's reconnect interval
+    EXPECT_EQ(arrivals(target), 0) << "the app followed the link";
+    for (auto it = sockets.cbegin(); it != sockets.cend(); ++it) {
+        if (it.key() != info.shellPort)
+            close(it.value());
+    }
+    close(target);
+}
+
