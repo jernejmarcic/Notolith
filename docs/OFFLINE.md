@@ -75,9 +75,18 @@ Only a `NOTEAPPC_WITH_NETWORK=ON` build. Nothing in a vault makes a request or d
   origin (`https://host[:port]`), and images from it load without a click. The list is the file
   `remote-image-hosts` in the application's state directory (`$XDG_STATE_HOME/notolith`), never in a vault.
   Settings > Editor > "Remote images" > "Clear list" empties it. The row "Fetch remote content" does not
-  govern images: the click does.
+  govern images: the click does, and an origin allowed earlier keeps loading without one even with that row off.
+  A click is the consent: it also follows a redirect to another origin, which an allowed origin's unclicked
+  load does not (the placeholder then names the host it went to and waits for a click). An allowed origin that
+  hosts other people's pictures (a code host's raw-file server, an image host) lets every note that links it
+  load them unasked, each a tracking pixel; allow only origins you trust with that.
+- A host is shown, and the allowlist is keyed, in ASCII (an international name as punycode,
+  `xn--pple-43d.com`), so a look-alike never reads as the real one.
 - Fetch: https only (http shows a notice). No `user:pass` in the URL. No `localhost`, `*.localhost`, and no
   host that is, or resolves to, a loopback, private, link-local, shared (CGNAT) or unique-local address.
+  No port 0 or above 65535, and no host that looks like an IPv4 address without being a plain dotted one
+  (`1.2.3.4.5`, `256.1.1.1`). IPv4 carried inside IPv6 counts as the IPv4 (mapped, compatible, 6to4,
+  NAT64 `64:ff9b::/96`), and the local-use NAT64 prefix `64:ff9b:1::/48` and Teredo `2001::/32` are refused whole.
   At most 3 redirects, each checked by the same rules and never to http. No cookies, no credentials, no
   `Referer`, `User-Agent: Notolith`, no compression. At most 20 MiB (stopped on Content-Length or while
   reading) and 30 s in all. DNS rebinding is not covered: a name is resolved for the check and again for the
@@ -87,7 +96,8 @@ Only a `NOTEAPPC_WITH_NETWORK=ON` build. Nothing in a vault makes a request or d
 - Decode: out of process. `notolith-imagedecode` (installed in `<libexec>/notolith`) reads the bytes on
   stdin and writes a 20-byte header (width, height, format) and raw pixels on stdout. The app starts it
   under bubblewrap with no network, no home, the seccomp filter and CPU, memory and file-size limits
-  (`libs/sandbox`). Inside it, `QImageReader` has the allocation limit at 64 MiB and the pixel count from
+  (`libs/sandbox`: the same line TeX and the notebooks get, so a 64 MiB `/dev/shm` and `/tmp`, 256 tasks and,
+  where the user's systemd answers, a 1 GiB cgroup that also counts tmpfs pages). Inside it, `QImageReader` has the allocation limit at 64 MiB and the pixel count from
   the header is capped at 16 megapixels before any decoding. The app checks the reply (magic, status,
   dimensions, the format it sniffed itself, exactly 4 bytes per pixel) before it makes a `QImage`. A GIF
   shows its first frame. Without bubblewrap, or without the helper, nothing is downloaded or decoded and
@@ -95,7 +105,16 @@ Only a `NOTEAPPC_WITH_NETWORK=ON` build. Nothing in a vault makes a request or d
 - Cache: the original bytes in `$XDG_CACHE_HOME/notolith/remote-images/` (directory 0700, files 0600),
   named by the SHA-256 of the URL, at most 100 MiB in all, the oldest removed first. They have no expiry,
   and cached bytes go through the helper like fresh ones. A cached image still needs the click.
-- An image in a table cell stays source text.
+- An image in a table cell stays source text. A remote `<img>` inside a block of HTML (`<div>`, `<figure>`, ...)
+  is not fetched, decoded or shown by anything: the HTML renderer (litehtml) has no network class and never
+  loads a remote `src` or an `@import`.
+- Decoded pictures are kept in one bounded cache per editor (256 MiB of pixels, flushed when full).
+- Remote icons ("Fetch remote content" on, a callout icon given as an `https://` link) take the same path:
+  the same rules, the same helper, PNG, JPEG, GIF or WebP only. A remote SVG icon is refused. An `icons`
+  directory an older build left in the cache is no longer read and can be deleted.
+- A development build (`NOTEAPPC_DEV_ENV_OVERRIDES`, on by default with `BUILD_TESTING`) honours
+  `NOTEAPPC_IMAGE_HELPER` and `NOTEAPPC_SANDBOX_TEST_BINDS` from the environment. A package passes
+  `-DBUILD_TESTING=OFF -DNOTEAPPC_DEV_ENV_OVERRIDES=OFF`.
 
 Measured on starbase-1 (median of 9, the helper under bubblewrap, at idle priority on 12 cores):
 

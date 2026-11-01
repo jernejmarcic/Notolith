@@ -20,8 +20,10 @@ optional, and both are reread the moment they change - no restart.
     entirely if there is none, rather than drawn as a box;
   - a local file, as a path or `file://` URL: `.svg`, `.png`, `.jpg`, or
     `.webp` where Qt's image formats plugin is installed (`qt6-imageformats`);
-  - an `https://` URL, fetched once into `~/.cache/notolith/icons` and shown
-    when it arrives. It never holds up drawing the note.
+  - an `https://` URL to a PNG, JPEG, GIF or WebP (never an SVG), fetched and
+    decoded like a remote image, with "Fetch remote content" on and in a build
+    with network support only (`OFFLINE.md`); shown when it arrives. It never
+    holds up drawing the note.
 - **The INI format**: one `[section]` per type or language, `key = value`,
   `;` or `#` for a comment line, ` ; comment` after a value, and double quotes
   around a value that needs them. Section and key names are case-insensitive.
