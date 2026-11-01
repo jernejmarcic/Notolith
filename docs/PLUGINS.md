@@ -211,7 +211,7 @@ before the corresponding app callback ever runs
 the difference, which is the point) and is logged and emitted as a signal for
 the settings page.
 
-**Sandbox and limits.** The host runs under bubblewrap when `bwrap` exists -
+**Sandbox and limits.** The host runs under bubblewrap, and without `bwrap` the plugin does not run -
 the same allowlist pattern as `libs/render/TexCompiler.cpp`: only `/usr`,
 a few `/etc` entries (`sandbox::etcBinds`, never all of `/etc`: no `machine-id`,
 `hostname` or user list; a plugin granted `network` also gets `resolv.conf`,

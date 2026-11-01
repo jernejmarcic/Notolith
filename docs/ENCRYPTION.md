@@ -1,6 +1,7 @@
 # Encrypted notes
 
 > Not in the default build: `-DNOTEAPPC_WITH_ENCRYPTION=ON` (docs/OFFLINE.md).
+> A preview: the cryptography here has not been independently audited.
 
 A note can be kept encrypted on disk and read only in this app, with a
 password. Its text is decrypted in memory when the note opens and never

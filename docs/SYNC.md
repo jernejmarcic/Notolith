@@ -1,6 +1,7 @@
 # Sync
 
 > Not in the default build: `-DNOTEAPPC_WITH_SYNC=ON` (docs/OFFLINE.md).
+> A preview: the cryptography here has not been independently audited.
 
 Local-first sync to an optional, untrusted server. The vault is the source of
 truth; the server relays and stores encrypted copies so other devices can

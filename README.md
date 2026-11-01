@@ -1,14 +1,20 @@
 # Notolith
 
-A fast, native Markdown notes app for Linux that opens Obsidian vaults as they
-are. C++20 and Qt 6 Widgets: no JavaScript, no browser engine, no Electron.
+Public beta (0.1.0-beta.1): expect bugs, and back up your vault.
 
-(Code name noteAppC: the repository's targets, the C++ namespace and the
-directories where it keeps settings and caches still carry it. The binary is
-`notolith` and the app id is `io.github.jernejmarcic.Notolith`.)
+A Markdown note app for developers, for Linux. C++20 and Qt 6 Widgets: no
+JavaScript, no browser engine, no Electron.
+
+![Notolith: a note with its properties and the backlinks pane](docs/images/main-window.png)
+
+(Code name noteAppC: the repository's targets and the C++ namespace still carry
+it. The binary is `notolith` and the app id is
+`io.github.jernejmarcic.Notolith`.)
 
 ## Features
 
+- **Obsidian vaults** - opens and works with Obsidian vaults: links, embeds,
+  properties, callouts and `.obsidian` settings are read as they are.
 - **Vault** - open any folder of Markdown files, with a file tree and
   byte-exact atomic saves (CRLF and BOM preserved). File recovery keeps
   snapshots with a diff. A note changed on disk (sync, another editor, a link
@@ -16,10 +22,11 @@ directories where it keeps settings and caches still carry it. The binary is
   win and the other version goes to file recovery. A note moved or renamed
   outside the app is followed, caret and unsaved edits kept.
 - **Index** - SQLite with FTS5, parallel cold build, incremental rescan,
-  Obsidian's link resolution order. 20 000 notes cold-index in about 1 s.
+  Obsidian's link resolution order. 20 000 notes cold-index in about 1 s on a
+  Ryzen 9 9900X.
 - **Editor** - one engine, three modes: live preview, source and reading.
   Viewport-only layout, incremental edits, parsing off the UI thread; 0.2 ms
-  per keystroke on a 200 kB note.
+  per keystroke on a 200 kB note, on the same machine.
 - **Rendered Markdown** - Obsidian's element-by-element syntax reveal,
   callouts, tables, maths, embeds of notes, images, PDFs, audio and video,
   editable properties, `query` blocks, raw HTML (litehtml), Mermaid, PlantUML,
@@ -34,13 +41,11 @@ directories where it keeps settings and caches still carry it. The binary is
   palette (Ctrl+P), and a right-click menu with a web search.
 - **Modules** - spellcheck, graph view (global and local), canvas (JSON
   Canvas), bases (`.base` views), a PDF viewer with annotation, image
-  annotation, handwritten notes with pen input, code blocks run through a
-  Jupyter kernel, Git-backed note history, and static-site publishing. Each
-  can be switched off at build time.
-- **Offline** - the default build has no networking and no encryption. Sync,
-  note sharing, encrypted notes, the AI plugin, word lookup and remote content
-  are not in the default build: see `docs/OFFLINE.md`.
-- **Plugins** - out-of-process plugins, sandboxed with bubblewrap.
+  annotation, handwritten notes with pen input (preview), code blocks run
+  through a Jupyter kernel, Git-backed note history, and static-site
+  publishing. Each can be switched off at build time.
+- **Plugins (preview)** - out-of-process plugins, sandboxed with bubblewrap.
+  The plugin format is young and there are no third-party plugins yet.
 - **Themes** - dark by default, Obsidian's token names and values, custom
   colour schemes, an importer for any Obsidian theme in the vault, and
   per-kind formatting colours (headings, bold, links, ...; display only,
@@ -48,22 +53,39 @@ directories where it keeps settings and caches still carry it. The binary is
 - **Touch** - momentum scrolling and long-press selection; sidebars fold on a
   narrow window.
 
+Sync, note sharing and encrypted notes are previews and are off by default:
+they are built only with their CMake options (`NOTEAPPC_WITH_SYNC`,
+`NOTEAPPC_WITH_SHARE`, `NOTEAPPC_WITH_ENCRYPTION`; see `docs/OFFLINE.md`). Their
+cryptography has not been independently audited.
+
+## Network and privacy
+
+The default build makes no network connections: nothing in it opens an
+internet socket, and `docs/OFFLINE.md` has the proof and the list of options
+that bring networking back. Remote references (a note that points at a URL) are
+off by default. Code blocks, kernels, diagrams, TeX, pandoc and plugins run
+only inside a bubblewrap sandbox with no network; `docs/NOTEBOOKS.md#sandbox`
+has the details.
+
 ## Install
 
 ### Arch Linux and CachyOS
 
+Arch (the PKGBUILD) is the supported package.
+
 ```sh
 git clone https://github.com/jernejmarcic/Notolith
 cd Notolith/packaging/arch
-makepkg -si --nocheck
+makepkg -si
 ```
 
-This builds and installs four packages together: `notolith`, `notolith-ink`,
-`notolith-hwfont` and `notolith-pdfview`. The first build needs network access
-to fetch its sources (see the header of `packaging/arch/PKGBUILD`); the
-installed app uses none.
+This builds, runs the tests and installs four packages together: `notolith`,
+`notolith-ink`, `notolith-hwfont` and `notolith-pdfview`. `makepkg -si
+--nocheck` skips the tests, which build the whole tree a second time. The first
+build needs network access to fetch its sources (see the header of
+`packaging/arch/PKGBUILD`); the installed app uses none.
 
-Update: `git pull`, then `makepkg -sif --nocheck` in `packaging/arch`.
+Update: `git pull`, then `makepkg -sif` in `packaging/arch`.
 
 Uninstall:
 
@@ -73,26 +95,35 @@ sudo pacman -Rns notolith notolith-ink notolith-hwfont notolith-pdfview
 
 ### Other Linux: build from source
 
-Needs Qt 6.7 or newer (`qt6-base`, `qt6-svg`, `qt6-multimedia`), a C++20
-compiler, CMake 3.28 or newer and Ninja. The list below uses Arch package
-names; most are optional and switched off cleanly when missing.
+Needs Qt 6.7 or newer, a C++20 compiler, CMake 3.28 or newer, Ninja and git.
+The package names below are Arch's.
 
-- Always: `qt6-base` `qt6-svg` `yaml-cpp` `cmake` `ninja` `git`
-- Optional modules: `qt6-multimedia` `hunspell` `syntax-highlighting`
-  `litehtml` `libgit2` `libarchive` `zeromq` `libseccomp` `abseil-cpp`
-  `poppler-qt6`
-- At run time: `bubblewrap` (sandboxes code blocks, TeX and plugins)
-- Tests: `gtest`
-
-md4qt, MicroTeX, tinyxml2 and ink-stroke-modeler are fetched at configure time.
+- **Always:** `qt6-base` `qt6-svg` `cmake` `ninja` `git` `python3`
+  `pkgconf` `zlib`, and a C++20 compiler. `python3` runs at configure time. `pkgconf` finds most of the optional libraries: without it
+  they are all silently left out.
+- **Optional modules** (each is left out cleanly when its library is missing,
+  and the configure step lists what was built): `qt6-multimedia` (audio and
+  video embeds) `hunspell` `syntax-highlighting` `litehtml` `gumbo-parser`
+  (editing HTML blocks in place) `libgit2` `libarchive` `zeromq` `abseil-cpp`
+  (handwriting) `poppler-qt6` (PDF viewer).
+  `yaml-cpp` is used when installed and fetched otherwise.
+- **Needed to run code, diagrams and plugins:** `bubblewrap` and `libseccomp`.
+  Without `libseccomp` the build still works, but nothing that needs the
+  sandbox will run.
+- **Network at configure time:** md4qt, MicroTeX and tinyxml2 are fetched, plus
+  ink-stroke-modeler with the handwriting module, and yaml-cpp when it is not
+  installed. Rust is needed only for the optional yrs sharing backend
+  (`NOTEAPPC_WITH_SHARE_YRS`, off by default), and its build then downloads
+  about 45 crates.
+- **Tests:** `gtest`. Configure with `-DBUILD_TESTING=OFF` to skip the tests.
+  The handwriting module's configure step looks for gtest even then, so
+  without gtest build with `-DNOTEAPPC_WITH_INK=OFF` too.
 
 ```sh
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cmake --build build
 sudo cmake --install build
 ```
-
-Flatpak and AppImage recipes are in `packaging/` (untested).
 
 ## Running
 
@@ -127,7 +158,7 @@ Documentation, in `docs/`:
 - `GRAPH.md`, `CANVAS.md` - graph view and JSON Canvas
 - `ANNOTATIONS.md` - image annotation
 - `INK.md`, `INK-DESIGN.md` - handwritten notes: usage and design
-- `NOTEBOOKS.md` - running code blocks
+- `NOTEBOOKS.md` - running code blocks, and the sandbox
 - `OFFLINE.md` - what the default build leaves out, and the options that bring it back
 - `ENCRYPTION.md` - encrypted notes (not in the default build)
 - `SYNC.md` - end-to-end encrypted sync (not in the default build)
@@ -136,8 +167,13 @@ Documentation, in `docs/`:
 - `PANDOC.md` - pandoc export and import
 - `PERFORMANCE.md` - measurements and what was tried
 - `PLATFORMS.md` - supported platforms and what portability requires
+- `DEMO-ASSETS.md` - where the demo vault's files came from, and their licences
+
+`SECURITY.md` says how to report a vulnerability, `CHANGELOG.md` lists the
+releases, and `THIRD-PARTY.md` lists every other component and its licence.
 
 ## License
 
-GPL-3.0-or-later, see `LICENSE`. Bundled: md4qt and MicroTeX (MIT), tinyxml2
-(zlib), Lucide icons (ISC).
+GPL-3.0-or-later, see `LICENSE`. Every file is under GPL-3.0-or-later unless it
+says otherwise. Third-party components and their licences (md4qt, MicroTeX and
+its fonts, tinyxml2, ink-stroke-modeler, Lucide icons) are in `THIRD-PARTY.md`.

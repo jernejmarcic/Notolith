@@ -1,11 +1,15 @@
-# Sharing a note (in progress)
+# Sharing a note (preview)
 
-> Not in the default build: `-DNOTEAPPC_WITH_SHARE=ON` (docs/OFFLINE.md).
+> Not in the default build: `-DNOTEAPPC_WITH_SHARE=ON` (docs/OFFLINE.md). A
+> preview: still in progress, so keep a copy of any note you share. The
+> cryptography here has not been independently audited.
 
-Live co-editing of one note between people, peer to peer. This page covers the
-parts that exist: the text CRDT, the link layer, the engine and the session
-that ties a note's editors to it. The dialogs (invitation, who has access), the
-tab marker and the status badge come later.
+Live co-editing of one note between people, peer to peer. This page covers how
+it is built: the text CRDT, the link layer, the engine, the session that ties a
+note's editors to it, and the window side. The window has four commands (Share
+this note, Who has access to this note, Join a shared note, Stop sharing this
+note on this device), a marker on the tab of a shared note and a "Shared - N
+here" badge in the status bar.
 
 ## CrdtDoc
 
@@ -76,7 +80,9 @@ a backend the build lacks skips):
   `CrdtDocYrs.cpp`. Built when cargo is found and `NOTEAPPC_WITH_SHARE_YRS` is
   on (the default); otherwise it is silently left out.
 
-Which one a note uses is the sharing layer's choice, not this library's. The
+The two backends do not share a wire format: replicas of one note must all use
+the same backend. Which one a note uses is the sharing layer's choice, not this
+library's. The
 numbers that tell them apart are in [PERFORMANCE.md](PERFORMANCE.md#note-sharing-two-text-crdt-backends).
 
 ### Native: how it works
@@ -217,8 +223,10 @@ Hearth, the author's separate peer-to-peer chat project. No Qt.
   `libs/ext/link/{core,net,proto}` with the include paths unchanged. Only
   `libs/ext/link/CMakeLists.txt` is Notolith's own. A copy, not a submodule or a
   fetch, so the repository builds on its own.
-- **Changing it:** the copy is kept in step with Hearth's link layer, so a fix
-  to `libs/ext/link/{core,net,proto}` belongs in Hearth too.
+- **Changing it:** a one-time copy. Notolith maintains it on its own from here,
+  and nothing is synced back to Hearth. The files carry GPL-3.0-or-later
+  headers; the `hearth` namespace, the proto package and the `HEARTH_DEBUG`
+  variable keep their old names.
 - **What Notolith will pass** (wired by the engine): `Node::Config`
   `signatureDomain = "notolith"` and `serviceType = "_notolith._tcp"`, so a Notolith
   node and a Hearth node never see or accept each other, and its own debug log via
