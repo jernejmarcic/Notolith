@@ -1079,9 +1079,9 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     // is incomplete, and what it did not rewrite stays on the old manifest. ---
     if (failures.isEmpty()) {
         // A key is removed only when the file there is a regular file (no link) with the very bytes the manifest
-        // recorded: anything else was not written by this exporter, or was changed since, and stays (a changed one
-        // is listed in Counts::leftInPlace). It is also left out of the new manifest. A removal that fails for any other reason than "already gone" fails the
-        // publish and keeps the key.
+        // recorded: anything else was not written by this exporter, or was changed since, and stays. A changed one is
+        // listed in Counts::leftInPlace and keeps its key, so the folder stays owned and the next run says so again.
+        // A removal that fails for any other reason than "already gone" fails the publish and keeps the key.
         for (auto it = oldManifest.constBegin(); it != oldManifest.constEnd(); ++it) {
             if (newManifest.contains(it.key()))
                 continue;
@@ -1092,6 +1092,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
             if (sha1Hex(onDisk) != it.value()) {
                 // Edited since it was written: not removed, and said so, as the page may still be on the site.
                 m_counts.leftInPlace << it.key();
+                newManifest.insert(it.key(), it.value());
                 continue;
             }
             QString why;

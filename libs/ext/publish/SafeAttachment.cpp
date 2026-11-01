@@ -134,7 +134,9 @@ QByteArray siteSvg(const QByteArray &svg)
                 const QString value = a.value().toString();
                 if (!ns.isEmpty() && ns != kSvgNS && ns != kXlinkNS)
                     continue;
-                if (attr.startsWith(QLatin1String("on"), Qt::CaseInsensitive))
+                // style can fetch through image-set() and other CSS that has no url(): never kept.
+                if (attr.startsWith(QLatin1String("on"), Qt::CaseInsensitive)
+                    || attr.compare(QLatin1String("style"), Qt::CaseInsensitive) == 0)
                     continue;
                 if (attr.compare(QLatin1String("href"), Qt::CaseInsensitive) == 0 && !localReference(value, raster))
                     continue;
