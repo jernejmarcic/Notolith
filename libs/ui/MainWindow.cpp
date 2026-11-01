@@ -6764,7 +6764,7 @@ void MainWindow::updateShare()
     m_shareProblem.clear();
     const std::optional<ModuleInfo> module = m_modules->moduleForFeature(QStringLiteral("share"));
     if (!module)
-        m_shareProblem = tr("Sharing needs the notolith-share package");
+        m_shareProblem = tr("Sharing needs the share module, which is not installed");
     else if (loadModule(*module, &m_shareProblem) && !m_makeShare)
         m_shareProblem = tr("The notolith-share module did not offer a sharing engine");
     if (!m_shareProblem.isEmpty()) {

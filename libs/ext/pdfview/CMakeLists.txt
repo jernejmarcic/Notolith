@@ -4,7 +4,7 @@
 # poppler half of PDF embeds: opens a vault's PDFs in a tab, reading and marking
 # them up like the rest of the app rather than handing them to the system viewer.
 #
-# Two libraries ship in the notolith-pdfview package, and the base app links neither:
+# Two libraries are built here (NOTEAPPC_WITH_PDFVIEW), and the base app links neither:
 #   libnotolith-pdfpage.so  poppler's page count, size and render behind the C face
 #                           libs/render/PdfPage.cpp resolves (PDF embeds in a note,
 #                           the hover preview), callable from any thread. No host

@@ -1015,7 +1015,7 @@ QWidget *SettingsPage::buildCorePluginsPage()
     }
 #ifdef NOTEAPPC_HAVE_SHARE
     if (!m_moduleFeatures.contains(QLatin1String("share")))
-        needsPackage.insert("share", tr("Not available: needs the notolith-share package."));
+        needsPackage.insert("share", tr("Not available: the share module is not installed."));
 #endif
     if (!MediaPlayback::isAvailable())
         missing << "media-embeds";
