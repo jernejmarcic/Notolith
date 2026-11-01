@@ -210,6 +210,8 @@ heading inside a quote or a list item is not a top-level block and is not
 listed. The heading text is the content with its tags removed and its entities
 decoded; the heading's range is the element, its text range the content.
 Publish draws the element once, with its HTML block (`tests/test_publish.cpp`).
+A published site loads nothing from other hosts (its Content-Security-Policy allows
+only the site's own files), so remote images and media in raw HTML do not show.
 `![[Note#Heading]]` (an embedded section) and a canvas card's `#Heading`
 (the section picker) find them too: both go through `headingSection` in
 `libs/markdown/Parser.cpp`, one line scan shared by the two - an ATX heading or
