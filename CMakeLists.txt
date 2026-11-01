@@ -13,10 +13,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg Sql Concurrent Network)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Svg Sql Concurrent Network)
 # Optional: the editor can paint its viewport through OpenGL instead of raster.
-find_package(Qt6 6.5 QUIET COMPONENTS OpenGLWidgets)
-find_package(Qt6 6.5 QUIET COMPONENTS Test)
+find_package(Qt6 6.7 QUIET COMPONENTS OpenGLWidgets)
+find_package(Qt6 6.7 QUIET COMPONENTS Test)
 qt_standard_project_setup()
 
 # The ABI tag every loadable module carries (spec section 4): same build only.
@@ -153,7 +153,7 @@ if(NOTEAPPC_WITH_SYNC)
     find_package(Qt6Keychain QUIET)
     # The reference server (tools/sync_server) only, never the client
     # library - a desktop build has no business linking an HTTP server.
-    find_package(Qt6 6.5 QUIET COMPONENTS HttpServer)
+    find_package(Qt6 6.7 QUIET COMPONENTS HttpServer)
 endif()
 # Encrypted notes (docs/ENCRYPTION.md): `.mdlock` files decrypted in memory
 # only. Needs libsodium, the same as sync; without it the option is off.

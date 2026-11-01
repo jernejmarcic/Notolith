@@ -71,7 +71,7 @@ sudo pacman -Rns notolith notolith-ink notolith-hwfont notolith-pdfview notolith
 
 ### Other Linux: build from source
 
-Needs Qt 6.5 or newer (`qt6-base`, `qt6-svg`, `qt6-multimedia`), a C++20
+Needs Qt 6.7 or newer (`qt6-base`, `qt6-svg`, `qt6-multimedia`), a C++20
 compiler, CMake 3.28 or newer, Ninja, and Rust 1.95 or newer (cargo builds the
 note-sharing backend). The list below uses Arch package names; most are
 optional and switched off cleanly when missing.
