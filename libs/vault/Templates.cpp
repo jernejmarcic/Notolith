@@ -51,7 +51,9 @@ QString Templates::folderAbsolute() const
 {
     if (m_vaultRoot.isEmpty())
         return Settings::templatesDirectory();
-    return m_config.folder.isEmpty() ? m_vaultRoot : QDir(m_vaultRoot).filePath(m_config.folder);
+    // A folder that climbs out of the vault is the vault's root instead.
+    const QString folder = Vault::pathInside(m_vaultRoot, m_config.folder);
+    return m_config.folder.isEmpty() || folder.isEmpty() ? m_vaultRoot : folder;
 }
 
 QStringList Templates::list() const

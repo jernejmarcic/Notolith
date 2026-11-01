@@ -116,6 +116,15 @@ QString Vault::confinedNotePath(const QString &relativePath) const
     return real.startsWith(root + QLatin1Char('/')) ? path : QString();
 }
 
+QString Vault::pathInside(const QString &root, const QString &relative)
+{
+    if (QDir::isAbsolutePath(relative) || relative.contains(QChar(0)))
+        return {};
+    const QString cleanRoot = QDir::cleanPath(root);
+    const QString path = QDir::cleanPath(cleanRoot + QLatin1Char('/') + relative);
+    return path == cleanRoot || path.startsWith(cleanRoot + QLatin1Char('/')) ? path : QString();
+}
+
 bool Vault::isConfinedPath(const QString &relativePath, bool leafMayBeLink) const
 {
     if (!isValid() || relativePath.isEmpty() || QDir::isAbsolutePath(relativePath)

@@ -232,6 +232,77 @@ TEST_F(DailyNotesTest, PreviousAndNextWalkCalendarDays)
     EXPECT_TRUE(notes.previousNote(today.addDays(-3)).isEmpty());
 }
 
+// The folder, the format and the template come from the vault's own settings, and a vault is what an
+// attacker hands over: none of them may reach a file outside it.
+TEST_F(DailyNotesTest, FolderOrFormatThatLeavesTheVaultStaysInside)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    const QString vaultRoot = QDir(dir.path()).filePath(QStringLiteral("vault"));
+    ASSERT_TRUE(QDir().mkpath(vaultRoot));
+    const QDate date(2026, 9, 23);
+
+    for (const QString &folder : {QStringLiteral("../outside"), QStringLiteral("a/../../outside"), outside.path()}) {
+        DailyNotes notes(vaultRoot, DailyNotes::Config{folder, QStringLiteral("YYYY-MM-DD"), {}});
+        const QString path = QDir::cleanPath(notes.pathFor(date));
+        EXPECT_TRUE(path.startsWith(vaultRoot + QLatin1Char('/'))) << folder.toStdString() << " -> " << path.toStdString();
+    }
+    DailyNotes byFormat(vaultRoot, DailyNotes::Config{{}, QStringLiteral("[../../escape-]YYYY"), {}});
+    EXPECT_TRUE(QDir::cleanPath(byFormat.pathFor(date)).startsWith(vaultRoot + QLatin1Char('/')));
+
+    QString error;
+    DailyNotes notes(vaultRoot, DailyNotes::Config{QStringLiteral("../outside"), QStringLiteral("YYYY-MM-DD"), {}});
+    ASSERT_FALSE(notes.ensureNote(date, &error).isEmpty()) << error.toStdString();
+    EXPECT_FALSE(QDir(dir.path()).exists(QStringLiteral("outside")));
+}
+
+TEST_F(DailyNotesTest, FolderThroughALinkOutOfTheVaultIsRefused)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    const QString vaultRoot = QDir(dir.path()).filePath(QStringLiteral("vault"));
+    ASSERT_TRUE(QDir().mkpath(vaultRoot));
+    ASSERT_TRUE(QFile::link(outside.path(), QDir(vaultRoot).filePath(QStringLiteral("out"))));
+
+    DailyNotes notes(vaultRoot, DailyNotes::Config{QStringLiteral("out/sub"), QStringLiteral("YYYY-MM-DD"), {}});
+    QString error;
+    EXPECT_TRUE(notes.ensureNote(QDate(2026, 9, 23), &error).isEmpty());
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(QDir(outside.path()).isEmpty());
+}
+
+TEST_F(DailyNotesTest, TemplateOutsideTheVaultIsNotRead)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    write(QDir(outside.path()).filePath(QStringLiteral("secret.md")), "outside words\n");
+    const QString vaultRoot = QDir(dir.path()).filePath(QStringLiteral("vault"));
+    ASSERT_TRUE(QDir().mkpath(vaultRoot));
+
+    const QString templateName = QDir(dir.path()).relativeFilePath(QDir(outside.path()).filePath(QStringLiteral("secret")));
+    for (const QString &templatePath : {QStringLiteral("../") + templateName, QDir(outside.path()).filePath(QStringLiteral("secret"))}) {
+        DailyNotes notes(vaultRoot, DailyNotes::Config{{}, QStringLiteral("YYYY-MM-DD"), templatePath});
+        QString error;
+        const QString path = notes.ensureNote(QDate(2026, 9, 23), &error);
+        ASSERT_FALSE(path.isEmpty()) << error.toStdString();
+        EXPECT_EQ(readAll(path), QByteArray()) << templatePath.toStdString();
+        QFile::remove(path);
+    }
+}
+
+TEST(TemplatesFolder, FolderThatLeavesTheVaultListsTheVaultInstead)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    write(QDir(outside.path()).filePath(QStringLiteral("elsewhere.md")), "x\n");
+    QTemporaryDir vault;
+    ASSERT_TRUE(vault.isValid());
+    write(QDir(vault.path()).filePath(QStringLiteral("mine.md")), "x\n");
+
+    Templates templates(vault.path(), Templates::Config{QDir(vault.path()).relativeFilePath(outside.path()), {}, {}});
+    EXPECT_EQ(templates.list(), QStringList{QStringLiteral("mine")});
+}
+
 // --- Bookmarks -----------------------------------------------------------
 
 class BookmarksTest : public ::testing::Test {

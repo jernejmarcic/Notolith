@@ -55,6 +55,10 @@ public:
     /// it is not a note, or when "..", an absolute path or a symlink would
     /// take it out of the vault. It need not exist, but its folder must.
     QString confinedNotePath(const QString &relativePath) const;
+    /// `relative` joined to `root` and cleaned, for a folder or file a vault's own
+    /// settings name (daily notes, templates): empty when it is absolute or would
+    /// climb out of the root with "..". Lexical only - links are not looked at.
+    static QString pathInside(const QString &root, const QString &relative);
     /// Whether `relativePath`, from outside this device (a sync record), names
     /// somewhere inside the vault that a write may go to: relative, with no
     /// empty, "." / ".." or dot-prefixed segment, no backslash or NUL, and its
