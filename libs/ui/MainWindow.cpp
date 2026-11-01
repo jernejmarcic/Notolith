@@ -5723,7 +5723,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
 }
 
 // The scan runs once per process, after the first paint. Opening another vault does not rescan:
-// modules are installed with the app, not with a vault , so the set found
+// modules are installed with the app, not with a vault, so the set found
 // here serves every vault this window opens.
 void MainWindow::startModuleScan()
 {
