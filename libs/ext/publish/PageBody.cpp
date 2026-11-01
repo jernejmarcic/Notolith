@@ -1422,6 +1422,9 @@ private:
         const QString kind = mediaKindOf(relativePath);
         const QString alias = link.alias.isEmpty() ? QFileInfo(relativePath).fileName() : link.alias;
 
+        // One that will not be copied is only named: nothing on the page points at it.
+        if (m_env.attachmentAllowed && !m_env.attachmentAllowed(relativePath))
+            return escapeHtml(QFileInfo(relativePath).fileName());
         if (kind == QLatin1String("image")) {
             static const QRegularExpression wxh(QStringLiteral("^(\\d+)(?:x(\\d+))?$"));
             const auto match = wxh.match(link.alias.trimmed());
