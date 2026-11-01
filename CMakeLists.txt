@@ -69,6 +69,11 @@ option(NOTEAPPC_STATIC_MODULES "Build the loadable modules as Qt static plugins 
 # mobile or cross build.
 option(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING "Colour fenced code blocks with KF6 SyntaxHighlighting" ON)
 option(NOTEAPPC_WITH_MEDIA "Play audio and video embeds with Qt Multimedia" ON)
+# Found here, not in libs/render: an imported target is visible only in the directory that found it, and
+# the executable's finalization (apps/noteAppC) walks noteAppC_render's link interface from its own.
+if(NOTEAPPC_WITH_MEDIA)
+    find_package(Qt6 6.7 QUIET COMPONENTS Multimedia)
+endif()
 # Raw HTML blocks (<div>, <table>, <details>...), rendered with litehtml.
 # Optional the same way: without it, or without the package, a note's HTML
 # blocks stay as source - see libs/render/HtmlRenderer and libs/render/CMakeLists.txt.

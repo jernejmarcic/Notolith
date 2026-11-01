@@ -75,6 +75,7 @@ target_compile_definitions(noteAppC_render PRIVATE
 if(TARGET KF6::SyntaxHighlighting)
     target_link_libraries(noteAppC_render PRIVATE KF6::SyntaxHighlighting)
     target_compile_definitions(noteAppC_render PRIVATE NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING)
+    set_property(GLOBAL PROPERTY NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING TRUE) # read by tests/CMakeLists.txt
     message(STATUS "noteAppC: syntax highlighting enabled (KF6::SyntaxHighlighting)")
 elseif(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING)
     message(STATUS "noteAppC: KF6 SyntaxHighlighting not found, code blocks will be uncoloured")
@@ -110,9 +111,7 @@ endif()
 
 # Audio and video embeds. Optional: without Qt Multimedia MediaPlayback reports
 # itself unavailable and an embed offers to open the file instead.
-if(NOTEAPPC_WITH_MEDIA)
-    find_package(Qt6 QUIET COMPONENTS Multimedia)
-endif()
+# (Qt6::Multimedia is looked for in the root CMakeLists.txt, under NOTEAPPC_WITH_MEDIA.)
 if(TARGET Qt6::Multimedia)
     target_link_libraries(noteAppC_render PRIVATE Qt6::Multimedia)
     target_compile_definitions(noteAppC_render PRIVATE NOTEAPPC_HAVE_MEDIA)
