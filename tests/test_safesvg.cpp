@@ -202,6 +202,20 @@ TEST(SafeSvg, DecodeImageAndReadImageCleanWhateverTheFileIsCalled)
     EXPECT_TRUE(readImage(d.vault + QStringLiteral("/missing.png")).isNull());
 }
 
+TEST(ImageLoadTest, AnSVGOverTheLimitIsNotRead)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("huge.svg"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='red'/><!--");
+    file.write(QByteArray(33 << 20, 'a'));
+    file.write("--></svg>");
+    file.close();
+    EXPECT_TRUE(readImage(path).isNull()) << "a valid SVG past 32 MiB is not drawn";
+}
+
 // What Qt's plugins read beyond Obsidian's set (eps, psd, tiff, raw, pdf...) is never decoded: the format
 // is told by the first bytes, and the reader is then forced to it. kimg_eps would run ghostscript on a
 // %!PS file whatever it is called.

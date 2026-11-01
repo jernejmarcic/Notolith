@@ -5596,6 +5596,25 @@ TEST(TexGateTest, ADocumentEmbedCompilesNothingUntilTheGateAnswersYes)
         EXPECT_EQ(editor->texCompilesForTest(), 1) << "the yes compiled it";
 }
 
+TEST(TexGateTest, AnEditorWithNoGateCompilesNothing)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("doc.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("\\documentclass{article}\\begin{document}Alpha\\end{document}\n");
+    }
+    // A hover preview is such an editor: nobody hands it a gate.
+    auto editor = editorWith(QStringLiteral("![[doc.tex]]\n\ntail\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+    editor->setCursorOffset(editor->noteText().size());
+    WAIT_TRUE(!editor->codeBlockImageRectAt(0).isEmpty(), 3000);
+    QTest::qWait(200);
+    EXPECT_EQ(editor->texCompilesForTest(), 0);
+}
+
 TEST(TexGateTest, MathsAloneNeedsNoGate)
 {
     ASSERT_TRUE(MathRenderer::isAvailable());

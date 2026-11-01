@@ -116,7 +116,12 @@ QImage readImage(const QString &path, int maxWidth, bool autoTransform)
         return {};
     if (format != "svg") // decoded from the file, at the size wanted
         return readAs(&file, format, autoTransform, maxWidth);
-    QImage image = decodeImage(file.readAll(), autoTransform);
+    // An SVG is read whole to be cleaned, so it gets the note limit: a vault's huge file is not drawn.
+    constexpr qint64 svgLimit = qint64(32) << 20;
+    const QByteArray bytes = file.read(svgLimit + 1);
+    if (bytes.size() > svgLimit)
+        return {};
+    QImage image = decodeImage(bytes, autoTransform);
     if (maxWidth > 0 && image.width() > maxWidth)
         image = image.scaledToWidth(maxWidth, Qt::SmoothTransformation);
     return image;

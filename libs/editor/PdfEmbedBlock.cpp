@@ -131,8 +131,9 @@ bool MarkdownEditor::layoutTexEmbed(BlockView &view, const EmbedSpan &embed, con
     }
 
     // A vault that is not trusted does not get a process started by being looked at: the source, and a click.
+    // An editor nobody handed a gate (a hover preview, slides, an export) starts nothing either.
     const QString gateSource = QStringLiteral("%% %1\n").arg(path) + source;
-    if (d->m_processGate && !d->m_processGate(QStringLiteral("tex"), gateSource, false))
+    if (!d->m_processGate || !d->m_processGate(QStringLiteral("tex"), gateSource, false))
         return layoutTexNotRun(view, info.fileName(), gateSource, source);
 
     if (!TexCompiler::isAvailable()) {
