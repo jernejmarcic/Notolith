@@ -4,8 +4,7 @@
 
 The first public release, a beta: expect bugs, and back up your vault.
 
-- Markdown editor with live preview, source and reading modes; Obsidian-style
-  wikilinks, embeds, callouts, properties, tags and `query` blocks.
+- Markdown editor with live preview, source and reading modes; wikilinks, embeds, callouts, properties, tags and `query` blocks.
 - Opens and works with Obsidian vaults.
 - SQLite full-text index, backlinks, outline, graph view, canvas, bases, daily
   notes, templates, workspaces, file recovery.

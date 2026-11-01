@@ -6,8 +6,8 @@ a Ryzen 9 9900X desktop (12 cores / 24 threads, RTX 5080, CachyOS; "the developm
 default RelWithDebInfo build (`-O2 -g`) unless it says otherwise, and every one
 can be reproduced with the commands in [Measuring](#measuring).
 
-The standing requirement: noteAppC must be faster than Obsidian in
-every way, being native C++, and stay fast on a machine with no GPU at all.
+The standing goal: stay fast on every measured path, being native C++, and
+on a machine with no GPU at all.
 
 ## The rules this work follows
 

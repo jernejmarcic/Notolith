@@ -13,29 +13,30 @@ it. The binary is `notolith` and the app id is
 
 ## Features
 
-- **Obsidian vaults** - opens and works with Obsidian vaults: links, embeds,
-  properties, callouts and `.obsidian` settings are read as they are.
+- **Obsidian vaults** - opens and works with Obsidian vaults: links and their
+  resolution order, embeds, properties, callouts, search syntax, the
+  `.obsidian` settings and any Obsidian theme in the vault are read as they
+  are.
 - **Vault** - open any folder of Markdown files, with a file tree and
   byte-exact atomic saves (CRLF and BOM preserved). File recovery keeps
   snapshots with a diff. A note changed on disk (sync, another editor, a link
   update) shows the change in every tab; if you were editing it, your edits
   win and the other version goes to file recovery. A note moved or renamed
   outside the app is followed, caret and unsaved edits kept.
-- **Index** - SQLite with FTS5, parallel cold build, incremental rescan,
-  Obsidian's link resolution order. 20 000 notes cold-index in about 1 s on a
-  Ryzen 9 9900X.
+- **Index** - SQLite with FTS5, parallel cold build, incremental rescan
+  and link resolution. 20 000 notes cold-index in about 1 s on a Ryzen 9 9900X.
 - **Editor** - one engine, three modes: live preview, source and reading.
   Viewport-only layout, incremental edits, parsing off the UI thread; 0.2 ms
   per keystroke on a 200 kB note, on the same machine.
-- **Rendered Markdown** - Obsidian's element-by-element syntax reveal,
-  callouts, tables, maths, embeds of notes, images, PDFs, audio and video,
-  editable properties, `query` blocks, raw HTML (litehtml), Mermaid, PlantUML,
-  TikZ and Graphviz diagrams, and syntax-highlighted code.
+- **Rendered Markdown** - element-by-element syntax reveal, callouts, tables,
+  maths, embeds of notes, images, PDFs, audio and video, editable properties,
+  `query` blocks, raw HTML (litehtml), Mermaid, PlantUML, TikZ and Graphviz
+  diagrams, and syntax-highlighted code.
 - **Vim mode** - optional: normal, insert and visual modes, counts, operators
   and motions, `.`, `/` search, `:w` and `:q`.
 - **Workspace** - tabs and nested splits, each tab with its own history; the
   layout comes back with the vault, and named layouts can be saved and loaded.
-- **Core plugins** - search with Obsidian's grammar, backlinks and unlinked
+- **Core plugins** - search with a query grammar, backlinks and unlinked
   mentions, outgoing links, tags, outline, bookmarks, daily notes, templates,
   page preview, PDF export, pandoc export and import, hotkeys, a command
   palette (Ctrl+P), and a right-click menu with a web search.
@@ -46,10 +47,9 @@ it. The binary is `notolith` and the app id is
   publishing. Each can be switched off at build time.
 - **Plugins (preview)** - out-of-process plugins, sandboxed with bubblewrap.
   The plugin format is young and there are no third-party plugins yet.
-- **Themes** - dark by default, Obsidian's token names and values, custom
-  colour schemes, an importer for any Obsidian theme in the vault, and
-  per-kind formatting colours (headings, bold, links, ...; display only,
-  nothing is written to a note).
+- **Themes** - dark by default, a documented set of colour tokens,
+  custom colour schemes, and per-kind formatting colours (headings, bold,
+  links, ...; display only, nothing is written to a note).
 - **Touch** - momentum scrolling and long-press selection; sidebars fold on a
   narrow window.
 
