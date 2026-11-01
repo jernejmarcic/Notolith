@@ -18,10 +18,8 @@ namespace noteAppC::ink {
 
 // Ported from Rnote (rnote-engine/src/store/trash_comp.rs, split_colliding_strokes),
 // copyright the Rnote contributors, GPL-3.0-or-later, https://github.com/flxzt/rnote.
-// Rnote cuts a brush stroke's path at every segment the eraser hits and keeps each
-// run of the others that has a segment left; the first run stays the original
-// stroke. Here a segment is hit when its outline path meets the eraser path, and a
-// run is the points joined by consecutive untouched segments.
+// A segment is hit when its outline path meets the eraser path; each run of points joined
+// by untouched segments is kept, and the first run stays the original stroke.
 SplitResult splitStroke(const Stroke &stroke, const QPainterPath &eraser)
 {
     const std::vector<StrokePoint> &pts = stroke.points;
@@ -77,7 +75,7 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
             continue;
         bool hit = false;
         if (item->type == Item::Type::Stroke) {
-            // Rnote: any point inside.
+            // any point inside
             const auto &pts = item->stroke->points;
             hit = std::any_of(pts.begin(), pts.end(), [&](const StrokePoint &p) { return region.contains(QPointF(p.x, p.y)); });
             // And a segment that crosses the region with no point inside it (a sparse stroke through a box): the brief's
@@ -176,9 +174,9 @@ QPainterPath shapePath(const Shape &shape)
     return outline;
 }
 
-// Ported from Rnote (rnote-engine/src/strokes/stroke.rs, Stroke::scale / Stroke::translate and
-// rnote-compose/src/shapes), copyright the Rnote contributors, GPL-3.0-or-later,
-// https://github.com/flxzt/rnote. Rnote scales the stroke width by the mean of the x and y scale.
+// Ported from Rnote (rnote-engine/src/strokes/stroke.rs, Stroke::scale / Stroke::translate),
+// copyright the Rnote contributors, GPL-3.0-or-later, https://github.com/flxzt/rnote.
+// The width scales by the mean of the x and y scale.
 Item transformItem(const Item &item, const QTransform &transform)
 {
     const double meanScale = 0.5 * (std::hypot(transform.m11(), transform.m12()) + std::hypot(transform.m21(), transform.m22()));

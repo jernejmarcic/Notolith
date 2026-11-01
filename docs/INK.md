@@ -21,7 +21,7 @@ thing about `.ink` files: how to read their text boxes for the index (see "Notes
 - Pen pressure
 - Performance notes
 - Not verified offscreen
-- Attribution
+- Credits
 - Glyph studio
 
 ## Installing and building
@@ -35,7 +35,7 @@ On Arch the build produces four packages from one `packaging/arch/PKGBUILD`:
 | `notolith-hwfont` | `notolith-hwfont.so` (the glyph studio, see the last section) | `notolith-ink` |
 | `notolith-pdfview` | `notolith-pdfview.so` (the PDF viewer tab) and `libnotolith-pdfpage.so` (poppler's page count, size and render, which PDF embeds in a note use on their own) | `notolith`, `poppler-qt6` |
 
-There are exactly these three module packages (`notolith-pdfview` has no handwriting in it; it is listed because it installs the same way). `notolith-ink` is one install unit: later work (`.rnote` files, markup,
+There are exactly these three module packages (`notolith-pdfview` has no handwriting in it; it is listed because it installs the same way). `notolith-ink` is one install unit: later work (markup,
 recognition) adds its hooks to this module, not to new packages. Handwriting recognition model weights, when they
 arrive, are an optional data download and not a module. Pacman enforces the dependency of `notolith-hwfont` on
 `notolith-ink`: a module manifest has no `dependencies` key.
@@ -127,7 +127,7 @@ that is not finite is written as `0`, never as `null`. The example is spaced out
  ]}
 ```
 
-**Units.** CSS px at 96 dpi, as in Rnote, so coordinates pass through `.rnote` unchanged. A4 is 793.701 x 1122.52.
+**Units.** CSS px at 96 dpi. A4 is 793.701 x 1122.52.
 Pages are not objects: one coordinate space holds everything and, in the paged layouts, page `n` covers `y` from
 `n * height` (plus the extent's `y`) to `(n + 1) * height`.
 
@@ -145,12 +145,12 @@ are equal and the pair otherwise; the reader takes either.
 
 **Items.** Common keys: `type`, `t` (a finite number from 0 up to but not including 9e15, truncated to a whole number, unique in the file:
 it is the creation order and the item's identity; the writer only ever produces whole numbers) and `layer` (`document`, `image`, `highlighter` or `user`, default `user`). Paint order is ascending
-`(layer, t)`, as in Rnote.
+`(layer, t)`.
 
 | `type` | keys |
 |---|---|
 | `stroke` | `style` `{width, color, pressureCurve}` and `points`, a flat list of `x, y, pressure` triples. `pressureCurve` is `const`, `linear`, `sqrt`, `cbrt`, `pow2` or `pow3`: the drawn width is `width * curve(pressure)`. |
-| `shape` | `kind` (`line`, `arrow`, `rect`, `ellipse`, `polyline`, `polygon`), `style` as above, `points`, a flat list of `x, y` pairs: two for a line, arrow, rect (corners) and ellipse (corners), at least two for a polyline and three for a polygon. No tool draws the last two; `.rnote` files carry them. |
+| `shape` | `kind` (`line`, `arrow`, `rect`, `ellipse`, `polyline`, `polygon`), `style` as above, `points`, a flat list of `x, y` pairs: two for a line, arrow, rect (corners) and ellipse (corners), at least two for a polyline and three for a polygon. No tool draws the last two; a file may carry them. |
 | `textbox` | `rect` `[x, y, width, height]` and `markdown`, the box's Markdown source, exactly as typed. |
 | `image` | `rect` and `path`, a vault-relative file; never embedded pixels. Drawn as a placeholder: there is no image tool yet. |
 | `group` | kept and written back verbatim; later work uses it for markup anchors, sketch sections and recognition results. |
@@ -215,7 +215,7 @@ drawing surface focused (click it once).
 | tool | key | what it does |
 |---|---|---|
 | Pen | `P` | Draws. Width, colour (six swatches taken from the page's theme) and pressure curve are on the toolbar. |
-| Eraser | `E` | Takes the whole stroke it touches. The toolbar toggle "Erase parts" or `Shift+E` makes it take only the touched segments, the rest of the stroke surviving as one or two strokes (Rnote's algorithm). Shapes, text boxes and images are always taken whole. |
+| Eraser | `E` | Takes the whole stroke it touches. The toolbar toggle "Erase parts" or `Shift+E` makes it take only the touched segments, the rest of the stroke surviving as one or two strokes. Shapes, text boxes and images are always taken whole. |
 | Select | `L` | Lasso, or a rectangle (`Shift+L` switches between them; so does the toolbar's menu). A stroke is selected when any of its points is inside the region or a segment crosses it; a shape when its ink meets it; a text box when the region holds the centre of its rectangle or crosses its edge. Drag the selection to move it, drag one of the eight handles to resize it. |
 | Shape | `S` | Line, arrow, rectangle, ellipse by dragging; `Shift+S` goes to the next kind in that order. A drag under 3 widget px commits nothing. |
 | Text | `T` | Click to write a text box, or to edit the one under the pointer. The editor is the note editor (Markdown, live preview), so links, tags and formatting work. A new box is 260 x 72 px; resize it with the selection handles (the text reflows, it is not scaled). |
@@ -242,7 +242,7 @@ that size cannot be pasted back; there is no cap on the copy side. Plain text do
 **Input devices.**
 
 - **Pen.** Draws, at the pen's pressure. Whatever the tool, the eraser end of a pen erases.
-- **Barrel buttons** (defaults from Rnote and the spec; the names are constants in `libs/ext/ink/core/InkInput.h`):
+- **Barrel buttons** (defaults from the spec; the names are constants in `libs/ext/ink/core/InkInput.h`):
   the lower button, `Qt::MiddleButton` (`BTN_STYLUS`), **erases while it is held**; the upper button,
   `Qt::RightButton` (`BTN_STYLUS2`), **selects while held** (with the Pen tool, for that one stroke; the selection then
   stays for the Select tool). In the glyph studio, a click of the upper button saves the sample instead (below).
@@ -255,7 +255,7 @@ that size cannot be pasted back; there is no cap on the copy side. Plain text do
   The setting is `ink.drawWithMouse`, and the toolbar toggle is the same setting.
 - **Touch.** One finger scrolls, a pinch zooms; touch never draws. While a pen stroke is in flight touch is ignored,
   so a resting palm does not move the page.
-- **Smoothing.** Pen strokes go through ink-stroke-modeler with Rnote's parameters (wobble smoothing, the spring
+- **Smoothing.** Pen strokes go through ink-stroke-modeler with tuned parameters (wobble smoothing, the spring
   position model, a predicted tail). "Raw pen input" (`ink.rawInput`) skips it and keeps every tablet sample.
 - Pressure is normalised per pen; see "Pen pressure".
 
@@ -283,17 +283,11 @@ A document is at most 100 000 pages (`kMaxPages`) on a side.
 | `lines` | ruled lines |
 | `grid` | a grid |
 | `dots` | dots |
-| `linesMargin` | ruled lines with a margin line |
-| `gridMajor` | a grid with every fifth line stronger |
-| `musicStaff` | music staves |
-| `calligraphy` | calligraphy guide lines |
-| `seyes` | Seyes ruling (French school paper) |
-| `cornell` | the Cornell note-taking layout |
-| `hexGrid` | a hexagonal grid |
 
-The first four are Rnote's stock styles; the other seven are from a Rnote fork (see "Attribution"). The pattern
+The pattern
 is drawn straight from the geometry, only for the lines that are on screen, and it is anchored to the page (to the
-document origin on a sheet), so a sheet that grows up or left never moves the pattern under the ink.
+document origin on a sheet), so a sheet that grows up or left never moves the pattern under the ink. A file that
+names any other pattern opens with `lines`.
 
 ## Settings
 
@@ -305,7 +299,7 @@ other setting.
 | `ink.drawWithMouse` | Draw with the mouse | off | on, off |
 | `ink.rawInput` | Raw pen input | off | on, off |
 | `ink.defaultLayout` | Page layout of new notes | `continuousVertical` | the four layouts |
-| `ink.defaultPattern` | Page pattern of new notes | `lines` | the eleven patterns |
+| `ink.defaultPattern` | Page pattern of new notes | `lines` | the four patterns |
 | `ink.defaultPenWidth` | Pen width | 2.0 | 0.5 to 40, in document px; read when a note opens |
 | `ink.eraserWidth` | Eraser width | 20 | 4 to 100, in document px |
 | `ink.tileCacheMB` | Handwriting tile cache (MB) | 64 | 8 to 1024; see "Performance notes" |
@@ -390,7 +384,7 @@ Everything above was tested with the offscreen platform, which cannot show a pop
 window width. These are the checks left for a person with the hardware (a FydeTab Duo and its pen, and a Wacom
 pen for the buttons):
 
-- **Barrel buttons and the eraser end.** The defaults are Rnote's. The test pen's buttons were broken and it has no
+- **Barrel buttons and the eraser end.** The defaults are the spec's. The test pen's buttons were broken and it has no
   eraser end, so held erase, held select and the glyph studio's barrel click have only been exercised with synthetic
   events.
 - **Pen proximity and pressure tail.** What happens when the pen leaves proximity mid-stroke
@@ -416,10 +410,10 @@ Known limits (not bugs to hunt): zoom and the pen colour are not remembered betw
 open, pasting plain text does nothing; the text boxes use the built-in Light or Dark theme by page lightness, so a customised application theme's colours
 do not reach them (font overrides do); a toolbar toggle reaches other open ink tabs when they are next shown.
 
-## Attribution
+## Credits
 
-The stroke engine is a port of Rnote's, and Notolith, like Rnote, is GPL-3.0-or-later. Rnote is
-<https://github.com/flxzt/rnote>, copyright the Rnote contributors. Each ported function carries the notice in its source:
+Parts of the stroke engine are ported from Rnote, <https://github.com/flxzt/rnote>, copyright the Rnote contributors,
+GPL-3.0-or-later, as is Notolith. Each ported function carries the notice in its source:
 
 - the stroke outline, `compose_lines_variable_width` in `rnote-compose/src/style/smooth/mod.rs`
   (`libs/ext/ink/core/StrokeOutline.cpp`);
@@ -429,14 +423,9 @@ The stroke engine is a port of Rnote's, and Notolith, like Rnote, is GPL-3.0-or-
 - the pressure curves, `PressureCurve::apply` in `rnote-compose/src/style/mod.rs` (`InkTypes.cpp`);
 - the eraser that cuts strokes, `split_colliding_strokes` in `rnote-engine/src/store/trash_comp.rs` (`InkTools.cpp`);
 - moving and resizing a selection, `Stroke::scale` and `Stroke::translate` in `rnote-engine/src/strokes/stroke.rs`
-  and the shapes in `rnote-compose/src/shapes` (`InkTools.cpp`);
-- the page patterns, the `gen_*_pattern` functions and `Background::page_overlay_lines` in
-  `crates/rnote-engine/src/document/background.rs` (`PagePatterns.cpp`).
-
-The page styles beyond Rnote's stock ones (`linesMargin`, `gridMajor`, `musicStaff`, `calligraphy`, `seyes`, `cornell`,
-`hexGrid`) are from a fork of Rnote, branch `jernej/features`: commit
-`974b1f8dbf3ff0b5bdde76b956b2545a390817db` (lines with margin, graph, staff, guide, Seyes, Cornell) and
-`b27e87b193ebd974bc1ee4e42d37d5732e2418b8` (hex grid). The fork is not public yet; its `origin` is upstream Rnote.
+  (`InkTools.cpp`);
+- the page patterns, the `gen_*_pattern` functions in `crates/rnote-engine/src/document/background.rs`
+  (`PagePatterns.cpp`).
 
 ## Glyph studio
 

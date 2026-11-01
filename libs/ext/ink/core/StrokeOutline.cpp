@@ -28,15 +28,11 @@ double outlineWidth(const Stroke &stroke, size_t index)
 
 } // namespace
 
-// Ported from Rnote (rnote-compose/src/style/smooth/mod.rs,
-// compose_lines_variable_width), copyright the Rnote contributors,
-// GPL-3.0-or-later, https://github.com/flxzt/rnote.
-// Rnote composes each pen path segment into a closed polygon - offset points
-// at half the width on either side, a cubic round cap at both ends whose
-// control points sit 2/3 of the width beyond the end - and appends every
-// segment into one path filled with the non-zero rule. Only LineTo segments
-// exist in files the default builder writes (rnote-study.md section 1.6), so a
-// segment here is one line.
+// Ported from Rnote (rnote-compose/src/style/smooth/mod.rs, compose_lines_variable_width),
+// copyright the Rnote contributors, GPL-3.0-or-later, https://github.com/flxzt/rnote.
+// Each segment becomes a closed polygon - offset points at half the width on either side,
+// a cubic round cap at both ends whose control points sit 2/3 of the width beyond the end -
+// appended into one path filled with the non-zero rule.
 QPainterPath strokeOutline(const Stroke &stroke, size_t firstPoint, size_t lastPoint)
 {
     QPainterPath path;
@@ -51,7 +47,7 @@ QPainterPath strokeOutline(const Stroke &stroke, size_t firstPoint, size_t lastP
         const QPointF d = b - a;
         const double length = std::hypot(d.x(), d.y());
         if (!(length > 0.0) || !std::isfinite(length))
-            continue; // a duplicate sample has no direction (skipped, as Rnote filters zero-length lines); a non-finite point has none either
+            continue; // a duplicate sample has no direction (skipped); a non-finite point has none either
         const double w0 = outlineWidth(stroke, i), w1 = outlineWidth(stroke, i + 1);
         const QPointF dir = d / length;
         const QPointF orth(-dir.y(), dir.x());
@@ -75,7 +71,7 @@ QPainterPath strokeOutline(const Stroke &stroke, size_t firstPoint, size_t lastP
         path.closeSubpath();
     }
     if (!anySegment) {
-        // A tap, or every point the same: Rnote draws a circle of the start width.
+        // A tap, or every point the same: a circle of the start width.
         const double radius = outlineWidth(stroke, firstPoint) * 0.5;
         if (radius > 0.0 && std::isfinite(pts[firstPoint].x + pts[firstPoint].y))
             path.addEllipse(QPointF(pts[firstPoint].x, pts[firstPoint].y), radius, radius);

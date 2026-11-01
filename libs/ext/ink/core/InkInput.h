@@ -63,7 +63,7 @@ private:
 
 /// One stroke's samples through ink-stroke-modeler (spec section 7, Input):
 /// wobble smoothing, the spring position model and a predicted tail, with
-/// Rnote's parameters. Raw mode passes samples straight through.
+/// the tuned parameters of InkInput.cpp. Raw mode passes samples straight through.
 class InkInput {
 public:
     InkInput();

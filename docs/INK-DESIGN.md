@@ -8,10 +8,10 @@ local handwriting recognition, and a handwriting font made from the user's own
 writing. This document covers what is built:
 
 - the loadable-module mechanism, the editor seams, the `.ink` format and the
-  ink core, with a basic handwritten-note tab (without `.rnote`);
+  ink core, with a basic handwritten-note tab;
 - the glyph studio.
 
-The later pieces (`.rnote`, sketch sections, markup over text, ink on PDF,
+The later pieces (sketch sections, markup over text, ink on PDF,
 images and EPUB, recognition, font training) are not built. The decisions they
 inherit are fixed in section 2, so nothing here has to be re-decided later.
 
@@ -22,8 +22,7 @@ The requirements:
 - Two equal uses: fully handwritten notes, and handwritten sections inside
   normal Markdown notes. Plus circling and scribbling on Markdown, PDF "and
   such".
-- An own open format, and `.rnote` editing. Rnote is the reference design.
-  It is GPL-3.0, as is Notolith, so its code can be reused with attribution.
+- An own open format.
 - Built "block by block": "a user can have a hyper minimal, ultra fast
   workflow that has nothing but text". Every non-essential feature is a
   plugin that "shouldn't even need to be installed".
@@ -52,7 +51,7 @@ Later work builds on these decisions without re-asking.
 
 | Topic | Decision |
 |---|---|
-| Pen | Draws. The eraser end erases. The lower barrel button is a held eraser and the upper one a held lasso (Rnote's defaults). These are a bonus, not the way in: some pens (e.g. the FydeTab Duo's) have no eraser end and no working buttons (pen input test, section 10), so every tool (pen, eraser, lasso, shapes, text, and the highlighter when it arrives) is reachable from the toolbar and by a keyboard shortcut with no pen hardware at all. |
+| Pen | Draws. The eraser end erases. The lower barrel button is a held eraser and the upper one a held lasso These are a bonus, not the way in: some pens (e.g. the FydeTab Duo's) have no eraser end and no working buttons (pen input test, section 10), so every tool (pen, eraser, lasso, shapes, text, and the highlighter when it arrives) is reachable from the toolbar and by a keyboard shortcut with no pen hardware at all. |
 | Pressure | Normalised per device by a learned maximum (setting `ink.pressureMax`, default 1.0, stored per device name): one pen (the FydeTab Duo's) never reports above 0.657, so raw pressure would make every line thin. |
 | Touch | Scrolls and pinch-zooms. It never draws. |
 | Mouse | Draws only while mouse inking is explicitly on. Otherwise it behaves as it does now, inside ink areas too. |
@@ -64,10 +63,9 @@ Later work builds on these decisions without re-asking.
 | Topic | Decision |
 |---|---|
 | `.ink` format | Plain JSON, written by `QJsonDocument::toJson(Compact)` with no custom emitter. The reader sniffs the gzip magic bytes (`1f 8b`) from v1 and inflates such a file (read is supported, in the editor and in the host's index reader); the writer always produces plain JSON. |
-| Paper | Chosen per note from Rnote's four layouts. The default is A4 pages stacked downward, with a page added as the ink grows. |
+| Paper | Chosen per note from four layouts. The default is A4 pages stacked downward, with a page added as the ink grows. |
 | Typed text box | It is the real Markdown editor (canvas text-card pattern), so links, tags and formatting work in it. |
 | Search | Text boxes are indexed now. Recognised handwriting is indexed later, with recognition. |
-| `.rnote` | Opened, edited and saved as `.rnote`, with lossless pass-through of anything the model does not know. "Save as .ink" and "Export as .rnote" are commands. |
 | Companion files | One hidden companion file per host file under a tidy folder, `Sketches/` by default, mirroring the vault path:<br>- `Uni/Networks/Lecture 3.md` uses `Sketches/Uni/Networks/Lecture 3.ink`.<br>- `paper.pdf` uses `Sketches/paper.pdf.ink`.<br>It holds the sketch sections and the markup. It follows the host file on rename, move and delete. |
 | PDF ink | Stored in the companion file, with pressure, plus a "Flatten into PDF" command. |
 | EPUB | Pen highlights use the existing EPUB highlights. Pen marks are anchored to EPUB locators. |
@@ -93,14 +91,14 @@ Later work builds on these decisions without re-asking.
 
 | Topic | Decision |
 |---|---|
-| Order | The core and the glyph studio first. Then `.rnote`, sketch sections, markup over text, PDF, image and EPUB ink, recognition, and font training and build. |
+| Order | The core and the glyph studio first. Then sketch sections, markup over text, PDF, image and EPUB ink, recognition, and font training and build. |
 
 ## 3. Blocks and install units
 
 Each block lives under `libs/ext/<name>` and has its own CMake option and
 its own runtime feature id. There are two install units (packages) in this
 design: `notolith-ink` (the ink core library plus the ink module, and later
-the rnote, markup and recognition hooks) and `notolith-hwfont` (the font
+the markup and recognition hooks) and `notolith-hwfont` (the font
 module, which depends on `notolith-ink` for the core library). Only the ink core, the ink module and the glyph
 studio are built; the rest of the table fixes names so the seams fit them.
 
@@ -108,7 +106,6 @@ studio are built; the rest of the table fixes names so the seams fit them.
 |---|---|---|---|---|---|
 | ink core library | libs/ext/ink/core | `libnotolith-inkcore.so`, package notolith-ink | `NOTEAPPC_WITH_INK` | - | yes |
 | ink module (handwritten-note tab, later sketch sections) | libs/ext/ink | `notolith-ink.so`, package notolith-ink | `NOTEAPPC_WITH_INK` | `ink` | yes (sketch sections later) |
-| rnote | libs/ext/rnote | `notolith-ink-rnote.so`, package notolith-ink | `NOTEAPPC_WITH_RNOTE` | shares `ink` | no |
 | markup | libs/ext/inkmarkup | `notolith-ink-markup.so`, package notolith-ink | `NOTEAPPC_WITH_INK_MARKUP` | `ink-markup` | no |
 | recognition | libs/ext/hwr + tools/hwr_worker | `notolith-hwr.so` + worker, package notolith-ink | `NOTEAPPC_WITH_HWR` | `handwriting-recognition` | no |
 | handwriting font | libs/ext/hwfont + tools/hwfont_worker | `notolith-hwfont.so` + worker, package notolith-hwfont | `NOTEAPPC_WITH_HWFONT` | `handwriting-font` | studio only |
@@ -250,8 +247,7 @@ example below is shown spaced out for reading.
 
 ### Coordinates and units
 
-- **Units**: CSS px at 96 dpi, identical to Rnote, so coordinates pass
-  through `.rnote` untouched. A4 is 793.701 x 1122.52.
+- **Units**: CSS px at 96 dpi. A4 is 793.701 x 1122.52.
 - **Precision**: numbers are written with three decimals (rounded before
   the document is handed to `QJsonDocument`).
 - **Pages**: pages are not objects. One coordinate space holds everything,
@@ -263,7 +259,7 @@ example below is shown spaced out for reading.
 
 **Common keys**: `type`, `t` (creation order, strictly increasing),
 `layer`. The layers are `document`, `image`, `highlighter` and `user`. Paint
-order is ascending `(layer, t)`, as in Rnote.
+order is ascending `(layer, t)`.
 
 **Item types:**
 
@@ -362,8 +358,8 @@ events carrying position, pressure, timestamp, pointer type and buttons.
   linked as its `InkStrokeModeler::stroke_modeler` target. Abseil comes from
   the system `find_package(absl)` and is required: without it the ink core is
   not built. There is no bundled copy. Apache-2.0 is GPL-3.0 compatible.
-- **Parameters**: Rnote's overrides of `ModelerParams::suggested()`, in the
-  app's units (px, seconds).
+- **Parameters**: overrides of `ModelerParams::suggested()`, in
+  the app's units (px, seconds).
 - **Prediction**: the predicted tail at the stroke end is drawn transiently
   and never stored.
 - **Raw input**: a "Raw pen input" setting, off by default.
@@ -374,7 +370,7 @@ events carrying position, pressure, timestamp, pointer type and buttons.
 - the four offset points per segment at `width * curve(pressure)`;
 - round caps;
 - all segments in one `QPainterPath`, filled once with `Qt::WindingFill`.
-This is Rnote's `compose_lines_variable_width`, ported with attribution.
+This is Rnote's `compose_lines_variable_width`, ported with attribution (see `docs/INK.md`, Credits).
 
 **Tile cache.** Finished ink is cached in 512 px `QImage` tiles:
 - stroke tiles are rasterised on the thread pool (`QImage` with `QPainter`
@@ -391,16 +387,16 @@ image, and `update(segmentRect)` repaints just that segment.
 **Zoom.** During a pinch the tiles are scaled. They re-rasterise 400 ms
 after the gesture settles, off-thread.
 
-**Backgrounds.** One pattern tile per period via `drawTiledPixmap`. The
-seven page styles of a Rnote fork (branch `jernej/features`) are ported with attribution.
+**Backgrounds.** Ruled lines, grid and dots, drawn as lines for the exposed
+rect only (`PagePatterns.cpp`).
 
 ### Tools
 
 | Tool | Behaviour |
 |---|---|
 | Pen | Width and colour from the toolbar. |
-| Highlighter | Not built. Its only effect is on text (applying `==` to covered characters, in Markdown notes and in text boxes), and over handwriting or an empty page it does nothing. So it arrives with the text geometry (seam 4). The `highlighter` layer exists in the model only so that `.rnote` highlighter strokes keep their paint order. |
-| Eraser | Two modes, as in Rnote: stroke (removes the whole stroke) and split (cuts strokes where it passes). |
+| Highlighter | Not built. Its only effect is on text (applying `==` to covered characters, in Markdown notes and in text boxes), and over handwriting or an empty page it does nothing. So it arrives with the text geometry (seam 4). The `highlighter` layer exists in the model so that a file carrying highlighter strokes keeps their paint order. |
+| Eraser | Two modes: stroke (removes the whole stroke) and split (cuts strokes where it passes). |
 | Lasso and rectangle select | Move, resize, delete, copy and paste within the document. |
 | Shapes | Line, arrow, rectangle, ellipse. |
 | Text box | A tap with the text tool creates one. Editing opens a child `MarkdownEditor` over its rectangle, the `CanvasView::beginEditingText` pattern (CanvasView.cpp:231-331). At rest the box renders through `makeContentEditor(text, size)->grab()` (CanvasRender.cpp:377-396) into the tile cache. |
@@ -565,7 +561,7 @@ Results go in docs/PERFORMANCE.md.
 
 Out of scope everywhere:
 - tilt and rotation;
-- textured and rough brushes (kept by `.rnote` pass-through, not editable);
+- textured and rough brushes;
 - in-app palm rejection, which libinput and the palm-filter daemon own;
 - fitting text boxes to ruled lines;
 - `.xopp` interchange;
@@ -573,7 +569,6 @@ Out of scope everywhere:
 - Tier 2 ABI changes for ink.
 
 Not built yet:
-- `.rnote`;
 - sketch sections, seams 2 and 3. They must also hide the
   `Sketches/` companion files from the file tree, the quick switcher and
   search, and rewrite the embed lines when a note is renamed;

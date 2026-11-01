@@ -790,7 +790,7 @@ void InkCanvas::finishStroke(bool keep)
     const std::shared_ptr<const Stroke> stroke = m_input.finish();
     // A one-point dot is a stroke the reader accepts; only a stroke with no point at all is not committed.
     if (keep && stroke && !stroke->points.empty()) {
-        // Pen strokes are always Layer::User; Layer::Highlighter is only read from .rnote.
+        // Pen strokes are always Layer::User; Layer::Highlighter is only read from a file.
         // A highlighter tool does nothing over handwriting (spec section 2), so none exists here.
         m_document.addStroke(stroke, Layer::User);
         const bool grew = m_document.growToContain(stroke->bounds());

@@ -79,7 +79,7 @@ package_notolith-ink() {
     license=('GPL-3.0-or-later' 'Apache-2.0')
     # Versioned: a module only loads in the build that made it (the ABI tag), so pacman must not mix versions.
     depends=("notolith=$pkgver-$pkgrel" 'abseil-cpp')
-    # One install unit: later .rnote, markup and recognition hooks go into this module.
+    # One install unit: later markup and recognition hooks go into this module.
     install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
         build/modules/libnotolith-inkcore.so build/modules/notolith-ink.so
 }

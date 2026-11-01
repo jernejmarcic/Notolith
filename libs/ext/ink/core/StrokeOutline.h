@@ -18,9 +18,9 @@ namespace noteAppC::ink {
 inline constexpr double kMaxOutlineWidth = 1e6;
 
 /// One QPainterPath per stroke, filled once with Qt::WindingFill, so overlaps
-/// never darken a translucent colour (spec section 7, Rendering). Rnote's
-/// per-segment closed subpaths (a quad at `width * curve(pressure)` with cubic
-/// round caps) are appended into that one path.
+/// never darken a translucent colour (spec section 7, Rendering). Each segment's
+/// closed subpath (a quad at `width * curve(pressure)` with cubic round caps) is
+/// appended into that one path.
 ///
 /// Safe on hostile model data: a single point or all-equal points give a dot,
 /// duplicate neighbours are skipped, zero width or pressure shrinks to a line,

@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -696,9 +697,10 @@ TEST(EpubViewTest, TocExpandsOneNodeAtATimeAndOnlyOnce)
 
 TEST(EpubViewTest, FontFaceIsRegisteredSynchronouslyBeforeTheWorkerIsDispatched)
 {
-    QFile fontFile(QStringLiteral("/usr/share/fonts/rnote-fonts/GrapeNuts-Regular.ttf"));
+    QDirIterator fonts(QStringLiteral("/usr/share/fonts"), {QStringLiteral("*.ttf")}, QDir::Files, QDirIterator::Subdirectories);
+    QFile fontFile(fonts.hasNext() ? fonts.next() : QString());
     if (!fontFile.open(QIODevice::ReadOnly))
-        GTEST_SKIP() << "system font fixture not present on this machine";
+        GTEST_SKIP() << "no system TrueType font on this machine";
     const QByteArray fontBytes = fontFile.readAll();
     ASSERT_FALSE(fontBytes.isEmpty());
 

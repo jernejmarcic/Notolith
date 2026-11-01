@@ -23,14 +23,12 @@ constexpr int kModelerMaxOutputsPerCall = 200;
 // The modeler refuses ceil(gap * rate) > max outputs; the cap on the gap must stay under it.
 static_assert(kMaxModelerGapS * kModelerMinOutputRate + 1 < kModelerMaxOutputsPerCall);
 
-// Rnote's parameters (rnote-engine/src/pens/pensconfig/brushconfig.rs and
-// rnote-study.md section 1.4), in seconds and document px. The wobble
-// timeout is Rnote's 0.04 s preset, not derived from kInputRateHz (which only
-// sets min_output_rate). The upstream
-// defaults for the position modeler stay. `stylus_state_modeler_params.
-// max_input_samples`, which Rnote overrides, does not exist at the pinned
-// modeler commit; use_stroke_normal_projection is the current knob.
-::ink::stroke_model::StrokeModelParams rnoteParams()
+// Parameters from Rnote (rnote-engine/src/pens/pensconfig/brushconfig.rs), copyright the
+// Rnote contributors, GPL-3.0-or-later, https://github.com/flxzt/rnote. In seconds and
+// document px; the wobble timeout is a fixed 0.04 s, not derived from kInputRateHz (which
+// only sets min_output_rate). `stylus_state_modeler_params.max_input_samples` does not
+// exist at the pinned modeler commit; use_stroke_normal_projection is the current knob.
+::ink::stroke_model::StrokeModelParams strokeModelParams()
 {
     ::ink::stroke_model::StrokeModelParams params;
     params.wobble_smoother_params.is_enabled = true;
@@ -130,7 +128,7 @@ void InkInput::begin(const InkSample &sample, const StrokeStyle &style)
     }
     m_active = true;
     m_last = sample;
-    if (!m_raw && !m_modeler->modeler.Reset(rnoteParams()).ok())
+    if (!m_raw && !m_modeler->modeler.Reset(strokeModelParams()).ok())
         m_degraded = true; // the params are constants, so this is unreachable; a stroke of raw points beats none
     feed(sample, 0);
 }
@@ -262,7 +260,7 @@ void InkInput::restartModeler(const InkSample &sample, double modelTime)
     down.position = {float(sample.position.x()), float(sample.position.y())};
     down.time = ::ink::stroke_model::Time(modelTime);
     down.pressure = float(cleanPressure(sample.pressure));
-    if (!m_modeler->modeler.Reset(rnoteParams()).ok() || !m_modeler->modeler.Update(down, m_modeler->results).ok()) {
+    if (!m_modeler->modeler.Reset(strokeModelParams()).ok() || !m_modeler->modeler.Update(down, m_modeler->results).ok()) {
         m_degraded = true; // cannot restart: the rest of this stroke is raw rather than lost
         return;
     }
