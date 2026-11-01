@@ -3,20 +3,21 @@
 Public beta (0.1.0-beta.1): expect bugs, and back up your vault.
 
 A Markdown note app for developers, for Linux. C++20 and Qt 6 Widgets: no
-JavaScript, no browser engine, no Electron.
+Electron and no embedded browser. Raw HTML is laid out by litehtml, and the app
+runs no JavaScript (a published site includes a small search script).
 
 ![Notolith: a note with its properties and the backlinks pane](docs/images/main-window.png)
 
-(Code name noteAppC: the repository's targets and the C++ namespace still carry
-it. The binary is `notolith` and the app id is
-`io.github.jernejmarcic.Notolith`.)
+(Code name noteAppC: it remains in the source targets, the C++ namespace and some
+internal identifiers, not in installed paths or in your vault. The binary is
+`notolith` and the app id is `io.github.jernejmarcic.Notolith`.)
 
 ## Features
 
 - **Obsidian vaults** - opens and works with Obsidian vaults: links and their
-  resolution order, embeds, properties, callouts, search syntax, the
-  `.obsidian` settings and any Obsidian theme in the vault are read as they
-  are.
+  resolution order, embeds, properties, callouts, search syntax and the
+  `.obsidian` settings are read as they are. Obsidian themes are read for their
+  colours only; fonts, sizes and layout are ignored.
 - **Vault** - open any folder of Markdown files, with a file tree and
   byte-exact atomic saves (CRLF and BOM preserved). File recovery keeps
   snapshots with a diff. A note changed on disk (sync, another editor, a link
@@ -45,6 +46,10 @@ it. The binary is `notolith` and the app id is
   annotation, handwritten notes with pen input (preview), code blocks run
   through a Jupyter kernel, Git-backed note history, and static-site
   publishing. Each can be switched off at build time.
+- **EPUB reader** - opens `.epub` books (EPUB 2 and 3) with a table of
+  contents, find in book, scrolling or paged reading, and highlights kept in a
+  note beside the book. Needs libarchive and litehtml at build time
+  (`NOTEAPPC_WITH_EPUB`, on by default).
 - **Plugins (preview)** - out-of-process plugins, sandboxed with bubblewrap.
   The plugin format is young and there are no third-party plugins yet.
 - **Themes** - dark by default, a documented set of colour tokens,
@@ -61,11 +66,14 @@ cryptography has not been independently audited.
 ## Network and privacy
 
 The default build makes no network connections: nothing in it opens an
-internet socket, and `docs/OFFLINE.md` has the proof and the list of options
+internet socket, and `docs/OFFLINE.md` has the evidence and the list of options
 that bring networking back. Remote references (a note that points at a URL) are
-off by default. Code blocks, kernels, diagrams, TeX, pandoc and plugins run
-only inside a bubblewrap sandbox with no network; `docs/NOTEBOOKS.md#sandbox`
-has the details.
+off by default. The right-click "Search the web" item hands a search URL
+(DuckDuckGo by default) to your browser; the browser sends the query, not the
+app. Code blocks, kernels, diagrams, TeX, pandoc and plugins run
+only inside a bubblewrap sandbox with no network (a plugin gets the network
+only in a build with `NOTEAPPC_WITH_NETWORK`, and only if you grant it);
+`docs/NOTEBOOKS.md#sandbox` has the details.
 
 ## Install
 
@@ -128,6 +136,9 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cmake --build build
 sudo cmake --install build
 ```
+
+The `android/` directory is an unsupported experiment, not a release target (see
+`docs/PLATFORMS.md`).
 
 ## Running
 

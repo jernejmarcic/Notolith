@@ -11,6 +11,14 @@ this note, Who has access to this note, Join a shared note, Stop sharing this
 note on this device), a marker on the tab of a shared note and a "Shared - N
 here" badge in the status bar.
 
+**What the devices need to reach each other.** Both devices must be on the same
+LAN (found by mDNS), or one must be able to reach the other's address on a
+private network. LAN and loopback addresses need nothing else. To reach each
+other by a tailnet address, both devices must already be on a tailnet: that
+needs the `tailscale` client and an account on a Tailscale (or Headscale)
+control server. Notolith does not start `tailscale` itself and never adds a
+device to a tailnet.
+
 ## CrdtDoc
 
 `libs/ext/share/CrdtDoc.h` is the interface the rest of sharing will use, and
@@ -207,7 +215,7 @@ cache lacks them), and pinned by the committed `libs/ext/share/yrs-ffi/Cargo.loc
 | crate | version | licence |
 |---|---|---|
 | yrs | 0.28.0 (exact, released 2026-09-17) | MIT |
-| 44 more crates it needs | as locked | MIT / Apache-2.0 and similar |
+| 44 more crates it needs | as locked | licences not audited |
 
 45 crates, 3.5 MB of source in total. The static library is about 13 MB and
 adds about 0.8 MB to a stripped test executable (measured against the same executable linked to a stub).
@@ -215,30 +223,25 @@ adds about 0.8 MB to a stripped test executable (measured against the same execu
 ## The link layer (libs/ext/link)
 
 Identity and the peer-to-peer `Node` (libdatachannel data channels, signed
-offers, mDNS discovery over avahi) are a vendored copy of the link layer of
-Hearth, the author's separate peer-to-peer chat project. No Qt.
+offers, mDNS discovery over avahi) come from the link layer of Hearth, the
+author's peer-to-peer chat project. No Qt.
 
-- **What is vendored:** `libs/core/{identity,debuglog}`, `libs/net/{node,tailnet}`,
-  their two test files and `proto/link.proto`, copied to
-  `libs/ext/link/{core,net,proto}` with the include paths unchanged. Only
-  `libs/ext/link/CMakeLists.txt` is Notolith's own. A copy, not a submodule or a
-  fetch, so the repository builds on its own.
-- **Changing it:** a one-time copy. Notolith maintains it on its own from here,
-  and nothing is synced back to Hearth. The files carry GPL-3.0-or-later
-  headers; the `hearth` namespace, the proto package and the `HEARTH_DEBUG`
-  variable keep their old names.
-- **What Notolith will pass** (wired by the engine): `Node::Config`
-  `signatureDomain = "notolith"` and `serviceType = "_notolith._tcp"`, so a Notolith
-  node and a Hearth node never see or accept each other, and its own debug log via
-  `setDebugLogPath()` (`$XDG_STATE_HOME/notolith/link.log`; left alone, it logs into Hearth's directory).
+- **Source:** `libs/ext/link/{core,net,proto}`. Only `libs/ext/link/CMakeLists.txt`
+  is Notolith's own. It is a copy, not a submodule or a fetch, so the repository
+  builds on its own, and Notolith maintains it from here. The files carry
+  GPL-3.0-or-later headers; the `hearth` namespace, the proto package and the
+  `HEARTH_DEBUG` variable keep their old names.
+- **What the engine passes:** `Node::Config` `signatureDomain = "notolith"` and
+  `serviceType = "_notolith._tcp"`, so only Notolith nodes see and accept each
+  other, and its own debug log via `setDebugLogPath()`
+  (`$XDG_STATE_HOME/notolith/link.log`).
 - **Build:** `NOTEAPPC_WITH_SHARE` (off by default) builds the share side of the window, the CRDT and `noteAppC_link`. It needs
   libdatachannel, avahi-client, protobuf, nlohmann_json and libsodium; when any is
   missing the option is silently off and the rest of the app builds as before.
-- **Tests:** ctest `link` runs Hearth's `Node.*` and `Tailnet.*` suites unchanged:
+- **Tests:** ctest `link` runs the layer's `Node.*` and `Tailnet.*` suites:
   loopback only, the mDNS cases skip without avahi-daemon, `XDG_STATE_HOME` points
-  into the build directory. Hearth has seen `Node.DebugLogNamesPeersByPrefixAndLeaksNoMessages`
-  hang once in shutdown (23 minutes in `futex_wait`); `link` has a 10 minute ctest
-  TIMEOUT so a hang fails instead of blocking.
+  into the build directory. `link` has a 10 minute ctest TIMEOUT so a hang fails
+  instead of blocking.
 
 ## The engine (libs/ext/shareengine)
 

@@ -413,7 +413,7 @@ do not reach them (font overrides do); a toolbar toggle reaches other open ink t
 ## Credits
 
 Parts of the stroke engine are ported from Rnote, <https://github.com/flxzt/rnote>, copyright the Rnote contributors,
-GPL-3.0-or-later, as is Notolith. Each ported function carries the notice in its source:
+GPL-3.0-or-later (upstream `Cargo.toml`, line 14: `license = "GPL-3.0-or-later"`), as is Notolith. Each ported function carries the notice in its source:
 
 - the stroke outline, `compose_lines_variable_width` in `rnote-compose/src/style/smooth/mod.rs`
   (`libs/ext/ink/core/StrokeOutline.cpp`);

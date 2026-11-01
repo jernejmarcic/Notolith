@@ -6,7 +6,7 @@ it takes input: [HTML edited in place](#html-edited-in-place),
 [the `</>` edit button](#the--edit-button-on-rendered-blocks) and its
 [callout menu](#the-callout-menu), [embedded notes](#embedded-notes),
 [the status bar counts](#status-bar-counts),
-[bare brackets](#bare-brackets), [meta notes](#meta-notes--) and
+[bare brackets](#bare-brackets), [meta notes](#meta-notes-) and
 [Vim key bindings](#vim-key-bindings).
 
 ## Scripts never run
@@ -542,7 +542,9 @@ for the menu key or Shift+F10 (not on Windows, where Qt sends that itself).
 Switches: Settings > Core plugins > "Look up words" (`plugins.wordLookup`, on;
 off, no item, no popover and no client are built), "Search" for "Search
 for", and Settings > Editor > "Web search" (`lookup.webSearchURL`, `%1` is
-the URL-encoded text; empty removes the item). Tests: `ContextMenuTest.*` in
+the URL-encoded text; empty removes the item). The default is DuckDuckGo
+(`https://duckduckgo.com/?q=%1`). The app hands the URL to your browser; the
+browser sends the query, not the app. Tests: `ContextMenuTest.*` in
 `tests/test_editor.cpp`, `DictClientTest.*` (a fake server on loopback; no
 test reaches a real one) in `tests/test_lookup.cpp`, `LookUp*` in
 `tests/test_window.cpp`.

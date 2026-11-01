@@ -19,3 +19,4 @@ The first public release, a beta: expect bugs, and back up your vault.
 - Arch Linux package (`packaging/arch/PKGBUILD`).
 - Images are PNG, JPEG, GIF, BMP, WebP, AVIF and SVG, told by their bytes; other formats (HEIC, TIFF, PSD...) show as a missing attachment.
 - A note that is a symbolic link is not written through; saving from the editor replaces the link with a regular file.
+- Installed modules and helper programs live under /usr/lib/notolith/; custom themes in a vault go in .obsidian/notolith-themes (the old folder is still read).
