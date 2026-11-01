@@ -31,6 +31,7 @@ private:
     void reopen();
 
     QMutex m_mutex;
+    QString m_path;
     QFile m_file;
     qint64 m_maxBytes;
     int m_lockFD = -1;

@@ -2,9 +2,14 @@
 // the build's isolated-home before main() runs, so a test binary started by
 // hand, not through ctest, still never touches the real ~/.config, ~/.cache,
 // ~/.local/share or ~/.local/state - a direct run once left thousands of history repos there.
+#include <cerrno>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace {
 const bool isolatedHome = [] {
@@ -21,9 +26,23 @@ const bool isolatedHome = [] {
         // after the directory: a deep $TMPDIR falls back to /tmp.
         const char *tmp = std::getenv("TMPDIR");
         std::string base = tmp && *tmp ? tmp : "/tmp";
-        if (base.size() + std::string("/nac-XXXXXX").size() + 25 > 107)
+        if (base.size() + std::string("/nac-1234567-XXXXXX").size() + 25 > 107)
             base = "/tmp";
-        std::string pattern = base + "/nac-XXXXXX";
+        // The directory of a test that was killed is never reached by the atexit below: it names its
+        // process, and the next test binary to start removes those whose process is gone.
+        std::error_code ignored;
+        for (const auto &entry : std::filesystem::directory_iterator(base, ignored)) {
+            const std::string name = entry.path().filename().string();
+            struct stat info;
+            if (name.rfind("nac-", 0) != 0 || ::lstat(entry.path().c_str(), &info) != 0 || !S_ISDIR(info.st_mode)
+                || info.st_uid != ::geteuid())
+                continue;
+            const long pid = std::strtol(name.c_str() + 4, nullptr, 10);
+            if (pid > 0 && name.find('-', 4) != std::string::npos && ::kill(static_cast<pid_t>(pid), 0) != 0
+                && errno == ESRCH)
+                std::filesystem::remove_all(entry.path(), ignored);
+        }
+        std::string pattern = base + "/nac-" + std::to_string(::getpid()) + "-XXXXXX";
         return mkdtemp(pattern.data()) ? pattern : std::string();
     }();
     if (!run.empty()) {

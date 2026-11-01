@@ -679,3 +679,22 @@ TEST(SingleInstance, AnOpenWindowOfTheBuildBeforeIsFoundAndGivenTheLaunch)
     window.close();
     EXPECT_TRUE(SingleInstance::previousBuildSockets().isEmpty()) << "no owner, no window";
 }
+
+TEST(MessageLog, TheFileIsPrivateFromTheMomentItExistsWhateverTheUmask)
+{
+    QTemporaryDir dir;
+    const mode_t before = ::umask(0);
+    const QString path = dir.filePath(QStringLiteral("notolith.log"));
+    {
+        MessageLog log(path, dir.filePath(QStringLiteral("notolith.log.lock")));
+        ASSERT_TRUE(log.isOpen());
+        EXPECT_EQ(mode(path), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    }
+    // One an older build made wider is narrowed.
+    ASSERT_TRUE(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadOther));
+    {
+        MessageLog log(path, dir.filePath(QStringLiteral("notolith.log.lock")));
+        EXPECT_EQ(mode(path), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    }
+    ::umask(before);
+}
