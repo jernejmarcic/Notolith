@@ -29,9 +29,13 @@ QString ModuleRegistry::ABItag()
 
 QStringList ModuleRegistry::defaultDirectories()
 {
+#ifdef NOTEAPPC_DEV_ENV_OVERRIDES
+    // Development and tests only. A module is native code loaded into the app, so a release does not let an
+    // environment variable name where it comes from: only the compiled-in directory counts.
     const QByteArray override = qgetenv("NOTEAPPC_MODULE_DIRS");
     if (!override.isEmpty())
         return QString::fromLocal8Bit(override).split(QLatin1Char(':'), Qt::SkipEmptyParts);
+#endif
     return {QStringLiteral(NOTEAPPC_MODULE_LIBDIR)};
 }
 

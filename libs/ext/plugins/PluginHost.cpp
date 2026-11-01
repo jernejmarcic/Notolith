@@ -95,8 +95,11 @@ QString PluginHost::hostBinaryPath()
     // A test build points this straight at the binary ctest just built,
     // since the host tool and the test executable do not sit in sibling
     // directories the way an installed app and an installed host tool do.
+    // Only builds made with NOTEAPPC_DEV_ENV_OVERRIDES: a release ignores the variable.
+#ifdef NOTEAPPC_DEV_ENV_OVERRIDES
     if (const QString overridden = qEnvironmentVariable("NOTEAPPC_PLUGIN_HOST"); !overridden.isEmpty())
         return overridden;
+#endif
     const QString sibling =
         QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("noteAppC-plugin-host"));
     if (QFileInfo::exists(sibling))
@@ -158,7 +161,7 @@ QStringList PluginHost::sandboxArguments(QString *program) const
         QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/sbin"),
         QStringLiteral("--proc"), QStringLiteral("/proc"),
         QStringLiteral("--dev"), QStringLiteral("/dev"),
-        QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
+        QStringLiteral("--size"), QStringLiteral("268435456"), QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
         // Read-only: a plugin's own directory is data (its library, its
         // plugin.ini, any assets it shipped), never a place it writes.
         QStringLiteral("--ro-bind"), pluginDir, pluginDir,
@@ -166,9 +169,10 @@ QStringList PluginHost::sandboxArguments(QString *program) const
         // -try: most plugins have no config file at all, and bwrap's plain
         // --ro-bind refuses to start when its source does not exist.
         QStringLiteral("--ro-bind-try"), noteAppCConfigDir, noteAppCConfigDir,
-        QStringLiteral("--unshare-user-try"), QStringLiteral("--unshare-ipc"),
+        // The user namespace is required, not best effort, and the plugin can make no further one.
+        QStringLiteral("--unshare-user"), QStringLiteral("--disable-userns"), QStringLiteral("--unshare-ipc"),
         QStringLiteral("--unshare-pid"), QStringLiteral("--unshare-uts"),
-        QStringLiteral("--unshare-cgroup-try"),
+        QStringLiteral("--unshare-cgroup"), QStringLiteral("--cap-drop"), QStringLiteral("ALL"),
     };
     // The one namespace TexCompiler always drops and this does not: shared
     // only when the user granted the `network` capability to this plugin.
@@ -233,6 +237,16 @@ void PluginHost::ensureStarted()
     m_startError.clear();
     QStringList sandboxed = arguments;
     const int filterFD = sandbox::addSyscallFilter(sandboxed);
+    if (filterFD < 0) { // no syscall filter, no plugin
+        m_startError = QStringLiteral("plugins run only with the syscall filter (libseccomp); it could not be built");
+        if (m_callbacks.log)
+            m_callbacks.log(m_manifest.id(), m_startError);
+        m_process.reset();
+        m_hasFailed = true;
+        m_sinceFailure.start();
+        setState(State::Crashed);
+        return;
+    }
     m_process = std::make_unique<QProcess>();
     m_reader = PluginFrameReader();
     m_process->setProgram(program);
