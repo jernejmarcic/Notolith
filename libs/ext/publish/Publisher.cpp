@@ -219,6 +219,13 @@ QString folderOf(const QString &outputPath)
     return slash < 0 ? QString() : outputPath.left(slash);
 }
 
+/// A second wall behind the cleaning of a note's HTML and links: no inline script and no javascript: URL runs on
+/// a page whatever got through. The site's own script is the file search.js. Inline style stays for the code
+/// colours; images may be data: URIs (the drawn diagrams).
+const QString kContentSecurityPolicy = QStringLiteral(
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+    "object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'");
+
 QString wrapPage(const QString &title, const QString &outputPath, const QString &contentHtml,
                  const QString &codeStyle, const QString &backlinksHtml,
                  const NavCache &navCache, const QString &currentNavOutputPath, const Options &options)
@@ -247,6 +254,7 @@ QString wrapPage(const QString &title, const QString &outputPath, const QString 
 
     QString html = QStringLiteral(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"%10\">\n"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
         "<title>%1 - %2</title>\n<link rel=\"stylesheet\" href=\"%3\">\n%4</head>\n<body>\n"
         "<div class=\"layout\">\n<nav class=\"sidebar\">\n"
@@ -256,7 +264,7 @@ QString wrapPage(const QString &title, const QString &outputPath, const QString 
         "<div class=\"nav-tree\">%6</div>\n</nav>\n<main>\n<article>%7</article>\n%8</main>\n</div>\n"
         "<script src=\"%9\" defer></script>\n</body>\n</html>\n");
     return html.arg(escapeHtml(title), escapeHtml(options.siteName), cssHref, codeStyle, homeHref,
-                    navHtml, contentHtml, backlinksHtml, searchJsHref);
+                    navHtml, contentHtml, backlinksHtml, searchJsHref, kContentSecurityPolicy);
 }
 
 QString siteStylesheet(const noteAppC::Theme &dark, const noteAppC::Theme &light, bool includeLight)
@@ -657,20 +665,29 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     // compare every write (pages, attachments, tag pages, assets) against
     // what the previous run left, in one pass rather than a second walk
     // over the output directory afterwards. -------------------------------
-    const QString manifestPath = outDir + QStringLiteral("/noteappc-publish-manifest.json");
+    // The manifest and every key in it come from the output folder, which a vault can ship: only a clean relative
+    // path is taken, and nothing below writes or deletes by any other.
+    const QString manifestName = QStringLiteral("notolith-publish-manifest.json");
+    const QString legacyManifestName = QStringLiteral("noteappc-publish-manifest.json");
     QHash<QString, QByteArray> oldManifest;
     {
-        QFile f(manifestPath);
-        if (f.open(QIODevice::ReadOnly)) {
+        QFile f(outDir + QLatin1Char('/') + manifestName);
+        if (!f.exists())
+            f.setFileName(outDir + QLatin1Char('/') + legacyManifestName); // read once, then replaced
+        if (!QFileInfo(f.fileName()).isSymLink() && f.open(QIODevice::ReadOnly)) {
             const QJsonObject obj = QJsonDocument::fromJson(f.readAll()).object();
-            for (auto it = obj.constBegin(); it != obj.constEnd(); ++it)
-                oldManifest.insert(it.key(), it.value().toString().toUtf8());
+            for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+                if (noteAppC::Vault::isCleanRelativePath(it.key()) && it.key() != manifestName
+                    && it.key() != legacyManifestName)
+                    oldManifest.insert(it.key(), it.value().toString().toUtf8());
+            }
         }
     }
     QHash<QString, QByteArray> newManifest;
     QMutex assemblyMutex; // guards every mutable thing below shared across workers
     QSet<QString> allAttachments;
     QJsonArray searchIndex;
+    QStringList failures; // every write that did not happen, with why; any entry fails the publish
 
     const auto writeIfChanged = [&](const QString &relPath, const QByteArray &bytes) {
         // Called both from worker threads (the merged render-and-write pass)
@@ -678,16 +695,21 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         // under assemblyMutex either way, held by the caller in the first
         // case and taken here for the second.
         const QByteArray hash = sha1Hex(bytes);
-        newManifest.insert(relPath, hash);
-        if (oldManifest.value(relPath) == hash) {
+        const QFileInfo existing(outDir + QLatin1Char('/') + relPath);
+        if (oldManifest.value(relPath) == hash && existing.isFile() && !existing.isSymLink()) {
+            newManifest.insert(relPath, hash);
             ++m_counts.unchanged;
             return;
         }
-        const QString fullPath = outDir + QLatin1Char('/') + relPath;
-        QDir().mkpath(QFileInfo(fullPath).path());
-        QFile f(fullPath);
-        if (f.open(QIODevice::WriteOnly))
-            f.write(bytes);
+        // Through a held folder descriptor, no link followed, a temp file renamed into place; the hash is
+        // kept only once the file is there. No fsync: a site can be made again.
+        QString why;
+        if (!noteAppC::Vault::isCleanRelativePath(relPath))
+            failures << QStringLiteral("%1 is not a path inside the site").arg(relPath);
+        else if (!noteAppC::Vault::writeBytesNoFollowUnder(outDir, relPath, bytes, &why, false))
+            failures << why;
+        else
+            newManifest.insert(relPath, hash);
     };
 
     // --- phase B: render, then - maths permitting - finish the page
@@ -796,13 +818,21 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
 
     // --- attachments: copied only because a published page's embed
     // resolved to them (ContentResult::attachments), never speculatively. --
-    for (const QString &relativePath : std::as_const(allAttachments)) {
-        Note note;
-        QString readError;
+    // Only a regular file that really lies inside the vault: a link in the vault must not carry a private file
+    // into a public site. What is left out is listed in the summary.
+    QStringList attachmentPaths = allAttachments.values();
+    std::sort(attachmentPaths.begin(), attachmentPaths.end());
+    for (const QString &relativePath : std::as_const(attachmentPaths)) {
         const QString absolute = m_vault.absolute(relativePath);
-        QFile source(absolute);
-        if (!source.open(QIODevice::ReadOnly))
+        if (!m_vault.resolvesInside(absolute) || !QFileInfo(absolute).isFile()) {
+            m_counts.skippedAttachments << relativePath;
             continue;
+        }
+        QFile source(absolute);
+        if (!source.open(QIODevice::ReadOnly)) {
+            m_counts.skippedAttachments << relativePath;
+            continue;
+        }
         const QByteArray bytes = source.readAll();
         writeIfChanged(QStringLiteral("attachments/") + relativePath, bytes);
         ++m_counts.attachments;
@@ -866,21 +896,41 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
                    QJsonDocument(searchIndex).toJson(QJsonDocument::Compact));
 
     // --- incremental cleanup: delete only what an earlier run of this same
-    // exporter wrote and no longer would. ----------------------------------
-    for (auto it = oldManifest.constBegin(); it != oldManifest.constEnd(); ++it) {
-        if (newManifest.contains(it.key()))
-            continue;
-        QFile::remove(outDir + QLatin1Char('/') + it.key());
-        ++m_counts.removed;
+    // exporter wrote and no longer would. Not after a failed write: the run
+    // is incomplete, and what it did not rewrite stays on the old manifest. ---
+    if (failures.isEmpty()) {
+        for (auto it = oldManifest.constBegin(); it != oldManifest.constEnd(); ++it) {
+            if (newManifest.contains(it.key()))
+                continue;
+            if (noteAppC::Vault::removeNoFollowUnder(outDir, it.key()))
+                ++m_counts.removed;
+        }
+    } else {
+        for (auto it = oldManifest.constBegin(); it != oldManifest.constEnd(); ++it) {
+            if (!newManifest.contains(it.key()))
+                newManifest.insert(it.key(), it.value());
+        }
     }
 
     QJsonObject manifestObject;
     for (auto it = newManifest.constBegin(); it != newManifest.constEnd(); ++it)
         manifestObject[it.key()] = QString::fromUtf8(it.value());
-    QFile manifestFile(manifestPath);
-    if (manifestFile.open(QIODevice::WriteOnly))
-        manifestFile.write(QJsonDocument(manifestObject).toJson(QJsonDocument::Compact));
+    QString manifestError;
+    if (noteAppC::Vault::writeBytesNoFollowUnder(outDir, manifestName,
+                                                 QJsonDocument(manifestObject).toJson(QJsonDocument::Compact),
+                                                 &manifestError))
+        noteAppC::Vault::removeNoFollowUnder(outDir, legacyManifestName);
+    else
+        failures << manifestError;
 
+    if (!failures.isEmpty()) {
+        if (error) {
+            *error = failures.first();
+            if (failures.size() > 1)
+                *error += QStringLiteral(" (and %1 more)").arg(failures.size() - 1);
+        }
+        return false;
+    }
     return true;
 }
 

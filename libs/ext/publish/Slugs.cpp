@@ -65,11 +65,15 @@ QString Slugs::permalinkOverride(const QString &raw)
         path.chop(1);
     if (path.isEmpty())
         return {};
+    // Only plain segments make a path: "..", "." and a backslash or NUL are refused (the page falls back to its
+    // default path), a doubled slash is folded.
     const QStringList segments = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
     for (const QString &segment : segments) {
-        if (segment == QLatin1String(".."))
-            return {}; // would climb out of the output directory - refused
+        if (segment == QLatin1String("..") || segment == QLatin1String(".") || segment.contains(QLatin1Char('\\'))
+            || segment.contains(QChar(0)))
+            return {};
     }
+    path = segments.join(QLatin1Char('/'));
     if (!path.endsWith(QLatin1String(".html"), Qt::CaseInsensitive))
         path += QStringLiteral(".html");
     return path;

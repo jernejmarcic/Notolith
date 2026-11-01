@@ -59,6 +59,8 @@ struct Counts {
     int skipped = 0;     ///< vault notes that were not published (privacy filter)
     int unchanged = 0;   ///< outputs of any kind whose bytes did not need rewriting
     int removed = 0;     ///< outputs this run deleted because they are no longer published
+    /// Vault paths of embedded files left out of the site: a link out of the vault, or not a regular file.
+    QStringList skippedAttachments;
 };
 
 using ProgressCallback = std::function<void(int done, int total)>;
@@ -76,7 +78,8 @@ public:
     /// Runs one publish. `progress` is called from this thread only (never
     /// from a worker), with `done`/`total` counted in published notes, so it
     /// is safe to update UI from directly. Returns false with `*error` set on
-    /// a refused output directory or an I/O failure; a page that individually
+    /// a refused output directory or an I/O failure (a file that could not be
+    /// written is named; the files that could be are still written); a page that individually
     /// fails to render (should not happen - PageBody has no failure path
     /// beyond falling back to source text) never aborts the whole run.
     bool publish(const Options &options, const ProgressCallback &progress, QString *error);
