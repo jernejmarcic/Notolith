@@ -9,7 +9,7 @@ started: 2026-09-01
 reviewed: 2026-09-23T14:30:00
 authors:
   - Ada
-  - The noteAppC project
+  - The Notolith project
 tags:
   - demo
   - properties
@@ -45,7 +45,7 @@ write back only that property, byte-exact everywhere else in the file.
 - **tags**: this note's own frontmatter tags, same namespace as an inline
   `#tag`.
 - **cssclasses**: extra CSS classes on the rendered note, for a
-  theme/snippet to hook into - noteAppC reads it into the rendered note's
+  theme/snippet to hook into - Notolith reads it into the rendered note's
   container the same way.
 
 See also [[Library]] and its `Books/` notes for a whole collection of notes

@@ -6,7 +6,7 @@ tags: [demo, embeds]
 
 What to look for: each file below should show as a labelled, syntax
 highlighted panel with its own content, the same treatment a fenced code
-block gets, rather than a plain download link. A file over noteAppC's
+block gets, rather than a plain download link. A file over Notolith's
 512 KB inline cap would show its header and a "too large to show inline"
 message instead - none of these are anywhere near that size.
 

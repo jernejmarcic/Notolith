@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej Marčič
 // The wire format of a shared note between Notolith devices (docs/SHARE.md
 // "The engine"): invitation, membership and the CRDT updates. Every message
 // travels inside the identity-authenticated link (libs/ext/link) and a

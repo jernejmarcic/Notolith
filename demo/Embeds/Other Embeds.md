@@ -20,7 +20,7 @@ collection of notes it queries.
 ## An unknown binary file
 
 `color-profile.icc` is a real ICC colour profile (source and licence in
-`docs/DEMO-ASSETS.md`) with an extension noteAppC does not recognise as an
+`docs/DEMO-ASSETS.md`) with an extension Notolith does not recognise as an
 image, audio, video or PDF - it should fall back to a generic file card
 (name, size, an icon, a way to open it externally) rather than trying to
 read it as text:

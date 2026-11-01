@@ -13,7 +13,7 @@ nested:
 
 What to look for: the YAML block above this heading is deliberately broken
 (an unterminated quoted string inside `bad-list`, and inconsistent nesting
-further down). noteAppC should not crash and should not lose the rest of the
+further down). Notolith should not crash and should not lose the rest of the
 note - at minimum the body below should still render, and the properties
 editor should either show nothing for this note or flag the block as
 invalid rather than guessing at a partial parse.

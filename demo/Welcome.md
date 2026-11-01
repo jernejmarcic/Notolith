@@ -1,5 +1,5 @@
 ---
-title: Welcome to the noteAppC demo vault
+title: Welcome to the Notolith demo vault
 aliases:
   - Demo Welcome
   - MOC
@@ -10,7 +10,7 @@ cssclasses:
   - demo-welcome
 ---
 
-# noteAppC demo vault
+# Notolith demo vault
 
 This is a small, hand-built vault (kept under 5 MB, see `docs/DEMO-ASSETS.md`
 for where every binary file came from) that
@@ -22,7 +22,7 @@ spot. Open a note in live preview, then toggle reading view
 
 This vault is also meant to open cleanly in real Obsidian - nothing here uses
 syntax Obsidian does not already understand, except where a note says
-explicitly that a feature is noteAppC's own extension (callout/code-block
+explicitly that a feature is Notolith's own extension (callout/code-block
 styling via `callouts.ini`/`codeblocks.ini`, documented in
 `docs/STYLING.md`).
 
@@ -40,7 +40,7 @@ styling via `callouts.ini`/`codeblocks.ini`, documented in
 - [[Code Blocks]] - languages, an unknown language, a long line, indented code.
 - [[Implicit Code]] - code a note's properties add to every runnable block of its language.
 - [[Callouts]] - all 13 built-in types and aliases, folding, nesting,
-  titles, a custom type, noteAppC's own inline/`:::` styling.
+  titles, a custom type, Notolith's own inline/`:::` styling.
 
 ### Maths
 - [[Maths]] - inline and display maths, hard formulas, a malformed one.

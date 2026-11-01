@@ -152,9 +152,9 @@ does; it renders exactly like the `> [!tip]` form above.
 The `details` type folds like `-` does on the `>` form.
 :::
 
-## Styled without any config file (noteAppC's own extension)
+## Styled without any config file (Notolith's own extension)
 
-The `|` slot after a callout's type is where noteAppC reads its own style
+The `|` slot after a callout's type is where Notolith reads its own style
 keys; Obsidian parses and ignores that slot, so this note still opens there
 unstyled:
 

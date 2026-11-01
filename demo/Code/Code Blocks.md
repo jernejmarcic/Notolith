@@ -95,7 +95,7 @@ LIMIT 10;
 
 ## An unknown language
 
-A label that is not in `codeblocks.ini` and is not a language noteAppC's
+A label that is not in `codeblocks.ini` and is not a language Notolith's
 highlighter knows should still show, verbatim, as its own name with no icon:
 
 ```zorp
@@ -107,7 +107,7 @@ labelled "zorp"
 ## A very long line
 
 ```text
-this single line intentionally has no wrapping and keeps going for a while so the block gets a horizontal scrollbar instead of wrapping, which matters because wrapping inside a code block hides where a line actually ends and makes a diff impossible to read at a glance, so noteAppC should scroll this sideways rather than reflow it
+this single line intentionally has no wrapping and keeps going for a while so the block gets a horizontal scrollbar instead of wrapping, which matters because wrapping inside a code block hides where a line actually ends and makes a diff impossible to read at a glance, so Notolith should scroll this sideways rather than reflow it
 ```
 
 ## Indented code (four spaces, not a fence)
@@ -115,7 +115,7 @@ this single line intentionally has no wrapping and keeps going for a while so th
     def indented():
         return "this block used four-space indentation instead of a fence"
 
-## Tabs (noteAppC's own extension)
+## Tabs (Notolith's own extension)
 
 Adjacent fences marked `tab` become one tabbed block - documented in
 `docs/STYLING.md`. This still opens in Obsidian as three separate blocks.
@@ -130,5 +130,5 @@ Vault openVault(const std::string &path) { return Vault(path); }
 ```
 
 ```bash tab="Shell"
-noteappc open ./demo
+notolith ./demo
 ```
