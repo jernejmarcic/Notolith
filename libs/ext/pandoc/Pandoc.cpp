@@ -312,7 +312,8 @@ QHash<QString, QString> moveMedia(const QString &extractedRoot, const QString &f
     QHash<QString, QString> names;
     const QDir root(extractedRoot);
     // Every file, not `media/` alone: ODT writes `Pictures/`, HTML puts them at the root under hashed names.
-    for (QDirIterator it(extractedRoot, QDir::Files, QDirIterator::Subdirectories); it.hasNext();) {
+    // Never a link: the directory is the sandbox's to write, and a link to a user's file is not a picture.
+    for (QDirIterator it(extractedRoot, QDir::Files | QDir::NoSymLinks, QDirIterator::Subdirectories); it.hasNext();) {
         const QString source = it.next();
         const QString relative = root.relativeFilePath(source);
         if (relative == QLatin1String("out.md"))

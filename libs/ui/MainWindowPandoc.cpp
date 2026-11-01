@@ -376,6 +376,13 @@ void MainWindow::exportWithPandoc(const QString &notePath, const QString &format
     const int unresolved = prepared.unresolved;
     runPandoc(program, pandoc::exportArguments(request), prepared.markdown.toUtf8(), scratch->path(),
               tr("Export with pandoc"), [this, target, produced, scratch, unresolved, images] {
+                  // The scratch directory is the sandbox's to write: a link there to a user's file is not pandoc's output.
+                  const QFileInfo made(produced);
+                  if (made.isSymLink() || !made.isFile()) {
+                      showNotice(this, QStringLiteral("pandocNotAFileDialog"), tr("Export with pandoc"),
+                                 tr("pandoc did not write a file, so nothing was exported."));
+                      return;
+                  }
                   QFile::remove(target); // the save dialog has asked about replacing it
                   if (!QFile::copy(produced, target)) {
                       QMessageBox::warning(this, tr("Export with pandoc"), tr("Could not write %1").arg(target));
@@ -447,6 +454,11 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
                       return;
                   }
                   QFile result(scratch->filePath(QStringLiteral("out.md")));
+                  if (QFileInfo(result).isSymLink()) { // a link is not pandoc's output
+                      showNotice(this, QStringLiteral("pandocNotAFileDialog"), tr("Import with pandoc"),
+                                 tr("pandoc did not write a file, so nothing was imported."));
+                      return;
+                  }
                   if (!result.open(QIODevice::ReadOnly)) {
                       QMessageBox::warning(this, tr("Import with pandoc"), tr("pandoc wrote no Markdown."));
                       return;

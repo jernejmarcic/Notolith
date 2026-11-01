@@ -1554,6 +1554,52 @@ TEST_F(WindowTest, PandocExportRefusesToOverwriteANote)
     qunsetenv("NOTEAPPC_SANDBOX_TEST_BINDS");
 }
 
+// The scratch directory is the sandbox's to write. A link there to a file of the user's (the link dangles inside the
+// sandbox, which cannot see the file) is not pandoc's output: it must not be copied into the export or the vault.
+TEST_F(WindowTest, APandocOutputThatIsALinkToAUsersFileIsNeverCopied)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir secretDir;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    const QString secret = secretDir.filePath(QStringLiteral("secret.txt"));
+    {
+        QFile file(secret);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("TOP SECRET\n");
+    }
+    write(QStringLiteral("Plan.md"), "# Plan\n");
+    {
+        // Export: the output file is a link to the secret.
+        usePandoc(fakePandoc(bin, "cat > /dev/null; ln -s '" + secret.toUtf8() + "' \"$last\""));
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        const QString target = path(QStringLiteral("Plan (gfm).md"));
+        QMetaObject::invokeMethod(&window, "exportWithPandoc", Q_ARG(QString, path(QStringLiteral("Plan.md"))),
+                                  Q_ARG(QString, QStringLiteral("other:gfm")), Q_ARG(QString, target));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return window.findChild<QMessageBox *>(QStringLiteral("pandocNotAFileDialog")) != nullptr; }, 20000));
+        EXPECT_FALSE(QFileInfo::exists(target)) << "the secret was exported";
+    }
+    {
+        // Import: out.md is a link to the secret.
+        usePandoc(fakePandoc(bin, "ln -s '" + secret.toUtf8() + "' out.md"));
+        QFile input(inputs.filePath(QStringLiteral("Doc.docx")));
+        ASSERT_TRUE(input.open(QIODevice::WriteOnly));
+        input.write("x");
+        input.close();
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, input.fileName()), Q_ARG(QString, QString()));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return window.findChild<QMessageBox *>(QStringLiteral("pandocNotAFileDialog")) != nullptr; }, 20000));
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Doc.md")))) << "the secret became a note";
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // Several documents dropped at once are all imported, one after the other, and a failure does not stop the rest.
 TEST_F(WindowTest, PandocImportsEveryDroppedFileInTurn)
 {
