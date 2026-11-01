@@ -29,9 +29,9 @@ struct Slugs {
     /// added). Never consults `permalink` - see permalinkOverride() for that.
     static QString defaultPagePath(const QString &vaultRelativePath);
 
-    /// `permalink` property value turned into an output path, or empty when
-    /// `raw` is empty or tries to leave the site root (a leading "..", or a
-    /// segment that is exactly ".."), in which case the caller falls back to
+    /// `permalink` property value turned into an output path: each segment
+    /// slugified, keeping only `[a-z0-9._~-]`. Empty when `raw` is empty or a
+    /// segment is empty, "." or "..", in which case the caller falls back to
     /// defaultPagePath(). Obsidian's own semantics: the property replaces the
     /// whole URL, not just the last segment.
     static QString permalinkOverride(const QString &raw);

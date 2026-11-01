@@ -10,7 +10,9 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -18,6 +20,8 @@
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QtConcurrent>
+
+#include <unistd.h>
 
 #include "CodeHighlighter.h"
 #include "Index.h"
@@ -46,16 +50,18 @@ struct TestSite {
     Vault vault;
     Index index;
 
-    explicit TestSite(const QHash<QString, QByteArray> &files)
+    /// `subfolder` puts the vault in a folder of vaultDir, for a test that publishes into the folder holding it.
+    explicit TestSite(const QHash<QString, QByteArray> &files, const QString &subfolder = QString())
     {
+        const QString base = subfolder.isEmpty() ? vaultDir.path() : vaultDir.filePath(subfolder);
         for (auto it = files.constBegin(); it != files.constEnd(); ++it) {
-            const QString path = vaultDir.filePath(it.key());
+            const QString path = base + QLatin1Char('/') + it.key();
             QDir().mkpath(QFileInfo(path).path());
             QFile file(path);
             file.open(QIODevice::WriteOnly);
             file.write(it.value());
         }
-        vault = Vault(vaultDir.path());
+        vault = Vault(base);
         Indexer indexer(&index);
         QSignalSpy done(&indexer, &Indexer::finished);
         indexer.setVault(vault);
@@ -886,7 +892,9 @@ TEST(PublishSafetyTest, TheManifestHasTheNewNameAndTheOldOneIsReadOnce)
     const QString siteDir = site.outDir.path();
     writeFile(siteDir + QStringLiteral("/stale.html"), "old page");
     QJsonObject legacy;
-    legacy[QStringLiteral("stale.html")] = QStringLiteral("0");
+    // The manifest records the hash of what was written; only such a file is removed as stale.
+    legacy[QStringLiteral("stale.html")] =
+        QString::fromLatin1(QCryptographicHash::hash("old page", QCryptographicHash::Sha1).toHex());
     writeFile(siteDir + QStringLiteral("/noteappc-publish-manifest.json"),
               QJsonDocument(legacy).toJson(QJsonDocument::Compact));
 
@@ -1041,6 +1049,221 @@ TEST(PublishSafetyTest, NothingFromANoteRunsOnAPublishedPage)
     EXPECT_TRUE(article.contains(QStringLiteral("a ")));
     EXPECT_TRUE(article.contains(QStringLiteral("class=\"keepme\"")));
     EXPECT_TRUE(article.contains(QStringLiteral("<u>kept</u>")));
+}
+
+
+// ---------------------------------------------------------------------------
+// Round two: what a vault can still reach
+
+namespace {
+
+QStringList filesUnder(const QString &folder)
+{
+    QStringList out;
+    QDirIterator it(folder, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext())
+        out << it.next();
+    return out;
+}
+
+void reindex(TestSite &site)
+{
+    Indexer indexer(&site.index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(site.vault);
+    ASSERT_TRUE(done.wait(20000));
+}
+
+} // namespace
+
+TEST(PublishSafetyTest, APermalinkIsSlugifiedAndNeverReachesAPageAsMarkup)
+{
+    TestSite site({
+        {QStringLiteral("Js.md"), "---\npermalink: 'javascript:alert(1)'\n---\n\nSee [[Evil]].\n"},
+        {QStringLiteral("Evil.md"),
+         "---\npermalink: 'x\"><meta http-equiv=\"refresh\" content=\"0;url=https://evil.example\"><a href=\"'\n---\n\n"
+         "See [[Js]].\n"},
+        {QStringLiteral("Dots.md"), "---\npermalink: ../../escape\n---\n\nBody.\n"},
+        {QStringLiteral("Fine.md"), "---\npermalink: Docs/About_Us.html\n---\n\nBody [[Js]].\n"},
+    });
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    const QStringList files = filesUnder(site.outDir.path());
+    EXPECT_GE(files.size(), 6);
+    for (const QString &file : files) {
+        EXPECT_FALSE(file.contains(QLatin1Char('"')) || file.contains(QLatin1Char('<')) || file.contains(QLatin1Char(':')))
+            << file.toStdString();
+        const QString text = QString::fromUtf8(readFile(file));
+        EXPECT_FALSE(text.contains(QStringLiteral("javascript:"), Qt::CaseInsensitive)) << file.toStdString();
+        EXPECT_FALSE(text.contains(QStringLiteral("<meta http-equiv=\"refresh\""), Qt::CaseInsensitive))
+            << file.toStdString();
+    }
+    EXPECT_TRUE(site.exists(QStringLiteral("docs/about_us.html"))) << "an ordinary permalink still works";
+    EXPECT_TRUE(site.exists(QStringLiteral("dots.html"))) << "../ falls back to the default path";
+}
+
+TEST(PublishSafetyTest, AFilePlantedInTheSiteIsReplacedWhateverTheManifestSays)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    const QByteArray good = readFile(site.outDir.filePath(QStringLiteral("search.js")));
+    ASSERT_FALSE(good.isEmpty());
+    // The manifest is untouched; only the script is not Notolith's any more.
+    writeFile(site.outDir.filePath(QStringLiteral("search.js")), "alert('planted')");
+    writeFile(site.outDir.filePath(QStringLiteral("site.css")), "body{}");
+    Counts counts;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error, &counts)) << error.toStdString();
+    EXPECT_EQ(readFile(site.outDir.filePath(QStringLiteral("search.js"))), good);
+    EXPECT_NE(readFile(site.outDir.filePath(QStringLiteral("site.css"))), QByteArray("body{}"));
+}
+
+TEST(PublishSafetyTest, OnlyAFileThisExporterWroteIsRemovedAsStale)
+{
+    TestSite site({
+        {QStringLiteral("Stays.md"), "Body.\n"},
+        {QStringLiteral("Goes.md"), "Body.\n"},
+        {QStringLiteral("Edited.md"), "Body.\n"},
+    });
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    // A user file, a folder and a link named in the manifest, and a page the user has since edited.
+    writeFile(site.outDir.filePath(QStringLiteral("private.md")), "mine");
+    ASSERT_TRUE(QDir().mkpath(site.outDir.filePath(QStringLiteral("dirkey/inside"))));
+    writeFile(site.outDir.filePath(QStringLiteral("edited.html")), "my own edit");
+    QJsonObject manifest = QJsonDocument::fromJson(
+        readFile(site.outDir.filePath(QStringLiteral("notolith-publish-manifest.json")))).object();
+    manifest[QStringLiteral("private.md")] = QStringLiteral("0000000000000000000000000000000000000000");
+    manifest[QStringLiteral("dirkey")] = QStringLiteral("0000000000000000000000000000000000000000");
+    writeFile(site.outDir.filePath(QStringLiteral("notolith-publish-manifest.json")),
+              QJsonDocument(manifest).toJson(QJsonDocument::Compact));
+    // Goes and Edited become private.
+    for (const char *name : {"Goes.md", "Edited.md"})
+        writeFile(site.vaultDir.filePath(QString::fromLatin1(name)), "---\npublish: false\n---\n\nBody.\n");
+    reindex(site);
+
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    EXPECT_FALSE(site.exists(QStringLiteral("goes.html"))) << "its own stale page goes";
+    EXPECT_EQ(readFile(site.outDir.filePath(QStringLiteral("private.md"))), QByteArray("mine"));
+    EXPECT_TRUE(QDir(site.outDir.filePath(QStringLiteral("dirkey/inside"))).exists());
+    EXPECT_EQ(readFile(site.outDir.filePath(QStringLiteral("edited.html"))), QByteArray("my own edit"));
+    const QByteArray after = readFile(site.outDir.filePath(QStringLiteral("notolith-publish-manifest.json")));
+    for (const char *key : {"private.md", "dirkey", "edited.html", "goes.html"})
+        EXPECT_FALSE(after.contains(key)) << key << " is not kept in the manifest";
+}
+
+TEST(PublishSafetyTest, AStaleFileThatCannotBeRemovedFailsThePublishAndStaysTracked)
+{
+    if (::geteuid() == 0)
+        GTEST_SKIP() << "root ignores folder permissions";
+    TestSite site({
+        {QStringLiteral("Stays.md"), "Body.\n"},
+        {QStringLiteral("Folder/Goes.md"), "Body.\n"},
+    });
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    writeFile(site.vaultDir.filePath(QStringLiteral("Folder/Goes.md")), "---\npublish: false\n---\n\nBody.\n");
+    reindex(site);
+    const QString folder = site.outDir.filePath(QStringLiteral("folder"));
+    ASSERT_TRUE(QFile::setPermissions(folder, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+    EXPECT_FALSE(publishInto(site, site.outDir.path(), &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("goes.html"))) << error.toStdString();
+    const QByteArray manifest = readFile(site.outDir.filePath(QStringLiteral("notolith-publish-manifest.json")));
+    EXPECT_TRUE(manifest.contains("folder/goes.html")) << "still tracked, so the next publish tries again";
+    ASSERT_TRUE(QFile::setPermissions(folder, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    EXPECT_FALSE(site.exists(QStringLiteral("folder/goes.html")));
+}
+
+TEST(PublishSafetyTest, TheOutputFolderIsNeverALinkNorTheVaultNorHoldsIt)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    QTemporaryDir elsewhere;
+    const QString viaLink = site.outDir.filePath(QStringLiteral("link-out"));
+    ASSERT_TRUE(QFile::link(elsewhere.path(), viaLink));
+    QString error;
+    EXPECT_FALSE(publishInto(site, viaLink, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(QDir(elsewhere.path()).isEmpty());
+
+    // A link to the vault gets past the lexical "is it the vault root" test.
+    const QString toVault = site.outDir.filePath(QStringLiteral("link-vault"));
+    ASSERT_TRUE(QFile::link(site.vaultDir.path(), toVault));
+    EXPECT_FALSE(publishInto(site, toVault, &error));
+    EXPECT_EQ(QDir(site.vaultDir.path()).entryList(QDir::Files | QDir::Hidden).size(), 1) << "only Note.md";
+
+    // A folder that holds the vault.
+    TestSite nested({{QStringLiteral("Note.md"), "Body.\n"}}, QStringLiteral("vault"));
+    EXPECT_FALSE(publishInto(nested, nested.vaultDir.path(), &error));
+    EXPECT_TRUE(QDir(nested.vaultDir.path()).entryList(QDir::Files).isEmpty());
+    // A link higher up the path is the person's own business.
+    ASSERT_TRUE(QFile::link(site.outDir.path(), elsewhere.filePath(QStringLiteral("home"))));
+    EXPECT_TRUE(publishInto(site, elsewhere.filePath(QStringLiteral("home/site")), &error)) << error.toStdString();
+}
+
+TEST(PublishSafetyTest, AnAttachmentReachedThroughALinkInsideTheVaultIsLeftOut)
+{
+    TestSite site({
+        {QStringLiteral("Note.md"), "![[link.png]] ![[plain.png]]\n"},
+        {QStringLiteral("plain.png"), QByteArray("plain-bytes")},
+        {QStringLiteral("real.png"), QByteArray("real-bytes")},
+    });
+    // Both ends inside the vault, so resolvesInside() passes; the copy still opens without following it.
+    ASSERT_TRUE(QFile::link(site.vaultDir.filePath(QStringLiteral("real.png")),
+                            site.vaultDir.filePath(QStringLiteral("link.png"))));
+    reindex(site);
+    QString error;
+    Counts counts;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error, &counts)) << error.toStdString();
+    EXPECT_FALSE(site.exists(QStringLiteral("attachments/link.png")));
+    EXPECT_TRUE(site.exists(QStringLiteral("attachments/plain.png")));
+    EXPECT_EQ(counts.skippedAttachments, QStringList{QStringLiteral("link.png")});
+}
+
+TEST(PublishSafetyTest, ANoteThatCannotBeReadFailsThePublishAndKeepsItsOldPage)
+{
+    if (::geteuid() == 0)
+        GTEST_SKIP() << "root reads any file";
+    TestSite site({
+        {QStringLiteral("Fine.md"), "Body.\n"},
+        {QStringLiteral("Locked.md"), "Body.\n"},
+    });
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    ASSERT_TRUE(site.exists(QStringLiteral("locked.html")));
+    ASSERT_TRUE(QFile::setPermissions(site.vaultDir.filePath(QStringLiteral("Locked.md")), QFileDevice::WriteOwner));
+
+    EXPECT_FALSE(publishInto(site, site.outDir.path(), &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("Locked.md"))) << error.toStdString();
+    EXPECT_TRUE(site.exists(QStringLiteral("locked.html"))) << "its old page is not cleaned away";
+    EXPECT_TRUE(site.exists(QStringLiteral("fine.html")));
+    ASSERT_TRUE(QFile::setPermissions(site.vaultDir.filePath(QStringLiteral("Locked.md")),
+                                      QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    EXPECT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+}
+
+TEST(PublishSafetyTest, TempFilesOfACrashedPublishAreSweptAndNothingElse)
+{
+    TestSite site({{QStringLiteral("Folder/Note.md"), "Body.\n"}});
+    QTemporaryDir elsewhere;
+    const QString hex = QStringLiteral("0123456789abcdef0123456789abcdef");
+    writeFile(site.outDir.filePath(QStringLiteral(".tmp-") + hex), "half");
+    writeFile(site.outDir.filePath(QStringLiteral("folder/.tmp-") + hex), "half");
+    writeFile(site.outDir.filePath(QStringLiteral(".tmp-notours")), "kept");
+    writeFile(site.outDir.filePath(QStringLiteral("tmp-") + hex), "kept");
+    ASSERT_TRUE(QDir().mkpath(site.outDir.filePath(QStringLiteral(".tmp-1123456789abcdef0123456789abcdef/in"))));
+    writeFile(elsewhere.filePath(QStringLiteral(".tmp-") + hex), "outside");
+    ASSERT_TRUE(QFile::link(elsewhere.path(), site.outDir.filePath(QStringLiteral("linked"))));
+
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    EXPECT_FALSE(site.exists(QStringLiteral(".tmp-") + hex));
+    EXPECT_FALSE(site.exists(QStringLiteral("folder/.tmp-") + hex));
+    EXPECT_TRUE(site.exists(QStringLiteral(".tmp-notours")));
+    EXPECT_TRUE(site.exists(QStringLiteral("tmp-") + hex));
+    EXPECT_TRUE(QDir(site.outDir.filePath(QStringLiteral(".tmp-1123456789abcdef0123456789abcdef/in"))).exists());
+    EXPECT_TRUE(QFile::exists(elsewhere.filePath(QStringLiteral(".tmp-") + hex))) << "a link to a folder is not entered";
 }
 
 int main(int argc, char **argv)

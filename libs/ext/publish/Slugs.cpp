@@ -65,15 +65,18 @@ QString Slugs::permalinkOverride(const QString &raw)
         path.chop(1);
     if (path.isEmpty())
         return {};
-    // Only plain segments make a path: "..", "." and a backslash or NUL are refused (the page falls back to its
-    // default path), a doubled slash is folded.
-    const QStringList segments = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-    for (const QString &segment : segments) {
-        if (segment == QLatin1String("..") || segment == QLatin1String(".") || segment.contains(QLatin1Char('\\'))
-            || segment.contains(QChar(0)))
+    // Each segment is slugified like a default page path, keeping `.`, `_` and `~` as well: whatever is not a
+    // URL-safe character (":", a quote, "<", a space) is folded into '-'. A segment that comes out empty, "." or
+    // ".." sends the whole permalink back to the default path.
+    static const QRegularExpression disallowed(QStringLiteral("[^a-z0-9._~-]+"));
+    QStringList safe;
+    for (const QString &segment : path.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+        const QString slug = collapseToSlug(segment, disallowed);
+        if (slug.isEmpty() || slug == QLatin1String(".") || slug == QLatin1String(".."))
             return {};
+        safe << slug;
     }
-    path = segments.join(QLatin1Char('/'));
+    path = safe.join(QLatin1Char('/'));
     if (!path.endsWith(QLatin1String(".html"), Qt::CaseInsensitive))
         path += QStringLiteral(".html");
     return path;

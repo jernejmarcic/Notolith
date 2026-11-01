@@ -4,6 +4,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -11,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMutex>
+#include <QRegularExpression>
 #include <QtConcurrent>
 
 #include <algorithm>
@@ -176,8 +178,8 @@ QString renderNav(const NavNode &node, const QString &upPrefix, const QString &a
         }
     }
     for (const ParsedNote *n : node.notes) {
-        html += QStringLiteral("<li class=\"nav-note\"><a href=\"%1%2\">%3</a></li>")
-                   .arg(upPrefix, n->outputPath, escapeHtml(n->title));
+        html += QStringLiteral("<li class=\"nav-note\"><a href=\"%1\">%2</a></li>")
+                   .arg(escapeHtml(upPrefix + n->outputPath), escapeHtml(n->title));
     }
     html += QStringLiteral("</ul>");
     return html;
@@ -201,7 +203,7 @@ QString renderBacklinks(const ParsedNote &note, const PublishedNotes &notes, con
     for (const QString &fromPath : fromPaths) {
         const ParsedNote &from = notes.value(fromPath);
         items << QStringLiteral("<li><a href=\"%1\">%2</a></li>")
-                    .arg(Slugs::relativeHref(note.outputPath, from.outputPath), escapeHtml(from.title));
+                    .arg(escapeHtml(Slugs::relativeHref(note.outputPath, from.outputPath)), escapeHtml(from.title));
     }
     return QStringLiteral("<section class=\"backlinks\"><h2>Linked mentions</h2><ul>%1</ul></section>")
           .arg(items.join(QString()));
@@ -217,6 +219,21 @@ QString folderOf(const QString &outputPath)
 {
     const qsizetype slash = outputPath.lastIndexOf(QLatin1Char('/'));
     return slash < 0 ? QString() : outputPath.left(slash);
+}
+
+/// `.tmp-` and 32 hex digits: the name Vault::writeBytesNoFollowUnder gives a file while it writes it. One left
+/// by a publish that was killed is removed at the start of the next, and only a regular file of that exact name.
+void sweepStaleTemps(const QString &outDir)
+{
+    static const QRegularExpression pattern(QStringLiteral("^\\.tmp-[0-9a-f]{32}$"));
+    QDirIterator it(outDir, {QStringLiteral(".tmp-*")}, QDir::Files | QDir::Hidden | QDir::NoSymLinks,
+                    QDirIterator::Subdirectories); // links to folders are not entered
+    const QDir root(outDir);
+    while (it.hasNext()) {
+        const QString path = it.next();
+        if (pattern.match(it.fileName()).hasMatch())
+            noteAppC::Vault::removeNoFollowUnder(outDir, root.relativeFilePath(path));
+    }
 }
 
 /// A second wall behind the cleaning of a note's HTML and links: no inline script and no javascript: URL runs on
@@ -247,7 +264,7 @@ QString wrapPage(const QString &title, const QString &outputPath, const QString 
     if (!currentNavOutputPath.isEmpty()) {
         // One page's own entry, patched in rather than re-rendering the
         // whole tree a second time just to add one CSS class.
-        const QString ownHref = upPrefix + currentNavOutputPath;
+        const QString ownHref = escapeHtml(upPrefix + currentNavOutputPath);
         navHtml.replace(QStringLiteral("<li class=\"nav-note\"><a href=\"%1\">").arg(ownHref),
                         QStringLiteral("<li class=\"nav-note current\"><a href=\"%1\">").arg(ownHref));
     }
@@ -263,8 +280,9 @@ QString wrapPage(const QString &title, const QString &outputPath, const QString 
         "placeholder=\"Search\" autocomplete=\"off\"><ul id=\"search-results\"></ul></div>\n"
         "<div class=\"nav-tree\">%6</div>\n</nav>\n<main>\n<article>%7</article>\n%8</main>\n</div>\n"
         "<script src=\"%9\" defer></script>\n</body>\n</html>\n");
-    return html.arg(escapeHtml(title), escapeHtml(options.siteName), cssHref, codeStyle, homeHref,
-                    navHtml, contentHtml, backlinksHtml, searchJsHref, kContentSecurityPolicy);
+    return html.arg(escapeHtml(title), escapeHtml(options.siteName), escapeHtml(cssHref), codeStyle,
+                    escapeHtml(homeHref), navHtml, contentHtml, backlinksHtml, escapeHtml(searchJsHref),
+                    kContentSecurityPolicy);
 }
 
 QString siteStylesheet(const noteAppC::Theme &dark, const noteAppC::Theme &light, bool includeLight)
@@ -492,10 +510,28 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         if (error) *error = QStringLiteral("refusing to publish into the vault root itself");
         return false;
     }
+    // The output folder itself is never a link (a vault can ship `_site` as one); links higher up the path the
+    // person chose, a linked home folder say, are theirs.
+    if (QFileInfo(outDir).isSymLink()) {
+        if (error) *error = QStringLiteral("%1 is a link, so nothing was published there").arg(outDir);
+        return false;
+    }
     if (!QDir().mkpath(outDir)) {
         if (error) *error = QStringLiteral("could not create %1").arg(outDir);
         return false;
     }
+    {
+        // Compared as they really are: not the vault itself, and not a folder that holds it.
+        const QString realOut = QFileInfo(outDir).canonicalFilePath();
+        const QString realVault = QFileInfo(vaultRoot).canonicalFilePath();
+        if (realOut.isEmpty() || (!realVault.isEmpty()
+                                  && (realOut == realVault || realVault.startsWith(realOut + QLatin1Char('/'))))) {
+            if (error) *error = QStringLiteral("refusing to publish into the vault or a folder that contains it");
+            return false;
+        }
+    }
+    QStringList failures; // every write that did not happen, and every note that could not be read; any entry fails the publish
+    sweepStaleTemps(outDir);
 
     // --- phase 0: who gets published (cheap - already-indexed properties,
     // no file re-read) ------------------------------------------------------
@@ -554,7 +590,9 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     outputPaths.reserve(parsed.size());
     for (const Parsed &p : parsed) {
         if (!p.ok) {
-            ++m_counts.skipped;
+            // A note that was to go out and cannot be read is an error, not a skipped note: its old page must
+            // stay until the next publish can read it.
+            failures << QStringLiteral("could not read %1").arg(p.relativePath);
             continue;
         }
         QString path;
@@ -671,11 +709,12 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     const QString legacyManifestName = QStringLiteral("noteappc-publish-manifest.json");
     QHash<QString, QByteArray> oldManifest;
     {
-        QFile f(outDir + QLatin1Char('/') + manifestName);
-        if (!f.exists())
-            f.setFileName(outDir + QLatin1Char('/') + legacyManifestName); // read once, then replaced
-        if (!QFileInfo(f.fileName()).isSymLink() && f.open(QIODevice::ReadOnly)) {
-            const QJsonObject obj = QJsonDocument::fromJson(f.readAll()).object();
+        QByteArray manifestBytes;
+        constexpr qint64 manifestLimit = qint64(256) << 20;
+        if (noteAppC::Vault::readFileNoFollowUnder(outDir, manifestName, &manifestBytes, manifestLimit)
+            || noteAppC::Vault::readFileNoFollowUnder(outDir, legacyManifestName, &manifestBytes, manifestLimit)) {
+            // the old name is read once, then replaced
+            const QJsonObject obj = QJsonDocument::fromJson(manifestBytes).object();
             for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
                 if (noteAppC::Vault::isCleanRelativePath(it.key()) && it.key() != manifestName
                     && it.key() != legacyManifestName)
@@ -687,16 +726,16 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     QMutex assemblyMutex; // guards every mutable thing below shared across workers
     QSet<QString> allAttachments;
     QJsonArray searchIndex;
-    QStringList failures; // every write that did not happen, with why; any entry fails the publish
-
     const auto writeIfChanged = [&](const QString &relPath, const QByteArray &bytes) {
         // Called both from worker threads (the merged render-and-write pass)
         // and later from this thread alone (tag pages, assets) - always
         // under assemblyMutex either way, held by the caller in the first
         // case and taken here for the second.
         const QByteArray hash = sha1Hex(bytes);
-        const QFileInfo existing(outDir + QLatin1Char('/') + relPath);
-        if (oldManifest.value(relPath) == hash && existing.isFile() && !existing.isSymLink()) {
+        // Unchanged only when the file on disk, opened without following a link, is these bytes: what the
+        // manifest says is not evidence of what is there.
+        QByteArray onDisk;
+        if (noteAppC::Vault::readFileNoFollowUnder(outDir, relPath, &onDisk, bytes.size()) && onDisk == bytes) {
             newManifest.insert(relPath, hash);
             ++m_counts.unchanged;
             return;
@@ -828,12 +867,13 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
             m_counts.skippedAttachments << relativePath;
             continue;
         }
-        QFile source(absolute);
-        if (!source.open(QIODevice::ReadOnly)) {
+        // Read through the descriptor of the file that was opened, no link followed on the way or at the
+        // end: a link swapped in after the check above is refused here.
+        QByteArray bytes;
+        if (!noteAppC::Vault::readFileNoFollowUnder(m_vault.root(), relativePath, &bytes)) {
             m_counts.skippedAttachments << relativePath;
             continue;
         }
-        const QByteArray bytes = source.readAll();
         writeIfChanged(QStringLiteral("attachments/") + relativePath, bytes);
         ++m_counts.attachments;
     }
@@ -847,7 +887,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         for (const QString &path : std::as_const(sortedPaths)) {
             const ParsedNote &n = notes.value(path);
             items << QStringLiteral("<li><a href=\"%1\">%2</a></li>")
-                        .arg(Slugs::relativeHref(tagOutputPath, n.outputPath), escapeHtml(n.title));
+                        .arg(escapeHtml(Slugs::relativeHref(tagOutputPath, n.outputPath)), escapeHtml(n.title));
         }
         const QString content = QStringLiteral("<h1 class=\"page-title\">#%1</h1><ul>%2</ul>")
                                     .arg(escapeHtml(it.key()), items.join(QString()));
@@ -899,11 +939,25 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     // exporter wrote and no longer would. Not after a failed write: the run
     // is incomplete, and what it did not rewrite stays on the old manifest. ---
     if (failures.isEmpty()) {
+        // A key is removed only when the file there is a regular file (no link) with the very bytes the manifest
+        // recorded: anything else was not written by this exporter, or was changed since, and stays. It is also
+        // left out of the new manifest. A removal that fails for any other reason than "already gone" fails the
+        // publish and keeps the key.
         for (auto it = oldManifest.constBegin(); it != oldManifest.constEnd(); ++it) {
             if (newManifest.contains(it.key()))
                 continue;
-            if (noteAppC::Vault::removeNoFollowUnder(outDir, it.key()))
+            QByteArray onDisk;
+            constexpr qint64 ownedLimit = qint64(512) << 20;
+            if (!noteAppC::Vault::readFileNoFollowUnder(outDir, it.key(), &onDisk, ownedLimit)
+                || sha1Hex(onDisk) != it.value())
+                continue;
+            QString why;
+            if (noteAppC::Vault::removeNoFollowUnder(outDir, it.key(), &why)) {
                 ++m_counts.removed;
+            } else if (!why.isEmpty()) {
+                failures << why;
+                newManifest.insert(it.key(), it.value());
+            }
         }
     } else {
         for (auto it = oldManifest.constBegin(); it != oldManifest.constEnd(); ++it) {
