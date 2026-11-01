@@ -191,7 +191,7 @@ TEST(LazyModules, PdfWithoutTheModuleIsNotAViewFile)
     auto *toggle = featureToggle(window, "pdf-embeds");
     ASSERT_NE(toggle, nullptr) << "the PDF embeds row vanished";
     EXPECT_FALSE(toggle->isEnabled());
-    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("notolith-pdfview")))
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("poppler-qt6")))
         << window.statusBar()->currentMessage().toStdString();
     // An embed of a perfectly good PDF says what is missing, not that the file is broken.
     MarkdownEditor editor;
@@ -200,7 +200,7 @@ TEST(LazyModules, PdfWithoutTheModuleIsNotAViewFile)
     editor.setLinkResolver([&](const QString &) { return vault.pdfPath(); });
     const MarkdownEditor::PdfEmbedInfo info = editor.pdfEmbedInfoAt(0);
     ASSERT_TRUE(info.isPdfEmbed);
-    EXPECT_TRUE(info.error.contains(QStringLiteral("notolith-pdfview"))) << info.error.toStdString();
+    EXPECT_TRUE(info.error.contains(QStringLiteral("poppler-qt6"))) << info.error.toStdString();
     EXPECT_FALSE(anyMapped(kPoppler));
 }
 

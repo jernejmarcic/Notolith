@@ -8,6 +8,7 @@
 #include <QEventLoop>
 #include <QPainter>
 #include <QPdfWriter>
+#include <QSaveFile>
 #include <QScrollBar>
 #include <QThread>
 
@@ -39,7 +40,15 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
                                std::function<QString(const QString &)> resolver,
                                const PdfOptions &options, QString *error)
 {
-    QPdfWriter writer(path);
+    // Written to a temporary file beside the target and renamed over it once it is whole: a failed export
+    // leaves the earlier file as it was. (Declared first: the writer is gone before the file is committed.)
+    QSaveFile out(path);
+    if (!out.open(QIODevice::WriteOnly)) {
+        if (error)
+            *error = tr("Could not write %1").arg(path);
+        return false;
+    }
+    QPdfWriter writer(&out);
     writer.setTitle(title);
     writer.setCreator(QStringLiteral("Notolith"));
     // One unit a pixel at 96 dpi, the density the editor lays out for.
@@ -121,6 +130,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
 
     QPainter painter;
     if (!painter.begin(&writer)) {
+        out.cancelWriting();
         if (error)
             *error = tr("Could not write %1").arg(path);
         return false;
@@ -144,7 +154,13 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
         editor.paintBlocks(painter, start - titleHeight, 0, end - start);
         painter.restore();
     }
-    return painter.end();
+    if (!painter.end() || out.error() != QFileDevice::NoError || !out.commit()) {
+        out.cancelWriting();
+        if (error)
+            *error = tr("Could not write %1").arg(path);
+        return false;
+    }
+    return true;
 }
 
 } // namespace noteAppC

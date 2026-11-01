@@ -10,6 +10,8 @@
 add_library(noteAppC_publish STATIC
     Slugs.h
     Slugs.cpp
+    SafeHtml.h
+    SafeHtml.cpp
     PageBody.h
     PageBody.cpp
     Publisher.h
@@ -19,3 +21,15 @@ target_include_directories(noteAppC_publish PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_publish
     PUBLIC Qt6::Core noteAppC_markdown noteAppC_index noteAppC_vault noteAppC_render noteAppC_theme
     PRIVATE Qt6::Concurrent)
+
+# Raw HTML in a note is cleaned with gumbo (litehtml's parser, as in libs/editor); without it the markup
+# is written out as escaped text.
+if(NOTEAPPC_WITH_HTML)
+    find_path(NOTEAPPC_GUMBO_INCLUDE gumbo.h)
+    find_library(NOTEAPPC_GUMBO_LIBRARY gumbo)
+endif()
+if(NOTEAPPC_WITH_HTML AND NOTEAPPC_GUMBO_INCLUDE AND NOTEAPPC_GUMBO_LIBRARY)
+    target_include_directories(noteAppC_publish PRIVATE ${NOTEAPPC_GUMBO_INCLUDE})
+    target_link_libraries(noteAppC_publish PRIVATE ${NOTEAPPC_GUMBO_LIBRARY})
+    target_compile_definitions(noteAppC_publish PUBLIC NOTEAPPC_HAVE_GUMBO)
+endif()

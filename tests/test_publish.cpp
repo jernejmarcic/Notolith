@@ -12,6 +12,8 @@
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QRegularExpression>
 #include <QTemporaryDir>
@@ -26,6 +28,7 @@
 #include "PageBody.h"
 #include "Parser.h"
 #include "Publisher.h"
+#include "SafeHtml.h"
 #include "Theme.h"
 #include "Vault.h"
 
@@ -787,6 +790,257 @@ TEST(PublishTest, PublishesFromAPoolThreadWithItsOwnIndex)
     }).result();
     EXPECT_TRUE(error.isEmpty()) << error.toStdString();
     EXPECT_TRUE(site.read(QStringLiteral("root.html")).contains(QStringLiteral("href=\"notes/sub.html\"")));
+}
+
+TEST(SafeHtmlTest, OnlyWebMailAndRelativeURLsPass)
+{
+    for (const char *ok : {"https://a.example/x", "HTTP://a.example", "mailto:a@b.c", "page.html#top", "../up.html",
+                           "#frag", "//host/x", "dir/a:b"})
+        EXPECT_TRUE(SafeHtml::isSafeURL(QString::fromLatin1(ok))) << ok;
+    for (const char *bad : {"javascript:alert(1)", "JaVaScRiPt:x", " \tjava\nscript:x", "\x01javascript:x", "data:text/html,x",
+                            "vbscript:x", "file:///etc/passwd", "foo:bar", "blob:x", "about:blank"})
+        EXPECT_FALSE(SafeHtml::isSafeURL(QString::fromLatin1(bad))) << bad;
+}
+
+TEST(SafeHtmlTest, InlineRawHtmlIsOneTagAtATime)
+{
+    EXPECT_EQ(SafeHtml::sanitize(QStringLiteral("<b>"), true), QStringLiteral("<b>"));
+    EXPECT_EQ(SafeHtml::sanitize(QStringLiteral("</b>"), true), QStringLiteral("</b>"));
+    EXPECT_EQ(SafeHtml::sanitize(QStringLiteral("<br>"), true), QStringLiteral("<br>"));
+    EXPECT_EQ(SafeHtml::sanitize(QStringLiteral("<script>"), true), QString());
+    EXPECT_EQ(SafeHtml::sanitize(QStringLiteral("</script>"), true), QString());
+    EXPECT_EQ(SafeHtml::sanitize(QStringLiteral("<a href=\"javascript:x\" onclick=\"y\" class=c>"), true),
+              QStringLiteral("<a class=\"c\">"));
+    EXPECT_EQ(SafeHtml::sanitize(QStringLiteral("<a href=\"https://x.example\">"), true),
+              QStringLiteral("<a href=\"https://x.example\" rel=\"noopener noreferrer\">"));
+}
+
+// ---------------------------------------------------------------------------
+// A vault is untrusted input: nothing it says may delete, overwrite or leak a
+// file outside the site, or run as script on a published page.
+
+namespace {
+
+void writeFile(const QString &path, const QByteArray &bytes)
+{
+    QDir().mkpath(QFileInfo(path).path());
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(bytes);
+}
+
+QByteArray readFile(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+bool publishInto(const TestSite &site, const QString &folder, QString *error, Counts *counts = nullptr)
+{
+    Publisher publisher(site.vault, site.index);
+    Options options;
+    options.outputDir = folder;
+    const bool ok = publisher.publish(options, nullptr, error);
+    if (counts)
+        *counts = publisher.counts();
+    return ok;
+}
+
+} // namespace
+
+TEST(PublishSafetyTest, AHostileManifestDeletesNothingOutsideTheSite)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    QTemporaryDir elsewhere;
+    const QString siteDir = site.outDir.filePath(QStringLiteral("site"));
+    const QString victim = site.outDir.filePath(QStringLiteral("victim.txt"));
+    const QString absoluteVictim = elsewhere.filePath(QStringLiteral("absolute.txt"));
+    const QString linked = elsewhere.filePath(QStringLiteral("linked.txt"));
+    writeFile(victim, "keep");
+    writeFile(absoluteVictim, "keep");
+    writeFile(linked, "keep");
+    writeFile(siteDir + QStringLiteral("/placeholder"), "x");
+    ASSERT_TRUE(QFile::link(elsewhere.path(), siteDir + QStringLiteral("/out")));
+
+    QJsonObject manifest;
+    manifest[QStringLiteral("../victim.txt")] = QStringLiteral("0");
+    manifest[QStringLiteral("a/../../victim.txt")] = QStringLiteral("0");
+    manifest[absoluteVictim] = QStringLiteral("0");
+    manifest[QStringLiteral("out/linked.txt")] = QStringLiteral("0"); // a folder link out of the site
+    manifest[QStringLiteral("a//b.html")] = QStringLiteral("0");
+    manifest[QStringLiteral("a\\b.html")] = QStringLiteral("0");
+    const QByteArray bytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
+    writeFile(siteDir + QStringLiteral("/notolith-publish-manifest.json"), bytes);
+    writeFile(siteDir + QStringLiteral("/noteappc-publish-manifest.json"), bytes);
+
+    QString error;
+    ASSERT_TRUE(publishInto(site, siteDir, &error)) << error.toStdString();
+    EXPECT_EQ(readFile(victim), QByteArray("keep"));
+    EXPECT_EQ(readFile(absoluteVictim), QByteArray("keep"));
+    EXPECT_EQ(readFile(linked), QByteArray("keep"));
+}
+
+TEST(PublishSafetyTest, TheManifestHasTheNewNameAndTheOldOneIsReadOnce)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    const QString siteDir = site.outDir.path();
+    writeFile(siteDir + QStringLiteral("/stale.html"), "old page");
+    QJsonObject legacy;
+    legacy[QStringLiteral("stale.html")] = QStringLiteral("0");
+    writeFile(siteDir + QStringLiteral("/noteappc-publish-manifest.json"),
+              QJsonDocument(legacy).toJson(QJsonDocument::Compact));
+
+    QString error;
+    ASSERT_TRUE(publishInto(site, siteDir, &error)) << error.toStdString();
+    EXPECT_TRUE(site.exists(QStringLiteral("notolith-publish-manifest.json")));
+    EXPECT_FALSE(site.exists(QStringLiteral("stale.html"))) << "the old manifest is still read";
+
+    // Once the new one is there the old one is not looked at again.
+    writeFile(siteDir + QStringLiteral("/stale2.html"), "kept");
+    QJsonObject again;
+    again[QStringLiteral("stale2.html")] = QStringLiteral("0");
+    writeFile(siteDir + QStringLiteral("/noteappc-publish-manifest.json"),
+              QJsonDocument(again).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(publishInto(site, siteDir, &error)) << error.toStdString();
+    EXPECT_TRUE(site.exists(QStringLiteral("stale2.html")));
+}
+
+TEST(PublishSafetyTest, AnOutputSymlinkIsReplacedNeverFollowed)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    QTemporaryDir elsewhere;
+    const QString victim = elsewhere.filePath(QStringLiteral("victim.txt"));
+    writeFile(victim, "keep");
+    ASSERT_TRUE(QFile::link(victim, site.outDir.filePath(QStringLiteral("index.html"))));
+    ASSERT_TRUE(QFile::link(victim, site.outDir.filePath(QStringLiteral("site.css"))));
+
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    EXPECT_EQ(readFile(victim), QByteArray("keep"));
+    EXPECT_FALSE(QFileInfo(site.outDir.filePath(QStringLiteral("index.html"))).isSymLink());
+    EXPECT_TRUE(site.read(QStringLiteral("index.html")).contains(QStringLiteral("<html")));
+}
+
+TEST(PublishSafetyTest, AFolderSymlinkInTheSiteFailsThePublishAndWritesNothingThrough)
+{
+    TestSite site({{QStringLiteral("Folder/Note.md"), "Body.\n"}});
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(QFile::link(elsewhere.path(), site.outDir.filePath(QStringLiteral("folder"))));
+
+    QString error;
+    EXPECT_FALSE(publishInto(site, site.outDir.path(), &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("folder"))) << error.toStdString();
+    EXPECT_TRUE(QDir(elsewhere.path()).isEmpty());
+}
+
+TEST(PublishSafetyTest, AFailedWriteFailsThePublishNamesTheFileAndIsNotRecorded)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    // index.html is a folder: nothing can be renamed over it.
+    ASSERT_TRUE(QDir().mkpath(site.outDir.filePath(QStringLiteral("index.html/inside"))));
+
+    QString error;
+    EXPECT_FALSE(publishInto(site, site.outDir.path(), &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("index.html"))) << error.toStdString();
+    EXPECT_TRUE(site.exists(QStringLiteral("note.html"))); // the rest is still written
+    const QByteArray manifest = readFile(site.outDir.filePath(QStringLiteral("notolith-publish-manifest.json")));
+    EXPECT_FALSE(manifest.contains("index.html")) << manifest.toStdString();
+    EXPECT_TRUE(manifest.contains("note.html"));
+}
+
+TEST(PublishSafetyTest, ASymlinkedAttachmentIsNotCopiedIntoTheSite)
+{
+    TestSite site({
+        {QStringLiteral("Note.md"), "![[secret.png]] ![[real.png]]\n"},
+        {QStringLiteral("real.png"), QByteArray("real-bytes")},
+    });
+    QTemporaryDir elsewhere;
+    const QString secret = elsewhere.filePath(QStringLiteral("private.txt"));
+    writeFile(secret, "PRIVATE-BYTES");
+    ASSERT_TRUE(QFile::link(secret, site.vaultDir.filePath(QStringLiteral("secret.png"))));
+    // The index was built before the link was there; build it again.
+    Indexer indexer(&site.index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(site.vault);
+    ASSERT_TRUE(done.wait(20000));
+
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    EXPECT_FALSE(site.exists(QStringLiteral("attachments/secret.png")));
+    EXPECT_TRUE(site.exists(QStringLiteral("attachments/real.png")));
+}
+
+TEST(PublishSafetyTest, AnAttachmentThatWasLeftOutIsListedInTheSummary)
+{
+    TestSite site({
+        {QStringLiteral("Note.md"), "![[secret.png]]\n"},
+    });
+    QTemporaryDir elsewhere;
+    writeFile(elsewhere.filePath(QStringLiteral("private.txt")), "PRIVATE-BYTES");
+    ASSERT_TRUE(QFile::link(elsewhere.filePath(QStringLiteral("private.txt")),
+                            site.vaultDir.filePath(QStringLiteral("secret.png"))));
+    Indexer indexer(&site.index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(site.vault);
+    ASSERT_TRUE(done.wait(20000));
+
+    QString error;
+    Counts counts;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error, &counts)) << error.toStdString();
+    EXPECT_EQ(counts.skippedAttachments, QStringList{QStringLiteral("secret.png")});
+}
+
+TEST(PublishSafetyTest, NothingFromANoteRunsOnAPublishedPage)
+{
+    TestSite site({
+        {QStringLiteral("Evil.md"),
+         "#tagged\n\n"
+         "[a](javascript:alert(1)) [b](JaVaScRiPt:alert(2)) [c](data:text/html,x) [d](vbscript:x) "
+         "[e](file:///etc/passwd) [f](foo:bar) [[javascript:alert(3)|g]]\n\n"
+         "[ok](https://example.com/x) [mail](mailto:a@example.com)\n\n"
+         "<img src=x onerror=alert(1)> <img src=\"javascript:alert(2)\">\n\n"
+         "<a href=\"javascript:alert(1)\">raw</a> <a href=\"  JaVa&#x73;cript:alert(2)\">raw2</a>\n\n"
+         "<iframe srcdoc=\"<script>alert(1)</script>\"></iframe>\n\n"
+         "<div style=\"background:url(javascript:alert(1))\" class=\"keepme\" onclick=\"x()\">\n"
+         "<form action=\"https://example.com\"><input name=q></form>\n"
+         "<svg onload=alert(1)><a href=\"javascript:alert(2)\"><text>t</text></a></svg>\n"
+         "<object data=\"x\"></object><embed src=\"x\"><base href=\"https://evil.example/\">\n"
+         "<script>alert(9)</script>\n"
+         "<u>kept</u>\n</div>\n"},
+    });
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+
+    for (const QString &name : {QStringLiteral("evil.html"), QStringLiteral("index.html"),
+                                QStringLiteral("tags/tagged.html")}) {
+        const QString page = site.read(name);
+        ASSERT_FALSE(page.isEmpty()) << name.toStdString();
+        // Every page carries the policy and has no inline script of its own.
+        EXPECT_TRUE(page.contains(QStringLiteral("http-equiv=\"Content-Security-Policy\""))) << name.toStdString();
+        EXPECT_TRUE(page.contains(QStringLiteral("script-src 'self'"))) << name.toStdString();
+        EXPECT_TRUE(page.contains(QStringLiteral("object-src 'none'")));
+        EXPECT_TRUE(page.contains(QStringLiteral("base-uri 'none'")));
+        EXPECT_TRUE(page.contains(QStringLiteral("form-action 'none'")));
+        static const QRegularExpression inlineScript(QStringLiteral("<script(?![^>]*\\bsrc=)"),
+                                                     QRegularExpression::CaseInsensitiveOption);
+        EXPECT_FALSE(page.contains(inlineScript)) << name.toStdString();
+    }
+    const QString page = site.read(QStringLiteral("evil.html"));
+    // Content outside the policy tag itself: no scheme that runs, no handler, no frame.
+    const qsizetype body = page.indexOf(QStringLiteral("<article>"));
+    ASSERT_GT(body, 0);
+    const QString article = page.mid(body, page.indexOf(QStringLiteral("</article>")) - body);
+    for (const char *bad : {"javascript", "vbscript", "data:text", "file:", "foo:bar", "onerror", "onclick",
+                            "onload", "srcdoc", "<iframe", "<form", "<svg", "<object", "<embed", "<base",
+                            "<script", "alert(9)", "url("})
+        EXPECT_FALSE(article.contains(QLatin1String(bad), Qt::CaseInsensitive)) << bad << "\n" << article.toStdString();
+    // The links that are fine stay, and an unsafe one keeps its text.
+    EXPECT_TRUE(article.contains(QStringLiteral("href=\"https://example.com/x\"")));
+    EXPECT_TRUE(article.contains(QStringLiteral("href=\"mailto:a@example.com\"")));
+    EXPECT_TRUE(article.contains(QStringLiteral(">ok</a>")));
+    EXPECT_TRUE(article.contains(QStringLiteral("a ")));
+    EXPECT_TRUE(article.contains(QStringLiteral("class=\"keepme\"")));
+    EXPECT_TRUE(article.contains(QStringLiteral("<u>kept</u>")));
 }
 
 int main(int argc, char **argv)

@@ -1481,7 +1481,15 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
 void MainWindow::followLink(const QString &target)
 {
     // The web and mail in their own apps; any other scheme a note names
-    // (file:, a custom handler) is not something a click should launch.
+    // (file:, a custom handler) is not something a click should launch. The
+    // ones with no "//" (javascript:, data:, file:/x) are refused here too,
+    // not taken for a note's name.
+    static const QRegularExpression runnable(QStringLiteral("^\\s*(javascript|vbscript|data|file|blob):"),
+                                             QRegularExpression::CaseInsensitiveOption);
+    if (const QRegularExpressionMatch scheme = runnable.match(target); scheme.hasMatch()) {
+        statusBar()->showMessage(tr("Links with %1: are not opened").arg(scheme.captured(1).toLower()), 3000);
+        return;
+    }
     if (target.contains(QLatin1String("://")) || target.startsWith(QLatin1String("mailto:"))) {
         const QUrl url(target);
         const QString scheme = url.scheme().toLower();
@@ -6756,7 +6764,7 @@ void MainWindow::updateShare()
     m_shareProblem.clear();
     const std::optional<ModuleInfo> module = m_modules->moduleForFeature(QStringLiteral("share"));
     if (!module)
-        m_shareProblem = tr("Sharing needs the notolith-share package");
+        m_shareProblem = tr("Sharing needs the share module, which is not installed");
     else if (loadModule(*module, &m_shareProblem) && !m_makeShare)
         m_shareProblem = tr("The notolith-share module did not offer a sharing engine");
     if (!m_shareProblem.isEmpty()) {
@@ -7102,7 +7110,7 @@ QString MainWindow::pdfViewerProblem() const
             return tr("The PDF viewer is switched off in Settings, Core plugins");
         return tr("The PDF viewer could not be loaded");
     }
-    return tr("PDF support is not installed (the notolith-pdfview package)");
+    return tr("PDF viewing needs Notolith built with poppler-qt6");
 }
 
 bool MainWindow::isViewFile(const QString &path) const

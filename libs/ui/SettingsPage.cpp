@@ -1009,13 +1009,13 @@ QWidget *SettingsPage::buildCorePluginsPage()
     // what to install, rather than vanishing. Asking PdfPage::isAvailable() instead would map poppler just to draw this page.
     QHash<QByteArray, QString> needsPackage;
     if (!m_moduleFeatures.contains(QLatin1String("pdf-viewer"))) {
-        const QString reason = tr("Not available: needs the notolith-pdfview package.");
+        const QString reason = tr("Not available: needs Notolith built with poppler-qt6.");
         needsPackage.insert("pdf-viewer", reason);
         needsPackage.insert("pdf-embeds", reason);
     }
 #ifdef NOTEAPPC_HAVE_SHARE
     if (!m_moduleFeatures.contains(QLatin1String("share")))
-        needsPackage.insert("share", tr("Not available: needs the notolith-share package."));
+        needsPackage.insert("share", tr("Not available: the share module is not installed."));
 #endif
     if (!MediaPlayback::isAvailable())
         missing << "media-embeds";

@@ -15,7 +15,7 @@
 #include "CodeHighlighter.h"
 #include "MermaidCache.h"
 #include "ObsidianSyntax.h"
-#include "HtmlRenderer.h"
+#include "SafeHtml.h"
 #include "Slugs.h"
 #include "TaskStates.h"
 #include "Theme.h"
@@ -946,26 +946,9 @@ private:
 
     QString renderRawHtml(const QString &raw, bool block)
     {
-        // sanitizeHtml() (HtmlRenderer's own script/on*= stripper, reused
-        // rather than duplicated) matches a *paired* "<script>...</script>"
-        // within one string. That is right for a whole raw-HTML block
-        // ("<div>...<script>x</script>...</div>" arrives here as one block,
-        // matched fine), but CommonMark's *inline* raw-HTML grammar matches
-        // one tag at a time: "text <script>x</script> more" is parsed as
-        // three separate items - "<script>", "x", "</script>" - so within
-        // any single one of those three calls there is nothing for a
-        // pair-matching regex to pair. Every open or close tag for a
-        // dangerous element is therefore also stripped outright, matched or
-        // not - defence in depth for iframe/object/embed/link/meta/style
-        // (which the live app only ever hides with CSS, safe for a real
-        // browser but not for a static site that promises no network
-        // request of any kind), and the actual fix for maths of the lone-tag
-        // case above.
-        QString safe = noteAppC::HtmlRenderer::sanitizeHtml(raw);
-        static const QRegularExpression dangerousTag(
-            QStringLiteral("</?\\s*(script|style|iframe|object|embed|link|meta)\\b[^>]*>"),
-            QRegularExpression::CaseInsensitiveOption);
-        safe.remove(dangerousTag);
+        // Parsed with gumbo and rewritten from a fixed list of elements and attributes (SafeHtml). Inline raw
+        // HTML arrives one tag at a time, which SafeHtml handles as a single tag.
+        const QString safe = SafeHtml::sanitize(raw, !block);
         return block ? (QStringLiteral("<div class=\"html-block\">") + safe + QStringLiteral("</div>\n"))
                     : safe;
     }
@@ -1319,6 +1302,8 @@ private:
         if (link->external) {
             const QString text = link->wiki ? wikilinkText(*link, span, note)
                                            : escapeHtml(link->alias.isEmpty() ? link->target : link->alias);
+            if (!SafeHtml::isSafeURL(link->target))
+                return text; // javascript:, data:, file: and the rest are text, not a link
             return QStringLiteral("<a href=\"%1\" rel=\"noopener noreferrer\">%2</a>")
                   .arg(escapeAttr(link->target), text);
         }

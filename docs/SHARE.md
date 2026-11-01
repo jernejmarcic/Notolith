@@ -332,8 +332,8 @@ first paint and the module scan) the module is loaded when the store already
 holds shares of this vault, and otherwise the first time a note is shared or
 joined (`MainWindow::ensureShare`). The window then owns a `ShareEngine` that is
 built but **not running**; it starts (keyring, socket) when a note is shared or
-joined, or at once when the store already holds shares. Without the package,
-sharing says "Sharing needs the notolith-share package" and the settings row is
+joined, or at once when the store already holds shares. Without the module installed,
+sharing says "Sharing needs the share module, which is not installed" and the settings row is
 not shown.
 
 - **Commands:** `share:share-note` (saves the note, makes the share and opens

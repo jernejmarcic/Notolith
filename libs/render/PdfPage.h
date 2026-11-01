@@ -11,9 +11,9 @@ namespace noteAppC {
 /// One page of a PDF, rendered to an image through poppler-qt6.
 ///
 /// Kept behind this small surface so poppler's headers - and its GPL, which
-/// is why the package is optional - stay out of the editor and out of the
+/// is why the PDF support is optional - stay out of the editor and out of the
 /// executable: the poppler half is libnotolith-pdfpage.so (libs/ext/pdfview,
-/// the notolith-pdfview package), resolved here on the first call from any
+/// built with NOTEAPPC_WITH_PDFVIEW), resolved here on the first call from any
 /// thread and never loaded by a note that holds no PDF.
 ///
 /// Every function here is safe to call from a worker thread: `Poppler::
