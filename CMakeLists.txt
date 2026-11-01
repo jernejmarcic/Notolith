@@ -18,6 +18,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# libFuzzer targets for the parsers that read a vault (tools/fuzz). Clang only, never installed. Every target is
+# built with the sanitizers and the fuzzer's coverage instrumentation, the downloaded parsers (md4qt, yaml-cpp) too.
+option(NOTEAPPC_FUZZ "Build the libFuzzer targets in tools/fuzz (clang; instruments the whole build)" OFF)
+if(NOTEAPPC_FUZZ)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "NOTEAPPC_FUZZ needs clang: configure with -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang")
+    endif()
+    add_compile_options(-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 # Network is here for QLocalSocket alone (the single-instance socket in libs/ui/SingleInstance, a Unix socket).
 # Only libs/ui/CMakeLists.txt links it; every other target reaches the network classes only under
 # NOTEAPPC_WITH_NETWORK below.
@@ -524,6 +535,10 @@ endif()
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
+endif()
+
+if(NOTEAPPC_FUZZ)
+    add_subdirectory(tools/fuzz)
 endif()
 
 # Installing matters for one reason: a .desktop file is what lets a file
