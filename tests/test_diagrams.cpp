@@ -503,6 +503,10 @@ protected:
             note.write(("```" + QByteArray(c.language) + "\n" + c.source.toUtf8() + "\n```\n\n").data());
         note.write("after\n");
         note.close();
+        // An untrusted vault draws no diagram until a click (test_window.cpp has that): this one is trusted.
+        Settings config = Settings::load();
+        config.setVaultTrusted(dir.path(), true);
+        ASSERT_TRUE(config.save());
     }
     void TearDown() override
     {

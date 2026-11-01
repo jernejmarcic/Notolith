@@ -63,6 +63,12 @@ MarkdownEditor::CodeBlockRenderer diagramRenderer(DiagramKind kind, const QStrin
 /// unit came to (what a click in the image is turned back into the SVG's own coordinates by).
 QImage rasteriseSVG(const QByteArray &svg, int width, qreal ratio, qreal *logicalScale = nullptr);
 
+/// What a fence whose renderer starts a process shows until it may: its source, as much as fits, and a
+/// button `label` (the one hotspot, id 1; the caller sets `activate`). A vault that is not trusted gets this in
+/// place of the diagram, so that viewing a note starts nothing.
+MarkdownEditor::CodeBlockResult diagramNotRendered(const QString &label, const QString &source, int width, qreal ratio,
+                                                   const Theme &theme);
+
 /// A renderer that only reads MermaidCache.h's directory and answers at once
 /// (the editor still posts the answer, so the caller processes events): the
 /// diagram if one was made for this source, in `theme`'s colours or any, else

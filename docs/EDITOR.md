@@ -1442,6 +1442,15 @@ it, and shown as source when the caret is inside, like any rendered block.
 Settings > Core plugins: "Mermaid diagrams" (`render.mermaid`, on by default)
 and "Mermaid tool" (`render.mermaidTool`, default `mmdr`).
 
+In a vault that is not trusted none of the diagram kinds starts its tool when a
+note is shown: the fence is drawn as its source with a "Render diagram" button
+(`diagramNotRendered` in `libs/editor/MermaidBlock.cpp`, one hotspot on the
+image). The button asks MainWindow's run gate (Run, Trust this vault, Cancel,
+`allowRun`); Run renders that block, and an answered block is not asked about
+again that session. Trusting the vault re-registers the renderers, so every
+fence draws. A trusted vault draws on layout, as described below. Plugin fences
+go through the same gate (`MainWindow::gatedRenderer`).
+
 The drawing is done by an external program, not linked in: `mmdr`, the
 pure-Rust `mermaid-rs-renderer` crate (installed with
 `cargo install mermaid-rs-renderer`; 1-5 ms a diagram, about 300 ms for the very

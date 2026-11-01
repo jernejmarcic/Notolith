@@ -1704,17 +1704,19 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
             m_diagramRenderer[index] = key.isEmpty() ? MarkdownEditor::CodeBlockRenderer()
                                                      : diagramRenderer(diagram.kind, key.mid(1), [this] { return m_theme; });
         }
+        // Trust is part of the key: trusting the vault hands the renderer over again, without the run gate.
         const QString property = QStringLiteral("diagramKey%1").arg(index);
-        if (editor->property(property.toUtf8().constData()).toString() == key)
+        const QString handed = key + (vaultTrusted() ? QLatin1String("+trusted") : QLatin1String());
+        if (editor->property(property.toUtf8().constData()).toString() == handed)
             continue;
-        editor->setProperty(property.toUtf8().constData(), key);
+        editor->setProperty(property.toUtf8().constData(), handed);
         if (!m_diagramRenderer[index]) {
             editor->setCodeBlockRenderer(diagramLanguages(diagram.kind), nullptr);
         } else {
             // The source goes to a tool that writes it to a temporary file and a cache: not for an encrypted note.
             editor->setCodeBlockRenderer(
                 diagramLanguages(diagram.kind),
-                [this, editor, renderer = m_diagramRenderer[index]](
+                [this, editor, renderer = gatedRenderer(m_diagramRenderer[index], tr("Render diagram"))](
                     const QString &language, const QString &source, int width, const QString &theme,
                     const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
                     if (showsEncryptedNote(editor)) {
@@ -5187,7 +5189,8 @@ void MainWindow::syncPlugins(bool rescan)
         };
     }
     // A plugin's fence in an encrypted note is never handed to the plugin.
-    const auto guarded = [this, renderer](MarkdownEditor *editor) -> MarkdownEditor::CodeBlockRenderer {
+    const auto guarded = [this, renderer = renderer ? gatedRenderer(renderer, tr("Render")) : renderer](
+                             MarkdownEditor *editor) -> MarkdownEditor::CodeBlockRenderer {
         return [this, renderer, editor](const QString &language, const QString &source, int width,
                                         const QString &theme,
                                         const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
@@ -6572,6 +6575,12 @@ void MainWindow::setVaultTrusted(bool trusted)
     m_settings.setVaultTrusted(m_vault.root(), trusted);
     m_settings.save();
     applyHotkeys(); // its hotkeys count (or stop counting) from now on; its feature switches at the next open
+    // Diagrams and plugin fences stop (or start) asking for a click: handed over again, which redraws them.
+    for (const auto &leaf : m_leaves) {
+        applyEditorSettings(leaf->editor);
+        if (m_applyPluginRenderer)
+            m_applyPluginRenderer(leaf->editor);
+    }
     statusBar()->showMessage(trusted ? tr("This vault is trusted: its hotkeys apply, and code still runs only in the sandbox")
                                      : tr("This vault is not trusted"),
                              5000);
@@ -6668,6 +6677,37 @@ void MainWindow::setRunApprovalForTests(std::function<bool(const QString &)> app
 
 /// A block of a vault that is not trusted asks before it first runs: what runs is the person's decision, not the
 /// vault's. "Trust this vault" ends the asking for this vault; either way the block runs in the sandbox.
+bool MainWindow::runAllowed(const QString &language, const QString &source) const
+{
+    return vaultTrusted()
+           || m_runsAllowed.contains(
+               QCryptographicHash::hash((language + QChar(0) + source).toUtf8(), QCryptographicHash::Sha256));
+}
+
+MarkdownEditor::CodeBlockRenderer MainWindow::gatedRenderer(MarkdownEditor::CodeBlockRenderer renderer,
+                                                            const QString &button)
+{
+    return [this, renderer = std::move(renderer), button](const QString &language, const QString &source, int width,
+                                                          const QString &theme,
+                                                          const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
+        if (runAllowed(language, source)) {
+            ++m_fenceRenders;
+            renderer(language, source, width, theme, deliver);
+            return;
+        }
+        // Showing a note starts nothing from a vault the person has not trusted: the source, and a click.
+        MarkdownEditor::CodeBlockResult shown = diagramNotRendered(button, source, width, devicePixelRatioF(), m_theme);
+        shown.activate = [this, renderer, language, source, width, theme](
+                             int, const std::function<void(MarkdownEditor::CodeBlockResult)> &deliverRendered) {
+            if (!allowRun(language, source))
+                return;
+            ++m_fenceRenders;
+            renderer(language, source, width, theme, deliverRendered);
+        };
+        deliver(std::move(shown));
+    };
+}
+
 bool MainWindow::allowRun(const QString &language, const QString &source)
 {
     if (vaultTrusted())

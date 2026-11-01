@@ -10958,6 +10958,84 @@ TEST_F(WindowTest, ABlockOverTheSizeLimitIsNotRunWhoeverAsks)
 }
 #endif
 
+// Showing a note starts no tool: a diagram of a vault the person has not trusted waits for a click and a yes.
+TEST_F(WindowTest, AnUntrustedVaultStartsNoDiagramToolUntilAClickAndAYes)
+{
+    setTrust(false);
+    write(QStringLiteral("Dia.md"), "```dot\ndigraph G { Alpha -> Beta }\n```\n\ntail\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_FALSE(window.vaultTrusted());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Dia.md"))));
+    int asked = 0;
+    bool answer = false;
+    window.setRunApprovalForTests([&](const QString &shown) {
+        ++asked;
+        EXPECT_TRUE(shown.contains(QStringLiteral("Alpha")));
+        return answer;
+    });
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype block = editor->noteText().indexOf(QStringLiteral("Alpha"));
+    WAIT_TRUE(!editor->codeBlockImageRectAt(block).isEmpty(), 5000);
+    QTest::qWait(300);
+    EXPECT_EQ(window.fenceRendersForTests(), 0) << "laying the note out started no tool";
+    const QRect placeholder = editor->codeBlockImageRectAt(block);
+    const QPoint button = placeholder.bottomLeft() + QPoint(30, -22);
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, button);
+    EXPECT_EQ(asked, 1);
+    EXPECT_EQ(window.fenceRendersForTests(), 0) << "a no starts nothing";
+    EXPECT_EQ(editor->codeBlockImageRectAt(block), placeholder);
+
+    answer = true;
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, button);
+    EXPECT_EQ(asked, 2);
+    EXPECT_EQ(window.fenceRendersForTests(), 1);
+    WAIT_TRUE(editor->codeBlockImageRectAt(block).height() != placeholder.height(), 30000);
+}
+
+TEST_F(WindowTest, TrustingAnUntrustedVaultDrawsItsDiagramsWithoutAClick)
+{
+    setTrust(false);
+    write(QStringLiteral("Dia.md"), "```dot\ndigraph G { Alpha -> Beta }\n```\n\ntail\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Dia.md"))));
+    window.setRunApprovalForTests([](const QString &) {
+        ADD_FAILURE() << "trusting is not a run";
+        return false;
+    });
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype block = editor->noteText().indexOf(QStringLiteral("Alpha"));
+    WAIT_TRUE(!editor->codeBlockImageRectAt(block).isEmpty(), 5000);
+    QTest::qWait(300);
+    ASSERT_EQ(window.fenceRendersForTests(), 0);
+
+    window.setVaultTrusted(true);
+    WAIT_TRUE(window.fenceRendersForTests() > 0, 10000); // once for each width it was laid out at
+}
+
+TEST_F(WindowTest, ATrustedVaultDrawsADiagramAtOnceAndAsksNothing)
+{
+    write(QStringLiteral("Dia.md"), "```dot\ndigraph G { Alpha -> Beta }\n```\n\ntail\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.vaultTrusted());
+    window.setRunApprovalForTests([](const QString &) {
+        ADD_FAILURE() << "a trusted vault is not asked";
+        return false;
+    });
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Dia.md"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    WAIT_TRUE(window.fenceRendersForTests() > 0, 10000); // once for each width it was laid out at
+}
+
 TEST_F(WindowTest, AFileIsOpenedByTheDesktopOnlyAfterAYesInAnUntrustedVaultAndNeverIfItIsAProgram)
 {
     write(QStringLiteral("picture.png"), "not really a picture\n");

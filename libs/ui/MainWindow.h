@@ -243,6 +243,8 @@ public:
     /// For the tests: who answers "run this block of an untrusted vault?" (gets the code shown), in place of
     /// the dialog, and "open this file with the desktop?" (gets the file name and its type).
     void setRunApprovalForTests(std::function<bool(const QString &code)> approve);
+    /// How many times a fence's renderer (a diagram tool or a plugin) was started since the window was made.
+    int fenceRendersForTests() const { return m_fenceRenders; }
     void setOpenApprovalForTests(std::function<bool(const QString &name, const QString &type)> approve);
     /// The editor's file cards, media and embeds ask for a file to be opened by the desktop here: never an
     /// executable or a launcher, and in an untrusted vault only after the person says yes.
@@ -680,6 +682,12 @@ private:
     /// The editor shows a note that is shared (P2P) right now.
     bool isSharedNote(const MarkdownEditor *editor) const;
     bool allowRun(const QString &language, const QString &source);
+    /// allowRun() without the question: the vault is trusted, or this block was allowed already.
+    bool runAllowed(const QString &language, const QString &source) const;
+    /// `renderer` (a diagram tool, a plugin: a process) behind the run gate: in a vault that is not trusted a
+    /// fence shows its source and a `button`, and the renderer starts only once allowRun() says yes to it.
+    MarkdownEditor::CodeBlockRenderer gatedRenderer(MarkdownEditor::CodeBlockRenderer renderer, const QString &button);
+    int m_fenceRenders = 0;
     std::function<bool(const QString &)> m_runApproval;
     std::function<bool(const QString &, const QString &)> m_openApproval;
     QSet<QByteArray> m_runsAllowed; ///< sha256 of language + source asked about, for this run of the app

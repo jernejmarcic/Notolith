@@ -22,6 +22,7 @@
 #include <QMutex>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFontMetricsF>
 #include <QPainter>
 #include <QProcess>
 #include <QRegularExpression>
@@ -388,6 +389,50 @@ QImage rasteriseSVG(const QByteArray &svg, int width, qreal ratio, qreal *logica
     if (logicalScale)
         *logicalScale = logicalWidth / natural.width();
     return image;
+}
+
+MarkdownEditor::CodeBlockResult diagramNotRendered(const QString &label, const QString &source, int width, qreal ratio,
+                                                   const Theme &theme)
+{
+    constexpr int kPad = 8, kMaxLines = 8, kButtonHeight = 28;
+    const QFont font = theme.monospaceFont();
+    const QFontMetricsF metrics(font);
+    QStringList lines = source.trimmed().split(QLatin1Char('\n'));
+    if (lines.size() > kMaxLines) {
+        lines = lines.mid(0, kMaxLines);
+        lines.last() = QStringLiteral("...");
+    }
+    const qreal lineHeight = metrics.lineSpacing();
+    const int logicalWidth = qMax(width, 120);
+    const int height = int(kPad + lines.size() * lineHeight + kPad + kButtonHeight + kPad);
+    const qreal scale = qMax<qreal>(ratio, 1);
+    QImage image(QSize(qRound(logicalWidth * scale), qRound(height * scale)), QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(scale);
+    image.fill(Qt::transparent);
+    const QRectF button(kPad, height - kPad - kButtonHeight, qMin(qreal(180), logicalWidth - 2.0 * kPad), kButtonHeight);
+    {
+        QPainter painter(&image);
+        painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
+        painter.setFont(font);
+        painter.setPen(theme.color(QStringLiteral("--text-normal")));
+        qreal y = kPad;
+        for (const QString &line : std::as_const(lines)) {
+            painter.drawText(QRectF(kPad, y, logicalWidth - 2.0 * kPad, lineHeight), Qt::AlignVCenter,
+                             metrics.elidedText(line, Qt::ElideRight, logicalWidth - 2.0 * kPad));
+            y += lineHeight;
+        }
+        painter.setPen(theme.color(QStringLiteral("--background-modifier-border")));
+        painter.setBrush(theme.color(QStringLiteral("--background-primary-alt")));
+        painter.drawRoundedRect(button, 4, 4);
+        painter.setPen(theme.color(QStringLiteral("--text-accent")));
+        painter.setFont(theme.textFont());
+        painter.drawText(button, Qt::AlignCenter, label);
+    }
+    MarkdownEditor::CodeBlockResult result;
+    result.isMarkdown = false;
+    result.image = std::move(image);
+    result.hotspots.append({button, 1});
+    return result;
 }
 
 namespace {

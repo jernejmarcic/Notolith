@@ -527,11 +527,13 @@ protected:
         config.reset(QStringLiteral("render.mermaidTool"));
         config.save();
     }
-    void configure(bool on, const QString &tool)
+    /// `trusted`: the vault is one the person trusts; an untrusted one draws no diagram until a click.
+    void configure(bool on, const QString &tool, bool trusted = true)
     {
         Settings config = Settings::load();
         config.setValue(QStringLiteral("render.mermaid"), on);
         config.setValue(QStringLiteral("render.mermaidTool"), tool);
+        config.setVaultTrusted(dir.path(), trusted);
         ASSERT_TRUE(config.save());
     }
 };
@@ -556,6 +558,36 @@ TEST_F(MermaidWindowTest, OnADiagramIsDrawnInTheWindow)
     WAIT_TRUE(!editor->embedImageSizeAt(fence).isEmpty(), 15000);
     EXPECT_EQ(runs(), 1);
     // Publish and PDF export find what the window drew by the fence's content, the same text.
+    EXPECT_FALSE(noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->B"), Theme::builtin(Theme::Mode::Dark)).isEmpty());
+}
+
+// Showing a note must not start the tool of a vault the person has not trusted: a click, and a yes, do.
+TEST_F(MermaidWindowTest, OnAnUntrustedVaultTheToolStartsOnlyAfterAClickAndAYes)
+{
+    configure(true, fake(QStringLiteral("mmdr")), false);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_FALSE(window.vaultTrusted());
+    int asked = 0;
+    window.setRunApprovalForTests([&](const QString &) {
+        ++asked;
+        return true;
+    });
+    window.openNote(dir.filePath(QStringLiteral("Note.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype fence = editor->noteText().indexOf(QLatin1String("graph"));
+    WAIT_TRUE(!editor->codeBlockImageRectAt(fence).isEmpty(), 15000);
+    QTest::qWait(700);
+    EXPECT_EQ(runs(), 0) << "the tool was started by showing the note";
+    EXPECT_EQ(asked, 0);
+    const QRect placeholder = editor->codeBlockImageRectAt(fence);
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, placeholder.bottomLeft() + QPoint(30, -22));
+    EXPECT_EQ(asked, 1);
+    WAIT_TRUE(runs() == 1, 15000);
+    WAIT_TRUE(editor->codeBlockImageRectAt(fence).height() != placeholder.height(), 15000);
     EXPECT_FALSE(noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->B"), Theme::builtin(Theme::Mode::Dark)).isEmpty());
 }
 
