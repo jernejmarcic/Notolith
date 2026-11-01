@@ -212,6 +212,9 @@ decoded; the heading's range is the element, its text range the content.
 Publish draws the element once, with its HTML block (`tests/test_publish.cpp`).
 A published site loads nothing from other hosts (its Content-Security-Policy allows
 only the site's own files), so remote images and media in raw HTML do not show.
+Publish writes only into an empty folder or one an earlier publish used (its record is in the state
+folder, not in the site); any other file there stops it before anything is written. Attachments are
+images, audio, video and PDF whose bytes match their name, and an SVG is rebuilt from an allowlist.
 `![[Note#Heading]]` (an embedded section) and a canvas card's `#Heading`
 (the section picker) find them too: both go through `headingSection` in
 `libs/markdown/Parser.cpp`, one line scan shared by the two - an ATX heading or

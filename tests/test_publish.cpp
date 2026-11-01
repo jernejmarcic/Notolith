@@ -902,7 +902,7 @@ TEST(PublishSafetyTest, AHostileManifestDeletesNothingOutsideTheSite)
     writeFile(victim, "keep");
     writeFile(absoluteVictim, "keep");
     writeFile(linked, "keep");
-    writeFile(siteDir + QStringLiteral("/placeholder"), "x");
+    ASSERT_TRUE(QDir().mkpath(siteDir));
     ASSERT_TRUE(QFile::link(elsewhere.path(), siteDir + QStringLiteral("/out")));
 
     QJsonObject manifest;
@@ -912,6 +912,7 @@ TEST(PublishSafetyTest, AHostileManifestDeletesNothingOutsideTheSite)
     manifest[QStringLiteral("out/linked.txt")] = QStringLiteral("0"); // a folder link out of the site
     manifest[QStringLiteral("a//b.html")] = QStringLiteral("0");
     manifest[QStringLiteral("a\\b.html")] = QStringLiteral("0");
+    manifest[QStringLiteral("out")] = QStringLiteral("0"); // the link itself is in the record, so it is owned
     const QByteArray bytes = QJsonDocument(manifest).toJson(QJsonDocument::Compact);
     writeFile(recordOf(siteDir), bytes);
 
@@ -934,13 +935,14 @@ TEST(PublishSafetyTest, AManifestInsideTheSiteIsNeverReadOrTouched)
     for (const char *name : {"/notolith-publish-manifest.json", "/noteappc-publish-manifest.json"})
         writeFile(siteDir + QString::fromLatin1(name), bytes);
 
+    // Not the record, so these are somebody else's files: nothing is written, nothing deleted.
     QString error;
-    ASSERT_TRUE(publishInto(site, siteDir, &error)) << error.toStdString();
-    ASSERT_TRUE(publishInto(site, siteDir, &error)) << error.toStdString();
+    EXPECT_FALSE(publishInto(site, siteDir, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("stale.html"))) << error.toStdString();
     EXPECT_EQ(readFile(siteDir + QStringLiteral("/stale.html")), QByteArray("old page")) << "deleted nothing";
     EXPECT_EQ(readFile(siteDir + QStringLiteral("/notolith-publish-manifest.json")), bytes) << "left alone";
     EXPECT_EQ(readFile(siteDir + QStringLiteral("/noteappc-publish-manifest.json")), bytes) << "left alone";
-    EXPECT_TRUE(QFile::exists(Publisher::manifestPath(siteDir))) << "the record is in the state folder";
+    EXPECT_FALSE(site.exists(QStringLiteral("index.html"))) << "nothing was written";
 }
 
 TEST(PublishSafetyTest, TheRecordIsKeptInThePrivateStateFolder)
@@ -984,10 +986,14 @@ TEST(PublishSafetyTest, AnOutputSymlinkIsReplacedNeverFollowed)
     QTemporaryDir elsewhere;
     const QString victim = elsewhere.filePath(QStringLiteral("victim.txt"));
     writeFile(victim, "keep");
-    ASSERT_TRUE(QFile::link(victim, site.outDir.filePath(QStringLiteral("index.html"))));
-    ASSERT_TRUE(QFile::link(victim, site.outDir.filePath(QStringLiteral("site.css"))));
 
+    // Links in the place of the files a publish wrote are replaced, not followed.
     QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    for (const char *name : {"index.html", "site.css"}) {
+        ASSERT_TRUE(QFile::remove(site.outDir.filePath(QString::fromLatin1(name))));
+        ASSERT_TRUE(QFile::link(victim, site.outDir.filePath(QString::fromLatin1(name))));
+    }
     ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
     EXPECT_EQ(readFile(victim), QByteArray("keep"));
     EXPECT_FALSE(QFileInfo(site.outDir.filePath(QStringLiteral("index.html"))).isSymLink());
@@ -1371,7 +1377,8 @@ TEST(PublishSafetyTest, AnSVGIsPublishedWithoutItsScript)
          "<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"alert(1)\" width=\"10\" height=\"10\">"
          "<script>alert(1)</script><style>@import url(https://x.example/a.css);</style>"
          "<foreignObject><iframe src=\"https://x.example\"/></foreignObject>"
-         "<a href=\"javascript:alert(2)\"><rect width=\"5\" height=\"5\" onclick=\"x()\"/></a>"
+         "<a href=\"javascript:alert(2)\"><text>link</text></a>"
+         "<rect width=\"5\" height=\"5\" onclick=\"x()\"/>"
          "<circle r=\"2\"/></svg>"},
     });
     QString error;
@@ -1460,6 +1467,220 @@ TEST(PublishSafetyTest, ANoteThatIsALinkOutOfTheVaultIsSkippedAndListed)
     EXPECT_TRUE(site.exists(QStringLiteral("inside.html"))) << "a link that stays inside the vault still publishes";
     EXPECT_TRUE(site.read(QStringLiteral("inside.html")).contains(QStringLiteral("InsideBody.")));
     EXPECT_FALSE(site.read(QStringLiteral("search-index.json")).contains(QStringLiteral("PRIVATE-NOTE-BODY")));
+}
+
+TEST(PublishSafetyTest, AFolderWithSomebodyElsesFilesIsNotWrittenTo)
+{
+    TestSite site({
+        {QStringLiteral("Note.md"), "![[pic.svg]]\n"},
+        {QStringLiteral("pic.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"1\" height=\"1\"/></svg>"},
+    });
+    const QByteArray planted = "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+    writeFile(site.outDir.filePath(QStringLiteral("attachments/pic.svg")), planted);
+    writeFile(site.outDir.filePath(QStringLiteral("index.html")), "my own page");
+    ASSERT_TRUE(QDir().mkpath(site.outDir.filePath(QStringLiteral("empty/folders/are/fine"))));
+
+    QString error;
+    EXPECT_FALSE(publishInto(site, site.outDir.path(), &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("attachments/pic.svg"))) << error.toStdString();
+    EXPECT_TRUE(error.contains(QStringLiteral("index.html"))) << error.toStdString();
+    EXPECT_TRUE(error.contains(QStringLiteral("empty or one it published before"))
+                || error.contains(QStringLiteral("empty folder")))
+        << error.toStdString();
+    EXPECT_EQ(readFile(site.outDir.filePath(QStringLiteral("attachments/pic.svg"))), planted) << "untouched";
+    EXPECT_EQ(readFile(site.outDir.filePath(QStringLiteral("index.html"))), QByteArray("my own page"));
+    EXPECT_FALSE(site.exists(QStringLiteral("note.html"))) << "nothing was written";
+    EXPECT_FALSE(QFile::exists(Publisher::manifestPath(site.outDir.path()))) << "and no record made";
+}
+
+TEST(PublishSafetyTest, ALinkInTheSiteIsAForeignEntryToo)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(QFile::link(elsewhere.path(), site.outDir.filePath(QStringLiteral("docs"))));
+    QString error;
+    EXPECT_FALSE(publishInto(site, site.outDir.path(), &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("docs"))) << error.toStdString();
+    EXPECT_TRUE(QDir(elsewhere.path()).isEmpty());
+}
+
+TEST(PublishSafetyTest, AtMostTwentyForeignFilesAreNamed)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    for (int i = 0; i < 30; ++i)
+        writeFile(site.outDir.filePath(QStringLiteral("f%1.txt").arg(i)), "x");
+    QString error;
+    EXPECT_FALSE(publishInto(site, site.outDir.path(), &error));
+    EXPECT_EQ(error.count(QStringLiteral(".txt")), 20) << error.toStdString();
+}
+
+TEST(PublishSafetyTest, AnOwnedFolderPublishesAgainAndKeepsItsOwnChangedFiles)
+{
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}, {QStringLiteral("Other.md"), "Body.\n"}});
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    // A page of ours that was edited by hand is still ours: written over while it is still generated.
+    writeFile(site.outDir.filePath(QStringLiteral("note.html")), "edited");
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    EXPECT_TRUE(site.read(QStringLiteral("note.html")).contains(QStringLiteral("<html")));
+}
+
+TEST(PublishSafetyTest, ASkippedAttachmentIsOnlyNamedOnThePage)
+{
+    TestSite site({
+        {QStringLiteral("Note.md"), "![[fake.png]] ![[fake.mp3]] ![[fake.mp4]] ![[fake.pdf]] ![[evil.html]]\n"},
+        {QStringLiteral("fake.png"), "<html><script>alert(1)</script></html>"},
+        {QStringLiteral("fake.mp3"), "<html>"},
+        {QStringLiteral("fake.mp4"), "<html>"},
+        {QStringLiteral("fake.pdf"), "<html>"},
+        {QStringLiteral("evil.html"), "<html>"},
+    });
+    QString error;
+    Counts counts;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error, &counts)) << error.toStdString();
+    EXPECT_EQ(counts.skippedAttachments.size(), 5);
+    const QString page = site.read(QStringLiteral("note.html"));
+    const int bodyStart = page.indexOf(QStringLiteral("<article"));
+    const QString body = bodyStart >= 0 ? page.mid(bodyStart) : page;
+    for (const char *tag : {"<img", "<audio", "<video", "<embed", "<iframe", "<a class=\"pdf-embed\"",
+                            "attachments/"})
+        EXPECT_FALSE(body.contains(QString::fromLatin1(tag))) << tag << "\n" << body.toStdString();
+    EXPECT_TRUE(body.contains(QStringLiteral("fake.png"))) << "named";
+}
+
+TEST(PublishSafetyTest, ASVGIsRebuiltFromAnAllowlist)
+{
+    const auto publishSvg = [](const QByteArray &svg, QString *outBytes, Counts *counts) {
+        TestSite site({{QStringLiteral("Note.md"), "![[pic.svg]]\n"}, {QStringLiteral("pic.svg"), svg}});
+        QString error;
+        EXPECT_TRUE(publishInto(site, site.outDir.path(), &error, counts)) << error.toStdString();
+        *outBytes = site.read(QStringLiteral("attachments/pic.svg"));
+    };
+    QString svg;
+    Counts counts;
+
+    // An XHTML root, even one that carries an svg inside, is not an SVG.
+    publishSvg("<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+               "<script>alert(1)</script></body></html>.svg",
+               &svg, &counts);
+    EXPECT_TRUE(svg.isEmpty());
+    EXPECT_EQ(counts.skippedAttachments, QStringList{QStringLiteral("pic.svg")});
+    // The root in no namespace at all is not one either.
+    publishSvg("<svg><rect width=\"1\" height=\"1\"/></svg>", &svg, &counts);
+    EXPECT_TRUE(svg.isEmpty());
+
+    // Foreign elements and namespaces, forms with a hidden scheme, a refresh, outside references.
+    publishSvg("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:h=\"http://www.w3.org/1999/xhtml\" "
+               "xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"10\" height=\"10\">"
+               "<h:form action=\"java&#9;script:alert(1)\"><h:input/></h:form>"
+               "<form action=\"java&#9;script:alert(1)\"/>"
+               "<meta http-equiv=\"refresh\" content=\"0;url=https://x.example\"/>"
+               "<image href=\"https://x.example/a.png\" width=\"1\" height=\"1\"/>"
+               "<image xlink:href=\" jav&#10;ascript:alert(1)\" width=\"1\" height=\"1\"/>"
+               "<image href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\" width=\"1\" height=\"1\"/>"
+               "<use xlink:href=\"https://x.example/a.svg#x\"/><use href=\"#local\"/>"
+               "<animate attributeName=\"href\" to=\"javascript:alert(1)\"/><set attributeName=\"href\"/>"
+               "<rect width=\"4\" height=\"4\" fill=\"url(https://x.example/p#a)\" h:onclick=\"x()\"/>"
+               "<rect width=\"5\" height=\"5\" style=\"fill:url(#g);stroke:u\\72l(https://x.example)\"/>"
+               "<rect id=\"ok\" width=\"6\" height=\"6\" fill=\"url(#g)\" filter=\"url( '#f' )\"/>"
+               "</svg>",
+               &svg, &counts);
+    ASSERT_FALSE(svg.isEmpty());
+    for (const char *bad : {"form", "java", "meta", "refresh", "x.example", "<animate", "<set", "h:", "onclick",
+                            "alert", "xhtml"})
+        EXPECT_FALSE(svg.contains(QString::fromLatin1(bad), Qt::CaseInsensitive)) << bad << "\n" << svg.toStdString();
+    EXPECT_TRUE(svg.contains(QStringLiteral("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")));
+    EXPECT_TRUE(svg.contains(QStringLiteral("href=\"#local\"")));
+    EXPECT_TRUE(svg.contains(QStringLiteral("url(#g)")));
+    EXPECT_TRUE(svg.contains(QStringLiteral("id=\"ok\"")));
+
+    // An ordinary drawing comes through whole and still draws.
+    const QByteArray plain =
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+        "viewBox=\"0 0 40 40\" width=\"40\" height=\"40\">"
+        "<defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#f00\"/><stop offset=\"1\" stop-color=\"#00f\"/>"
+        "</linearGradient><symbol id=\"s\" viewBox=\"0 0 10 10\"><circle cx=\"5\" cy=\"5\" r=\"4\" fill=\"#0a0\"/></symbol>"
+        "</defs>"
+        "<path d=\"M2 2 L38 2 L38 20 Z\" fill=\"url(#g)\" style=\"stroke:#000\"/>"
+        "<use xlink:href=\"#s\" x=\"10\" y=\"22\" width=\"16\" height=\"16\"/>"
+        "<text x=\"2\" y=\"38\" font-size=\"6\">hi</text></svg>";
+    publishSvg(plain, &svg, &counts);
+    ASSERT_FALSE(svg.isEmpty());
+    EXPECT_EQ(counts.skippedAttachments.size(), 0);
+    for (const char *kept : {"<defs>", "<linearGradient", "<symbol", "<path", "<use", "<text", "xlink:href=\"#s\""})
+        EXPECT_TRUE(svg.contains(QString::fromLatin1(kept))) << kept << "\n" << svg.toStdString();
+    QImage drawn = QImage::fromData(svg.toUtf8(), "svg");
+    ASSERT_FALSE(drawn.isNull()) << "the SVG image plugin is missing";
+    drawn = drawn.convertToFormat(QImage::Format_ARGB32);
+    int opaque = 0;
+    for (int y = 0; y < drawn.height(); ++y)
+        for (int x = 0; x < drawn.width(); ++x)
+            opaque += qAlpha(drawn.pixel(x, y)) > 0;
+    EXPECT_GT(opaque, 50);
+}
+
+TEST(PublishSafetyTest, AnOutputInsideAnotherOutputFailsBeforeAnythingIsWritten)
+{
+    TestSite site({
+        {QStringLiteral("Docs.md"), "---\npermalink: docs\n---\n\nBody.\n"},
+        {QStringLiteral("Child.md"), "---\npermalink: docs.html/child\n---\n\nBody.\n"},
+    });
+    QString error;
+    EXPECT_FALSE(publishInto(site, site.outDir.path(), &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("Docs.md")) && error.contains(QStringLiteral("Child.md"))
+                && error.contains(QStringLiteral("docs.html")))
+        << error.toStdString();
+    EXPECT_TRUE(QDir(site.outDir.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
+}
+
+TEST(PublishSafetyTest, APublishThatCannotKeepItsRecordWritesNothing)
+{
+    if (::geteuid() == 0)
+        GTEST_SKIP() << "root ignores folder permissions";
+    TestSite site({{QStringLiteral("Note.md"), "Body.\n"}});
+    QString error;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error)) << error.toStdString();
+    writeFile(site.vaultDir.filePath(QStringLiteral("New.md")), "Body.\n");
+    reindex(site);
+    const QString state = QFileInfo(Publisher::manifestPath(site.outDir.path())).path();
+    ASSERT_TRUE(QFile::setPermissions(state, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const bool ok = publishInto(site, site.outDir.path(), &error);
+    ASSERT_TRUE(QFile::setPermissions(state, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(error.contains(QStringLiteral("record"))) << error.toStdString();
+    EXPECT_FALSE(site.exists(QStringLiteral("new.html"))) << "nothing was written to the site";
+}
+
+TEST(PublishSafetyTest, ANoteIsReadFromTheDescriptorThatWasChecked)
+{
+    TestSite site({{QStringLiteral("Real.md"), "InsideBody.\n"}, {QStringLiteral("Dir/Deep.md"), "DeepBody.\n"}});
+    QTemporaryDir elsewhere;
+    writeFile(elsewhere.filePath(QStringLiteral("private.md")), "PRIVATE\n");
+    writeFile(elsewhere.filePath(QStringLiteral("folder/in.md")), "VIA-FOLDER\n");
+    ASSERT_TRUE(QFile::link(elsewhere.filePath(QStringLiteral("private.md")), site.vaultDir.filePath(QStringLiteral("Out.md"))));
+    ASSERT_TRUE(QFile::link(elsewhere.filePath(QStringLiteral("folder")), site.vaultDir.filePath(QStringLiteral("Linked"))));
+    ASSERT_TRUE(QFile::link(site.vaultDir.filePath(QStringLiteral("Real.md")), site.vaultDir.filePath(QStringLiteral("In.md"))));
+    ASSERT_TRUE(QFile::link(site.vaultDir.filePath(QStringLiteral("Dir")), site.vaultDir.filePath(QStringLiteral("DirLink"))));
+
+    Note note;
+    QString error;
+    bool outside = false;
+    EXPECT_TRUE(site.vault.readInside(site.vault.absolute(QStringLiteral("Real.md")), note, &error, &outside));
+    EXPECT_EQ(note.text, QStringLiteral("InsideBody.\n"));
+    EXPECT_TRUE(site.vault.readInside(site.vault.absolute(QStringLiteral("In.md")), note, &error, &outside)) << "inside";
+    EXPECT_TRUE(site.vault.readInside(site.vault.absolute(QStringLiteral("DirLink/Deep.md")), note, &error, &outside));
+    EXPECT_EQ(note.text, QStringLiteral("DeepBody.\n"));
+
+    note = Note();
+    EXPECT_FALSE(site.vault.readInside(site.vault.absolute(QStringLiteral("Out.md")), note, &error, &outside));
+    EXPECT_TRUE(outside);
+    EXPECT_TRUE(note.text.isEmpty()) << "not a byte of it was read";
+    outside = false;
+    EXPECT_FALSE(site.vault.readInside(site.vault.absolute(QStringLiteral("Linked/in.md")), note, &error, &outside));
+    EXPECT_TRUE(outside) << "a folder link out of the vault";
+    outside = true;
+    EXPECT_FALSE(site.vault.readInside(site.vault.absolute(QStringLiteral("Missing.md")), note, &error, &outside));
+    EXPECT_FALSE(outside) << "unreadable is not the same as outside";
 }
 
 TEST(PublishSafetyTest, TheOutputFolderIsHeldSoARenamedNameLeadsNowhere)

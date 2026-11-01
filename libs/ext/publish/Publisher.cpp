@@ -545,6 +545,75 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         if (error) *error = QStringLiteral("no state folder for the publish record");
         return false;
     }
+    // The state folder first: made and shown writable before anything is written to the site, so a publish that
+    // cannot keep its record writes nothing.
+    const QString stateFolder = QFileInfo(manifestFile).path();
+    const QString manifestName = QFileInfo(manifestFile).fileName();
+    {
+        QString probeError;
+        const QString probe = QStringLiteral(".probe");
+        if (!noteAppC::ensurePrivateDir(stateFolder)
+            || !noteAppC::Vault::writeBytesNoFollowUnder(stateFolder, probe, QByteArray(), &probeError, false)) {
+            if (error)
+                *error = QStringLiteral("cannot write the publish record in %1").arg(stateFolder);
+            return false;
+        }
+        noteAppC::Vault::removeNoFollowUnder(stateFolder, probe);
+    }
+
+    // --- the record: what an earlier publish into this folder wrote. It is kept in the state folder, never in
+    // the output folder: a vault can ship that folder's contents, so nothing found there says what this exporter
+    // may delete. ------------------------------------------------------------------------------------------
+    QHash<QString, QByteArray> oldManifest;
+    {
+        QByteArray manifestBytes;
+        constexpr qint64 manifestLimit = qint64(256) << 20;
+        if (noteAppC::Vault::readFileNoFollowUnder(stateFolder, manifestName, &manifestBytes, manifestLimit)) {
+            const QJsonObject obj = QJsonDocument::fromJson(manifestBytes).object();
+            for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+                if (noteAppC::Vault::isCleanRelativePath(it.key()))
+                    oldManifest.insert(it.key(), it.value().toString().toUtf8());
+            }
+        }
+    }
+
+    // --- only an empty folder, or one this exporter published into before: every file, link or other entry that
+    // is not in the record is somebody else's, and the publish stops before it writes anything. ---------------
+    {
+        static const QRegularExpression ownTemp(QStringLiteral("^\\.tmp-[0-9a-f]{32}$"));
+        QStringList foreign;
+        bool more = false;
+        QString walkError;
+        const bool walked = noteAppC::Vault::walkNonDirectories(
+            out,
+            [&](const QString &path, bool regular) {
+                if (oldManifest.contains(path))
+                    return true;
+                // What a publish that was killed halfway leaves: a temp file of ours, never a page.
+                if (regular && ownTemp.match(QFileInfo(path).fileName()).hasMatch())
+                    return true;
+                if (foreign.size() >= 20) {
+                    more = true;
+                    return false;
+                }
+                foreign << path;
+                return true;
+            },
+            &walkError);
+        if (!walked) {
+            if (error)
+                *error = walkError;
+            return false;
+        }
+        if (!foreign.isEmpty()) {
+            if (error)
+                *error = QStringLiteral("Publish only writes to an empty folder or one it published before: remove "
+                                        "or move these files from %1: %2%3")
+                             .arg(outDir, foreign.join(QStringLiteral(", ")),
+                                  more ? QStringLiteral(" (and more)") : QString());
+            return false;
+        }
+    }
     QStringList failures; // every write that did not happen, and every note that could not be read; any entry fails the publish
 
     // --- phase 0: who gets published (cheap - already-indexed properties,
@@ -589,12 +658,12 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         QString readError;
         // A note that is a link to a file outside the vault is not the vault's to publish (links that stay
         // inside it are fine).
-        if (!m_vault.resolvesInside(m_vault.absolute(relativePath))) {
-            out.outside = true;
+        // The file that is opened is the one checked and read (Vault::readInside).
+        bool outside = false;
+        if (!m_vault.readInside(m_vault.absolute(relativePath), note, &readError, &outside)) {
+            out.outside = outside;
             return out;
         }
-        if (!noteAppC::Vault::read(m_vault.absolute(relativePath), note, &readError))
-            return out;
         out.text = note.text;
         const auto result = parser.parseAll(out.text, m_vault.absolute(relativePath), options.parse);
         out.metadata = result.metadata;
@@ -724,6 +793,18 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
             claim(note.outputPath, note.relativePath);
         for (auto it = tagOutputPaths.constBegin(); it != tagOutputPaths.constEnd(); ++it)
             claim(it.value(), QStringLiteral("the page for tag #%1").arg(it.key()));
+        // An output may not sit inside another ("docs.html" and "docs.html/child.html"): one is a file, the other
+        // needs it to be a folder.
+        const QStringList claimed = sourceOf.keys();
+        for (const QString &path : claimed) {
+            for (qsizetype slash = path.indexOf(QLatin1Char('/')); slash >= 0;
+                 slash = path.indexOf(QLatin1Char('/'), slash + 1)) {
+                const auto parent = sourceOf.constFind(path.left(slash));
+                if (parent != sourceOf.constEnd())
+                    failures << QStringLiteral("%1 (%2) cannot be a folder: %3 (%4) would be inside it")
+                                    .arg(path.left(slash), parent.value(), path, sourceOf.value(path));
+            }
+        }
         if (!failures.isEmpty()) {
             if (error) {
                 *error = failures.first();
@@ -759,23 +840,32 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         }
     }
 
-    // --- manifest: what an earlier publish into this folder wrote, loaded before writing starts. It is kept in
-    // the state folder, never in the output folder: a vault can ship that folder's contents, so nothing found
-    // there (a manifest of either earlier name included) says what this exporter may delete. --------------------
-    const QString stateFolder = QFileInfo(manifestFile).path();
-    const QString manifestName = QFileInfo(manifestFile).fileName();
-    QHash<QString, QByteArray> oldManifest;
-    {
-        QByteArray manifestBytes;
-        constexpr qint64 manifestLimit = qint64(256) << 20;
-        if (noteAppC::Vault::readFileNoFollowUnder(stateFolder, manifestName, &manifestBytes, manifestLimit)) {
-            const QJsonObject obj = QJsonDocument::fromJson(manifestBytes).object();
-            for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
-                if (noteAppC::Vault::isCleanRelativePath(it.key()))
-                    oldManifest.insert(it.key(), it.value().toString().toUtf8());
-            }
+    // An attachment is copied only when it is a regular file really inside the vault, read without following a
+    // link, whose bytes are the format its name says (SafeAttachment). Checked here before any page is
+    // rendered, so an embed of one that will be left out is written as its name and not as a link to it.
+    const auto loadAttachment = [this](const QString &relativePath, QByteArray *bytes) {
+        const QString absolute = m_vault.absolute(relativePath);
+        if (!m_vault.resolvesInside(absolute) || !QFileInfo(absolute).isFile())
+            return false;
+        // Read through the descriptor of the file that was opened, no link followed on the way or at the end.
+        return noteAppC::Vault::readFileNoFollowUnder(m_vault.root(), relativePath, bytes)
+            && SafeAttachment::prepare(relativePath, *bytes); // an SVG comes back rebuilt
+    };
+    QMutex verdictMutex;
+    QHash<QString, bool> verdicts;
+    const auto attachmentAllowed = [&](const QString &relativePath) {
+        {
+            QMutexLocker lock(&verdictMutex);
+            const auto known = verdicts.constFind(relativePath);
+            if (known != verdicts.constEnd())
+                return known.value();
         }
-    }
+        QByteArray bytes;
+        const bool ok = loadAttachment(relativePath, &bytes);
+        QMutexLocker lock(&verdictMutex);
+        verdicts.insert(relativePath, ok);
+        return ok;
+    };
     QHash<QString, QByteArray> newManifest;
     QMutex assemblyMutex; // guards every mutable thing below shared across workers
     QSet<QString> allAttachments;
@@ -862,7 +952,8 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
                      themeDark,
                      themeLight,
                      4,
-                     options.mindMaps};
+                     options.mindMaps,
+                     attachmentAllowed};
         const ParsedNote &note = notes.value(relativePath);
         ContentResult content = PageBody::render(note, env);
 
@@ -916,16 +1007,8 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     QStringList attachmentPaths = allAttachments.values();
     std::sort(attachmentPaths.begin(), attachmentPaths.end());
     for (const QString &relativePath : std::as_const(attachmentPaths)) {
-        const QString absolute = m_vault.absolute(relativePath);
-        if (!m_vault.resolvesInside(absolute) || !QFileInfo(absolute).isFile()) {
-            m_counts.skippedAttachments << relativePath;
-            continue;
-        }
-        // Read through the descriptor of the file that was opened, no link followed on the way or at the
-        // end: a link swapped in after the check above is refused here.
         QByteArray bytes;
-        if (!noteAppC::Vault::readFileNoFollowUnder(m_vault.root(), relativePath, &bytes)
-            || !SafeAttachment::prepare(relativePath, bytes)) { // images, audio, video, PDF; an SVG comes back cleaned
+        if (!loadAttachment(relativePath, &bytes)) {
             m_counts.skippedAttachments << relativePath;
             continue;
         }
@@ -968,7 +1051,8 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         highlighterDark.setTheme(themeDark);
         highlighterLight.setTheme(themeLight);
         RenderEnv env{notes, resolveCache, highlighterDark,
-                     bothThemes ? &highlighterLight : nullptr, themeDark, themeLight, 4, options.mindMaps};
+                     bothThemes ? &highlighterLight : nullptr, themeDark, themeLight, 4, options.mindMaps,
+                     attachmentAllowed};
         ContentResult content = PageBody::render(atRoot, env);
         resolveFormulas(content);
         const QString backlinks = renderBacklinks(atRoot, notes, backlinksMap);
@@ -1011,6 +1095,8 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
                 continue;
             }
             QString why;
+            // ponytail: a concurrent writer can swap the file between the hash above and this unlink; only a
+            // process with write access to an owned folder can, and the empty-or-owned rule keeps foreign files out.
             if (noteAppC::Vault::removeNoFollowUnder(out, it.key(), &why)) {
                 ++m_counts.removed;
             } else if (!why.isEmpty()) {
@@ -1031,10 +1117,9 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     for (auto it = newManifest.constBegin(); it != newManifest.constEnd(); ++it)
         manifestObject[it.key()] = QString::fromUtf8(it.value());
     QString manifestError;
-    if (!noteAppC::ensurePrivateDir(stateFolder)
-        || !noteAppC::Vault::writeBytesNoFollowUnder(stateFolder, manifestName,
-                                                     QJsonDocument(manifestObject).toJson(QJsonDocument::Compact),
-                                                     &manifestError)) {
+    if (!noteAppC::Vault::writeBytesNoFollowUnder(stateFolder, manifestName,
+                                                  QJsonDocument(manifestObject).toJson(QJsonDocument::Compact),
+                                                  &manifestError)) {
         failures << (manifestError.isEmpty() ? QStringLiteral("could not write the publish record in %1").arg(stateFolder)
                                              : manifestError);
     }
