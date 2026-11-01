@@ -230,14 +230,15 @@ TEST(Scheme, findsVaultSchemesAndInstalledObsidianThemes)
     ASSERT_EQ(schemes.size(), 3);
     EXPECT_EQ(schemes.at(0).name, QStringLiteral("Mine"));
     EXPECT_FALSE(schemes.at(0).obsidianCSS);
-    EXPECT_EQ(schemes.at(1).name, QStringLiteral("Older"));
+    // Sorted by name, so the old folder's scheme comes last.
+    EXPECT_EQ(schemes.at(1).name, QStringLiteral("Minimal"));
+    EXPECT_TRUE(schemes.at(1).obsidianCSS);
     EXPECT_TRUE(schemes.at(1).inVault);
-    EXPECT_EQ(schemes.at(2).name, QStringLiteral("Minimal"));
-    EXPECT_TRUE(schemes.at(2).obsidianCSS);
+    EXPECT_EQ(schemes.at(2).name, QStringLiteral("Older"));
     EXPECT_TRUE(schemes.at(2).inVault);
 
     // An installed Obsidian theme applies like any other scheme.
-    const Theme theme = Scheme::apply(schemes.at(2).path, Theme::Mode::Dark);
+    const Theme theme = Scheme::apply(schemes.at(1).path, Theme::Mode::Dark);
     EXPECT_EQ(theme.value(QStringLiteral("--background-primary")), QStringLiteral("#000000"));
 }
 
