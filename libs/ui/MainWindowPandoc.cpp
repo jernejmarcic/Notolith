@@ -422,7 +422,8 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
     }
     const QFileInfo input(file);
     const QString reader = pandoc::readerForSuffix(input.suffix());
-    if (!input.isFile() || reader.isEmpty()) {
+    // A link is refused: what the sandbox is given to read is the one file the person chose, not wherever a link points.
+    if (!input.isFile() || input.isSymLink() || reader.isEmpty()) {
         statusBar()->showMessage(tr("pandoc is not offered for %1 here").arg(input.fileName()), 5000);
         return;
     }
@@ -445,7 +446,8 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
     }
     pandoc::ImportRequest request;
     request.reader = reader;
-    request.inputPath = input.absoluteFilePath();
+    // The sandbox has no home and the file is outside the scratch folder: bind exactly that file, read-only.
+    request.inputPath = input.canonicalFilePath();
     request.outputName = QStringLiteral("out.md");
 
     runPandoc(program, pandoc::importArguments(request), {}, scratch->path(), tr("Import with pandoc"),

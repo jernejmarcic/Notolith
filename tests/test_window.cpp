@@ -1600,6 +1600,34 @@ TEST_F(WindowTest, APandocOutputThatIsALinkToAUsersFileIsNeverCopied)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// The sandbox is given the one file the person chose: a link to a file is refused, not followed.
+TEST_F(WindowTest, PandocImportRefusesALinkToTheFile)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "echo imported > out.md"));
+    QFile real(inputs.filePath(QStringLiteral("Real.docx")));
+    ASSERT_TRUE(real.open(QIODevice::WriteOnly));
+    real.write("x");
+    real.close();
+    const QString link = inputs.filePath(QStringLiteral("Link.docx"));
+    ASSERT_TRUE(QFile::link(real.fileName(), link));
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, link), Q_ARG(QString, QString()));
+        EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("not offered")))
+            << window.statusBar()->currentMessage().toStdString();
+        EXPECT_EQ(window.findChild<noteAppC::pandoc::Runner *>(), nullptr) << "pandoc was started on a link";
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Link.md"))));
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // Several documents dropped at once are all imported, one after the other, and a failure does not stop the rest.
 TEST_F(WindowTest, PandocImportsEveryDroppedFileInTurn)
 {
