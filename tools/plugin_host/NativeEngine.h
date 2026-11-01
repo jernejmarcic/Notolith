@@ -5,9 +5,7 @@
 namespace noteAppC {
 
 /// `engine = native` (plugin.ini's default): dlopen()s the plugin's `.so`
-/// and calls straight through the C ABI in plugin.h. This is the only
-/// engine that exists today - see QuickJSEngine.h for the seam a scripted
-/// engine would plug into.
+/// and calls straight through the C ABI in plugin.h. It is the only engine.
 class NativeEngine : public Engine {
 public:
     ~NativeEngine() override;

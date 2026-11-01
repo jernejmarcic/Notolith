@@ -31,8 +31,7 @@ public:
     void refresh();
 
 signals:
-    /// Phase 5's search pane takes this over; for now the caller opens the
-    /// first note carrying the tag.
+    /// The caller opens the first note carrying the tag.
     void tagActivated(const QString &tag);
 
 protected:

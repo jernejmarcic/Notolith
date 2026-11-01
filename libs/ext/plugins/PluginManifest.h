@@ -14,12 +14,9 @@ namespace noteAppC {
 /// set, which the user controls from the Community plugins settings page.
 enum class PluginPermission { ReadNotes, WriteNotes, Network, Clipboard };
 
-/// Which engine loads the plugin's code. Only Native exists today; QuickJS
-/// is the documented seam for quickjs-ng (see tools/plugin_host/Engine.h) -
-/// selecting it in a plugin.ini that ships before the engine is built simply
-/// fails that one plugin's host with a clear error, the same as any other
-/// missing library.
-enum class PluginEngineKind { Native, QuickJS };
+/// Which engine loads the plugin's code. Native (dlopen of a shared library)
+/// is the only one; any other `engine =` value makes the manifest invalid.
+enum class PluginEngineKind { Native };
 
 /// One plugin directory's `plugin.ini`, parsed but not loaded - reading it
 /// costs a handful of small file reads and no dlopen (Tier 2's "how it stays

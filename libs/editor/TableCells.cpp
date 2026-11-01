@@ -390,7 +390,7 @@ bool MarkdownEditor::handleSourceTableKey(int key)
     // Inside the parse debounce the last parse's table still holds: every
     // edit since has shifted its range and cells (shiftRanges), and the cells
     // are read again from its lines below. Whole-note reparse, synchronous,
-    // was 340 ms a Tab in a 1 MB note. ponytail: a table typed since that
+    // was 340 ms a Tab in a 1 MB note. Limit: a table typed since that
     // parse is not in it yet, and that first Tab still reparses the note.
     qsizetype index = tableAround(d->m_cursor);
     if (index < 0 && d->m_parsedVersion != d->m_textVersion) {

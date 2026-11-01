@@ -1,5 +1,4 @@
-# Sync, a Tier 1 module (docs/PLUGINS.md) and stage 10 of the roadmap
-# (docs/SYNC.md): local-first sync to an optional, end-to-end encrypted
+# Sync, a Tier 1 module (docs/PLUGINS.md, docs/SYNC.md): local-first sync to an optional, end-to-end encrypted
 # server. Built only with NOTEAPPC_WITH_SYNC on and both libsodium and
 # Qt6Keychain found - see the root CMakeLists.txt.
 add_library(noteAppC_sync STATIC

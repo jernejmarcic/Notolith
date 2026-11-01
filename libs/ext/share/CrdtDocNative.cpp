@@ -438,7 +438,7 @@ public:
                     runs.push_back(std::move(d));
             }
         }
-        // ponytail: the whole delete set goes into every diff, so a diff is
+        // Limit: the whole delete set goes into every diff, so a diff is
         // never smaller than the history of deletions; a per-client delete
         // clock in the state vector would bound it.
         return encodeUpdate(runs, std::move(deleted));
@@ -448,7 +448,7 @@ public:
 
     // A position is 'P' 0x01 kind, kind 0: the start of the note, kind 1 then
     // `client clock`: right after that item (a varint and a u32, like a run's).
-    // ponytail: both walk the runs from the head, O(runs); a caret goes out at
+    // Limit: both walk the runs from the head, O(runs); a caret goes out at
     // most ten times a second, so a long note is fine, an order-statistics
     // tree over the runs (see locate) would make it O(log runs) if a profile asks.
     QByteArray encodePosition(qsizetype offset) const override
@@ -540,7 +540,7 @@ private:
     /// Cut `r` after its first `k` items (0 < k < len); returns the right part.
     Run *splitAt(Run *r, qsizetype k)
     {
-        Run &n = m_arena.emplace_back(); // ponytail: the arena never shrinks, there is no garbage collection of tombstones
+        Run &n = m_arena.emplace_back(); // Limit: the arena never shrinks, there is no garbage collection of tombstones
         n.client = r->client;
         n.clock = r->clock + quint32(k);
         n.ts = r->ts + quint32(k);
@@ -561,7 +561,7 @@ private:
     }
 
     /// The visible run holding visible unit `idx` (0 <= idx < m_visibleLen).
-    /// ponytail: walks runs from the cursor (where the last edit was), so
+    /// Limit: walks runs from the cursor (where the last edit was), so
     /// typing in one place is O(1) and a jump is O(runs); an order-statistics
     /// tree over the runs would make jumps O(log runs) if a profile asks.
     Run *locate(qsizetype idx, qsizetype *off)
@@ -748,7 +748,7 @@ private:
     /// editor applies it: a retain moves `pos`, an insert is an edit at `pos`
     /// that moves it past the new text, a delete is an edit at `pos`. Also
     /// clears the transient flags and re-anchors the cursor.
-    /// ponytail: O(runs) per remote update, the price of not keeping an index.
+    /// Limit: O(runs) per remote update, the price of not keeping an index.
     QList<CrdtEdit> deltaWalk()
     {
         QList<CrdtEdit> out;

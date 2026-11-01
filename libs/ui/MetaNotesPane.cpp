@@ -301,7 +301,7 @@ void MetaNotesPane::runVaultQuery()
         return;
     const QString filter = m_filter->text().trimmed();
     // A phrase, as this note's filter matches it: the text to find, not search
-    // syntax. ponytail: a trailing backslash escapes the closing quote.
+    // syntax. Limit: a trailing backslash escapes the closing quote.
     QString quoted = filter;
     quoted.replace(QLatin1Char('"'), QStringLiteral("\\\""));
     m_search->setQuery(filter.isEmpty() ? QStringLiteral("meta:") : QStringLiteral("meta:\"%1\"").arg(quoted));

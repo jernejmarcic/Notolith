@@ -10,11 +10,8 @@ namespace noteAppC {
 
 /// What loads a plugin's code inside the host process and runs its three
 /// hooks. One `noteAppC-plugin-host` process picks exactly one Engine,
-/// decided by `plugin.ini`'s `engine = native | quickjs` key
-/// (PluginManifest::engine()) - the documented seam docs/PLUGINS.md asks
-/// for, so a second engine (QuickJSEngine, see QuickJSEngine.h) plugs in
-/// beside NativeEngine without the host's main.cpp or the protocol caring
-/// which one is running.
+/// decided by `plugin.ini`'s `engine` key (PluginManifest::engine()); the
+/// host's main.cpp and the protocol do not care which one is running.
 class Engine {
 public:
     virtual ~Engine() = default;

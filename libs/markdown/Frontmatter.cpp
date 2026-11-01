@@ -36,7 +36,7 @@ void collectMarks(const YAML::Node &node, QList<int> &marks)
 /// The source text of one scalar, byte for byte. yaml-cpp's marks are offsets
 /// into the UTF-8 it was handed, so the cut is made there and converted back.
 ///
-/// ponytail: a value ends at its line, so a block scalar (`key: |`) keeps only
+/// Limit: a value ends at its line, so a block scalar (`key: |`) keeps only
 /// its first line. Walk the indentation when someone writes one in frontmatter.
 QString rawOf(const QByteArray &body, const QList<int> &marks, const YAML::Node &node)
 {

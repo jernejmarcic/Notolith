@@ -14,7 +14,7 @@ namespace {
 
 // inkcore's limits are for opening one file (kMaxInflatedBytes, 64 MiB, which holds ~1 GB of parsed JSON at its worst:
 // measured). The index reads every file of a vault on the thread pool, so it takes kInkIndexMaxBytes and two at a time.
-// ponytail: ceiling ~2 x the parse of a 16 MiB file (a few hundred MB); raise the semaphore if indexing ink is ever the slow part.
+// Limit: ceiling ~2 x the parse of a 16 MiB file (a few hundred MB); raise the semaphore if indexing ink is ever the slow part.
 constexpr qint64 kMaxInflatedBytes = kInkIndexMaxBytes;
 // What one file may add to the index; far above any page of text boxes.
 constexpr qsizetype kMaxTextChars = 1 << 20;

@@ -1730,7 +1730,6 @@ TEST(InkCanvasTest, UndoRedoFromTheKeyboard)
 
 TEST(InkCanvasTest, EraseEverythingAutosaveThenUndoBringsTheStrokesBack)
 {
-    // Review Focus item 5.
     CanvasFixture f;
     QTemporaryDir tmp;
     penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000);

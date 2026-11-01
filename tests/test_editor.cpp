@@ -899,7 +899,7 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
                 sizeRatio, timeRatio);
 
     // Five times the text may cost up to about five times the wait, never more:
-    // what is left is linear (about 7 ms for 1 MB on a Ryzen 9 9900X desktop, a 3.7-4.3x
+    // what is left is linear (about 7 ms for 1 MB on a desktop machine, a 3.7-4.3x
     // ratio), and the bug this guards against was quadratic. The headroom is
     // for the 2 ms small open, where a single scheduler hiccup moves the ratio.
     EXPECT_LT(timeRatio, sizeRatio * 1.25);
@@ -1806,7 +1806,7 @@ TEST(EnterJitterTest, ALetterInALongNoteDoesNotMoveTheViewWhenTheParseLands)
 // note of 20-30 kB was debounced, and the one after parsed again at once.
 TEST(EnterJitterTest, EveryEnterInANoteOfMiddlingSizeIsParsedOnTheSpot)
 {
-    for (int kilobytes : {20, 24}) { // ponytail: 28 kB parses in 4.2 ms on this loaded box, over the budget on purpose
+    for (int kilobytes : {20, 24}) { // Limit: 28 kB parses in 4.2 ms on this loaded box, over the budget on purpose
         SCOPED_TRACE(kilobytes);
         const QString note = generateNote(kilobytes);
         auto editor = editorWith(note);
@@ -2002,7 +2002,7 @@ TEST(CodeHighlighterTest, ColoursTokensAndLeavesUnknownLanguagesAlone)
     EXPECT_TRUE(highlighter.highlight(QString(), QStringLiteral("cpp")).isEmpty());
 }
 
-// --- auto-pairs (PLAN.md 4.6) --------------------------------------------
+// --- auto-pairs ----------------------------------------------------------
 
 TEST(AutoPairTest, InsertsTheClosingHalfAndSitsBetweenThem)
 {
@@ -3894,7 +3894,7 @@ TEST(CodeStylerEditorTest, InlineCodeIsHighlightedInItsLanguageAndTheTagComesBac
     EXPECT_NE(keyword(*styled, tagged), keyword(*bare, plain)) << "still coloured while the tag shows";
 }
 
-// Stage 13: setNotebookRunner is a fake here, the same way setQueryRunner and
+// setNotebookRunner is a fake here, the same way setQueryRunner and
 // setBaseRunner are faked elsewhere in this file - libs/editor must not link
 // libs/ext/notebook, so a real kernel is only ever exercised by
 // tests/test_notebook.cpp. `deliver` is always called through

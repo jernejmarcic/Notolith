@@ -379,8 +379,8 @@ endif()
 
 if(TARGET noteAppC_epub)
     add_executable(test_epub test_epub.cpp)
-    # noteAppC_editor: for Lifeline.h (task 1's off-thread chapter render -
-    # EpubView.h now includes it), the same reason noteAppC_render/vault are
+    # noteAppC_editor: for Lifeline.h (the off-thread chapter render -
+    # EpubView.h includes it), the same reason noteAppC_render/vault are
     # already listed here directly rather than relied on transitively
     # through noteAppC_epub's own PRIVATE link to them.
     target_link_libraries(test_epub PRIVATE noteAppC_epub noteAppC_render noteAppC_vault noteAppC_editor
@@ -419,7 +419,7 @@ if(TARGET noteAppC_sync AND TARGET Qt6::HttpServer)
     set_tests_properties(sync PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
-# Stage 13 (docs/PLUGINS.md, Tier 1): the Jupyter kernel protocol client,
+# Tier 1 (docs/PLUGINS.md): the Jupyter kernel protocol client,
 # built only when NOTEAPPC_WITH_NOTEBOOK is on and libzmq was found. The
 # end-to-end cases skip themselves (GTEST_SKIP) when no kernel is
 # installed, so the minimal environment still passes; TIMEOUT is generous
@@ -433,7 +433,7 @@ endif()
 
 # The vendored link layer's own tests (Hearth's, unchanged), loopback only; the
 # mDNS cases skip without avahi-daemon. XDG_STATE_HOME keeps the debug log out of
-# the real home. TIMEOUT: Node shutdown hung once in Hearth (docs/SHARE.md).
+# the real home. TIMEOUT: a Node shutdown can hang (docs/SHARE.md).
 if(TARGET noteAppC_link)
     add_executable(test_link ${CMAKE_SOURCE_DIR}/libs/ext/link/net/test_node.cpp
         ${CMAKE_SOURCE_DIR}/libs/ext/link/net/test_tailnet.cpp)
@@ -441,15 +441,6 @@ if(TARGET noteAppC_link)
     add_test(NAME link COMMAND test_link)
     set_tests_properties(link PROPERTIES TIMEOUT 600
         ENVIRONMENT "XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/link-state")
-    # The copy must still be a Hearth commit. Only registered when a Hearth checkout is
-    # given (-DNOTEAPPC_HEARTH_DIR=...); skipped (77) if that path is not a git checkout.
-    set(NOTEAPPC_HEARTH_DIR "" CACHE PATH
-        "Hearth checkout that tools/vendor_link.sh --check compares libs/ext/link with")
-    if(NOTEAPPC_HEARTH_DIR)
-        add_test(NAME link_vendor_check
-            COMMAND sh ${CMAKE_SOURCE_DIR}/tools/vendor_link.sh --check ${NOTEAPPC_HEARTH_DIR})
-        set_tests_properties(link_vendor_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
-    endif()
 endif()
 
 # The sharing engine (docs/SHARE.md "The engine") over loopback: engines and bare
@@ -656,6 +647,7 @@ foreach(test IN LISTS noteappc_tests)
         "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/config"
         "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/cache"
         "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/data"
+        "XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/state"
         "XDG_RUNTIME_DIR=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/run"
         "NOTEAPPC_INSTANCE_SOCKET=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/run/n")
     # M8: what is installed on the machine never reaches a test. A test that wants modules

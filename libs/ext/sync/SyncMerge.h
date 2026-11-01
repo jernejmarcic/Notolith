@@ -6,7 +6,7 @@ namespace noteAppC {
 
 /// Line-based three-way merge for a Markdown body (docs/SYNC.md "Conflict
 /// rules"): diff3(base, local, remote). Not a character-level CRDT - that
-/// is a later stage (docs/SYNC.md "What is left for the CRDT stage").
+/// is not implemented (docs/SYNC.md "Not implemented").
 ///
 /// The line matcher is a small, separate copy of the LCS diff already in
 /// libs/ui/RecoveryDialog.cpp (lineDiff), extended to run twice (base-vs-

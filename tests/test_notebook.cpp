@@ -1,4 +1,4 @@
-// Stage 13 (docs/PLUGINS.md, Tier 1): the Jupyter kernel protocol client.
+// Tier 1 (docs/PLUGINS.md): the Jupyter kernel protocol client.
 // Message framing/signing on its own, kernel discovery, the sidecar cache,
 // the tier-1 sandbox actually denying a file outside its allowlist, and -
 // if a Jupyter kernel is installed - a real end-to-end run against it:
@@ -303,7 +303,7 @@ TEST(NotebookSandboxTest, Tier1FiltersTheSyscallsThatLeaveANamespace)
         GTEST_SKIP() << "built without libseccomp";
     EXPECT_EQ(plain, 0) << "the filter must not stop an ordinary program";
     // Without the filter a nested user namespace works inside bwrap (checked
-    // by hand on a Ryzen 9 9900X desktop), and with it every capability comes back.
+    // by hand on a desktop), and with it every capability comes back.
     EXPECT_NE(run({QStringLiteral("/usr/bin/unshare"), QStringLiteral("-U"),
                    QStringLiteral("/usr/bin/true")}),
               0);
@@ -401,7 +401,7 @@ TEST(NotebookEndToEndTest, RealPython3Kernel)
         interrupted->result = std::move(result);
         interrupted->delivered = true;
     });
-    // ponytail: a fixed wait for the kernel to actually enter the loop,
+    // Limit: a fixed wait for the kernel to actually enter the loop,
     // not a "busy" signal this test hooks - good enough for a loop that
     // starts executing in well under this, tighten with a real busy-state
     // callback if it ever flakes.

@@ -41,7 +41,7 @@ Parser &threadParser()
 /// which no search for the note's own words can match. For the index, give each
 /// such byte the Latin-1 letter it most likely was (a Latin-1 export's "caf\xE9"
 /// is "caf\u00E9"); the note on disk and in the editor stays as it is.
-/// ponytail: Latin-1, not Windows-1252, so 0x80-0x9F are control characters;
+/// Limit: Latin-1, not Windows-1252, so 0x80-0x9F are control characters;
 /// and only when each U+FFFD stands for exactly one bad byte (Qt may show a cut
 /// multi-byte sequence as one), else the text is left as it was, so the offsets
 /// the index keeps still match what the editor shows.
@@ -121,7 +121,7 @@ QStringList Indexer::pathsInFlight() const
         return {};
     if (!m_scanWhole && !m_rescan)
         return m_scanPaths + m_pending;
-    // ponytail: a walk on the caller's thread, only while a whole scan is in
+    // Limit: a walk on the caller's thread, only while a whole scan is in
     // flight (opening a vault, a forced rebuild); a rename then reads every note.
     QStringList notes;
     QDirIterator it(m_vault.root(), QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
@@ -535,7 +535,7 @@ void Indexer::rewatch()
         if (!isIgnored(relative) && !m_vault.isIgnored(relative))
             directories << path;
     }
-    // ponytail: one inotify watch per directory, which tops out around 8k.
+    // Limit: one inotify watch per directory, which tops out around 8k.
     // fanotify, or watching only the open folders, if a vault ever hits it.
     addWatches(directories);
 }
@@ -573,7 +573,7 @@ void Indexer::watch(const QHash<QString, qint64> &directories, bool partial)
         if (!watched.contains(it.key()))
             added << it.key();
     }
-    // ponytail: one inotify watch per directory, which tops out around 8k.
+    // Limit: one inotify watch per directory, which tops out around 8k.
     if (!added.isEmpty())
         addWatches(added);
     // Between the walk reading a directory and its watch starting, a file can

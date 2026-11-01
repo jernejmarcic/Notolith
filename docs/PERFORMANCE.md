@@ -1,6 +1,6 @@
 # Performance
 
-What noteAppC costs, how that was measured, every fix that changed it, and the
+What noteAppC costs, how that was measured, how it stays fast, and the
 things that were tried and not adopted. Every number here was measured on
 a Ryzen 9 9900X desktop (12 cores / 24 threads, RTX 5080, CachyOS; "the development machine" below) with the
 default RelWithDebInfo build (`-O2 -g`) unless it says otherwise, and every one
@@ -11,7 +11,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 
 ## The rules this work follows
 
-1. **Measure before changing anything.** Every fix below was found with `perf`
+1. **Measure before changing anything.** Every optimisation here was found with `perf`
    or the bench, not guessed. Twice a plausible guess was wrong: font
    enumeration was suspected at startup and cost 0.0 ms, and the MicroTeX gap
    was recorded as font coverage when it was a 1 pt raster.
@@ -27,10 +27,10 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 6. **Numbers taken on a busy machine are not numbers.** See
    [Measurement pitfalls](#measurement-pitfalls).
 
-### Handwriting
+## Handwriting
 
 The `ink` bench phase (`noteAppC-bench --phase ink --json`; `Bench.cpp`, "handwriting (phase `ink`)") measures the
-handwriting tab (libs/ext/ink, Spec: docs/INK-DESIGN.md). The design that the rows
+handwriting tab (libs/ext/ink, design in docs/INK-DESIGN.md). The design that the rows
 test: the live stroke is rasterised per segment into an overlay image, committed items come from 512 px tiles rendered
 on the thread pool (a paint never renders: it paints the tiles it has, blurry or the page colour where it has none, and
 asks the pool for the rest), a file above 256 KB is parsed off the UI thread, and the module scan runs after the first
@@ -47,18 +47,18 @@ rows alternate "present" and "empty" sample by sample. Every number above is the
 invocations, run as `taskset -c 6-11,18-23 chrt --idle 0 systemd-run --user --scope -q -p MemoryMax=8G`
 (CCD1, SCHED_IDLE, 8 GB), in an isolated XDG home.
 
-**The machine was not quiet** (rule 6): a Wine game (`GameThread`, about 650 % CPU, all 24 cores allowed) ran for the
-whole session, CCD1 was 71-77 % idle, and under `chrt --idle` the bench yields to it. The pool-side rows (tile latency,
-zoom re-render, cold start) are therefore pessimistic and noisy; the rows nearest their gate are the cold-start
-difference and the keystroke ratio. Both were re-taken after the review with more samples (`--phase inkmodules`: 61
-alternated pairs, 9 rounds of 30 keys, spread reported in the row, a guard that the "present" condition finds the
-module manifests and the "empty" one finds none) and now read 0.09 ms with quartiles of about +-0.5 ms, and a ratio
-of 1.00 over three runs (rounds 0.90-1.16). One caveat is recorded rather than removed: the ink feature registration is
-process-global (`Settings::registerFeature`), so after the first "present" window every "empty" window of the same
-process already has the feature row; "empty" means no manifests to scan, which is what the scan costs. Every row of this
-section is provisional (busy machine); a rerun on an idle machine is owed.
+**The rows are provisional.** A Wine game (`GameThread`, about 650 % CPU, all 24 cores allowed) ran for the
+whole session, CCD1 was 71-77 % idle, and under `chrt --idle` the bench yields to it, so the pool-side rows (tile
+latency, zoom re-render, cold start) are pessimistic and noisy; the rows nearest their gate are the cold-start
+difference and the keystroke ratio. Both use `--phase inkmodules` (61 alternated pairs, 9 rounds of 30 keys, spread
+reported in the row, and a guard that the "present" condition finds the module manifests and the "empty" one finds
+none) and read 0.09 ms with quartiles of about +-0.5 ms, and a ratio of 1.00 over three runs (rounds 0.90-1.16). One
+caveat is recorded rather than removed: the ink feature registration is process-global (`Settings::registerFeature`),
+so after the first "present" window every "empty" window of the same process already has the feature row; "empty"
+means no manifests to scan, which is what the scan costs. A rerun on an idle machine would tighten every row of this
+section.
 
-Also measured, not gated (`--phase inkcarry`, 2026-10-22, same conditions): tile render latency for a screen of cold
+Also measured, not gated (`--phase inkcarry`, same conditions): tile render latency for a screen of cold
 tiles 32.5 ms at 10 000 strokes and 32.7 ms at 50 000 (a frame that asks for them: 2.1 / 2.3 ms on the UI thread,
 which includes building the tile jobs); `selectItems` over 100 050 segments inside an 800-vertex lasso 7.4 ms, over
 3 000 shapes 10.9 ms; one sample of dragging a selection of 9 600 points 0.32 ms; one eraser sample over 3 000 shapes
@@ -66,87 +66,86 @@ which includes building the tile jobs); `selectItems` over 100 050 segments insi
 settle; a keystroke in an open box of 16 384 characters 6.1 ms; pen-up in a 50 000-stroke page through the view
 1.8 ms; parsing a clipboard payload 95 ms at 7.5 MiB and 187 ms at 15.2 MiB (about 12 ms a MiB, on the UI thread).
 
-Three fixes came out of those rows, each with its test:
+Three limits came out of those rows, each with its test:
 
 | what | before | after |
 |---|---|---|
-| a fast scroll over 50 000 strokes (20 viewport steps without waiting): time until the last screen is sharp, tile jobs that ran | 229.6 ms, 90 jobs | 70.0 ms, 28 jobs (`TileCache::keepOnly`: a paint cancels the queued renders for cells it no longer wants, N1; a cell wanted again after being cancelled gets a new job at once and the abandoned result is dropped, review I3) |
+| a fast scroll over 50 000 strokes (20 viewport steps without waiting): time until the last screen is sharp, tile jobs that ran | 229.6 ms, 90 jobs | 70.0 ms, 28 jobs (`TileCache::keepOnly`: a paint cancels the queued renders for cells it no longer wants; a cell wanted again after being cancelled gets a new job at once and the abandoned result is dropped) |
 | a clipboard payload of 62 MiB pasted | parsed on the UI thread, about 0.75 s (11.9 ms a MiB from the 7.5 and 15.2 MiB rows) | refused by its size at once; the cap is 16 MiB (`kMaxClipboardBytes`) |
-| one paint of 8 text boxes of 8 MB each | all 8 rendered and held, 64 MB | rendering stops once the pictures this paint rendered fill the 32 MB budget (a test: at most the budget plus one picture); pictures already cached do not count against it, and a paint that skipped boxes schedules one more, so every box gets its picture within a few paints (found in review); all cached pictures together are held under a hard ceiling of 4 x the budget, 128 MB (`kTextCacheCeilingBytes`): over it a box keeps its stale picture or the placeholder and asks for no more paints (a test: 100 boxes of 8 MB in view, painted 12 times, never above the ceiling plus one picture, and the paints stop) |
+| one paint of 8 text boxes of 8 MB each | all 8 rendered and held, 64 MB | rendering stops once the pictures this paint rendered fill the 32 MB budget (a test: at most the budget plus one picture); pictures already cached do not count against it, and a paint that skipped boxes schedules one more, so every box gets its picture within a few paints; all cached pictures together are held under a hard ceiling of 4 x the budget, 128 MB (`kTextCacheCeilingBytes`): over it a box keeps its stale picture or the placeholder and asks for no more paints (a test: 100 boxes of 8 MB in view, painted 12 times, never above the ceiling plus one picture, and the paints stop) |
 
-Cold start and executable size, this branch against `main`: `ENABLE_EXPORTS` makes the executables carry their
-whole dynamic symbol table so modules can resolve host classes (`.dynsym` 2.9 k symbols on `main`, 15.5 k here).
-`noteAppC-bench` from both builds, `--phase start`, three times alternately, `NOTEAPPC_MODULE_DIRS` an empty
-directory: cold start to first painted frame (later windows) 45.08 ms on `main`, 46.01 ms here (+2.1 %), the first
-window 102.5 and 100.3 ms (-2.2 %); an earlier set with the module variable unset gave 37.21 and 36.40 ms (-2.2 %) and
-87.55 and 88.36 ms (+0.9 %). The dynamic loader itself (`LD_DEBUG=statistics`, `--help`, five runs each) reports
-17.28 million cycles on `main` and 17.27 million here, so the table costs nothing measurable at start. Size:
-`stat` 288 271 616 bytes on `main`, 292 070 216 here (+1.3 %, mostly DWARF at RelWithDebInfo); the text segment
-(`size`) 12.56 MB to 13.89 MB (+10.6 %, +1 330 331 bytes). The `stat` figure is not the one that shows this cost: it
-is dominated by DWARF, which the export table does not touch. Stripped, the executable grows 12 725 920 to 14 053 376
-bytes (+10.4 %); `.gnu.hash` + `.dynsym` + `.dynstr` grow from 0.37 MB to 1.56 MB (+1 193 117 bytes, +9.5 % of the base
-text), and everything else in the text segment grows 137 214 bytes (+1.1 %). The gate passes as the requirement is worded (on
-`stat` size, +1.3 % against +10 %), and the export table alone sits just under the 10 % line when the same gate is
-read on the stripped executable or the text segment: a further 0.5 % of exported symbols would cross it. No
-visibility rework was done; if the line is ever read that way, that is the place to cut (export only what modules
+Cold start and executable size: `ENABLE_EXPORTS` makes the executables carry their whole dynamic symbol table so
+modules can resolve host classes (`.dynsym` 2.9 k symbols without it, 15.5 k with it). `noteAppC-bench` from builds
+with and without it, `--phase start`, three times alternately, `NOTEAPPC_MODULE_DIRS` an empty directory: cold start to
+first painted frame (later windows) 45.08 ms without, 46.01 ms with (+2.1 %), the first window 102.5 and 100.3 ms
+(-2.2 %); an earlier set with the module variable unset gave 37.21 and 36.40 ms (-2.2 %) and 87.55 and 88.36 ms
+(+0.9 %). The dynamic loader itself (`LD_DEBUG=statistics`, `--help`, five runs each) reports 17.28 million cycles
+without and 17.27 million with, so the table costs nothing measurable at start. Size: `stat` 288 271 616 bytes
+without, 292 070 216 with (+1.3 %, mostly DWARF at RelWithDebInfo); the text segment (`size`) 12.56 MB to 13.89 MB
+(+10.6 %, +1 330 331 bytes). The `stat` figure is dominated by DWARF, which the export table does not touch. Stripped,
+the executable grows 12 725 920 to 14 053 376 bytes (+10.4 %); `.gnu.hash` + `.dynsym` + `.dynstr` grow from 0.37 MB
+to 1.56 MB (+1 193 117 bytes, +9.5 % of the base text), and everything else in the text segment grows 137 214 bytes
+(+1.1 %). The gate passes as worded (on `stat` size, +1.3 % against +10 %), and the export table alone sits just under
+the 10 % line when the same gate is read on the stripped executable or the text segment: a further 0.5 % of exported
+symbols would cross it. If the line is ever read that way, that is the place to cut (export only what modules
 resolve).
 
 ## Where it stands
 
-Median of several runs, after every fix below; a 2 000-note vault unless the row says 20 000. Rows dated
-2026-10-16 are the best of three interleaved runs at `d9fcfae` (20 000 notes, the busy machine):
+Median of several runs; a 2 000-note vault unless the row says 20 000. Several rows were taken on a loaded
+machine, so read ratios more than single milliseconds:
 
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
-| cold start, the process's first window (bench, includes `openVault`) | 36.3 ms (2026-10-16, perf2) | 40 ms |
-| cold start to first painted frame, later in-process windows (bench) | 19.5 ms (2026-10-16) | - |
-| pop-out window: command to first painted frame (bench, 2 000 notes, busy machine) | 10.7-11.8 ms (2026-10-18; three runs' medians) | 25 ms |
-| move a tab to a new window (bench, same) | 3.1-3.4 ms (2026-10-18; includes the empty tab main gets in its place) | 5 ms |
+| cold start, the process's first window (bench, includes `openVault`) | 36.3 ms | 40 ms |
+| cold start to first painted frame, later in-process windows (bench) | 19.5 ms | - |
+| pop-out window: command to first painted frame (bench, 2 000 notes) | 10.7-11.8 ms (three runs' medians) | 25 ms |
+| move a tab to a new window (bench, same) | 3.1-3.4 ms (includes the empty tab main gets in its place) | 5 ms |
 | vault usable from process start | 204 ms | - |
-| note open, 1 kB | 1.8 ms (2026-10-16) | 300 ms |
-| note open, 50 kB | 7.9 ms (2026-10-16) | 300 ms |
-| note open, 200 kB | 2.5 ms (2026-10-16; readable, styled ~26 ms later) | 300 ms |
-| note open, 1 MB | 10.2 ms (2026-10-16; readable, styled ~140 ms later) | - |
-| note open, notebook with 40 stored PNG outputs | 37.7 ms (2026-10-16) | - |
+| note open, 1 kB | 1.8 ms | 300 ms |
+| note open, 50 kB | 7.9 ms | 300 ms |
+| note open, 200 kB | 2.5 ms (readable, styled ~26 ms later) | 300 ms |
+| note open, 1 MB | 10.2 ms (readable, styled ~140 ms later) | - |
+| note open, notebook with 40 stored PNG outputs | 37.7 ms | - |
 | Tags pane refresh, 20 000 notes, 4 505 distinct tags | 36 ms when shown; 0.00 ms while hidden (marked stale, rebuilt on show) | - |
-| every note for a base (`allNotesForBases`), 20 000 notes, off the UI thread | 33 ms (2026-10-16, perf2; 65 ms before) | - |
+| every note for a base (`allNotesForBases`), 20 000 notes, off the UI thread | 33 ms (65 ms before) | - |
 | keystroke to relaid, painted block, 200 kB | 0.22 ms | 8 ms |
 | keystroke through the whole window, 200 kB | 0.17 ms | 8 ms |
-| keystroke, 1 MB | 0.55 ms (2026-10-16; 0.44 ms on a quiet machine) | 0.6 ms (this pass), 8 ms |
-| source-mode table Tab, 1 MB | 2.0 ms (2026-10-16) | - |
-| resize, text width kept / rewrapped, 1 MB | 0.24 / 1.36 ms (2026-10-16) | - |
-| fold a callout, 1 MB | 0.29 ms (2026-10-16) | - |
-| fold all / unfold all headings and list parents, 1 MB (10 958 folds: 5 479 headings, 5 479 list parents) | 1.81 / 1.52 ms (2026-10-19) | 50 ms |
-| `foldState()` after fold all, 1 MB (10 958 folds; only asked on leaving the note) | 2.18 ms (2026-10-19) | 50 ms |
-| keystroke on a heading with everything folded, 200 kB | 0.15 ms (2026-10-19) | 8 ms |
+| keystroke, 1 MB | 0.55 ms (0.44 ms on a quiet machine) | 0.6 ms, 8 ms |
+| source-mode table Tab, 1 MB | 2.0 ms | - |
+| resize, text width kept / rewrapped, 1 MB | 0.24 / 1.36 ms | - |
+| fold a callout, 1 MB | 0.29 ms | - |
+| fold all / unfold all headings and list parents, 1 MB (10 958 folds: 5 479 headings, 5 479 list parents) | 1.81 / 1.52 ms | 50 ms |
+| `foldState()` after fold all, 1 MB (10 958 folds; only asked on leaving the note) | 2.18 ms | 50 ms |
+| keystroke on a heading with everything folded, 200 kB | 0.15 ms | 8 ms |
 | keystroke in a code block, 100 / 1 000 / 5 000 lines | 1.10 / 1.10 / 1.16 ms | 8 ms |
-| keystroke in a cell of a 50-row HTML table (2026-10-02, busy machine) | 1.33 ms | 8 ms |
+| keystroke in a cell of a 50-row HTML table | 1.33 ms | 8 ms |
 | parse plus HTML structure pass, that note, gumbo cache cold (off the UI thread) | 0.24 ms | - |
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
-| scroll by finger on a FydeTab Duo (RK3588S, GNOME at 1.67, OpenGL by default there), a real note, in its own session | 60 fps: frame gap 16.6 ms median, paint 3.8 ms (2026-10-19, frame log) | 16.7 ms |
-| Settings, first open in a window (bench) | 30 ms (2026-10-19; 252 ms before) | - |
-| cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine); 1.04 s on 2026-10-16 with the tag-heavy note | 5 s |
-| peak RSS, vault plus a 1 MB note | 228 MB (2026-10-16) | 250 MB (this pass) |
-| ink pen sample, 10 000-stroke page (bench) | 0.047 ms (2026-10-22, busy machine, rerun owed; runs 0.047, 0.047, 0.047) | 1 ms |
-| ink scrolled frame, 10 000 strokes (bench) | 1.03 ms (2026-10-22, busy machine, rerun owed; runs 1.01-1.08) | 4 ms |
-| ink scrolled frame, 50 000 strokes, ratio to 10 000 | 1.07x (2026-10-22, busy machine, rerun owed; 1.10 / 1.03 ms; per-run ratios 1.01-1.09) | 2x |
-| ink zoom settle to sharp (bench), the re-render after the tiles switch | 20.8 ms (2026-10-22, busy machine, rerun owed; runs 20.7-22.2; plus kZoomSettleMs = 400 ms, 403.9 ms in all) | 100 ms |
-| cold start, module directory present vs empty | 0.09 ms paired median difference (2026-10-22, busy machine, rerun owed; three runs of 61 alternated pairs: medians 0.09, -0.03, -0.03; quartiles about -0.5 .. +0.55 each; the earlier 21-pair runs of 0.47, -0.37, 1.37 were noise of this size, which is why the count went to 61) | 1 ms |
-| window keystroke on the 1 MB note, module directory present vs empty (after the scan), ratio | 1.00x pooled (2026-10-22, busy machine, rerun owed; three runs of 9 rounds: 0.58 / 0.57 ms; the rounds' own ratios range 0.90-1.16, 0.94-1.16, 0.97-1.04) | 1.10x |
-| cold start, this branch vs main (ENABLE_EXPORTS cost) | +2.1 % later windows, -2.2 % the first window (2026-10-22, busy machine, rerun owed); the loader's own time equal | +5 % |
-| `noteAppC` executable size, this branch vs main | +1.3 % file (292 070 216 vs 288 271 616 bytes, the gate); +10.4 % stripped, +10.6 % text segment, of which the dynamic tables are +9.5 % of the base text (13.89 vs 12.56 MB; just under the line on those readings) | +10 % |
+| scroll by finger on a FydeTab Duo (RK3588S, GNOME at 1.67, OpenGL by default there), a real note, in its own session | 60 fps: frame gap 16.6 ms median, paint 3.8 ms | 16.7 ms |
+| Settings, first open in a window (bench) | 30 ms (252 ms before) | - |
+| cold index, 20 000 notes | 0.95 s on a quiet machine; 1.04 s with the tag-heavy note | 5 s |
+| peak RSS, vault plus a 1 MB note | 228 MB | 250 MB |
+| ink pen sample, 10 000-stroke page (bench) | 0.047 ms (provisional; runs 0.047, 0.047, 0.047) | 1 ms |
+| ink scrolled frame, 10 000 strokes (bench) | 1.03 ms (provisional; runs 1.01-1.08) | 4 ms |
+| ink scrolled frame, 50 000 strokes, ratio to 10 000 | 1.07x (provisional; 1.10 / 1.03 ms; per-run ratios 1.01-1.09) | 2x |
+| ink zoom settle to sharp (bench), the re-render after the tiles switch | 20.8 ms (provisional; runs 20.7-22.2; plus kZoomSettleMs = 400 ms, 403.9 ms in all) | 100 ms |
+| cold start, module directory present vs empty | 0.09 ms paired median difference (provisional; three runs of 61 alternated pairs: medians 0.09, -0.03, -0.03; quartiles about -0.5 .. +0.55 each; the earlier 21-pair runs of 0.47, -0.37, 1.37 were noise of this size, which is why the count went to 61) | 1 ms |
+| window keystroke on the 1 MB note, module directory present vs empty (after the scan), ratio | 1.00x pooled (provisional; three runs of 9 rounds: 0.58 / 0.57 ms; the rounds' own ratios range 0.90-1.16, 0.94-1.16, 0.97-1.04) | 1.10x |
+| cold start, with vs without the symbol export (`ENABLE_EXPORTS`) | +2.1 % later windows, -2.2 % the first window (provisional); the loader's own time equal | +5 % |
+| `noteAppC` executable size, with vs without the symbol export | +1.3 % file (292 070 216 vs 288 271 616 bytes, the gate); +10.4 % stripped, +10.6 % text segment, of which the dynamic tables are +9.5 % of the base text (13.89 vs 12.56 MB; just under the line on those readings) | +10 % |
 
 "Readable" is deliberate wording: above 128 kB a note is shown as plain
 paragraphs at once and styled when its parse comes back from the thread pool.
-See [the async parse](#8-a-big-note-is-shown-before-it-is-parsed).
+See [Opening a note](#opening-a-note).
 
 ## Against Obsidian
 
-First head-to-head, 2026-10-16, on the development machine, Obsidian 1.14.4 (Electron 43, no
-plugins, never signed in) against noteAppC at `c3e13ea` (Release). Both ran in
+Head-to-head on the development machine: Obsidian 1.14.4 (Electron 43, no
+plugins, never signed in) against noteAppC (Release). Both ran in
 the same headless `cage` (1280x720, real RTX 5080 through GL, so Obsidian was
 GPU-accelerated), in a throwaway `HOME`/XDG tree, pinned to CCD1 (cores
 6-11,18-23) at `nice 19`, one app at a time, interleaved (noteAppC cold, noteAppC
@@ -213,8 +212,8 @@ Caveats, in the order they matter:
   without those notes (a second, clean batch of 5 rounds); the 1 MB and 200 kB
   notes exist only in the first batch's vaults, so Obsidian's open, keystroke and
   peak-RSS rows come from there (its index there: 7.4 s / 39 s, warm note
-  1.28 s / 2.18 s). Fixed since: see
-  [fix 29](#29-the-tags-pane-ran-one-query-per-tag), and the bench vault now
+  1.28 s / 2.18 s). The Tags pane now reads every tag count in one query
+  (`Index::tagCounts()`, see "Indexing and queries"), and the bench vault
   carries a tag-heavy note.
 - **Defaults on both sides.** Obsidian ran in its default Live Preview on a vault
   whose only config was an empty `app.json`, with no network restriction (its
@@ -258,7 +257,7 @@ since the last paint, paint time, exposed and viewport size, device pixel
 ratio, scroll steps since the last paint, the time spent handling them, and
 the wait from the first of them to the paint. A frame bound by the handler,
 the paint or the wait each needs a different fix; the FydeTab Duo scroll work
-read them in that order ([fix 33](#33-a-fractional-scale-repainted-the-whole-note-on-every-scroll-step)).
+read them in that order (see "Scrolling and GPU acceleration").
 
 `--gpu` needs a real window and a real GPU context, but never a real monitor:
 inside `cage` with the headless wlroots backend it gets a GPU renderer and one
@@ -285,7 +284,7 @@ mkdir ~/.cache/bench-tmp && TMPDIR=~/.cache/bench-tmp \
 
 | save | median | p95 / worst | where |
 |---|---|---|---|
-| 200 kB note | 5.7 ms | 15.7 ms | development machine, NVMe (btrfs on LUKS), 2026-10-17, three runs |
+| 200 kB note | 5.7 ms | 15.7 ms | development machine, NVMe (btrfs on LUKS), three runs |
 | 1 MB note | 6.0 ms | 17.4 ms | as above |
 
 The cost is the disk's flush, not the note's size: 200 kB and 1 MB are within
@@ -404,800 +403,227 @@ budgets themselves are unchanged, so a real regression still fails all three.
 Under ASan or TSan the guards skip (`SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER`):
 the clock would measure the instrumentation.
 
-The last of the editor rows used to live in the editor tests. When the parse moved off the UI
-thread it started measuring the layout path instead, and would have gone on
-passing while the quadratic it existed for came back. It now measures
-`Parser::parseAll` directly, which is where the bug was.
+## How it stays fast
 
-## The fixes
+The mechanisms behind the numbers above, by area. Each one is pinned by a test
+or a bench row (see "Guards in the test suite").
 
-In the order they landed.
+### The keystroke path
 
-### 1. Keystroke: 375 ms to 0.09 ms on a 200 kB note
-
-`7528eee`. The first working engine took 375 ms per keystroke against an 8 ms
-budget. Four changes, each measured:
-
-| change | per keystroke |
-|---|---|
-| lay out only the blocks near the viewport, estimate the rest | 375 -> 212 ms |
-| apply a keystroke incrementally: shift ranges, relayout one block, parse later | 212 -> 68 ms |
-| parse on the thread pool with a generation counter | no change alone; keeps the budget honest on big notes |
-| memoise line height per block kind | 68 -> 0.09 ms |
-
-The last one was the real cost all along: a `QFont` and its `QFontMetricsF`
-built for each of 7 595 blocks, twice per layout pass.
-
-### 2. Cold index: quadratic, 39.8 s to 3.6 s for 20 000 notes
-
-`11f1a95`. The full-text table was deleted by a non-indexed column, so every
-note scanned the whole table.
-
-| notes | before | after |
-|---|---|---|
-| 5 000 | 3.49 s | 0.98 s |
-| 10 000 | 14.68 s | 1.57 s |
-| 20 000 | 39.80 s | 3.57 s |
-
-### 3. Backlinks read every link in the vault
-
-`036dc7f`. `Index::backlinks()` selected every non-external link in the
-database and called `resolve()` on each, so opening one note cost time
-proportional to the whole vault.
-
-The fix rests on one invariant: a target can only resolve to a note whose name
-is the target's last path component. Obsidian resolves by name or by a path
-ending in the name, and `cleanPath` keeps the last component through any `../`.
-Links now carry `tname`, that component folded and without the extension,
-indexed. Schema version 3.
-
-| 1 kB note open | before | after |
-|---|---|---|
-| 500-note vault | 4.7 ms | 1.2 ms |
-| 2 000-note vault | 14.6 ms | 1.4 ms |
-
-It no longer depends on vault size at all.
-
-### 4. Opening a note was quadratic, twice over
-
-`8ce3cc3`. A 1 MB note took 822 ms to open. `perf` found two independent
-O(n^2) bugs, and neither was md4qt.
-
-**The comment pass.** `ObsidianSyntax::scan` ran the lazy `%%...%%` pattern
-with `globalMatch(text, region.start)` once per unmasked region. On a file with
-no comment in it, PCRE has to walk to the end of the text before it can say
-there is no match, and a 1 MB note has 16 273 regions. It is now one pass over
-the whole text, with each match assigned to its region by binary search.
-Parse: **1 992 ms -> 142 ms**.
-
-**The outgoing-links pane.** `OutgoingLinksPane::refresh` called `contextLine`
-once per link, and each call re-read the note from disk, decoded it, and built
-a whole `SourceMap` over it: O(links x file size). Under `perf` it was 30% of
-the entire run. The note is now read once per refresh.
-
-| note open | before | after |
-|---|---|---|
-| 50 kB | 9.4 ms | 6.9 ms |
-| 200 kB | 53.4 ms | 25.7 ms |
-| 1 MB | 822 ms | 146 ms |
-
-After both, the profile is flat: md4qt's own paragraph parser is the largest
-single item at 3.7%.
-
-### 5. Show the window first, read the vault second
-
-`0f8d041`. The whole vault load ran before `show()`, so nothing appeared until
-everything was indexed and open. `openWhenShown()` now waits for the empty
-shell's first paint and queues the open behind it.
-
-A/B, same binary, seven runs each:
-
-| order | window on screen | vault usable |
-|---|---|---|
-| load, then show | 194.5 ms | 195.4 ms |
-| show, then load | **50.5 ms** | 204.2 ms |
-
-The window appears 144 ms sooner at a real cost of **8.8 ms**, because the
-shell is now painted twice. That is inside the 10 ms rule, but not by much.
-Anything further in this direction has to make the first paint cheaper rather
-than add another.
-
-### 6. The settings page built itself twice before the window appeared
-
-`3139a6f`. `SettingsPage::setContext` built all four pages of rows, and it ran
-from the `MainWindow` constructor and again the moment a vault opened, in a
-session that usually never opens settings. The rows are now built on the
-page's first `showEvent`. The constructor went from **27.5 ms to 15.4 ms**.
-
-Unlike fix 5, this costs no real time: the work is not moved, it is not done.
-
-Where the remaining 15.4 ms goes: sidebar 7.4 ms, theme and style sheet
-4.4 ms, main area 2.3 ms, everything else under 1 ms.
-
-### 7. Five settings that cost nothing because they did nothing
-
-`475a876`. Not a speed fix, listed because it touched the keystroke path: Tab
-now inserts `editor.tabWidth` spaces instead of a hardcoded four. No
-measurable change.
-
-### 8. A big note is shown before it is parsed
-
-`b02cc37`. After fix 4, the parse was still the whole cost of opening a note -
-142 ms of a 1 MB note's 146 ms - all on the UI thread. Above 128 kB the text
-now goes up at once as plain paragraphs and the parse runs on the thread pool;
-the styled version replaces it when it arrives. Below 128 kB the parse is
-faster than a frame, so it stays synchronous rather than flickering through an
-unstyled state.
-
-`plainParagraphs()` is what makes it work. Without it an unparsed note is one
-block a megabyte long, and laying that out as a single `QTextLayout` costs more
-than the parse did.
-
-| time to a readable note | before | after |
-|---|---|---|
-| 200 kB | 25.7 ms | 2.2 ms |
-| 1 MB | 146 ms | 11.3 ms |
-
-The parse still costs what it cost. It is off the UI thread and no longer in
-front of the reader.
-
-Callers that must hold the parsed note (a canvas card's grab, a PDF export) call
-`MarkdownEditor::finishParse()`: it waits on the pool and adopts the result
-directly. They must not spin a nested `QEventLoop` for it - the canvas card is
-rendered inside `paintEvent`, where a timer or deferred delete (closing the tab)
-firing would free the view mid-paint.
-
-### 9. The word count, recounted for every keystroke
-
-`c77d7a5`. Every keystroke fired `textChanged`, and the shell answered by
-recounting the words of the whole note on the UI thread - O(document) on the
-keystroke path. The benchmark could not see it, because its keystroke row drove
-a bare editor, not the window a person types into; a row that types through the
-whole `MainWindow` was added for exactly this. Meanwhile `Parser::parseAll`
-already counted the words, with the identical rule, on the worker thread, and
-the editor threw the number away. The count now travels with the parse.
-
-| keystroke through the window, 200 kB | before | after |
-|---|---|---|
-| median | 0.33 ms | 0.21 ms |
-
-It also answered a question: the navigation work had installed an
-application-wide event filter, so every event passes through
-`MainWindow::eventFilter`. With the word count gone the window row sits at the
-bare editor's number, so the filter costs nothing measurable.
-
-### 10. A long code block was laid out whole on every keystroke
-
-A fence was one block however long it was, so a keystroke in it laid out and
-highlighted the entire listing. Release build (`-O3`), keystroke plus paint:
-
-| lines | before | after |
-|---|---|---|
-| 100 | 2.7 ms | 1.10 ms |
-| 1 000 | 26 ms | 1.10 ms |
-| 5 000 | 158 ms | 1.16 ms |
-
-The first measurement of 5 000 lines said 25.7 ms, and was wrong: above
-128 kB the parse is async, and neither the bench nor the new test waited for
-it, so both timed an unhighlighted paragraph. See the pitfalls below.
-
-perf put about two thirds of the time in `QTextLine::layout_helper`, shaping
-with HarfBuzz, and the highlighter under 4%. Taken apart on 5 000 lines: 35 ms
-to highlight, 21 ms to lay out as plain text, but 112 ms to lay out with the
-45 000 format ranges the highlighter produced - more than linear, since 1 000
-lines took 14 ms.
-
-Two changes:
-
-- **The highlighter's formats are built once per Kate format.**
-  `KSyntaxHighlighting::AbstractHighlighter::theme()` returns a copy, and
-  `applyFormat` asked for it up to seven times per token. A `QTextCharFormat`
-  per `Format::id()` is now cached: highlighting 5 000 lines 35 ms -> 21 ms.
-- **A fence longer than 32 lines is split into 32-line blocks,** as a list
-  became one block per item (`kCodePieceLines`). An edit relays out one piece,
-  and a reparse relays out only the pieces near the viewport. The fence's
-  chrome is drawn across its pieces - each paints its own band of one panel,
-  the header, label and tabs go on the first, the caption on the last, line
-  numbers carry on - and folding, copying and the hover label act on the
-  whole fence. The caret anywhere in it reveals every piece.
-
-Highlighting has to cross the pieces: a `/*` in one piece colours the next.
-`CodeHighlighter::State` wraps KSyntaxHighlighting's line state, and each
-piece records the state it ended in. A piece is highlighted from the end state
-of the one before; when its own end state changes, the next piece is marked
-stale and every later piece already laid out loses its layout, to be redone as
-it comes into view. A state that converges again stops the redoing there, so
-ordinary typing re-highlights one piece. States survive a reparse for pieces
-whose text did not move, which matters: after typing near line 4 500 of 5 000,
-the parse landing costs 3.25 ms with its paint, where re-highlighting the
-listing from the top to reach the viewport would be about 20 ms.
-
-Found on the way, and fixed separately in `43e96b5`: `applyEdit` shifted the
-edited block's end twice, so until the reparse a block drew the start of the
-next one as well - a flicker of duplicated text on every keystroke.
-
-Not covered: a long listing inside a callout is still part of the callout's
-single layout.
-
-### 11. What a keystroke still did to the whole note
-
-After fix 10, perf on a parsed 1 MB note (Release, UI thread only) put a third
-of a keystroke in `SourceMap`'s constructor: the editor rescanned the whole
-note for line starts on every edit, one `QString::at()` at a time. Then
-`updateLayout()`'s own loops, four passes over every block, and
-`shiftRanges`.
-
+- Only the blocks near the viewport are laid out; the rest are estimated. An
+  edit is applied incrementally: ranges are shifted, one block is relaid, and
+  the parse follows on the thread pool behind a generation counter. Line
+  height is memoised per block kind (building a `QFont` and `QFontMetricsF`
+  for every block twice per pass was the whole cost of the first engine: 375 ms
+  to 0.09 ms on a 200 kB note).
 - `SourceMap::applyEdit` moves the line starts after the edit instead of
-  rescanning, and the full scan uses the vectorised `indexOf`, which also
-  speeds the parse. A randomised test holds it to a rebuild after 2 000 edits.
-- `updateLayout()` settles what each block reveals and places it in one pass,
-  finds the blocks near the viewport by binary search, and after a layout
-  re-places only from the first block whose height changed.
-- List items are found by binary search on the block, not by walking every
-  item in the note, which layout did once per line and painting once per
-  list block.
-
-| keystroke, relaid and painted | before | after |
-|---|---|---|
-| 1 MB | 0.71 ms | 0.44 ms |
-| 200 kB | 0.27 ms | 0.22 ms |
-| 200 kB, through the window | 0.22 ms | 0.17 ms |
-
-The list change needed list items to move with the text between a keystroke
-and its reparse, and doing only that broke something the new guard caught:
-the bullets of the items below an edit disappeared. A block below an edit
-keeps its cached layout, and its `DisplayMap` was still in the old offsets;
-the unshifted items had agreed with it by accident. So now the cached maps
-shift with the text, and so does every decoration a layout or paint can read
-- callouts, tables, embeds, maths, `#|` options, paragraphs - which closes the
-latent hazard this page and the TODO had recorded: gutter numbers, code-row
-wrapping and click positions on blocks below an edit were also read at stale
-offsets for those 20 ms. That costs back about 0.05 ms at 1 MB, included
-above.
-
-### 12. A wheel notch repainted the whole viewport
-
-`QAbstractScrollArea` repaints everything on any scroll. The editor now
-overrides `scrollContentsBy`: when the step is smaller than the viewport and
-the layout that runs with it moved nothing on screen, `viewport()->scroll()`
-moves the painted pixels and only the exposed strip is painted, and
-`paintEvent` finds the blocks in that strip by binary search instead of
-walking to them. A page step, a layout that moved something visible, and the
-OpenGL viewport all still repaint whole.
-
-On screen in headless `cage`, 5 000-line note, 1180x760, median of 800 frames:
-
-| | before | after |
-|---|---|---|
-| raster, 72 px steps (one wheel notch) | 1.00 ms | 0.40-0.65 ms |
-| raster, page steps | 1.6 ms | 1.35-1.6 ms |
-| OpenGL, 72 px steps | 1.7 ms | 1.7 ms |
-
-The "after" runs came out bimodal, 0.40 or 0.65, across four runs; they were
-taken while a parallel Android build was compiling, so contention is the
-likely reason (see the pitfalls). Either way under two thirds of before.
-
-`ScrollTest.AScrolledFrameMatchesAFreshOne` scrolls in odd-sized steps both
-ways, then compares the backing store - what the blits actually left on
-screen - against a full repaint. It fails when the blit is off by one pixel.
-
-The on-screen bench gained the wheel-step rows, and lost a forced
-`viewport()->update()` after each step that would have hidden the blit. Its
-loop also reads the live scroll maximum now: once real heights shrank the
-range, a step past the end changed nothing, painted nothing, and waited out
-the 200 ms ceiling - a fifth of all frames in the first run.
-
-### 13. Search read every matching body before confirming the first
-
-`Index::search()` selected `rowid, path, body ... ORDER BY path`, and SQLite's
-sorter copies every selected column of every match: a common word over 20 000
-notes sorted 20 000 bodies so that 200 could be confirmed. The sorted query now
-carries `rowid, path`, and each body is read by rowid only while fewer than
-`limit` notes have matched. `noteAppC-bench`, 20 000 notes, a query matching
-every note: 18.1 ms to 6.4 ms. A rare word: 0.05 ms either way. The search
-runs on the thread pool, so neither ever reaches the UI thread.
-
-### 14. The link suggester sized 60 000 rows on every theme pass
-
-Each editor's `[[` suggester is a `QCompleter` over every link target in the
-vault, about three names per note. Any application-wide style change - every
-settings pass runs one, including the one when a vault opens - re-laid out its
-hidden popup, and a `QListView` without uniform item sizes measures each row:
-157 ms of a 20 000-note cold start, and again for every tab's editor. The rows
-are one line each, so `setUniformItemSizes(true)` loses nothing. Cold start,
-20 000 notes: 475 ms to 335 ms (the 475 included a double refresh, fix 15,
-that made the suggester's list exist before the theme pass).
-
-### 15. Two emitters of one refresh
-
-Three panes listen to `Index::changed` themselves, and the window's own
-handler refreshed all three again, so each save queried them twice. Once
-`Index::open()` began to report a new vault (the graph and search panes need
-it), the indexer's `finished()` calling the same handler made that twice per
-vault open as well. And each pane rebuilt its list on every settings pass,
-the tags pane's being a query over every tag in the vault. Now one refresh per
-change, and a theme pass rebuilds a pane only when a colour it paints with
-changed. Cold start, 20 000 notes: 335 ms to 285 ms; 303 ms before this
-session's features, which added a local graph, a search pane and tabs to it.
-
-### 16. A graph nobody can see
-
-`GraphView` re-read every file and link in the vault on each `Index::changed`
-(every save) and rebuilt the local graph on each note switch, whether or not
-it was on screen. Hidden, it now only marks itself stale and catches up in
-`showEvent()`. The sidebar's local graph is built at startup for this reason
-alone: it costs nothing until its tab is opened.
-
-### 17. A whole parse for a title
-
-The backlinks pane's unlinked mentions re-read the note and ran the full
-Markdown parser over it to learn its title and aliases, which only the file
-name and the front matter hold. Measuring every feature off against on (the
-Core plugins switches) showed it: a 1 MB note opened in 15 ms with the side
-panes off and 156 ms with them on. Now only the front matter is parsed, and
-the outgoing links pane no longer reads the note when it has no links. Note
-open with the panes on, 20 000-note vault: 13 / 27 / 156 ms at 50 / 200 /
-1 024 kB to 7.5 / 3.2 / 19 ms; unlinked mentions 0.33 to 0.16 ms.
-
-### 18. The indexer wrote on the UI thread
-
-A scan parsed across the pool, but each result came back to the UI thread as
-a queued call that wrote the note to SQLite there. On a cold index those calls
-arrived faster than the loop ran them, so it did nothing else: a 3 000-note
-index kept a 5 ms timer waiting 506 ms. And `openVault` asked the cache about
-every file on the UI thread before the scan began. Now the whole scan - walk,
-`isCurrent`, attachments, removals, writes - runs on a thread of its own with
-its own connection (`Index::Writer`); the UI thread takes only each 256-note
-chunk's names and progress, and one `changed()` at the end. The writer's
-statements are prepared once, not per row, which halved the write cost.
-20 000 notes: cold start 277 ms to 65 ms, cold index 1.97 s to 0.98 s, peak
-memory 376 MB to 196 MB; the 3 000-note timer's worst wait 6 ms. A scan that
-stop() cancels drops what it had queued: its names never reach the next
-vault's table (`IndexerThreadTest`).
-
-### 19. Every switch restyled the whole window
-
-A settings switch runs `applySettings`, and it restyled the application
-(`setStyleSheet` over every widget) and gave every open editor its theme again,
-which relays out every block: 21.6 ms with a 1 MB note open, for a switch that
-changes neither. `Theme` now compares, and the restyle waits for the theme
-itself to change; a pane built by a switch takes the theme when it is built,
-and the settings page re-themes the rows it rebuilds (they had kept the
-default colours until the next restyle). Settings pass, 1 MB note open: 21.6 ms
-to 1.6 ms (bench row "Settings pass").
-
-### 19b. A formatting colour relaid the whole note
-
-A colour in Settings > Appearance > Formatting colours changes only the
-formats a block's `QTextLayout` carries, but `MarkdownEditor::setTheme` zeroed
-every block's height and estimated them all again (the 17-21 ms of item 19,
-and the scroll position with it). `Theme::sameExcept` now says when the only
-difference is one of the format-colour tokens, and `setTheme` then does what a
-spelling refresh does: drop the layouts, keep every height, lay out the blocks
-on screen. `QTextLayout::setFormats` clears a laid-out layout's lines (checked
-by measuring `lineCount()` on either side of it), so those blocks cannot be
-recoloured in place; the cost is the visible blocks only, 0.2 ms each. A size,
-a font, the accent or the text colour is still the full path.
-
-### 20. EPUB reader: chapter rendering off the UI thread, a lazy TOC, CSS resources, paged mode
-
-Four gaps in the EPUB reader (`libs/ext/epub`), not from a profile - the
-module is new enough that its own report named them directly. All four
-numbers below are `tests/test_epub.cpp`'s own `Perf*` tests, printed via
-`fprintf(stderr, ...)` (`QT_FORCE_STDERR_LOGGING=1 ctest -R epub`), not the
-bench (there is no EPUB row in it yet).
-
-**Chapter rendering.** Opening a book laid out and rasterised its first
-chapter with litehtml on the UI thread, ~11 ms. `requestChapterRender()` now
-does the archive/CSS/font work synchronously (cheap - string handling and a
-QFontDatabase call, never litehtml) and hands the layout/raster itself to
-`QtConcurrent::run`, delivered back through the same Lifeline +
-generation-counter (here: `m_renderEpoch`) pattern `MarkdownEditor`'s embeds
-already use (`PdfEmbedBlock.cpp`). A cache miss during paint shows the
-already-known/guessed chapter height as a placeholder and repaints when the
-worker delivers.
-
-| | before | after |
-|---|---|---|
-| chapter render: time blocking the UI thread | ~11 ms | 0 ms |
-| chapter render: total time to a cached, paintable chapter | ~11 ms (all on the UI thread) | ~10-11 ms (all off it) |
-
-The work costs the same - litehtml did not get faster - only where it runs
-changed. Page-turn time (paged mode, below) is a position update only
-(0 ms); the page painting it triggers is the same off-thread render path.
-
-**Lazy table of contents.** `buildToc()` used to run at `load()`, all levels
-at once. It now runs only the first time the panel is shown, one level at a
-time (a node with children gets a single placeholder row until it is
-actually expanded - `onTocExpanded()`). Measured on a synthetic 50 000-entry
-TOC (50 volumes x 1 000 chapters each - `makeEpubWithHugeToc`):
-
-| | cost |
-|---|---|
-| `open()` | 0 (deferred entirely) |
-| first show (50 top-level rows) | 346 us |
-| one volume expanded (1 000 rows) | 429 us |
-| the other 49 volumes (49 000 rows - what an eager build at `open()` used to pay) | 20.1 ms |
-
-At the 2 000-entry scale the committed regression test uses (20 x 100, cheap
-enough to run on every `ctest`), all three numbers round to 0 ms - see
-`PerfTocBuildOnAHugeToc`.
-
-**CSS `url()` resources.** A chapter's stylesheets (external `<link>` sheets
-and inline `<style>` blocks) never had their `url()`s resolved into the
-archive at all - a `background-image` drew nothing, and no `@font-face`
-source was ever loaded. Both are now extracted the same way an `<img src>`
-already was (`rewriteCssUrls`), and every `@font-face` source is registered
-into the application font database once per archive path
-(`registerChapterFonts`). Not a speed fix, but a thread-safety one: this
-registration is why the calling thread still does the archive/CSS work
-before dispatch in the chapter-rendering fix above -
-`QFontDatabase::addApplicationFontFromData` is not safe off the Qt GUI
-thread, the exact rule that already keeps MathRenderer/MicroTeX font loading
-on `Publisher`'s calling thread rather than its worker pool
-(`PageBody.h`/`Publisher.cpp`, "publish, PDF viewer, plugins and sync
-merged"). `FontFaceIsRegisteredSynchronouslyBeforeTheWorkerIsDispatched`
-checks the registration count is already 1 the instant
-`requestChapterRender()` returns, before the worker has run at all.
-
-**Paged mode.** New, not a fix: one or two page-height slices of the same
-continuous document-space litehtml already lays out (`m_vscroll`'s value,
-snapped to multiples of the viewport height), rather than a second layout
-path - so the render cache, hit-testing and highlight painting needed no
-changes to work in both modes. Page-turn cost above; column count picked
-from viewport width (`kTwoColumnMinWidth`, 900 px). See "Guards in the test
-suite" above for the regression tests this fix added.
-
-### 21. Stage 14: a note's blocks were moved every time the list grew
-
-`rebuildBlocks` pushed each block straight into a `std::vector<BlockView>`
-with no reserve. A `BlockView` is 1.6 kB (layout, cells, callout style, code
-state), so every regrowth moved every block built so far: under `perf` the
-move constructor, the destructor and `_M_realloc_append` were a quarter of
-the open phase. The spans are now cut into a vector of small parts first,
-and the views are built once in a vector sized for them. The same pass read
-`view.span` after `std::move(view)`, which worked only because the span is
-trivially copyable; the part is now read before it is stored.
-
-Two side fixes from the same run. `OutgoingLinksPane` passed an empty path
-to `Vault::read` when a note had no links, and Qt warned about it on every
-note open (83 warnings a run). `PdfView`, `PdfPagesArea`, `EpubView` and
-`SlidesView` held a default-constructed `Theme` until `setTheme` was called,
-whose zero font sizes produced 4 602 `QFont::setPixelSize` warnings a
-pdfview run; they now start from `Theme::builtin(Dark)`, as the editor and
-the window already did.
-
-`noteAppC-bench --phase <memory|start|open|keystroke|scroll|pdfview>` runs
-one phase, so a profile covers only what it is about. The start phase now
-also has a `Cold index` row: a full scan into an emptied cache, the time the
-indexer reports, on the generated vault only (a vault given on the command
-line keeps its cache).
-
-| note open | before | after |
-|---|---|---|
-| 1 kB | 2.3 ms | 3.2 ms |
-| 50 kB | 11.3 ms | 12.0 ms |
-| 200 kB | 6.3 ms | 3.9 ms |
-| 1 MB | 38.6 ms | 11.9 ms |
-| peak RSS | 262 MB | 233 MB |
-
-The 1 kB and 50 kB rows are within run-to-run noise with another build
-running on the machine. Of the 50 kB open, 7.1 ms is md4qt's parse, run
-synchronously below the 128 kB threshold; the blocks, layout and panes are
-the other 2 ms, and the first frame the rest.
-
-### 22. Tab in a source-mode table reparsed the whole note
-
-`handleSourceTableKey` rewrote the table and then called `reparseNow()` so the
-next key would find the table again: the whole note, synchronously, on every
-Tab or Enter. The table is now found in the decorations as `shiftRanges` left
-them, its rows are re-read from its own lines, the caret is placed from the
-rewritten lines, and the reparse goes back to the normal 20 ms debounce. Only
-when the shifted decorations no longer describe the table (no table found, or
-the header's cell count changed) does it still reparse first.
-
-| Tab in a source-mode table | before | after |
-|---|---|---|
-| 1 MB note | 340 ms | 2.07 ms |
-
-### 23. A notebook's stored outputs were all written at open
-
-Reading an `.ipynb` decoded every stored output and wrote each into the output
-cache before the note was shown: with 40 plots of about 1.2 MB, 230 ms of a
-358 ms open. `seedNotebookCache` now keeps a closure per key; the first lookup
-of that key (only blocks that are laid out look themselves up) decodes and
-writes it, and a run or a clear before then drops it. See
-[NOTEBOOKS.md](NOTEBOOKS.md#jupyter-notebooks-ipynb).
-
-| note open | before | after |
-|---|---|---|
-| notebook, 40 PNG outputs | 351 ms | 35.4 ms |
-
-### 24. Unlinked mentions read every candidate whole for its front matter
-
-`unlinkedMentions` read each candidate note in full to find its aliases. It
-now reads the first 16 kB and goes back for the rest only when the note opens
-a front matter that has not closed by then. `Vault::decode` no longer runs a
-CRLF replace over text that has no `\r`. The bench vault's notes are about
-1 kB, so its rows did not move (unlinked mentions 0.165 to 0.163 ms, vault
-note open 4.05 to 3.85 ms); the read is bounded for long notes now.
-
-### 25. A resize, a fold or a link turning resolved threw away every layout
-
-`invalidateLayouts()` reset every block, and it was the answer to anything
-that was not an edit. Now:
-
-- a resize relays out only when `contentWidth()` changed - the left margin is
-  added at paint time, so a window wider than the readable line length keeps
-  every layout;
-- a fold invalidates that one block;
-- a link-status change invalidates only blocks with a link to a target that
-  flipped.
-
-Narrowing the resize exposed a bug the full invalidation had hidden:
-`updateLayout()` lays out the window around the scroll position from estimated
-heights, and when real heights then moved other blocks into view they stayed
-unlaid, and undrawn, until something invalidated everything. The fuzz test
-caught it as pixel differences. `updateLayout()` now repeats until nothing
-changes (at most 8 passes), and the passes after the first cover only the
-viewport, which is what a rewrapping resize pays for.
-
-| relayout | before | after |
-|---|---|---|
-| resize, text width kept, 200 kB / 1 MB | 0.83 / 1.29 ms | 0.19 / 0.25 ms |
-| resize, text rewrapped, 200 kB / 1 MB | 0.79 / 1.26 ms | 0.86 / 1.36 ms |
-| fold a callout, 200 kB / 1 MB | 0.88 / 1.41 ms | 0.23 / 0.30 ms |
-| media arrival, 200 kB / 1 MB | already one block | unchanged |
-
-The rewrap rows are the fixed point's price, inside the 15% this pass allowed
-(+11.4% / +9.4% in the final interleaved run against the pre-pass build).
-
-### 26. DisplayMap walked its runs from the start
-
-`DisplayMap::toDisplay` and `isHidden` walked every run up to the offset. The
-runs are in source order with non-decreasing ends, so both are a
-`lower_bound` / `upper_bound` now. Small at today's sizes; it is on the path
-of every caret move in a note with hidden syntax.
-
-### 27. Every window re-applied the application style sheet
-
-`MainWindow` set the palette and the style sheet in `applyTheme()`, after its
-widgets existed, so they were polished twice; and setting an unchanged sheet
-still repolishes every widget in the application. The theme is now applied to
-the application before any widget is built, and `applyTheme()` sets the
-palette and the sheet only when they differ.
-
-| what | before | after |
-|---|---|---|
-| cold start, in-process windows (median) | 32.0 ms | 19.4 ms |
-| cold start, the process's first window | 40.4 ms | 40.7 ms |
-| settings pass, 1 MB note open | 1.59 ms | 0.70 ms |
-
-The median row fell because later windows no longer repolish the earlier
-ones; a real launch is the first-window row, which did not move. With fix 28
-on top, the final interleaved run put it at 42.6 to 40.3 ms.
-
-### 28. Every editor read the syntax definitions
-
-Each `MarkdownEditor` owns a `CodeHighlighter`, whose constructor built a
-`KSyntaxHighlighting::Repository` - reading every definition's metadata, 2.3 ms
-- whether or not the note had a line of code. The repository is now made on
-the first `knows()` or `highlight()`. A canvas builds an editor per visible
-node:
-
-| canvas cold first paint | before | after |
-|---|---|---|
-| 60 nodes, all on screen | 188-210 ms | 63-88 ms |
-
-That made the canvas cold-paint guard flaky. Its "60 nodes" were laid out 40
-columns wide, so only 16 of them were on screen and the honest ratio against
-1 000 nodes was about 4x, under a 6x limit; the 2.3 ms per editor had been
-padding both sides. The small canvas is now 8 columns wide, so the ratio is
-about 1x, and a broken cull (`isNodeVisible()` always true) was checked to
-fail it at about 16x.
-
-### 29. The Tags pane ran one query per tag
-
-`TagsPane::refresh()` asked `Index::notesWithTag()` for every node of the tag
-tree, each a full scan of the `tags` table (its `LIKE` cannot use the name
-index), on the UI thread, at open and on every `Index::changed`. Found by the
-[Obsidian comparison](#against-obsidian). `Index::tagCounts()` reads the
-(note, tag) pairs once and adds each note once to its tag and every
-`/`-parent.
-
-| Tags pane refresh, 20 000 notes, 4 505 distinct tags | before | after |
-|---|---|---|
-| warm index | 9.5 s | 38 ms |
-
-### 30. The Tags pane rebuilt while nobody could see it
-
-`TagsPane::refresh()` is 36 ms at 4 505 tags (half query, half
-`QTreeWidget`) and ran on every `Index::changed`, shown or not. A hidden pane
-now sets `m_stale` and returns; `showEvent` refreshes a stale one. The two
-window tests that read the pane now show the window and click its tab first,
-and the first also asserts the hidden list is still empty. The bench has a row
-for each case.
-
-| Tags pane refresh, 20 000 notes, 4 505 distinct tags | before | after |
-|---|---|---|
-| index change while the pane is hidden | 37 ms | 0.00 ms |
-| the pane being shown | 37 ms | 36 ms (paid once, on show) |
-
-### 31. `allNotesForBases` read 220 000 rows one after the other
-
-Every base block, view switch and publish calls it, always on a worker
-(`BaseView::openCurrentView`, the editor's base runner, `Publisher`), never
-on the UI thread, so the cost was latency before a base appeared: files 5 ms,
-props 15, tags 14, links 14, plus a QVariant per cell. Two changes. Each query
-is `setForwardOnly(true)`, which drops Qt's row cache (65 to 61 ms). The
-three child tables are then read on their own threads and connections (WAL
-lets readers run side by side) into lists indexed like the notes and moved in,
-so the wall time is the slowest one. `std::async`, not the global pool, because
-the caller may itself be on that pool. `GROUP_CONCAT` per note was tried and
-was slower (73 ms: the sort for `GROUP BY` and the splitting cost more than
-the rows saved). Same results; the bases, publish and index suites pass.
-
-| every note for a base, 20 000 notes | before | after |
-|---|---|---|
-| bench row (includes freeing the result) | 65 ms | 33 ms |
-
-### 32. The first window paid libgit2's certificate load
-
-`--phase start` on the first window splits as constructor 19.5 ms, `openVault`
-15 ms, show and paint 6 ms; later windows total 19 ms. A sampled profile of the
-first window put 5 ms of `openVault` in `NoteHistory`'s constructor, which
-runs `git_libgit2_init()` once per process, and that loads the system's CA
-bundle through OpenSSL. A `NoteHistory::warmUp()` on the history pool first
-overlapped it with widget construction; the debloat measurement (2026-10-24)
-then showed the init itself is the cost: +6.2 MB RSS and 3-4 ms, of which the
-certificates are only 1.4 MB (OpenSSL's own set-up is the rest, and libgit2
-1.9 has no switch for it). So nothing sets libgit2 up any more until history is
-used: `NoteHistory`'s constructor only stores the path, and the first call that
-needs the repository opens it - the first save, on the history pool. Opening a
-vault costs nothing for history; a vault only read never loads OpenSSL. The
-history dialog, opened by hand, may pay the 3-4 ms on the UI thread once.
-Nothing is shut down, so the crash the comment in NoteHistory.cpp records
-(shutdown racing init) is not reintroduced.
-
-Also profiled and left: font database population and the first font load are
-about 5 ms but start at the first widget, with no earlier work to overlap
-(warming it on a worker from the constructor's first line changed nothing);
-`Indexer::rewatch` was 6.7 ms of directory walking on the UI thread in every
-window. The scan's own walk now lists the directories too and hands them to
-`Indexer::watch` with each one's mtime as read; a directory whose mtime moved
-before its watch started triggers a rescan, so the gap is closed. Only the
-difference is (re)watched, and folders made later are now watched too (they
-were not before). First window 36.3 -> 28 ms (best of 3, 20 000 notes).
-A folder inotify will not watch (past `fs.inotify.max_user_watches`, or no
-permission) is no longer dropped silently: the status bar says so once and
-the indexer rescans every 30 s while any folder lacks a watch. With every
-folder watched the poll timer never starts.
-
-| cold start, the process's first window (bench), best of 3 | before | after |
-|---|---|---|
-| 20 000 notes | 41.5 ms | 36.3 ms |
-
-### 33. A fractional scale repainted the whole note on every scroll step
-
-Reported on a FydeTab Duo (RK3588S, Mali-G610, 2560x1600 at GNOME's 1.67):
-"Scrolling is slow and choppy", by finger and by mouse, "very very choppy, def
-not 30FPS". Opening notes was instant; only scrolling was slow.
-
-Fix 12 scrolls by moving the pixels already painted. At a fractional scale Qt
-cannot: a step of n logical pixels is 1.67 n device pixels, `QBackingStore::scroll`
-refuses a non-integer native delta, and Qt Wayland's shm backing store refuses
-any scroll at a fractional scale ("With fractional scaling we cannot easily
-scroll the existing pixels", qwaylandshmbackingstore.cpp, Qt 6.12). So every
-frame repainted the whole viewport, about 16.5 ms at 1533x958 on the FydeTab Duo's A76
-cores. Rendering at 2 (`QT_SCALE_FACTOR_ROUNDING_POLICY=Round`) brought the
-blit back (0.7 ms paints) but not the frame rate: the frames still came about
-31 ms apart, which pointed at the full-size shm upload rather than the paint.
-
-The OpenGL viewport has no shm upload. Switching it on made it "much much
-better", but still not very smooth, with "just a small delay between
-scrolling". What followed, in its frame log (a real note, in the device's own session):
-
-| FydeTab Duo, OpenGL, scale 1.67 | paint median | frame gap median / p90 | fps |
-|---|---|---|---|
-| before 4cebb61, 685x1278 viewport | 6.9 ms | 25.4 / 33 ms | 39 |
-| after 0f7e792, 905x572 viewport (the tablet turned) | 3.8 ms | 16.6 / 27.4 ms | 60 |
-
-The second row's viewport is about half the pixels, so part of its paint gain
-is the smaller window. The scroll steps themselves dropped to 0.01 ms a frame
-in the log, and it felt smooth. What changed:
-
-- `scrollContentsBy` ran `updateLayout()` on every step, and its first loop
-  walks every block of the note. Scrolling changes nothing that loop settles,
-  so a step whose reach (a screen either side) is already laid out skips it
-  and only re-places the notebook prompt. Also pinned: the prompt follows its
-  block (`APromptEndsWhenItsRunDoesAndFollowsItsBlockWhenScrolled`).
-- While the touch scroller is moving, the hover ring is not re-aimed: there is
-  no pointer resting anywhere.
-- `QScrollerProperties::DragStartDistance` 5 mm (Qt's default) to 2 mm: the
-  page stood still under the finger for 5 mm, the "small delay".
-- `Theme::firstAvailableFamily` and `hasFamily` asked `QFontDatabase::families()`,
-  which rebuilds its list, on every font lookup; the set is cached and dropped
-  on `fontDatabaseChanged`.
-
-And the default: `editor.gpuAcceleration` is now `auto`, `true` or `false`, and
-`auto` takes OpenGL exactly where raster cannot blit, a fractional device
-pixel ratio (`MarkdownEditor::GPUaccelerationWanted`). Where it can, raster is
-faster: a Radeon 780M 2-in-1 laptop (scale 1, headless cage) scrolls a 72 px
-step in 0.96 ms raster against 2.37 ms OpenGL, a page in 2.24 against 3.34 ms.
-A settings file from before keeps its `true` or `false`.
-`GPUaccelerationTest.AutomaticIsOnOnlyAtAFractionalScale` pins the rule.
-
-Measured with `--fydetab --note` on the development machine the same note (eight copies) at
-685x1278 went 0.79 to 0.69 ms a 20 px step at scale 2; the device's own log
-above is the number that matters.
-
-### 34. Settings built seven pages, then restyled them, on every open
-
-Reported on the FydeTab Duo: "settings need like 3 seconds to launch". The page is rebuilt
-on each show (so a theme added meanwhile is listed); the rebuild built all
-seven pages and only then set the page's style sheet, which repolished every
-row it had just made. A profile of the open: 59% building pages, 36% the
-restyle, much of both in layout: word-wrapped `QLabel` height-for-width and
-the text shaping behind it.
-
-Now the sheet is set first (and not again when it has not changed), and only
-the page on show is built; each other page is built the first time the nav
-shows it. Pages a rebuild replaces leave the widget tree at once instead of at
-their deferred deletion, which had let a lookup by name find the old row's
-widgets first.
-
-| Settings first open, fresh window (bench) | before | after |
-|---|---|---|
-| development machine | 252 ms | 30 ms |
-
-Settings also did not scroll by finger ("scorlring does not work in the
-settings"): only the editor had grabbed the touch gesture. `PopupStyle::polish`
-now grabs it for every scroll area that is not inside another one (the
-settings page, the file tree, the panes), so a list or block inside a page
-leaves the drag to the page. `AFingerScrollsAnyScrollAreaButNotOneInsideAnother`.
+  rescanning. `updateLayout()` settles and places blocks in one pass, finds
+  the blocks near the viewport by binary search, re-places only from the first
+  block whose height changed, and repeats until nothing changes (at most 8
+  passes). List items and `DisplayMap::toDisplay` / `isHidden` use binary
+  search too.
+- Between a keystroke and its reparse, the cached `DisplayMap`s and every
+  decoration a layout or paint can read (callouts, tables, embeds, maths, `#|`
+  options, paragraphs) shift with the text, so blocks below an edit are never
+  read at stale offsets.
+- A fence longer than 32 lines is split into 32-line blocks
+  (`kCodePieceLines`), so an edit relays out one piece. The fence's chrome is
+  drawn across its pieces, and the highlighter state (`CodeHighlighter::State`)
+  carries from one piece to the next, stopping where it converges again. The
+  highlighter builds one `QTextCharFormat` per Kate format instead of asking
+  for the theme per token. A keystroke in 100 / 1 000 / 5 000 lines costs
+  1.10 / 1.10 / 1.16 ms.
+- Whole-note work never runs per keystroke: the word count travels with the
+  parse, and Tab or Enter in a source-mode table finds the table in the shifted
+  decorations instead of reparsing (340 ms to 2 ms at 1 MB). The bench's
+  keystroke row types through the whole `MainWindow` for this reason.
+- A resize relays out only when `contentWidth()` changed, a fold invalidates
+  that one block, and a link turning resolved invalidates only blocks that link
+  to the target. A formatting-colour change (`Theme::sameExcept`) drops the
+  layouts but keeps every height.
+- Every settings pass compares the theme and restyles only when it changed
+  (21.6 ms to 0.7 ms with a 1 MB note open).
+
+### Opening a note
+
+- Above 128 kB a note goes up at once as plain paragraphs
+  (`plainParagraphs()`) and the parse runs on the thread pool; the styled
+  version replaces it when it arrives (200 kB: 25.7 to 2.2 ms to readable,
+  1 MB: 146 to 11.3 ms). Below 128 kB the parse is faster than a frame and
+  stays synchronous, so there is no unstyled flicker. Callers that must hold
+  the parsed note (a canvas card's grab, a PDF export) call
+  `MarkdownEditor::finishParse()`, which waits on the pool and adopts the
+  result; they must not spin a nested `QEventLoop`, because the canvas card is
+  rendered inside `paintEvent`.
+- `ObsidianSyntax::scan` finds `%%...%%` comments in one pass over the whole
+  text and assigns matches to regions by binary search (a lazy pattern run
+  once per region was quadratic on a 1 MB note). Panes read the note once per
+  refresh, not once per link.
+- `rebuildBlocks` builds its `BlockView`s (1.6 kB each) in a vector sized for
+  them, so growth never moves them.
+- A notebook's stored outputs are seeded as one closure per cache key and
+  decoded the first time a laid-out block looks them up; a run or a clear
+  before then drops the closure (40 PNG outputs: 351 to 35 ms).
+- Backlinks cost nothing in the vault size: links carry `tname`, the target's
+  last path component folded and without the extension, indexed, and a target
+  can only resolve to a note with that name. Unlinked mentions read only the
+  first 16 kB of a candidate (more only if its front matter is still open) and
+  parse only the front matter.
+
+### Start-up
+
+- The window is shown first and the vault is read second (`openWhenShown()`
+  waits for the empty shell's first paint): on screen at 50 ms instead of
+  194 ms, for 8.8 ms of real cost because the shell is painted twice. That is
+  inside the 10 ms rule, but anything further has to make the first paint
+  cheaper rather than add another.
+- Work is not done until it is needed. The settings pages are built on their
+  first `showEvent`, one page at a time, with the style sheet set before the
+  rows exist (first open 252 to 30 ms). Each editor's `CodeHighlighter` builds
+  its syntax repository on the first `knows()` or `highlight()` (2.3 ms each,
+  and a canvas builds an editor per visible node). libgit2 is not initialised
+  until history is first used (the init is 3-4 ms and 6.2 MB, mostly OpenSSL).
+- The theme is applied to the application before any widget is built, and
+  `applyTheme()` sets the palette and the style sheet only when they differ,
+  because setting an unchanged sheet repolishes every widget.
+- The `[[` suggester sets uniform item sizes: without them an application-wide
+  style change measured 60 000 rows (157 ms of a 20 000-note cold start).
+- The panes that listen to `Index::changed` refresh once per change, and a
+  hidden pane (graph, tags) only marks itself stale and catches up in
+  `showEvent()`.
+- The indexer's directory watches come from the scan's own walk, each with the
+  mtime it read; a directory whose mtime moved before its watch started
+  triggers a rescan, and only the difference is (re)watched. A folder inotify
+  will not watch (past `fs.inotify.max_user_watches`, or no permission) is
+  reported once in the status bar, and the indexer rescans every 30 s while any
+  folder lacks a watch.
+
+### Indexing and queries
+
+- A scan - walk, `isCurrent`, attachments, removals and writes - runs on a
+  thread of its own with its own connection (`Index::Writer`), with statements
+  prepared once. The UI thread takes only each 256-note chunk's names and
+  progress, and one `changed()` at the end. A scan that `stop()` cancels drops
+  what it queued, so its names never reach the next vault's table.
+- The full-text table is deleted by an indexed key; a non-indexed column made
+  every note scan the whole table (20 000 notes: 39.8 s to 3.6 s, later 1 s).
+- `Index::search()` sorts `rowid, path` only and reads a body by rowid while
+  fewer than `limit` notes have matched (a query matching every note: 18.1 to
+  6.4 ms).
+- `Index::tagCounts()` reads the (note, tag) pairs once and adds each note to
+  its tag and every `/`-parent (4 505 tags: 9.5 s of `notesWithTag()` calls to
+  38 ms).
+- `allNotesForBases` uses forward-only queries and reads the three child
+  tables on their own threads and connections (WAL lets readers run side by
+  side), with `std::async` because the caller may itself be on the global pool
+  (65 to 33 ms). `GROUP_CONCAT` per note was slower.
+
+### Scrolling and GPU acceleration
+
+`QAbstractScrollArea` repaints everything on any scroll. The editor overrides
+`scrollContentsBy`: when the step is smaller than the viewport and the layout
+that runs with it moved nothing on screen, `viewport()->scroll()` moves the
+painted pixels and only the exposed strip is painted, and `paintEvent` finds
+the blocks in that strip by binary search (a wheel notch 1.00 to 0.40-0.65 ms,
+headless cage, 1180x760). A page step, a layout that moved something visible
+and the OpenGL viewport repaint whole. A step whose reach (a screen either
+side) is already laid out skips `updateLayout()`, and while the touch scroller
+moves the hover ring is not re-aimed. `ScrollTest.AScrolledFrameMatchesAFreshOne`
+compares the backing store after odd-sized scrolls against a full repaint.
+
+At a fractional device pixel ratio Qt cannot blit: `QBackingStore::scroll`
+refuses a non-integer native delta and Qt Wayland's shm store refuses any
+scroll at a fractional scale, so every frame repaints the viewport and uploads
+it. The OpenGL viewport has no shm upload. `editor.gpuAcceleration` is
+therefore `auto`, `true` or `false`, and `auto` takes OpenGL exactly where
+raster cannot blit, a fractional ratio (`MarkdownEditor::GPUaccelerationWanted`,
+pinned by `GPUaccelerationTest.AutomaticIsOnOnlyAtAFractionalScale`). Where
+raster can blit it is faster: on a Radeon 780M 2-in-1 laptop at scale 1 a 72 px
+step is 0.96 ms raster against 2.37 ms OpenGL, a page 2.24 against 3.34 ms.
+On a FydeTab Duo (RK3588S, Mali-G610, 2560x1600 at GNOME's 1.67) OpenGL scrolls
+a real note at 60 fps with a 3.8 ms paint and a 16.6 ms frame gap. The touch
+scroller's `DragStartDistance` is 2 mm (Qt's 5 mm default made the page stand
+still under the finger), and `Theme::firstAvailableFamily` / `hasFamily` cache
+the family set, dropped on `fontDatabaseChanged`, because
+`QFontDatabase::families()` rebuilds its list on every call.
+`PopupStyle::polish` grabs the touch gesture for every scroll area that is not
+inside another, so the settings page, the file tree and the panes scroll by
+finger.
 
 ### The graph view at 20 000 notes
 
 A step of the force layout is O(n log n) and a frame is linear in nodes and
-edges, and both ran on the UI thread: at 20 000 notes and 40 000 links a step
-was 22-28 ms and a frame 18 ms, so a settling graph held the window for ~65 ms a
-tick and every hover repainted for ~18 ms. Opening the graph read the index
-(`Index::graphData()`, 100 ms with its 40 000 link resolutions) and built the
-node lists on the UI thread too, and every note save did it again, scattering
-every node (`m_layout.reset()`) as it went.
+edges; at 20 000 notes and 40 000 links a step is 22-28 ms and a frame 18 ms,
+so both run off the UI thread. Stepping and painting are one `QtConcurrent` job
+at a time, painted into a `QImage`; the UI thread draws that image (and,
+between jobs, maps it from the camera it was painted with to the current one,
+so pan and zoom are instant). The index read, link resolution and node/edge
+building run on a worker over a snapshot (`Index::graphDataIn`, the same
+pattern as `searchIn`); a rebuild keeps every surviving node where it was.
+Threading contract: GraphView.h.
 
-Now: stepping and painting are one `QtConcurrent` job at a time, painted into a
-`QImage`; the UI thread draws that image (and, between jobs, maps it from the
-camera it was painted with to the current one, so pan and zoom are instant).
-The index read, link resolution and node/edge building run on a worker over a
-snapshot (`Index::graphDataIn`, same pattern as `searchIn`); the rebuild keeps
-every surviving node where it was. Threading contract: GraphView.h.
-
-| 20 000 notes / 40 000 links, best of three | before | after |
+| 20 000 notes / 40 000 links, best of three | on the UI thread | on a worker |
 |---|---|---|
-| layout step (unchanged, on a worker now) | 28.5 ms | 22 ms (run-to-run noise) |
-| frame (on a worker now) | 17.9 ms | 8.5 ms |
+| layout step | 28.5 ms | 22 ms (run-to-run noise) |
+| frame | 17.9 ms | 8.5 ms |
 | UI thread per paint | 17.9 ms | 0.2 ms |
 | `setIndex()` blocks the UI | 123 ms | 0.0 ms |
 | longest UI stall while the graph loads | 123 ms | 6.8 ms |
 | graph ready after `setIndex()` | 123 ms | 83 ms |
-| 5 000 nodes, step / frame (the old guard) | 5.5 / 9.5 ms | 4.4 / 2.8 ms |
 
 `GraphPerformanceTest.TwentyThousandNodesReportCosts` prints the first four;
-`BigVaultOpenCosts` (set `NOTEAPPC_GRAPH_BENCH_NOTES=20000`) prints the rest.
-Left: a save while the graph is visible waits for the job in flight before it
-rebuilds - one job, ~35 ms at 20 000 notes, but up to 250 ms with Animate off,
-which runs a settling pass per job.
+`BigVaultOpenCosts` (set `NOTEAPPC_GRAPH_BENCH_NOTES=20000`) prints the rest. A
+save while the graph is visible waits for the job in flight before it
+rebuilds: one job, about 35 ms at 20 000 notes, but up to 250 ms with Animate
+off, which runs a settling pass per job.
+
+### The EPUB reader
+
+Measured by `tests/test_epub.cpp`'s own `Perf*` tests, printed via
+`fprintf(stderr, ...)` (`QT_FORCE_STDERR_LOGGING=1 ctest -R epub`), not by the
+bench.
+
+- **Chapter rendering** runs litehtml's layout and raster (about 11 ms) on
+  `QtConcurrent::run`, delivered back through the same Lifeline +
+  generation-counter pattern (`m_renderEpoch`) the editor's embeds use
+  (`PdfEmbedBlock.cpp`). The archive, CSS and font work stays on the calling
+  thread: it is cheap, and `QFontDatabase::addApplicationFontFromData` is not
+  safe off the GUI thread. A cache miss during paint shows the known or guessed
+  chapter height as a placeholder and repaints when the worker delivers. The
+  work costs the same; it no longer blocks the UI thread.
+- **The table of contents** is built the first time the panel is shown, one
+  level at a time (a node with children gets one placeholder row until it is
+  expanded, `onTocExpanded()`). On a synthetic 50 000-entry TOC `open()` costs
+  0, the first show 346 us, one volume of 1 000 rows 429 us, the other 49 000
+  rows 20.1 ms (what an eager build at `open()` would pay).
+- **CSS `url()` resources** in stylesheets and inline `<style>` blocks are
+  extracted from the archive like an `<img src>` (`rewriteCssUrls`), and every
+  `@font-face` source is registered once per archive path
+  (`registerChapterFonts`). Remote sources are never fetched.
+- **Paged mode** shows one or two page-height slices of the same continuous
+  litehtml layout (`m_vscroll` snapped to multiples of the viewport height,
+  two columns from `kTwoColumnMinWidth`, 900 px), so the render cache,
+  hit-testing and highlight painting work in both modes. A page turn is a
+  position update (0 ms).
+
+### Smaller things
+
+- `NoteHistory`'s constructor only stores the path; the first call that needs
+  the repository opens it (the first save, on the history pool).
+- `Vault::decode` skips the CRLF replace for text with no `\r`.
+- A canvas's cold first paint tracks the visible nodes, not the total: the
+  guard compares a 1 000-node canvas with one of 60 nodes that all fit the
+  viewport (about 1x; a broken cull is about 16x).
 
 ## Tried and not adopted
 
 ### OpenGL viewport
 
-`0a5fefc`. `MarkdownEditor::setGPUacceleration` swaps the viewport for a
-`QOpenGLWidget`, which is the supported way to put widget painting on the GPU
-without QML. It is a setting, off by default at an integer scale, because it
-measured slower there; at a fractional scale it is on by default since
-2026-10-19, where raster cannot blit ([fix 33](#33-a-fractional-scale-repainted-the-whole-note-on-every-scroll-step)).
+`MarkdownEditor::setGPUacceleration` swaps the viewport for a `QOpenGLWidget`,
+which is the supported way to put widget painting on the GPU without QML. At an
+integer scale it measured slower, so it is off there; at a fractional scale it
+is on by default, where raster cannot blit (see "Scrolling and GPU
+acceleration").
 
 On screen, vsync off, 5 000-line note, three runs:
 
@@ -1209,28 +635,29 @@ On screen, vsync off, 5 000-line note, three runs:
 About 11% slower overall - the GL paint engine's glyph cache is the usual
 reason for text - with a steadier tail.
 
-Re-measured headless in `cage`, where both viewports get the same virtual
-output and near-equal frame counts (420 and 444), so frame by frame is fair:
+Headless in `cage`, where both viewports get the same virtual output and
+near-equal frame counts (420 and 444), so frame by frame is fair:
 
 | viewport | median frame | worst frame |
 |---|---|---|
 | raster | 0.70-0.98 ms | 5.3-5.6 ms |
 | OpenGL | 1.57-1.68 ms | 4.3-4.8 ms |
 
-The same verdict: slower on average, slightly steadier in the tail. The per-frame medians are not
-comparable on their own, because the GL viewport scrolled in larger steps: 216
-frames against 400. The whole sweep is the fair number.
+The same verdict: slower on average, slightly steadier in the tail. The
+per-frame medians are not comparable on their own, because the GL viewport
+scrolled in larger steps: 216 frames against 400. The whole sweep is the fair
+number.
 
 ### Vulkan
 
-Qt 6.11 on this machine has Vulkan and `QRhiWidget`, so a Vulkan path is
-buildable. It is not a switch, though: there is no Vulkan paint engine for
-`QPainter`. Vulkan in a widget application means `QRhiWidget` plus a renderer
-of our own - a glyph atlas built from `QRawFont::alphaMapForGlyph`, glyph
-positions taken from the `QGlyphRun`s the existing `QTextLayout`s already
-produce, one instanced-quad pipeline, and shaders compiled with Qt's `qsb` so
-the same source serves Vulkan, OpenGL and Metal. Every panel, caret, selection,
-image and callout the editor paints today would have to be redrawn that way.
+Qt 6.11 has Vulkan and `QRhiWidget`, so a Vulkan path is buildable. It is not a
+switch, though: there is no Vulkan paint engine for `QPainter`. Vulkan in a
+widget application means `QRhiWidget` plus a renderer of our own - a glyph
+atlas built from `QRawFont::alphaMapForGlyph`, glyph positions taken from the
+`QGlyphRun`s the existing `QTextLayout`s already produce, one instanced-quad
+pipeline, and shaders compiled with Qt's `qsb` so the same source serves
+Vulkan, OpenGL and Metal. Every panel, caret, selection, image and callout the
+editor paints today would have to be redrawn that way.
 
 Whether that is worth building depends on where raster runs out, which is
 pixels. Full-page scroll of a 5 000-line note:
@@ -1244,37 +671,26 @@ pixels. Full-page scroll of a 5 000-line note:
 | 2560x1440 @2x | 14.7 Mpx | 6.89 ms | 8.61 ms |
 | 3840x2160 @2x | 33 Mpx | 18.2 ms | 21.7 ms |
 
-This machine's main panel is 3440x1440 at 240 Hz, a 4.17 ms budget, and raster
-fits it with room. The editor's column is capped at a readable width, so most
-of a wide window is flat background, which is cheap. Raster stops keeping up
-at a 5K panel at 2x (6.9 ms, over a 144 Hz budget) and falls below 60 Hz at 6K
-and beyond.
+The development machine's main panel is 3440x1440 at 240 Hz, a 4.17 ms budget,
+and raster fits it with room. The editor's column is capped at a readable
+width, so most of a wide window is flat background, which is cheap. Raster
+stops keeping up at a 5K panel at 2x (6.9 ms, over a 144 Hz budget) and falls
+below 60 Hz at 6K and beyond.
 
-So the order is:
+Scrolling already blits, so a wheel notch repaints only the strip that came in.
+The remaining cost raster has is the Wayland buffer transfer. As a proxy, the
+compositor's own CPU time per frame (`perf stat -i` on `cage`, its threads
+only, minus a run that opens the window and scrolls nothing, user time, 1180x760)
+is 0.28-0.31 ms for raster (shared-memory buffer, uploaded) against 0.065 ms for
+OpenGL (the buffer stays on the GPU). The copy is real, roughly 1.4 ms at
+3440x1440 if it scales with the pixels (an estimate, not a measurement), but
+raster still costs less in all, app and compositor together, than OpenGL does at
+this size. That is cage's wlroots GLES2 renderer, not Hyprland. Reproduce with
+`noteAppC-bench --gpu --only none|raster|opengl` under
+`perf stat -i -e task-clock -- cage -- ...`.
 
-1. **Scroll by blitting.** Done, fix 12: a wheel notch now moves the pixels
-   already painted and repaints only the strip that came in.
-2. **Measure the Wayland buffer transfer.** Measured 2026-09-23, as a proxy:
-   the compositor's own CPU time while the on-screen bench scrolls, taken
-   with `perf stat -i` on `cage` (its threads only, not the bench inside it),
-   minus a run that opens the window and scrolls nothing. User time only,
-   two runs each, 1180x760:
-
-   | viewport | compositor CPU per frame | the app's own frame |
-   |---|---|---|
-   | raster (shared-memory buffer, uploaded) | 0.28-0.31 ms | 0.34-0.65 ms (wheel) |
-   | OpenGL (the buffer stays on the GPU) | 0.065 ms | 1.56 ms (wheel) |
-
-   So the copy is real - a quarter of a millisecond of someone's CPU per
-   frame at this size, roughly 1.4 ms at 3440x1440 if it scales with the
-   pixels, which is an estimate, not a measurement - but raster still costs
-   less in all, app and compositor together, than OpenGL does here. And it is
-   cage's wlroots GLES2 renderer, not Hyprland; the number to trust would be
-   Hyprland's own, which cannot be taken without a window on a real monitor.
-   Reproduce with `noteAppC-bench --gpu --only none|raster|opengl` under
-   `perf stat -i -e task-clock -- cage -- ...`.
-3. **Then a Vulkan renderer**, only if HiDPI panels matter or step 2 says the
-   copy does. It would sit behind the same `editor.gpuAcceleration` setting.
+A Vulkan renderer is only worth building if HiDPI panels matter. It would sit
+behind the same `editor.gpuAcceleration` setting; none is built.
 
 ## Measurement pitfalls
 
@@ -1288,26 +704,16 @@ Each of these produced a wrong number at least once in this project.
   on screen, with vsync off, or every sample comes back as one refresh.
 - **A frame captured at logical size.** `paintedFrame()` built its image at the
   widget's logical size, so a 2x run painted a quarter of the pixels and called
-  it 2x. It surfaced because the 2x and 1x numbers came back identical. Fixed in
-  `25ea55a`.
+  it 2x. It surfaced because the 2x and 1x numbers came back identical.
 - **Unequal step counts.** Two viewports scrolling the same document in
   different step sizes cannot be compared frame for frame. Compare the sweep.
 - **A guard that stops guarding.** Moving the parse off the UI thread changed
   what the editor's linearity test measured, without failing it. When the code
   path under a test changes, check the test still exercises the thing it was
   written for.
-- **A tool that hangs looks like the code under test hanging.** A screenshot
-  of a note that did not exist blocked forever on a modal error box nobody
-  could dismiss offscreen, and it was first taken for a bug in the inline
-  maths that had just landed. The tool now refuses a missing vault or note.
 - **A benchmark that skips the real path.** The keystroke row drove a bare
   editor, so a whole-document word count the shell ran on every keystroke was
   invisible to it for as long as it existed.
-- **Building while another agent edits a shared header.** A struct grew a
-  field in `Decorations.h` in the middle of a build; some objects saw one
-  layout and some the other, and a destructor crashed freeing a string that was
-  not there. It looked exactly like a real bug. Rebuild everything that
-  includes a header after it changes, and do not build over a live edit.
 - **Exact-colour pixel counts on antialiased text.** Only a handful of a
   label's pixels land on its exact colour, and how many depends on Qt's glyph
   cache - a test passed alone and failed every time after another test had
@@ -1337,142 +743,3 @@ Each of these produced a wrong number at least once in this project.
 - **A hypothesis is not a measurement.** Font enumeration was the suspect for
   constructor cost and measured 0.0 ms; the settings page, which nobody
   suspected, was 12 ms.
-
-## Still open
-
-- Two passes per keystroke are still proportional to the note, not the edit:
-  `shiftRanges` over every block and decoration, and `updateLayout()`'s one
-  placement pass. 0.44 ms in all at 1 MB. Proportional to the edit would take
-  offsets stored relative to something, which is a bigger change than the
-  numbers ask for yet.
-- The Wayland buffer measurement, above.
-- PDF page rasters in an editor (`m_pdfPageCache`) are never evicted. Zooming a
-  PDF embed adds rasters up to 4x the width, so those alone are bounded (128 MB,
-  oldest out first, `PdfEmbedBlock.cpp`); a budget over the ordinary ones would
-  want a `QCache`, and a 100-page column re-rendering as it scrolls is the
-  cost to weigh. Zoom itself is a repaint of the held raster, no layout.
-- Sidebar construction is 7.4 ms of the 15.4 ms constructor, and it is on the
-  path to first paint.
-- The process's first window is 36 ms to its first frame: fonts (about 5 ms,
-  no earlier work to overlap) and `Indexer::rewatch`'s directory walk (6.7 ms,
-  see fix 32) are what is left that is not needed for the frame.
-- The Tags pane rebuilds in 36 ms the first time it is shown after an index
-  change; incremental updates of the tree would remove that.
-- A keystroke on the 1 MB note is mostly text shaping of the edited block;
-  nothing cheap was left in it.
-
-## 2026-10-16 wave A/B: before the wave (6dd2608) vs after (all changes merged)
-
-Best of three interleaved runs, 20 000 notes, one core complex of the development machine, load 7-9. No
-row is more than 15% worse. Cold start to first painted frame 35.1 -> 18.8 ms,
-1 MB open 12.65 -> 10.57 ms, settings pass 1.41 -> 0.68 ms, keystroke on the
-1 MB note 0.50 -> 0.53 ms (budget 0.6), peak RSS 229.5 -> 226.3 MB; cold index
-1036 -> 1059 ms (+2%, noise). New rows (tags pane 36.7 ms, notebook open
-34.3 ms, resize/fold/media 0.2-1.4 ms, source table Tab 1.9 ms) have no
-before value.
-
-## 2026-10-18 index8: saves, renames and the link list
-
-20 000 notes (`tools/gen_bench_vault.py`), one core complex of the development machine under load, scan-thread
-times as the indexer's own clock reports them.
-
-- An in-app save used to cause two scans: the note's own, then, 300 ms later, the
-  watcher's debounced full walk (130-140 ms, nothing to index). The debounce now
-  hands the scan only the folders the watcher named (a folder it did not hold yet
-  is read whole and watched), so the second scan reads one folder: 30-40 ms, and
-  the index is idle 340-380 ms after the save instead of 440 ms. A whole-vault walk
-  is left to explicit rebuilds, a setting that changes how notes parse, and the 30 s
-  poll while a folder cannot be watched. Edits made in place by another program to a
-  note that is not open raise no folder event (inotify on a folder does not report
-  them); editors that save through a temp file do.
-- `Index::linkTargets()` after a name change: 16.0 -> 3.6 ms (cold 16.8 -> 8.2 ms),
-  by reading the names kept in memory (kept in order) instead of a second pass over
-  the names table.
-- A rename no longer waits for the indexer (it could start a full walk on the UI
-  thread and wait up to a second): the notes just saved, and those the indexer has
-  been asked to read, are named to the rewrite, which reads them from disk.
-
-## 2026-10-18 watch: edits made in place
-
-`Indexer` reads inotify directly on Linux (`libs/index/DirWatcher`) instead of
-through QFileSystemWatcher, whose folder watch reports only entries appearing,
-going or being renamed. A program that opens a note, writes it and closes it (no
-temp file, no rename) is now seen: the watch adds `IN_CLOSE_WRITE`, and the note
-alone goes to the same 300 ms debounce and is reindexed (no folder read, no
-whole walk). Still one watch per folder; the fd is read through a
-`QSocketNotifier` (no thread, no timer), so nothing wakes while the vault is
-idle. `IN_MODIFY` is not used: a program that holds a note open and writes
-without closing it is seen when it closes. A file that is not a note (an
-attachment, a temp file) is read with its folder, as before. A full kernel queue
-(`IN_Q_OVERFLOW`) starts a whole rescan. A folder the kernel will not watch still
-turns on the 30 s poll and the status message. Other platforms keep
-QFileSystemWatcher (folder events only).
-
-## 2026-10-19 checkbox states
-
-Any one character in a task's box is a state (docs/EDITOR.md, Checkbox states).
-What it costs, by the rules above:
-
-- **Off** (`ParseOptions::taskStates` false, the plugin switched off): one `bool`
-  branch per list item in `describeListItem` and in `parseListLine`. `taskStateOf`
-  answers `[ ]`, `[x]` and `[X]` from a two-entry scan of a function-local static
-  table, so no `tasks.ini` is read and no table lookup happens until a task with
-  another character is painted. The tasks table of the index keeps one character
-  where it kept a flag.
-- **On** (the default in the window): the same regex engine with a different class
-  (`[^\[\]\n]` for `[ xX]`), one scan of the 13-entry table per custom task per
-  layout, one per paint of its box.
-- The index schema went 6 to 7 (`tasks.state`), so the first start after the
-  upgrade is one cold index.
-
-Measured with `noteAppC-bench` (Release, offscreen) against the commit this was
-branched from, built the same way, interleaved. **Indicative only: other builds
-were running on the machine (load average 10-15), so read the ratios.** The
-standalone-editor rows run with `ParseOptions` default (feature off); the window
-rows go through `MainWindow::parseOptions()` (feature on).
-
-| what | before | after |
-|---|---|---|
-| keystroke, 1 kB note (off) | 0.52 ms | 0.46 ms |
-| keystroke, 200 kB note (off) | 0.70 ms | 0.45 ms |
-| keystroke, 1 MB note (off) | 1.16 ms | 0.91 ms |
-| keystroke through the window, 200 kB note (on) | 0.30 ms | 0.33 ms |
-| open a 1 kB / 200 kB / 1 MB note in the window (on) | 3.0 / 3.9 / 11.9 ms | 2.5 / 3.1 / 11.2 ms |
-| cold index, 5 000 notes, bare `Indexer` | 425 ms | 413 ms |
-| `OpeningAMegabyteNoteIsImmediate`, 10 runs each, load low | 7.4 ms (200 kB 1.8) | 7.4 ms (200 kB 1.8) |
-
-No row moves outside what two runs of the same binary differ by. The same test
-failed about one run in six on the new build while the machine was loaded and
-passed ten of ten, alongside the old build, once the load fell.
-
-## 2026-10-23 the October performance pass
-
-Seven areas (window and start, index, editor and bench, build and process, panes, poppler and the share stack as
-modules, big-note memory) against main `6404d9d`, measured on the merged tree `686c7db` with interleaved A/B runs
-(order reversed per round, load under 4 and CPU pressure under 0.3 where the box allowed, offscreen, own XDG; medians
-of the runs' medians). `ctest` 73 of 73.
-
-| what | before | after | why |
-|---|---|---|---|
-| `notolith --version`, instructions | 785 M | 127 M | help, version and the hand-over answer before `QApplication`; `--as-needed`; libzmq on first use; poppler and the share stack are modules (362 to 172 mapped objects after paint) |
-| warm start of a 20 000-note vault, instructions / CPU | 5.67 G / 603 ms | 2.11 G / 262 ms | the file tree stopped asking for every file's MIME type, graph data waits for the pane, the warm check is one query, image plugins load by suffix list |
-| steady RSS, 20 000-note vault (12 s) | 254 MB | 173 MB | fewer libraries mapped, no graph read, one `malloc_trim` at 8 s |
-| move a tab to a new window / pop-out, 20 000 notes | 11.6 / 19.7 ms | 3.6 / 11.6 ms | same file-tree fix |
-| note open, 1 MB / 200 kB | 7.7 / 2.0 ms | 2.6 / 1.5 ms | the placeholder before the parse lands is 64-line chunks, not a view per paragraph (40 893 to 1 350 views) |
-| peak RSS with a 1 MB note, real process (given as argument / handed over later) | 505 / 526 MB | 419 / 374 MB | the chunked placeholder and one trim after the first big parse |
-| fold / media arrival / resize width kept, 1 MB | 0.71 / 0.74 / 0.57 ms | 0.47 / 0.49 / 0.42 ms | `blockGap` read the note's text and two cache lines of every view per relayout; it reads two fields beside `y` now |
-| parse landing to painted, 1 MB | 13-15 ms | 3.9 ms | a view nothing laid out is reset, not rebuilt |
-| autosave, UI thread blocked, 200 kB / 1 MB | the whole save, 5.7 / 6.7 ms | 0.20 / 1.3 ms | the commit and the recovery copies run on a thread of their own; durable time unchanged |
-| index every note stale (`noteAppC-index`, 20 000 notes) | 255-272 s | 2 s | the eight child tables had no index on `file`: each delete scanned them (not re-run for the closing table) |
-| cold index, 20 000 notes | 1 038 ms | 990 ms | the child indexes are made at the end of an empty build, not up front |
-
-What got slower, and why. The bench rows "keystroke through the whole window, 200 kB" (0.23 to 0.32 ms) and "scroll
-frame, 1180x760" (0.58 to 0.64 ms) type and scroll before the parse of a note over 128 kB has landed; the chunked
-placeholder costs more per relayout than one view per paragraph. The 1 MB window keystroke on the settled note went
-0.58 to 0.34 ms. "PDF view open, 500 pages" went 2.9 to 3.5 ms with poppler behind the module's C face (the first real
-open also pays the `dlopen`). The Settings pass on a 1 MB note went 0.83 to 0.87 ms.
-
-Tried and not kept: SQLite pragmas (cold index -4 % from `cache_size` alone, under the -5 % line), LTO (instructions -0.3
-to -3.6 %), `-ffunction-sections` with `--gc-sections` (text -0.16 %), `MALLOC_ARENA_MAX=2` (cold index +28 %), cached
-stroke outline paths for ink tiles (the 28 ms tile latency stays at 32 ms: the cost is Qt flattening each Bezier on every
-draw). Still over budget: peak RSS with a 1 MB note on the bench, 282 MB against 250 MB (the 57 354 `BlockView`s, 105 MB).

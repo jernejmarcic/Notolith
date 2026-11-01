@@ -2,7 +2,7 @@
 // and walks every note, canvas and base file, painting each so a parser or
 // layout crash shows up as a test failure instead of something a person has
 // to notice by eye. See demo/Welcome.md for what the vault covers and
-// demo-assets.md (repo root) for where its binary assets came from.
+// docs/DEMO-ASSETS.md for where its binary assets came from.
 //
 // NOTEAPPC_DEMO_VAULT_PATH is the absolute path to demo/, set by
 // tests/CMakeLists.txt so this does not depend on the working directory a
@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QListWidget>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QAbstractButton>
 #include <QAction>
@@ -185,7 +186,7 @@ TEST(DemoVaultTest, StaysUnderTheFiveMegabyteBudget)
     ASSERT_TRUE(QFileInfo::exists(vaultPath())) << vaultPath().toStdString();
     const qint64 bytes = totalVaultBytes();
     EXPECT_LT(bytes, qint64(5) * 1024 * 1024)
-        << bytes << " bytes - see demo-assets.md before adding anything larger.";
+        << bytes << " bytes - see docs/DEMO-ASSETS.md before adding anything larger.";
 }
 
 TEST(DemoVaultTest, HasContentToWalk)
@@ -379,9 +380,10 @@ TEST(DemoVaultTest, EveryCommandRunsWithoutWarnings)
     // Every right-sidebar pane (search, backlinks, tags, properties, outline,
     // ...): each has a tab button, and showing the pane fills it for the note.
     int panes = 0;
-    for (QAbstractButton *button : window.findChildren<QAbstractButton *>()) {
-        if (!button->objectName().endsWith(QLatin1String("TabButton")))
-            continue;
+    // Snapshot only the tab buttons: a snapshot of every button also holds the
+    // RecoveryDialog's (WA_DeleteOnClose, closed by the timer above), which are
+    // freed mid-loop by the event processing below.
+    for (QAbstractButton *button : window.findChildren<QAbstractButton *>(QRegularExpression(QStringLiteral("TabButton$")))) {
         SCOPED_TRACE(button->objectName().toStdString());
         button->click();
         QApplication::processEvents();

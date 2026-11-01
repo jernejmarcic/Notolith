@@ -4,8 +4,8 @@
 // control, stdin - only used for an execute() that allows it: the kernel's
 // input() asks on it and the reply goes back on it - iopub, heartbeat), all
 // owned by this object's own worker thread so kernel I/O is never on the
-// caller's thread (stage 13's requirement - a long-running cell must not
-// block anything, and interrupt must keep working while one runs).
+// caller's thread (a long-running cell must not block anything, and
+// interrupt must keep working while one runs).
 //
 // Every public method is safe to call from any thread; results come back
 // as ordinary Qt signals, which Qt itself marshals onto the receiver's

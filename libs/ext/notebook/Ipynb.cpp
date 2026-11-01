@@ -382,7 +382,7 @@ void appendString(QByteArray &out, const QString &text)
 
 void appendNumber(QByteArray &out, double number)
 {
-    // ponytail: a double cannot tell 1.0 from 1, so a float with no fraction is written as an integer, and an
+    // Limit: a double cannot tell 1.0 from 1, so a float with no fraction is written as an integer, and an
     // integer beyond 2^53 loses digits; nothing nbformat itself stores is either.
     if (number == std::floor(number) && std::abs(number) < 9.007199254740992e15)
         out += QByteArray::number(qint64(number));
@@ -548,7 +548,7 @@ CellPairing pairCells(const QList<Cell> &original, const QList<Cell> &shown)
         return original.at(k).type == shown.at(i).type && original.at(k).source == shown.at(i).source;
     };
     // The cells that did not change, found as the longest run of them in order (a cell inserted or deleted
-    // in the middle does not make every cell after it look edited). ponytail: a table n by m, so a notebook of
+    // in the middle does not make every cell after it look edited). Limit: a table n by m, so a notebook of
     // thousands of cells is paired by position instead; add a diff library if that ever matters.
     const bool tooBig = n * m > 4'000'000;
     std::vector<std::vector<int>> run(tooBig ? 0 : size_t(n) + 1, std::vector<int>(size_t(m) + 1, 0));

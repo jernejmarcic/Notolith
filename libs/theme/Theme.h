@@ -12,7 +12,7 @@ namespace noteAppC {
 
 /// Colour scheme. Tokens are keyed by Obsidian's own CSS variable names
 /// (`--background-primary`, `--text-muted`, ...) so that a palette lifted from
-/// an Obsidian theme drops straight in, and so the Phase 4 importer has
+/// an Obsidian theme drops straight in, and so the theme importer has
 /// nothing to translate.
 ///
 /// The built-in schemes carry Obsidian's documented default values verbatim.

@@ -20,16 +20,11 @@ graphviz-dot-manual.pdf 57.9 KB (9 pages - used for every PDF page-argument
 test), bell.oga 8.3 KB, example-movie.mp4 194.6 KB, color-profile.icc 416 B.
 Total assets 269 KB; the whole `demo/` vault is well under 5 MB.
 
-Picked for size and a permissive-enough licence over the first match found:
-`graphviz-dot-manual.pdf` because it is a real 9-page document, small enough
-to keep the vault tiny, and lets `#page=` arguments (single, list, range,
-mixed, `all`) all be demonstrated against the same file. `color-profile.icc`
-is deliberately an extension noteAppC does not recognise as image, audio,
-video or PDF, so it is the "unknown binary" embed - a generic file card.
-No small video existed anywhere obviously free of a licence question except
-the LaTeX example clip, which is GPL and tiny; nothing else under 2 MB turned
-up outside game asset packs whose per-asset licence was unclear, so those
-were skipped in favour of this one.
+`graphviz-dot-manual.pdf` is a real 9-page document, so `#page=` arguments
+(single, list, range, mixed, `all`) can all be shown against one file.
+`color-profile.icc` is deliberately an extension noteAppC does not recognise
+as image, audio, video or PDF, so it is the "unknown binary" embed (a generic
+file card).
 
 ## Text embeds (not from this table)
 

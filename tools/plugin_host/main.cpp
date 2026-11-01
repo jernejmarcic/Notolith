@@ -245,12 +245,6 @@ int main(int argc, char **argv)
     QString loadError;
     if (!manifest.isValid()) {
         loadError = manifest.error();
-    } else if (manifest.engine() == PluginEngineKind::QuickJS) {
-        // Not built - see tools/plugin_host/QuickJSEngine.h for the seam
-        // and the root CMakeLists.txt's NOTEAPPC_WITH_QUICKJS option, which
-        // refuses to configure a build that would ever reach this branch
-        // expecting it to work.
-        loadError = QStringLiteral("engine = quickjs is not built into this noteAppC (docs/PLUGINS.md)");
     } else {
         auto native = std::make_unique<NativeEngine>();
         if (!native->load(manifest, &kHostTable, &loadError))

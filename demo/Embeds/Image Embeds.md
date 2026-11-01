@@ -6,7 +6,7 @@ tags: [demo, embeds]
 
 What to look for: every form below should show the actual picture, sized as
 its arguments say; the wikilink and Markdown forms of a plain embed should
-look identical. Source and licence for both images are in `demo-assets.md`
+look identical. Source and licence for both images are in `docs/DEMO-ASSETS.md`
 at the project root.
 
 ## Wikilink embed, natural size

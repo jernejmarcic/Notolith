@@ -127,7 +127,7 @@ std::string safetyNumber(const PublicKey& a, const PublicKey& b)
     for (std::size_t i = 0; i < sizeof h; ++i) {
         if (i && i % 5 == 0)
             out += ' ';
-        out += char('0' + h[i] % 10); // ponytail: mod-10 bias ~2%, fine for a visual compare
+        out += char('0' + h[i] % 10); // Limit: mod-10 bias ~2%, fine for a visual compare
     }
     return out;
 }

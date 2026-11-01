@@ -4,8 +4,7 @@
 // way `jupyter --paths` and jupyter_client.kernelspec.KernelSpecManager find
 // one - a `kernel.json` under a `kernels/<name>/` directory in one of a
 // fixed list of roots. No Python runs to do this: the roots and the
-// kernel.json shape are just read directly (stage 13's requirement, "no
-// Python in the app itself").
+// kernel.json shape are just read directly (no Python in the app itself).
 
 #include <QHash>
 #include <QString>

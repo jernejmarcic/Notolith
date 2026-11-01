@@ -1320,7 +1320,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         const auto owner = m_journal->entityForPath(remote.path);
         if (owner && owner->entityID != record.entityID) {
             // A record with a parent is not the entity's first: it predates a creation, so it wins.
-            // ponytail: firstSeq reads the kept rows; 32 pushes with no pull would prune the
+            // Limit: firstSeq reads the kept rows; 32 pushes with no pull would prune the
             // oldest and misjudge this. A firstSeq column on entities if it turns up.
             const qint64 ownerFirst = m_journal->firstSeq(owner->entityID); // 0: nothing of it pushed yet
             const bool incomingWins = ownerFirst == 0 || !remote.parent.isEmpty() || record.seq < ownerFirst;

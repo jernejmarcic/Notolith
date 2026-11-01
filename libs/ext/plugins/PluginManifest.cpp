@@ -64,7 +64,11 @@ PluginManifest PluginManifest::load(const QString &directory)
                                .toString()
                                .trimmed()
                                .toLower();
-    manifest.m_engine = engine == QLatin1String("quickjs") ? PluginEngineKind::QuickJS : PluginEngineKind::Native;
+    if (engine != QLatin1String("native")) {
+        manifest.m_error = QStringLiteral("plugin.ini in %1: unsupported engine '%2' (only native)").arg(directory, engine);
+        return manifest;
+    }
+    manifest.m_engine = PluginEngineKind::Native;
 
     manifest.m_commands = splitList(ini.value(QStringLiteral("provides/commands")));
     manifest.m_codeBlockLanguages = splitList(ini.value(QStringLiteral("provides/code-blocks")));

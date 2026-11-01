@@ -4,9 +4,8 @@
 // the sidecar keeping the reader's own note text across re-extraction, and
 // that a render scheduled before the view is destroyed does nothing after.
 // Also: chapter rendering off the UI thread and the stale-render/UAF guards
-// that come with it (task 1), a lazy table of contents (task 2), @font-face
-// registration and CSS url() resource extraction (task 3), and paged mode
-// (task 4) - see docs/PERFORMANCE.md for the measured numbers.
+// that come with it, a lazy table of contents, @font-face registration and
+// CSS url() resource extraction, and paged mode - see docs/PERFORMANCE.md for the measured numbers.
 
 #include <gtest/gtest.h>
 
@@ -231,7 +230,7 @@ QString makeEpub2(const QString &dir)
 
 /// A book with a huge, two-level table of contents - `volumeCount` top-level
 /// entries, each with `chaptersPerVolume` children - and exactly one real
-/// spine chapter every entry points at (task 2's fixture only needs the tree
+/// spine chapter every entry points at (the lazy-TOC fixture only needs the tree
 /// shape, not distinct targets for each of possibly thousands of rows).
 QString makeEpubWithHugeToc(const QString &dir, int volumeCount, int chaptersPerVolume)
 {
@@ -273,7 +272,7 @@ QString makeEpubWithHugeToc(const QString &dir, int volumeCount, int chaptersPer
 }
 
 /// A book whose stylesheet declares two `@font-face` rules (one local, one
-/// remote - never fetched) and a `background-image` - task 3's fixture.
+/// remote - never fetched) and a `background-image` - the CSS-resource fixture.
 /// `fontBytes` is embedded verbatim as the local font's source; the caller
 /// decides whether that is a real font (to check registration succeeds) or
 /// garbage (to check a failed load still degrades quietly).
@@ -564,7 +563,7 @@ TEST(EpubViewTest, NavigatesToALocatorFragment)
     EXPECT_FALSE(view.navigateToFragment(QStringLiteral("epub:99:0-5")));
 }
 
-// --- task 1: chapter rendering moves off the UI thread ----------------------
+// --- chapter rendering moves off the UI thread ------------------------------
 
 TEST(EpubViewTest, ChapterRenderRunsOffThreadAndArrivesAsynchronously)
 {
@@ -644,7 +643,7 @@ TEST(EpubViewTest, DeletingTheViewWhileAWorkerRenderIsInFlightIsSafe)
     SUCCEED();
 }
 
-// --- task 2: lazy table of contents ------------------------------------
+// --- lazy table of contents -------------------------------------------------
 
 TEST(EpubViewTest, TocIsNotBuiltAtOpenEvenForAHugeBook)
 {
@@ -693,7 +692,7 @@ TEST(EpubViewTest, TocExpandsOneNodeAtATimeAndOnlyOnce)
     EXPECT_EQ(view.tocChildCountForTest(0), 100);
 }
 
-// --- task 3: CSS url() resources - fonts and background images -------------
+// --- CSS url() resources - fonts and background images ----------------------
 
 TEST(EpubViewTest, FontFaceIsRegisteredSynchronouslyBeforeTheWorkerIsDispatched)
 {
@@ -765,7 +764,7 @@ TEST(EpubViewTest, BackgroundImageUrlInCssIsExtractedFromTheArchive)
     EXPECT_TRUE(QFileInfo::exists(expected));
 }
 
-// --- task 4: paged mode -----------------------------------------------------
+// --- paged mode -------------------------------------------------------------
 
 TEST(EpubViewTest, PagedModeTurnsByExactlyOnePageHeight)
 {
@@ -892,7 +891,7 @@ TEST(EpubViewTest, HighlightsPaintInPagedModeWithoutCrashing)
     SUCCEED();
 }
 
-// --- task 5: a real book, if this machine happens to have one --------------
+// --- a real book, if this machine happens to have one -----------------------
 
 TEST(EpubViewTest, OpensARealCalibreSampleBookIfPresentOnThisMachine)
 {
@@ -950,10 +949,9 @@ TEST(EpubViewTest, PerfChapterRenderDispatchStaysOffTheUiThread)
         other.requestChapterForTest(0);
         return qint64(again.elapsed());
     }, 3, 5);
-    // The UI thread's own share of task 1's ~11 ms/chapter litehtml cost is
-    // now just building the request and handing it to QtConcurrent::run -
-    // not the layout/raster itself, which used to be the whole 11 ms spent
-    // right here before this task.
+    // The UI thread's own share of the ~11 ms/chapter litehtml cost is just
+    // building the request and handing it to QtConcurrent::run, not the
+    // layout/raster itself.
     EXPECT_LT(dispatchMs, 5);
 
     timer.restart();
@@ -961,8 +959,8 @@ TEST(EpubViewTest, PerfChapterRenderDispatchStaysOffTheUiThread)
     const qint64 totalMs = timer.elapsed();
     fprintf(stderr,
             "[epub perf] chapter render: dispatch (blocks the UI thread) %lld ms, "
-            "total incl. worker (does not block it) %lld ms - before this task both numbers were "
-            "the same ~11 ms, all on the UI thread\n",
+            "total incl. worker (does not block it) %lld ms - both were once the same "
+            "~11 ms, all on the UI thread\n",
             (long long)dispatchMs, (long long)totalMs);
 }
 

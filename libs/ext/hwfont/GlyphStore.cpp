@@ -122,7 +122,7 @@ int renameNoReplace(const QString &from, const QString &to)
     if (errno != EINVAL && errno != ENOSYS && errno != ENOTSUP)
         return errno;
 #endif
-    // ponytail: check-then-rename leaves a window of microseconds in which a sample written by another
+    // Limit: check-then-rename leaves a window of microseconds in which a sample written by another
     // process or a sync is replaced; only on file systems without RENAME_NOREPLACE (FAT, some network mounts).
     if (QFileInfo(to).isSymLink() || QFileInfo::exists(to))
         return EEXIST;

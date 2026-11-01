@@ -11,5 +11,3 @@ file tree and tab title, not as mangled bytes or a question mark.
 Linked from [[Unicode and Scripts]]. See also
 [[Gödel, Escher, Bach]] in the [[Library]] collection for another
 non-ASCII filename already in this vault.
-
-Wowy this is pretty fucking cool 

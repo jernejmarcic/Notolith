@@ -1,4 +1,4 @@
-/// A fenced code block's Jupyter-kernel output (stage 13/docs/PLUGINS.md,
+/// A fenced code block's Jupyter-kernel output (docs/PLUGINS.md,
 /// Tier 1): unlike CodeBlockHook.cpp's plugin fences, this never replaces
 /// the listing - the source stays exactly as written, a run control joins
 /// "Copy" in the header (codeLabelOf, paintCodeChrome, handleBlockClick),
@@ -279,8 +279,7 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
     const bool sandboxHost = options && options->sandboxHost;
     const bool sandboxWasm = options && options->sandboxWasm;
     // The tier is part of the key: a host-tier and a bubblewrap-tier run of
-    // the same source must never share a cached result (this stage's own
-    // requirement) - the working directory is not, since it never changes
+    // the same source must never share a cached result - the working directory is not, since it never changes
     // what the code itself does, only what files sit beside it. The kernel
     // choice is: it changes what state the code runs against.
     QString key = language.trimmed().toLower() + QLatin1Char('|')
@@ -288,7 +287,7 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
                   + QLatin1Char('|') + (options ? options->kernel : QString()) + QLatin1Char('|') + source;
     // The note's own `implicit-<lang>[-main]` frontmatter, unless the block
     // opts out. Part of the key: editing it makes the block look itself up
-    // again and its old output Outdated. ponytail: `py` is not `python`, a
+    // again and its old output Outdated. Limit: `py` is not `python`, a
     // note using both spellings sets both keys.
     view.extrasMut().notebookImplicit.clear();
     view.extrasMut().notebookImplicitMain.clear();

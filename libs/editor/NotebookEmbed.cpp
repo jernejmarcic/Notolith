@@ -1,4 +1,4 @@
-/// Runnable code-file embeds (stage 13's rest, item 2): `![[script.py]]`
+/// Runnable code-file embeds: `![[script.py]]`
 /// gets the same run control and output NotebookBlock.cpp already gives a
 /// fenced block - notebookEligible, appendNotebookOutput, the paint and
 /// click paths in MarkdownEditor.cpp/BlockRenderers.cpp all key off those

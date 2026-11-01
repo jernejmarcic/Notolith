@@ -1053,7 +1053,7 @@ QLabel *m_vimStatus = nullptr;
     std::function<bool(const QString &, const QString &)> m_shareApproval;
     std::function<bool(const QString &)> m_sharedRunApproval;
     /// sha256 of language + source of the shared-note blocks allowed to run.
-    /// ponytail: this run of the app only; persist it if asking again after a restart grates.
+    /// Limit: this run of the app only; persist it if asking again after a restart grates.
     QSet<QByteArray> m_sharedRunsAllowed;
     bool allowSharedRun(const MarkdownEditor *editor, const QString &language, const QString &source);
 #endif

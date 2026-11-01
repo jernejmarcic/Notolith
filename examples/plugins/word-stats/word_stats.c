@@ -83,7 +83,7 @@ static int on_run_command(const char *commandID)
 }
 
 /* calc: one arithmetic line in, "line = result" out. A single operator, no
- * precedence, no parentheses - ponytail: this is a test fixture's
+ * precedence, no parentheses - Limit: this is a test fixture's
  * calculator, not noteAppC's own; a real one would need a proper
  * recursive-descent parser, add it if calc ever ships as more than a demo. */
 static void evaluateLine(const char *line, char *out, size_t outSize)

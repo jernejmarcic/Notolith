@@ -742,7 +742,7 @@ bool Vault::isIgnored(const QString &relativePath) const
     if (!m_filtersConfigured) {
         // No configured filters: fall back to skipping the obvious build
         // artefact directories rather than sweeping them into the index.
-        // ponytail: a fixed "build*/" heuristic, not a full .gitignore reader -
+        // Limit: a fixed "build*/" heuristic, not a full .gitignore reader -
         // revisit if a real vault needs more.
         static const QRegularExpression buildDir(QStringLiteral("(^|/)build[^/]*/"));
         if (buildDir.match(relativePath).hasMatch())

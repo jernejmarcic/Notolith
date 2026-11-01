@@ -102,7 +102,7 @@ public:
     // lock held.
     std::function<bool(const PublicKey& device, const PublicKey& account)> allowPeer;
 
-    // Password login (accounts plan, phase 5): a gated node's own pre-proof
+    // Password login: a gated node's own pre-proof
     // exchange, tried instead of the 96/192-byte proof above (an ungated
     // node: instead of the offer) when the first message is exactly 32 bytes (a zero-padded username, [a-z0-9._-],
     // 3-32 chars). Both callbacks must be set together, or neither - unset

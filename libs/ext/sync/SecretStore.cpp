@@ -27,7 +27,7 @@ void runKeychainJob(QKeychain::Job *job)
 {
     QEventLoop loop;
     QObject::connect(job, &QKeychain::Job::finished, &loop, &QEventLoop::quit);
-    // ponytail: on a genuine timeout the stack-allocated job in
+    // Limit: on a genuine timeout the stack-allocated job in
     // the caller is destroyed with its D-Bus call still
     // in flight - a late reply is simply dropped (QKeychain does not
     // deliver into a destroyed QObject). Upgrade to a heap-allocated,

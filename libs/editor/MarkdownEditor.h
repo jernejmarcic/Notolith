@@ -636,7 +636,7 @@ public:
                            const std::function<void(CodeBlockResult)> &deliver)>;
     void setCodeBlockRenderer(const QStringList &languages, CodeBlockRenderer renderer);
 
-    /// One piece of a notebook block's output (NotebookBlock.cpp, stage 13):
+    /// One piece of a notebook block's output (NotebookBlock.cpp):
     /// a Jupyter kernel's stream/execute_result/display_data/error, already
     /// reduced to what this editor can draw without linking libs/ext -
     /// libs/ext/notebook's own NotebookOutput is the source this is built
@@ -680,8 +680,8 @@ public:
     };
     using NotebookInputReply = std::function<void(bool ok, const QString &line)>;
     using NotebookInputHandler = std::function<void(const NotebookInputPrompt &, const NotebookInputReply &)>;
-    /// What a run request carries besides the language and source - stage
-    /// 13's rest (per-block sandbox tier, runnable embeds). Kept as one
+    /// What a run request carries besides the language and source
+    /// (per-block sandbox tier, runnable embeds). Kept as one
     /// struct rather than growing NotebookRunner's own parameter list again
     /// for the next thing this needs to carry.
     struct NotebookRunOptions {
@@ -1022,7 +1022,7 @@ public:
     QList<BlockBox> blockBoxes();
 
     // --- editing commands -------------------------------------------------
-    // Bound to the same keys Obsidian uses; public so the Phase 4 command
+    // Bound to the same keys Obsidian uses; public so the command
     // palette can reach them without a second implementation.
 
     /// One editing command, under the id Obsidian gives it where it has one,
@@ -1621,8 +1621,7 @@ private:
     /// The picture at `path`: a file, or an `attachment:` one from the table. Null when neither decodes.
     QPixmap loadEmbedPixmap(const QString &path) const;
     bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
-    /// NotebookEmbed.cpp: a runnable `![[script.py]]` embed (stage 13's
-    /// rest) - called once layoutSourceFile has already built the panel's
+    /// NotebookEmbed.cpp: a runnable `![[script.py]]` embed - called once layoutSourceFile has already built the panel's
     /// listing, `body` is its unsliced-or-not source exactly as shown. A
     /// no-op, and no run control, for an extension no installed kernel
     /// claims, or when the notebooks feature or its runner is off.
@@ -1826,7 +1825,7 @@ private:
     /// `![[Note]]`, `![[Note#Heading]]` or `![[Note#^block-id]]`: the target
     /// note's own text (or the named section of it), in a panel like a
     /// source file embed's. A plain-text slice, not a recursive re-render of
-    /// the target's own markdown - ponytail: no nested live-preview styling,
+    /// the target's own markdown - Limit: no nested live-preview styling,
     /// upgrade to one if a transcluded note's own formatting turns out to
     /// matter enough to pay for a second parser instance per embed.
     bool layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, const QString &path);

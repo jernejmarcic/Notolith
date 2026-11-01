@@ -294,7 +294,7 @@ void KernelClient::run()
     bool hbAwaiting = false;
     bool hbAlive = true;
 
-    // ponytail: a fixed 50 ms poll tick, not a wake-on-write pipe - simplest
+    // Limit: a fixed 50 ms poll tick, not a wake-on-write pipe - simplest
     // thing that keeps both outgoing sends and the heartbeat's 1 s cadence
     // well within an interactive feel; add an eventfd/pair-socket wakeup if
     // sub-50ms send latency ever matters.

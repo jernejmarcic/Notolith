@@ -11,11 +11,11 @@
 #include <QToolButton>
 #include <QtConcurrentRun>
 
-/// Chapters: off-thread litehtml rendering through HtmlRenderer (task 1), the
+/// Chapters: off-thread litehtml rendering through HtmlRenderer, the
 /// image/text-run cache that bounds memory on a big book, resource
-/// extraction and font registration from the archive (task 3), and the
+/// extraction and font registration from the archive, and the
 /// document-space layout (cumulative chapter heights) both continuous scroll
-/// and paged mode (task 4) are built on.
+/// and paged mode are built on.
 
 namespace noteAppC {
 
@@ -211,7 +211,7 @@ QString EpubView::collectStylesheets(const QString &html, const QString &chapter
             continue;
         const QString sheetCss = QString::fromUtf8(bytes);
         // Resolved relative to *this stylesheet's own* archive path, per
-        // CSS's own rule (task 3) - not the chapter's, which is what
+        // CSS's own rule - not the chapter's, which is what
         // rewriteCssUrls/registerChapterFonts get below for an inline
         // <style> block instead.
         registerChapterFonts(sheetCss, *resolved);
@@ -279,7 +279,7 @@ void EpubView::requestChapterRender(int spineIndex)
     const int width = contentWidth();
     const qreal ratio = devicePixelRatioF();
 
-    // The litehtml layout/raster itself - the ~11 ms this task measures -
+    // The litehtml layout/raster itself - the ~11 ms a chapter costs -
     // runs here, off the UI thread. It only ever paints into a QImage this
     // call owns (never a QWidget/QPainter tied to the window, which is the
     // part Qt requires stay on the GUI thread) and only ever resolves QFonts

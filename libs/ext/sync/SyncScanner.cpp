@@ -147,7 +147,7 @@ QList<SyncScanner::Change> SyncScanner::scan(const Vault &vault, const SyncJourn
     // non-blank lines) and take a pair that is alike and clearly the best for
     // that file. A wrong pair hands the new note the old one's identity;
     // nothing is lost either way.
-    // ponytail: only when new * vanished notes <= 64, a folder of edited notes
+    // Limit: only when new * vanished notes <= 64, a folder of edited notes
     // moved at once falls back to delete + create; raise it if that turns up.
     QList<qsizetype> created;
     for (qsizetype i = 0; i < changes.size(); ++i) {

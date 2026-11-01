@@ -1,5 +1,5 @@
-// Indexes a vault and prints what the cache holds. The seed of the Phase 13
-// performance CI, and the quickest way to run the indexer over a real vault.
+// Indexes a vault and prints what the cache holds: the quickest way to run
+// the indexer over a real vault.
 //
 //   noteAppC_index [--fresh] <vault> [query]
 

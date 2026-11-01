@@ -219,7 +219,7 @@ QList<RecoveryDialog::DiffLine> RecoveryDialog::lineDiff(const QStringList &befo
     QList<DiffLine> out;
     for (qsizetype i = 0; i < head; ++i)
         out.append({DiffLine::Kind::Same, before.at(i)});
-    // ponytail: an LCS table over the changed middle, capped at four million
+    // Limit: an LCS table over the changed middle, capped at four million
     // cells; past that the middle shows as removed then added. Myers' O(ND)
     // when snapshots that different turn out to matter.
     constexpr qsizetype kCap = 4'000'000;

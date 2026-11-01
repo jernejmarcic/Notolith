@@ -666,7 +666,7 @@ TEST(PublishTest, RemovingPublishRemovesItsOldPage)
     ASSERT_TRUE(site.exists(QStringLiteral("goes.html")));
 
     // Mark Goes.md private and reindex before republishing - Publisher reads
-    // the *index's* cached properties (Phase 0), so a rebuilt cache is what
+    // the *index's* cached properties, so a rebuilt cache is what
     // makes it visible, exactly as it would be for a real edit-then-republish.
     QFile goes(site.vaultDir.filePath(QStringLiteral("Goes.md")));
     goes.open(QIODevice::WriteOnly);

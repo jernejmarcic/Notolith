@@ -29,7 +29,7 @@ struct EpubLocator {
     bool isValid() const { return spineIndex >= 0 && end > start; }
 
     /// "epub:<spineIndex>:<start>-<end>" - also the fragment half of a link
-    /// into the book, e.g. "book.epub#epub:0:128-172" (task 3).
+    /// into the book, e.g. "book.epub#epub:0:128-172".
     QString toString() const;
     static std::optional<EpubLocator> parse(const QString &text);
 

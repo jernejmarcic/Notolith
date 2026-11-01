@@ -43,7 +43,7 @@ namespace noteAppC {
 namespace {
 
 constexpr qint64 kReferenceMaxBytes = 2 * 1024 * 1024;
-// ponytail: the listing is a QTextLayout built on the UI thread on every
+// Limit: the listing is a QTextLayout built on the UI thread on every
 // relayout, so what is shown is cut here; a viewport-only layout is the upgrade.
 constexpr int kReferenceMaxLines = 500;
 constexpr qint64 kRemoteFreshMs = 5 * 60 * 1000;
@@ -695,7 +695,7 @@ void MarkdownEditor::fetchReference(const QString &key, const QString &url, quin
         });
     };
     const QString refusal = tr("%1 is a local address: not fetched").arg(host);
-    // ponytail: the name is resolved here for the check and again by the
+    // Limit: the name is resolved here for the check and again by the
     // network manager for the request, so a name that changes in between (DNS
     // rebinding) gets through; pinning the address needs a socket of our own.
     const QHostAddress literal(host);

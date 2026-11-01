@@ -13,7 +13,7 @@ set(INK_STROKE_MODELER_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 # checked find_package(absl) before adding this directory. The modeler is
 # told to use it and brings none of its own. If the modeler does not build
 # against the system Abseil, the ink core stays off until the modeler pin is
-# moved (spec section 14).
+# moved (spec section 13).
 set(INK_STROKE_MODELER_FIND_DEPENDENCIES ON CACHE BOOL "" FORCE)
 set(INK_STROKE_MODELER_FIND_ABSL ON CACHE BOOL "" FORCE)
 # The modeler's CMake asks find_package(googletest) even with its tests off, and no

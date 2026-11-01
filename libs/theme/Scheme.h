@@ -22,8 +22,8 @@ struct SchemeInfo {
 /// Obsidian theme already installed in the vault.
 ///
 /// Only colour *variables* come across from an Obsidian theme. Its layout CSS
-/// does not, and cannot - QSS is not CSS. That is the documented trade in
-/// PLAN.md section 8: palettes port, layouts do not.
+/// does not, and cannot - QSS is not CSS. That is the trade: palettes port,
+/// layouts do not.
 class Scheme {
 public:
     /// Directories searched for schemes, vault first so a vault can carry its

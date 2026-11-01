@@ -292,7 +292,7 @@ bool NoteHistory::pack()
     git_packbuilder_free(builder);
     if (!ok)
         return false;
-    // ponytail: every object this class writes is reachable from a note's
+    // Limit: every object this class writes is reachable from a note's
     // ref (an unchanged save is hashed, never written), so once the pack
     // holds every ref's history the loose copies can all go. A repository
     // something else writes to would need a real prune instead.

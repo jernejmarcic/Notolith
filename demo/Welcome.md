@@ -12,8 +12,8 @@ cssclasses:
 
 # noteAppC demo vault
 
-This is a small, hand-built vault (kept under 5 MB, see `demo-assets.md` in
-the project root next to `demo/` for where every binary file came from) that
+This is a small, hand-built vault (kept under 5 MB, see `docs/DEMO-ASSETS.md`
+for where every binary file came from) that
 exercises one feature area per note. Every note says, near the top, what it
 demonstrates and what a correct render looks like, so a regression is
 something you can *see* rather than something you have to already know to
@@ -26,7 +26,6 @@ explicitly that a feature is noteAppC's own extension (callout/code-block
 styling via `callouts.ini`/`codeblocks.ini`, documented in
 `docs/STYLING.md`).
 
-Okay so 
 ## Map of contents
 
 ### Text and structure
@@ -58,7 +57,7 @@ Okay so
 ### Embeds
 - [[Note Embeds]], [[Image Embeds]], [[PDF Embeds]], [[Media Embeds]],
   [[Source Embeds]], [[Tex Embeds]], [[Other Embeds]] - one note per embed
-  kind;.
+  kind.
 
 ### Query, bases and raw blocks
 - [[Query Blocks]] - ` ```query ` embedded search.
@@ -95,6 +94,3 @@ Okay so
 filters matching this vault's tags), `daily-notes.json`, `templates.json`,
 `bookmarks.json`, `workspace.json` and `workspaces.json` (two named
 layouts), and `hotkeys.json` (a couple of rebinds).
-Ok imma try typing something
-seems pretty smooth now. pretty GOATED
-Yes that is IT, its going great for n

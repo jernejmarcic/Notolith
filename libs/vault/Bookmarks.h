@@ -35,7 +35,7 @@ struct BookmarkItem {
 /// vault that already has Obsidian's bookmarks never creates a dotfile change
 /// and never needs Obsidian's format to be writable, only readable.
 ///
-/// ponytail: a bookmarked folder, graph or web link (Obsidian has all three)
+/// Limit: a bookmarked folder, graph or web link (Obsidian has all three)
 /// is dropped on import rather than round-tripped, since nothing here can act
 /// on them yet. Add a pass-through type if that turns out to matter.
 class Bookmarks {

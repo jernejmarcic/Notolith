@@ -523,7 +523,7 @@ void make(const std::shared_ptr<State> &state, const QString &source, const QByt
     {
         QMutexLocker lock(&state->mutex);
         if (state->memo.size() >= 64)
-            state->memo.clear(); // ponytail: a flush, not an LRU; the disk copy answers the next ask
+            state->memo.clear(); // Limit: a flush, not an LRU; the disk copy answers the next ask
         state->memo.insert(key, made);
     }
     if (!made.error.isEmpty())
@@ -535,7 +535,7 @@ void make(const std::shared_ptr<State> &state, const QString &source, const QByt
 /// while a tool runs for seconds: a hung PlantUML or TeX (20 s, TeX's two
 /// steps 40) leaves the other kinds untouched, and one hung fence leaves a
 /// thread for the next of its kind. Few threads, as a JVM or TeX is heavy.
-/// Built on the first diagram; the threads on the first job. ponytail: two
+/// Built on the first diagram; the threads on the first job. Limit: two
 /// hung fences of one kind still block it; per-key timeouts if that is felt.
 QThreadPool *pool(DiagramKind kind)
 {

@@ -16,7 +16,7 @@
 ///  - toMarkdown wraps paragraphs at 80 columns, so the soft wraps are joined.
 /// Every scan for a closing tag is one indexOf, not a lazy regex, which would
 /// be quadratic on a page of unclosed tags.
-/// ponytail: Qt escapes `*` and `_` only partly (it writes `2\*3*4`), so text
+/// Limit: Qt escapes `*` and `_` only partly (it writes `2\*3*4`), so text
 /// with several literal stars inside otherwise formatted HTML can still turn
 /// into emphasis; a fenced block inside a list item or quote loses its indent.
 

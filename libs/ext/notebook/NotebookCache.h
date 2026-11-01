@@ -1,6 +1,6 @@
 #pragma once
 
-// The output sidecar (Quarto's "freeze" idea, stage 13's requirement):
+// The output sidecar (Quarto's "freeze" idea):
 // a block's last outputs, keyed by a hash of its source and language, kept
 // outside the note so opening one never runs anything and the .md stays
 // clean text. Same cache root convention as libs/render/TexCompiler.cpp's
@@ -60,8 +60,8 @@ struct NotebookRunResult {
 /// `language` (lower-cased) + the block's own source + `tier`, hashed - not
 /// any of the display-only `#|` options (title, caption, fold, lines,
 /// highlight, wrap), which must not invalidate a cached run just because a
-/// reader changed how the listing looks. `tier` is folded in (stage 13's
-/// rest, `#| sandbox: host`) so a host-tier and a bubblewrap-tier run of the
+/// reader changed how the listing looks. `tier` is folded in (`#| sandbox: host`)
+/// so a host-tier and a bubblewrap-tier run of the
 /// same source never share a cached result - defaults to the tier-1
 /// default for the handful of existing callers that ran before tiers were
 /// a per-block choice. The note's implicit code (`prelude`, `wrapper`) is part

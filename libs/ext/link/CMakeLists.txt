@@ -1,7 +1,7 @@
 # The link layer for note sharing (docs/SHARE.md): device identity and a
 # peer-to-peer Node (libdatachannel, mDNS over avahi). No Qt. core/, net/ and
-# proto/ are vendored from Hearth by tools/vendor_link.sh - never edit them
-# here; this file and LINK_SOURCE are the only Notolith-owned parts. Built
+# proto/ are a vendored copy of the link layer from the author's separate
+# Hearth chat project; this file is the only Notolith-owned part. Built
 # only when the root CMakeLists.txt found every dependency
 # (NOTEAPPC_WITH_SHARE); its tests are registered in tests/CMakeLists.txt.
 add_library(noteAppC_link STATIC

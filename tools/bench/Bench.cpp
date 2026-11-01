@@ -1214,7 +1214,7 @@ Timing benchPdfViewSave(const QString &pdfPath, const QString &scratchDir, int r
 /// 4. Scroll frame time: page down through a long note and back up,
 /// timing relayout-of-newly-visible-blocks plus paint for each page - what
 /// the reader actually waits on while scrolling. No budget exists yet;
-/// this is the number the TODO calls out as the one that matters most.
+/// this is the number that matters most.
 /// Scroll frame time with the widget actually on screen, which is the only
 /// way to compare the raster viewport against the OpenGL one.
 ///

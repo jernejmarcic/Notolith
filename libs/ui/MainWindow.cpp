@@ -1094,9 +1094,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // ponytail: the inline title is a fixed label above the editor, so it does
-    // not scroll away like Obsidian's. It becomes the first block once the
-    // Phase 2 engine owns the layout.
+    // The inline title is a fixed label above the editor, so it does not
+    // scroll away like Obsidian's.
     leaf->inlineTitle = new InlineTitleEdit(leaf->area);
     leaf->inlineTitle->setObjectName(QStringLiteral("inlineTitle"));
     leaf->inlineTitle->setVisible(false);
@@ -1634,7 +1633,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setParseOptions(parseOptions());
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
-    // ponytail: decided when settings are applied; a window dragged to a
+    // Limit: decided when settings are applied; a window dragged to a
     // screen of another scale keeps its viewport until the next change.
     const QScreen *screen = editor->screen();
     editor->setGPUacceleration(MarkdownEditor::GPUaccelerationWanted(
@@ -1862,7 +1861,7 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
         QDir().mkpath(folder);
         return folder;
     };
-    // ponytail: embeds by file name, Obsidian's "shortest path"; two files
+    // Limit: embeds by file name, Obsidian's "shortest path"; two files
     // of one name in the vault resolve to whichever the index finds first.
     editor->setAttachmentSaver([this, noteOf, attachmentFolder](const QString &name, const QByteArray &bytes) {
         const QString note = noteOf();
@@ -3493,7 +3492,7 @@ void MainWindow::buildActions()
     add(QStringLiteral("global-search:open"), tr("Search: Search in all files"),
         QStringLiteral("Ctrl+Shift+F"), [this] { openSearch(); });
 #ifdef NOTEAPPC_HAVE_BASES
-    // ponytail: Obsidian's own id for this command is unconfirmed; this one
+    // Limit: Obsidian's own id for this command is unconfirmed; this one
     // follows canvas:new-file's shape. A hotkeys.json naming another will not bind.
     add(QStringLiteral("bases:new-file"), tr("Bases: Create new base"), QString(), [this] {
         if (!m_vault.isValid())
@@ -4642,7 +4641,7 @@ void MainWindow::openDailyNote(int step)
         }
     } else {
         // From the daily note that is open, when one is; from today otherwise.
-        // ponytail: finds its date by trying the year either side, since an
+        // Limit: finds its date by trying the year either side, since an
         // arbitrary format need not parse back into a date.
         for (int days = 0; days <= 366; ++days) {
             if (daily.pathFor(date.addDays(-days)) == m_active->notePath) {
@@ -8050,7 +8049,7 @@ void MainWindow::watchOpenNotes()
 
 QString MainWindow::findMovedNote(const QString &lost, const Note &known)
 {
-    // ponytail: a walk of the vault's files by size, once per lost note after the
+    // Limit: a walk of the vault's files by size, once per lost note after the
     // grace (tens of ms at 20 000 notes, only when a note really went); look the
     // size up in the Index instead if folders of notes are ever moved by hand.
     if (!m_vault.isValid() || !m_vault.contains(lost) || Vault::isEncryptedNote(lost))
@@ -8080,7 +8079,7 @@ QString MainWindow::findMovedNote(const QString &lost, const Note &known)
 
 QString MainWindow::findMovedFile(const QString &lost)
 {
-    // ponytail: the same walk as findMovedNote; a view's file has no text to compare, so the candidate must have
+    // Limit: the same walk as findMovedNote; a view's file has no text to compare, so the candidate must have
     // the name and the size and modification time the tab last saw (a move keeps all three; a copy-then-delete
     // sync does not, and the tab is then marked missing). One such file not open in a tab, or none: two are a guess.
     const QString stamp = m_viewStamps.value(lost);
@@ -8150,7 +8149,7 @@ void MainWindow::followLostNotes(bool final)
         if (!final) {
             // A sync client deletes before it writes, and a move is found by
             // looking through the vault: not before the grace is over.
-            // ponytail: one look after the grace (1 s). A file that turns up later (a slow sync client, a copy-then-delete
+            // Limit: one look after the grace (1 s). A file that turns up later (a slow sync client, a copy-then-delete
             // across devices) stays missing, and the destination folders are not watched; look again on a longer timer.
             m_lostNotes.insert(path, false);
             if (!m_lostRetry.isActive())
@@ -8243,7 +8242,7 @@ void MainWindow::reloadChangedNotes()
         if (encrypted && !m_encryption->isUnlocked())
             continue; // never a password prompt out of nowhere
 #endif
-        // ponytail: every own save is read back to tell it apart from a
+        // Limit: every own save is read back to tell it apart from a
         // change (under 1 ms at 200 kB); compare size and mtime first if a
         // note ever gets big enough for that to show.
         Note disk;
@@ -8271,7 +8270,7 @@ void MainWindow::reloadChangedNotes()
             showDiskNote(path, disk);
             continue;
         }
-        // ponytail: what is being typed wins and the next save writes it;
+        // Limit: what is being typed wins and the next save writes it;
         // the version on disk goes to file recovery. A three-way merge
         // (libs/ext/sync's SyncMerge) if that ever is not enough.
         const bool kept = !encrypted && featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(path)
@@ -8765,7 +8764,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         exportWithPandoc(path, chosen->property("pandocFormat").toString());
 #endif
     else if (chosen == showAction)
-        // ponytail: opens the folder; selecting the file in it needs the
+        // Limit: opens the folder; selecting the file in it needs the
         // FileManager1 D-Bus call, add if the folder alone is not enough.
         QDesktopServices::openUrl(QUrl::fromLocalFile(m_files->isDir(index) ? path : QFileInfo(path).absolutePath()));
     else if (chosen == iconAction)

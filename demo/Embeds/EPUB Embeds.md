@@ -14,7 +14,7 @@ by default, in a build with the EPUB module); without it the card is always
 plain and a click opens the file with the system.
 
 The book is `assets/sample.epub`: a two-chapter EPUB 3 made for this vault (see
-`demo-assets.md`), with a nav document, a stylesheet and a cover that is the
+`docs/DEMO-ASSETS.md`), with a nav document, a stylesheet and a cover that is the
 neovim logo.
 
 ## The card

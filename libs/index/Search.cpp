@@ -207,7 +207,7 @@ public:
             outcome.matches.append({ctx.scope.start + hit, m_text.size()});
             from = hit + m_text.size();
             if (outcome.matches.size() >= 500)
-                break; // ponytail: a ceiling against a one-character needle in a huge note
+                break; // Limit: a ceiling against a one-character needle in a huge note
         }
         outcome.matched = !outcome.matches.isEmpty();
         return outcome;

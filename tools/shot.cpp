@@ -1,6 +1,5 @@
 // Renders the window to a PNG on the offscreen platform. Used to review the
-// look without a display, and the harness the Phase 13 golden-image tests grow
-// out of.
+// look without a display.
 //
 //   noteAppC_shot <vault> <note> <out.png> [dark|light] [width height]
 //   noteAppC_shot - <file>  <out.png> [dark|light] [w h] --single

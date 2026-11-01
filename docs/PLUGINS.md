@@ -1,9 +1,9 @@
 # Extending noteAppC
 
-**Status: Tier 0 and Tier 1 are proposal only (nothing to build - Tier 1 is
+**Status: Tier 0 and Tier 1 are conventions rather than code (Tier 1 is
 already how `libs/ext/` works); Tier 2 is built**
 (`libs/ext/plugins/`, `tools/plugin_host/`, `include/noteappc/`, its own
-section below). Tier 3 remains a proposal. This file exists so that each
+section below). Tier 3 is not planned. This file exists so that each
 extra goes in at the lowest tier that can do the job, keeping the core small
 and fast.
 
@@ -85,15 +85,13 @@ modules are documented in [INK.md](INK.md). Spec:
 
 ### Tier 2: runtime plugins - out-of-process, over a C ABI
 
-**Status: built, 2026-09-23.** For third-party extras, and for first-party
-ones a distribution might ship separately. What follows describes what is
-actually in the tree (`libs/ext/plugins/`, `tools/plugin_host/`,
-`include/noteappc/`), not a proposal - the one change from the shape sketched
-above is that the C ABI now loads inside a *separate host process*, never
-inside the app, because "a plugin that crashes takes the app with it" turned
-out not to be a cost worth paying once it was time to actually build this.
+For third-party extras, and for first-party ones a distribution might ship
+separately. What follows describes what is in the tree (`libs/ext/plugins/`,
+`tools/plugin_host/`, `include/noteappc/`). The C ABI loads inside a
+*separate host process*, never inside the app, so a plugin that crashes does
+not take the app with it.
 
-A plugin is still a directory, unchanged from the proposal:
+A plugin is a directory:
 
 ```
 ~/.local/share/noteAppC/plugins/word-stats/
@@ -109,8 +107,8 @@ and edit it. The real shape, from `examples/plugins/word-stats/plugin.ini`:
 id = word-stats
 name = Word stats
 version = 0.1.0
-api = 2
-engine = native      ; native | quickjs (quickjs is a seam, not built - below)
+api = 3
+engine = native      ; the only engine
 library = libword-stats.so
 timeout-ms =          ; optional, [1000, 300000]; unset keeps PluginHost's 4000ms default
 env-passthrough =     ; optional, comma list of env var NAMES to forward - see "Timeouts" below
@@ -153,11 +151,10 @@ round trip without either process needing a thread. An image in a
 itself is documented and unit-tested for partial reads, an oversized frame,
 and malformed JSON (`tests/test_plugins_host.cpp`).
 
-**The C ABI - unchanged in shape from the proposal above**, still a
-`noteappc_host`/`noteappc_plugin` function-table pair, still
-`noteappc_plugin_entry()` as the one dlsym'd symbol. The real header is
-`include/noteappc/plugin.h`, with five more host functions than the sketch
-had (`active_selection_text`, `list_notes`, `write_note`, `clipboard_read`,
+**The C ABI** is a `noteappc_host`/`noteappc_plugin` function-table pair, with
+`noteappc_plugin_entry()` as the one dlsym'd symbol. The header is
+`include/noteappc/plugin.h`; besides the basics the host table has
+(`active_selection_text`, `list_notes`, `write_note`, `clipboard_read`,
 `clipboard_write`) and a `render_code_block` that can return either an image
 or plain text, so a plugin without an image encoder can still answer a code
 block. A header-only C++ convenience wrapper is `include/noteappc/plugin.hpp`
@@ -167,17 +164,16 @@ block. A header-only C++ convenience wrapper is `include/noteappc/plugin.hpp`
 the bare header instead, on purpose, as the shortest proof the ABI itself
 works.
 
-`NOTEAPPC_PLUGIN_API` is `2` with the AI plugin: it was `1`
-until `active_selection_text` landed in the host table, needed so a plugin can
-read what the user selected (`MarkdownEditor::selectedText()` already
-existed; this just exposes it the way `active_note_text()` exposes the whole
-note) before deciding what to send a language model. A struct gaining a field
-is a real layout change, so every in-tree plugin's `plugin.ini` bumped its
-`api =` alongside - see `plugin.h`'s comment on the macro for what a
-third-party plugin needs to do.
+`NOTEAPPC_PLUGIN_API` is `3`. Version 2 added `active_selection_text` to the
+host table, so a plugin can read what the user selected (the way
+`active_note_text()` exposes the whole note) before deciding what to send a
+language model. A struct gaining a field is a real layout change, so each
+version bump means every plugin's `plugin.ini` `api =` is raised alongside -
+see `plugin.h`'s comment on the macro for what a third-party plugin needs to
+do.
 
-`NOTEAPPC_PLUGIN_API` is `3` as of 2026-10-16: `noteappc_host::prompt(label,
-password, timeout_ms)` was added at the end of the table, so a plugin can ask
+Version 3 added `noteappc_host::prompt(label,
+password, timeout_ms)` at the end of the table, so a plugin can ask
 the person one typed line (a `NULL` return is cancelled, timed out or no way to
 ask; `""` is a real empty answer). It needs no capability. It travels as a
 `ui.prompt` request; `PluginHost` hands it to `PluginAppCallbacks::askUser`,
@@ -192,14 +188,8 @@ cancelled at once. Both in-tree `plugin.ini` files declare `api = 3`.
 
 **Engine abstraction, inside the host.** `tools/plugin_host/Engine.h` is an
 interface with one method per plugin hook; `NativeEngine` (`dlopen`, the C
-ABI above) is the only one built. `QuickJSEngine.h` documents the seam a
-scripted engine would fill - quickjs-ng is not installed anywhere this
-project builds, and this codebase does not fetch a dependency on its own
-initiative, so it is not built. `plugin.ini`'s `engine` key already
-distinguishes `native` from `quickjs`, and the CMake option
-`NOTEAPPC_WITH_QUICKJS` (default `OFF`) fails the configure step with a clear
-message either way it could go wrong - the library missing, or (today,
-always) the engine simply not written yet.
+ABI above) is the only engine. `plugin.ini`'s `engine` key accepts only
+`native`; any other value makes the manifest invalid.
 
 **Capability allowlist, enforced on every request.** `plugin.ini`'s
 `[permissions]` declares what a plugin *wants*: `read-notes`, `write-notes`,
@@ -294,15 +284,15 @@ like any other (`Settings::features()`), default off - Obsidian starts in
 restricted mode too. Off means `PluginRegistry::scan()` does not read a
 single `plugin.ini`, not just that nothing is enabled.
 
-### Tier 3: scripts - only if wanted
+### Tier 3: scripts - not planned
 
 Small automation without a compiler: "insert today's date in this format",
 "move finished tasks to an archive note". The natural fit would be Lua: a
 250 kB C library, fast, embedded by many C and C++ applications. It would run
 through the same command point as Tier 2 and nothing else.
 
-It is listed last because it is the one tier that bends the "C and C++ only"
-rule - the interpreter is C, but the scripts are not. It is an open decision.
+It is the one tier that bends the "C and C++ only" rule - the interpreter is
+C, but the scripts are not - and it does not exist.
 
 ## What belongs in the core
 
@@ -315,78 +305,68 @@ Everything a note-taking app is for, and nothing it is not:
   PDF embeds (already optional), export, git sync. Export through the pandoc program is the
   `pandoc` core plugin (docs/PANDOC.md): an optional runtime tool, never a build dependency.
 
-## Order of building, when it is time
+## First-party examples
 
-1. **Done 2026-09-23.** Spellcheck is the first Tier 1 module:
-   `libs/ext/spell/` (hunspell) behind `NOTEAPPC_WITH_SPELLCHECK`, on by
-   default and dropped when hunspell is not found. The editor does not link
-   it - the window hands the editor three callbacks (is this word correct,
-   suggestions, add a word), so the editor library is the same with or
-   without the module. The dictionaries load on the thread pool after the
-   first paint, and the settings row exists only in a build that has the
-   module. It is the pattern the next module copies.
-2. **Done 2026-09-23.** Tier 2, built against a first real plugin
-   (`examples/plugins/word-stats`) rather than designed with no client - see
-   above. Built out-of-process from the start rather than the in-process
-   `dlopen` this section originally sketched, once "a plugin that crashes
-   takes the app with it" was weighed against the cost of a pipe: noteAppC's
-   own speed budget (docs/PERFORMANCE.md) is about the keystroke and paint
-   path, which a plugin's process never sits on, so the latency Tier 2's
-   first draft ruled out for rendering was not actually the cost it looked
-   like once code blocks already went through a cache and a placeholder
-   either way.
-3. **Done 2026-09-23.** The first Tier 2 plugin that is not a test fixture:
-   `plugins/ai/` (`NOTEAPPC_WITH_AI_PLUGIN`, on by default), an optional
-   first-party integration with a local Ollama server or an OpenAI-compatible
-   or Anthropic HTTP API. It is what drove the `timeout-ms`, `env-passthrough`
-   and `[commands]` manifest additions and the `active_selection_text` host
-   function above - none of those existed until a plugin that actually needed
-   them was built against the tier, the same lesson Tier 2 itself drew from
-   word-stats. Commands: summarize (a notice - stays inside `read-notes`, no
-   `write-notes` needed), ask/rewrite the selection and continue writing (all
-   `replace_selection`), and a `list-models` command for Ollama's `/api/tags`.
-   A fenced ` ```ai ` block's source is the prompt, its rendered answer is the
-   block. Configuration - provider, base URL, model, and the *name* of an
-   environment variable holding a key, never the key itself - lives in
-   `$XDG_CONFIG_HOME/noteAppC/plugins/ai/ai.ini`, outside the vault; the key is read from
-   the app's own environment at call time and is never written to a file,
-   logged, or put in a URL (`plugins/ai/AiConfig.cpp`, `plugins/ai/AiProvider.cpp`).
-   Added 2026-10-01: `translate` (the selection in place; with nothing
-   selected, the whole note into a new `Note (<code>).md` beside it, refused
-   if that note already exists) and `proofread` (the selection). ai.ini
-   `translate-to` (default `English (en)`), `translate-from` (empty: the model
-   detects it), `translate-model` (empty: `model`). A model whose name holds
-   `translategemma` gets that model's own single-message prompt and no system
-   prompt; its template names the source, so an empty `translate-from` means
-   Slovenian there. `provider = openai` with no `api-key-env` sends no key at
-   all, for a local OpenAI-compatible server - Ollama's own `/v1` is one:
+### Spellcheck
 
-   ```ini
-   [ai]
-   provider = openai
-   base-url = http://localhost:11434
-   model = qwen3.8:latest
-   translate-model = translategemma:27b
-   translate-from = Slovenian (sl)
-   ```
+The first Tier 1 module: `libs/ext/spell/` (hunspell) behind
+`NOTEAPPC_WITH_SPELLCHECK`, on by default and dropped when hunspell is not
+found. The editor does not link it - the window hands the editor three
+callbacks (is this word correct, suggestions, add a word), so the editor
+library is the same with or without the module. The dictionaries load on the
+thread pool after the first paint, and the settings row exists only in a
+build that has the module. It is the pattern the next module copies.
 
-   A named `api-key-env` that is unset still refuses before any request.
+### AI plugin
 
-   Added 2026-10-16: **AI: Ask a question** (`ask-question`). It asks the
-   person for the question through `host->prompt` (how long they have:
-   `ask-timeout-ms` in `ai.ini`, default 120000), sends that line and nothing
-   else - not the note, as an `ai` block does not either - and puts the answer
-   at the caret (`replace_selection`). With text selected, which an insert would
-   overwrite, the answer is shown in the status line and logged instead. A
-   cancelled or empty question sends no request. The key comes from the
-   `api-key-env` variable as for every command; nothing new is written to any
-   file. The tests (`tests/test_ai_plugin.cpp`) answer the dialog with a stand-in
-   and the model with the in-process fake server.
+`plugins/ai/` (`NOTEAPPC_WITH_AI_PLUGIN`, on by default), an optional
+first-party integration with a local Ollama server or an OpenAI-compatible
+or Anthropic HTTP API. It is what the `timeout-ms`, `env-passthrough`
+and `[commands]` manifest keys and the `active_selection_text` host
+function above exist for. Commands: summarize (a notice - stays inside `read-notes`, no
+`write-notes` needed), ask/rewrite the selection and continue writing (all
+`replace_selection`), and a `list-models` command for Ollama's `/api/tags`.
+A fenced ` ```ai ` block's source is the prompt, its rendered answer is the
+block. Configuration - provider, base URL, model, and the *name* of an
+environment variable holding a key, never the key itself - lives in
+`$XDG_CONFIG_HOME/noteAppC/plugins/ai/ai.ini`, outside the vault; the key is read from
+the app's own environment at call time and is never written to a file,
+logged, or put in a URL (`plugins/ai/AiConfig.cpp`, `plugins/ai/AiProvider.cpp`).
+Also: `translate` (the selection in place; with nothing
+selected, the whole note into a new `Note (<code>).md` beside it, refused
+if that note already exists) and `proofread` (the selection). ai.ini
+`translate-to` (default `English (en)`), `translate-from` (empty: the model
+detects it), `translate-model` (empty: `model`). A model whose name holds
+`translategemma` gets that model's own single-message prompt and no system
+prompt; its template names the source, so an empty `translate-from` means
+Slovenian there. `provider = openai` with no `api-key-env` sends no key at
+all, for a local OpenAI-compatible server - Ollama's own `/v1` is one:
 
-## Open decisions
+```ini
+[ai]
+provider = openai
+base-url = http://localhost:11434
+model = qwen3.8:latest
+translate-model = translategemma:27b
+translate-from = Slovenian (sl)
+```
 
-1. Scripts (Tier 3): yes with Lua, or never?
-2. May a plugin add a pane to the sidebar? Doing that through a C ABI means the
-   plugin hands over data - a tree of items - and the app draws it, so every
-   pane looks like noteAppC. Handing over a raw `QWidget` would allow anything,
-   but ties every plugin to the exact Qt build the app was compiled against.
+A named `api-key-env` that is unset still refuses before any request.
+
+**AI: Ask a question** (`ask-question`). It asks the
+person for the question through `host->prompt` (how long they have:
+`ask-timeout-ms` in `ai.ini`, default 120000), sends that line and nothing
+else - not the note, as an `ai` block does not either - and puts the answer
+at the caret (`replace_selection`). With text selected, which an insert would
+overwrite, the answer is shown in the status line and logged instead. A
+cancelled or empty question sends no request. The key comes from the
+`api-key-env` variable as for every command; nothing new is written to any
+file. The tests (`tests/test_ai_plugin.cpp`) answer the dialog with a stand-in
+and the model with the in-process fake server.
+
+## Not supported
+
+A plugin cannot add a pane to the sidebar. Doing that through a C ABI means the
+plugin hands over data - a tree of items - and the app draws it, so every
+pane looks like noteAppC. Handing over a raw `QWidget` would allow anything,
+but ties every plugin to the exact Qt build the app was compiled against.

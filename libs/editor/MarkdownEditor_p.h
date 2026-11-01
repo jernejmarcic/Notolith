@@ -929,7 +929,7 @@ struct MarkdownEditor::Private {
     QHash<qsizetype, PdfNavUse> m_pdfNavLast;
     /// A PDF embed's zoom and pan, by block start like m_pdfSlideIndex and
     /// remapped with it by shiftRanges; empty while nothing is zoomed.
-    /// ponytail: one state per embed, so every page of a column or grid
+    /// Limit: one state per embed, so every page of a column or grid
     /// shows the same corner; per-cell state if anyone asks.
     struct PdfZoom {
         qreal zoom = 1;
@@ -939,7 +939,7 @@ struct MarkdownEditor::Private {
     QTimer m_pdfZoomSettle; ///< the hi-res render waits for the wheel to stop
     /// Zoomed rasters in delivery order, and what they weigh: past the
     /// budget the oldest leave m_pdfPageCache and a page falls back to its
-    /// base raster. ponytail: FIFO over zoomed keys only, base rasters stay
+    /// base raster. Limit: FIFO over zoomed keys only, base rasters stay
     /// unbounded as before; a QCache over the whole cache if they get a budget.
     QList<QString> m_pdfZoomKeys;
     qint64 m_pdfZoomBytes = 0;

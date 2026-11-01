@@ -142,7 +142,7 @@ void InkInput::begin(const InkSample &sample, const StrokeStyle &style)
 // skipped: the modeler rejects time going backwards.
 // The held sample is in neither the stroke nor the predicted tail (the tail is anchored on the
 // last fed one), so the pen is one event ahead of the ink.
-// ponytail: one event of latency on every move; the modeler's Save()/Restore() would feed at once and refeed on a replacement, if the bench says 8 ms matters.
+// Limit: one event of latency on every move; the modeler's Save()/Restore() would feed at once and refeed on a replacement, if the bench says 8 ms matters.
 void InkInput::extend(const InkSample &sample)
 {
     if (!m_active)

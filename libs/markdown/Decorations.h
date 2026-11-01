@@ -175,10 +175,10 @@ struct EmbedSpan {
     bool html = false;
 };
 
-/// `#|` option lines at the head of a fenced code block (PLAN.md 16.2), where
+/// `#|` option lines at the head of a fenced code block, where
 /// `#` is whatever the language uses for a line comment.
 ///
-/// Stage 13's rest gives Quarto's execution keys real meaning - `eval`,
+/// Quarto's execution keys carry real meaning - `eval`,
 /// `echo`, `output`, `include`, `cache` - and noteAppC's own `sandbox`,
 /// `timeout` and `kernel` (not Quarto keys at all).
 /// `warning` and `error` still just fall into `extra` and go no

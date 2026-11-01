@@ -1,8 +1,7 @@
 #pragma once
 
 // Owns one kernel per language, lazily: nothing starts until the first
-// forceRun=true request for that language (stage 13's performance rule -
-// "no kernel starts before the user runs something"). This is the type the
+// forceRun=true request for that language. This is the type the
 // window (libs/ui) actually talks to; MarkdownEditor::setNotebookRunner's
 // callback is a thin adapter over run() below (see docs on that seam in
 // MarkdownEditor.h).

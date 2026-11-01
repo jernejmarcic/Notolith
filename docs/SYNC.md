@@ -5,9 +5,8 @@ truth; the server relays and stores encrypted copies so other devices can
 catch up. Everything works fully offline and sync is just another device
 catching up when it can reach the server.
 
-This is stage 10 of the roadmap. Real-time collaboration (a CRDT per note
-body) is later and not built here - see "What is left for the CRDT stage" at
-the end. This document is the contract the code in `libs/ext/sync/` and
+Real-time collaboration (a CRDT per note body) is not part of sync - see
+"Not implemented" at the end. This document is the contract the code in `libs/ext/sync/` and
 `tools/sync_server/` implements; where the code and this doc disagree, that is
 a bug in one of them.
 
@@ -186,10 +185,10 @@ probe from learning anything.
 `crypto_generichash` (BLAKE2b), keyed with `contentKey`, 32-byte output, over
 `entityID || ` the **padded, still-plaintext** blob before encryption (the
 entity's ID is in the preimage because the blob is sealed under that entity's
-`noteKey`: with the bytes alone, two entities holding equal bytes shared one
-blob sealed under one `noteKey`, and the other could not open it - fixed in
-round 9; receivers read the address from the record, so blobs written under
-the old rule still open). Keying is what makes
+`noteKey`: with the bytes alone, two entities holding equal bytes would share one
+blob sealed under one `noteKey`, and the other could not open it; receivers
+read the address from the record, so blobs written under the older bytes-only
+rule still open). Keying is what makes
 "never raw SHA of plaintext" true: an attacker who does not have `contentKey`
 cannot precompute the address of a guessed plaintext ("does this vault contain
 the string X") the way they could against an unkeyed hash. With the entity ID in
@@ -682,8 +681,7 @@ how often each changes (record counts and `seq` gaps per `entityID`); ciphertext
 sizes rounded up to a padding bucket (so "a 3 KB note" is visible as "a note in
 the 4 KiB-or-under bucket", never 3 072 bytes exactly); timing of when pushes
 and pulls happen (sync is not batched to disguise activity patterns - out of
-scope, see threat model); (only blobs written before round 9, which were addressed by their bytes
-alone, show which attachments are byte-identical within one vault); account existence is only
+scope, see threat model); (only blobs written under the older bytes-only addressing show which attachments are byte-identical within one vault); account existence is only
 mitigated, not eliminated, by the salt-lookup response shape (a sufficiently
 persistent enumeration attempt - timing the salt endpoint, watching account
 creation - is not defended against, it is out of scope for a first cut);
@@ -818,15 +816,14 @@ right next to it stays fully readable) at the cost of a second key-management
 path with its own bugs - not worth it until something other than "disk
 encryption" is the assumption.
 
-## What is left for the CRDT stage
+## Not implemented
 
 - Note **bodies** are synced file-level (three-way merge, conflict copy on a
   true clash) - not merged character-by-character. A CRDT per note body
   replaces `SyncMerge` for the body field specifically; the journal/tree
   layer above (entity records, LWW by server seq, the key hierarchy) does not
   change, because Trilium's model this borrows is already metadata/tree-only
-  by design - the plan called for CRDT bodies from the start, this is not a
-  retrofit.
+  by design.
 - Real-time presence, cursors, and sub-second propagation are not attempted;
   sync is timer/batch-driven off the file watcher, not a live channel.
 - Collaborator lockboxes (sharing a single note's key with another *account*,
@@ -837,18 +834,3 @@ encryption" is the assumption.
   no caller yet - nothing revokes a device today, so nothing needs it. The
   format supports multiple itemsKeys already (`itemsKeyID` on every record),
   so adding rotation later does not touch the wire format.
-
-## The test suite never touches the OS keyring
-
-The device identity key and the stored keys normally go to the OS keyring
-through QtKeychain. `tests/test_sync.cpp` and `tests/test_window.cpp` set an
-in-memory `SyncEngine::SecretStore` in their `main()` instead, for two reasons. A test run must not leave device keys in
-the user's real keyring. And a secret-service backend that never answers (a
-locked keyring, a prompt nobody sees) held each engine for the full 15 s of
-`runKeychainJob`'s watchdog: that was the whole of the "per-process
-slowdown" once noted here, 30 s for most two-device tests, and the suite
-now runs in about five seconds.
-
-`QStandardPaths::setTestModeEnabled(true)` stays out of the suite as well:
-it overrides the per-test `XDG_DATA_HOME`, so every test's `SyncJournal`
-wrote into one shared, never-cleaned `~/.qttest/share/noteAppC/sync/`.

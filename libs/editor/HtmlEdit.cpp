@@ -931,7 +931,7 @@ private:
 
 std::shared_ptr<const Structure> structureOf(const QString &block)
 {
-    // ponytail: one cache per parse thread, emptied when it fills; an LRU if
+    // Limit: one cache per parse thread, emptied when it fills; an LRU if
     // a note ever carries more than 256 distinct HTML blocks.
     thread_local QHash<QString, std::shared_ptr<const Structure>> cache;
     const auto cached = cache.constFind(block);

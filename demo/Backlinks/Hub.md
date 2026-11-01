@@ -15,7 +15,6 @@ twice.
 
 These notes link here directly:
 - [[Linker One]]
-	- 
 - [[Linker Two]]
 - [[Linker Three]]
 

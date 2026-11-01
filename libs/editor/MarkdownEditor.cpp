@@ -275,7 +275,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
         viewport()->update();
     });
 
-    // ponytail: the parse is synchronous behind a short debounce. It measures
+    // Limit: the parse is synchronous behind a short debounce. It measures
     // well under the keystroke budget on notes this size; move it to the
     // thread pool when a 1 MB note says otherwise.
     d->m_parseTimer.setSingleShot(true);
@@ -2851,7 +2851,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::nestedCodeFormatsFor(const Block
             || !span.range.overlaps(view.span.range))
             continue;
 
-        // ponytail: a listing that began in an earlier piece of a long callout
+        // Limit: a listing that began in an earlier piece of a long callout
         // is highlighted from this piece's first line, so a comment opened
         // before it is not carried over; carry CodeHighlighter::State across
         // callout pieces as fences do if that shows up.
@@ -3280,7 +3280,7 @@ const EmbedSpan *MarkdownEditor::soleEmbedOf(const BlockView &view) const
         if (embed.html || !embed.range.overlaps(view.span.range))
             continue;
         // Only when the embed is the whole block; an image in the middle of a
-        // sentence stays inline until Phase 3 finishes inline objects.
+        // sentence stays inline.
         const QStringView rest =
             QStringView(d->m_text).mid(view.span.range.start, view.span.range.length());
         const QString trimmed = rest.trimmed().toString();
@@ -4234,7 +4234,7 @@ void MarkdownEditor::paintEmbedChrome(QPainter &painter, const BlockView &view, 
 qreal MarkdownEditor::sideExtent(const BlockView &view) const
 {
     // A fence's pieces share one offset, so the widest of them bounds it.
-    // ponytail: a piece not laid out yet has no width, so the extent can grow
+    // Limit: a piece not laid out yet has no width, so the extent can grow
     // as the fence scrolls into view; the offset is clamped on every read.
     const BlockView *piece = &firstPiece(view);
     qreal widest = 0;
@@ -4614,7 +4614,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         formats.append({int(formula.displayPos), 1, format});
     }
     if (!view.x().separators.empty()) {
-        // ponytail: measured in the block's font; a "#" inside bold or italic
+        // Limit: measured in the block's font; a "#" inside bold or italic
         // text is a little off from the separator painted over it.
         const QFontMetricsF metrics(view.layout->font());
         QTextCharFormat format;
@@ -4865,7 +4865,7 @@ void MarkdownEditor::updateLayout()
     // what is now on screen itself - not the margins, which can wait for the
     // next call - until nothing moves. Once, those stayed unlaid, not drawn,
     // until something else called this again, which a resize always did.
-    // ponytail: capped at eight passes; a note whose estimates are that far
+    // Limit: capped at eight passes; a note whose estimates are that far
     // off fills in on the next call.
     for (int pass = 0; pass < 8; ++pass) {
         const qreal passTop = pass == 0 ? top : scroll;
@@ -5361,7 +5361,7 @@ QList<MarkdownEditor::RemoteCaret> MarkdownEditor::remoteCarets() const
     return d->m_remoteCarets;
 }
 
-// ponytail: the caret and a name tag; another person's selection is not tinted.
+// Limit: the caret and a name tag; another person's selection is not tinted.
 void MarkdownEditor::paintRemoteCarets(QPainter &painter) const
 {
     if (d->m_remoteCarets.isEmpty() || d->m_mode == Mode::Reading)
@@ -5989,7 +5989,7 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     // from elsewhere (another pane, a peer, a command's loop) keep the
     // debounce, so a burst of them is one parse; a parse already running is
     // left to land.
-    // ponytail: past the budget the debounced pool parse and the jump stay -
+    // Limit: past the budget the debounced pool parse and the jump stay -
     // softened for headings in layoutBlock; a parse of the edited block alone
     // would remove it.
     const bool parsedNow = (breaksLines || onTheTail) && d->m_typing && !d->m_applyingExternal && !d->m_formattingTables

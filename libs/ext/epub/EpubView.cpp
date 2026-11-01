@@ -206,7 +206,7 @@ bool EpubView::load(const QString &path, QString *error)
 
     ensureHeightsSized();
     // buildToc() is deferred to the panel's first show - see setTocVisible()
-    // and its own comment (task 2: a book with a huge TOC pays nothing for
+    // and its own comment (a book with a huge TOC pays nothing for
     // it at open unless the reader actually opens the panel).
     m_tocTree->clear();
     m_tocBuilt = false;
@@ -236,7 +236,7 @@ bool EpubView::navigateToFragment(const QString &fragment)
     if (const auto locator = EpubLocator::parse(fragment)) {
         if (locator->spineIndex >= 0 && locator->spineIndex < m_document.spine().size()) {
             // Blocking: a highlight/TOC jump is a one-off user action, not
-            // the scroll/open hot path task 1 is about, and it needs the
+            // the scroll/open hot path, and it needs the
             // exact offset->Y position right now to land the view on the
             // right line rather than just the chapter's top - see the
             // header comment on renderedChapterBlocking().
@@ -380,8 +380,8 @@ bool EpubView::eventFilter(QObject *watched, QEvent *event)
                 m_vscroll->setValue(m_vscroll->value() - m_vscroll->pageStep());
             return true;
         }
-        // Arrow keys turn a page only in paged mode - task 4. Continuous
-        // mode leaves them unhandled, same as before this task.
+        // Arrow keys turn a page only in paged mode. Continuous
+        // mode leaves them unhandled.
         if (m_readingMode == ReadingMode::Paged
             && (key->key() == Qt::Key_Right || key->key() == Qt::Key_Down)) {
             turnPage(1);

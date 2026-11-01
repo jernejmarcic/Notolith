@@ -1,5 +1,5 @@
 // Widget smoke test: drives the real MainWindow on the offscreen platform, so
-// the Phase 0 exit criteria (open vault, file tree, open note, save) are
+// the basics (open vault, file tree, open note, save) are
 // checked by something other than a human looking at the screen.
 
 #include <gtest/gtest.h>

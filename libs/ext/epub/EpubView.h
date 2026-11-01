@@ -29,7 +29,7 @@ namespace noteAppC {
 
 class FindBar;
 
-/// The EPUB reader: continuous scroll or paged (task 4) through a book's
+/// The EPUB reader: continuous scroll or paged through a book's
 /// spine, each chapter laid out and rasterised by litehtml through
 /// HtmlRenderer - the same renderer a note's raw HTML block already uses
 /// (see HtmlRenderer.h for the two small things this reader needed from it
@@ -65,7 +65,7 @@ public:
     QString title() const { return m_document.title(); }
 
     /// Scrolls to a fragment - "epub:<spine>:<start>-<end>" (a highlight's
-    /// own locator, task 3's link form), a bare "<spine-index>", or a TOC
+    /// own locator, the link form), a bare "<spine-index>", or a TOC
     /// target's element id (searched for in the nearest chapter as a plain
     /// id="..."/name="..." attribute match, litehtml having no DOM to query
     /// live once rasterised - see the .cpp). False when nothing in the book
@@ -89,7 +89,7 @@ public:
     int pagedColumnsForTest() const { return m_pagedColumns; }
     qint64 scrollValueForTest() const;
     /// True once spineIndex's chapter has actually landed in the render
-    /// cache - real content, not a placeholder (see RenderedChapter/task 1).
+    /// cache - real content, not a placeholder (see RenderedChapter).
     bool chapterCachedForTest(int spineIndex) const { return m_cache.contains(spineIndex); }
     /// Kicks off (or joins) spineIndex's render exactly like paint would,
     /// without a real paint event.
@@ -105,14 +105,14 @@ public:
     /// As if the reader opened this top-level row for the first time.
     void expandTocForTest(int topLevelIndex);
     /// How many distinct archive paths registerChapterFonts() has handed to
-    /// QFontDatabase so far (task 3) - success or not, see its own comment.
+    /// QFontDatabase so far - success or not, see its own comment.
     int registeredFontCountForTest() const { return m_registeredFonts.size(); }
     QString cacheRootForTest() const { return m_cacheRoot; }
     int pageHeightForTest() const { return pageHeight(); }
     qint64 scrollMaximumForTest() const;
     int currentSpineIndexForTest();
-    /// As if the reader clicked at (x, y) within the content area - task 4's
-    /// "click margins to turn"; true (and a page already turned) for a
+    /// As if the reader clicked at (x, y) within the content area - the
+    /// "click margins to turn" gesture; true (and a page already turned) for a
     /// margin click, false (nothing happened) anywhere else.
     bool marginClickForTest(int x, int y) { return turnPageOnMarginClick(QPoint(x, y)); }
 
@@ -197,7 +197,7 @@ private:
     /// Rewrites every `url(...)` in `css` - a background image, or a
     /// `@font-face` source litehtml itself never reads (harmless either way)
     /// - resolved against `stylesheetArchivePath` (the *stylesheet's* own
-    /// path, per CSS's own resolution rule, not the chapter's - task 3) and
+    /// path, per CSS's own resolution rule, not the chapter's) and
     /// extracted the same way rewriteResourceRefs extracts an `<img>`.
     /// Remote and `data:` URLs are left untouched (never fetched, same rule
     /// as everywhere else in this reader).
@@ -277,8 +277,8 @@ private:
     void handleContentDoubleClick(QMouseEvent *event);
     void handleContentContextMenu(QContextMenuEvent *event);
     /// Paged mode only: true (and a page already turned) when `contentPos`
-    /// falls in the left/right margin strip rather than the text - task 4's
-    /// "click margins to turn".
+    /// falls in the left/right margin strip rather than the text - the
+    /// "click margins to turn" gesture.
     bool turnPageOnMarginClick(const QPoint &contentPos);
 
     void buildToc();
@@ -322,12 +322,12 @@ private:
     static constexpr int kTocWidth = 240;
     static constexpr int kTwoColumnMinWidth = 900; ///< below this, paged mode falls back to one column
     static constexpr int kPagedColumnGap = 24;
-    static constexpr int kMarginClickWidth = 44; ///< task 4: click inside this many px of either edge to turn
+    static constexpr int kMarginClickWidth = 44; ///< click inside this many px of either edge to turn
 
     QList<qint64> m_chapterHeights;
     QList<bool> m_chapterHeightExact;
 
-    // --- off-thread chapter rendering (task 1) ------------------------------
+    // --- off-thread chapter rendering ------------------------------
     std::shared_ptr<Lifeline> m_lifeline = std::make_shared<Lifeline>();
     QSet<int> m_pendingSpine; ///< spine indices with a worker render currently in flight
     /// Bumped by invalidateRenders() (resize, font size, theme, paged/column
@@ -337,10 +337,10 @@ private:
     quint64 m_renderEpoch = 0;
     QSet<QString> m_registeredFonts; ///< archive paths already handed to QFontDatabase, tried at most once
 
-    // --- lazy table of contents (task 2) ------------------------------------
+    // --- lazy table of contents ------------------------------------
     bool m_tocBuilt = false; ///< buildToc() deferred until the panel is first shown - see setTocVisible()
 
-    // --- paged mode (task 4) -------------------------------------------------
+    // --- paged mode -------------------------------------------------
     ReadingMode m_readingMode = ReadingMode::Continuous;
     int m_pagedColumns = 1;
 

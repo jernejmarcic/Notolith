@@ -51,7 +51,7 @@ std::optional<BookmarkItem> parseItem(const QJsonObject &obj)
                 item.items.append(*parsed);
         }
     } else {
-        // folder / graph / url bookmarks - see the ponytail note in the header.
+        // folder / graph / url bookmarks - see the Limit note in the header.
         return std::nullopt;
     }
     return item;

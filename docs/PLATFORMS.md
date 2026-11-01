@@ -12,7 +12,7 @@ code, what has been checked, and what has not.
    on a Zen 5 machine uses instructions an older Intel or AMD chip does not
    have, and crashes there with an illegal instruction. A future `PKGBUILD`
    must override it, with baseline `x86-64` or at most `x86-64-v2`.
-2. **No architecture-specific code.** Checked 2026-09-23: there are no SSE, AVX
+2. **No architecture-specific code.** There are no SSE, AVX
    or other x86 intrinsics and no inline assembly anywhere in noteAppC or in
    the three vendored libraries (md4qt, MicroTeX, tinyxml2). An ARM build -
    a Raspberry Pi, an ARM laptop, a phone - has nothing in its way from the
@@ -163,7 +163,7 @@ tests run offscreen, so the first pop-out on Hyprland is worth opening by hand.
 
 ## Mobile
 
-Not started. What is already true, and what stands in the way:
+There is no touch UI yet. What is already true, and what stands in the way:
 
 **Reusable as they are.** `libs/vault`, `libs/markdown`, `libs/index`,
 `libs/render`, `libs/theme` and `libs/settings` are plain C++ static libraries
@@ -178,78 +178,35 @@ add bars and long-press cell selection already work by finger, docs/EDITOR.md
 for a narrow screen with no sidebars. The shell (`libs/ui`) would be largely
 new.
 
-**The Qt version.** The Android kit used here (`$QT_ANDROID`, see
-"Build it" below) is Qt 6.7.3; the desktop is 6.11. Anything
-noteAppC uses from Qt 6.8 or later will not compile for Android. Nothing has
-checked this yet.
+**The Qt version.** The Android kit (`$QT_ANDROID`, see "Build it" below) is
+Qt 6.7.3; the desktop is 6.11. Anything noteAppC uses from Qt 6.8 or later will
+not compile for Android, so the tree must stay buildable against 6.7.3.
 
 **Two dependencies are not in the Android kit.** KF6 SyntaxHighlighting (code
-blocks) and poppler-qt6 (PDF embeds) come from the Linux distribution. For
-Android they must be cross-built or made optional. Poppler already is
-optional; syntax highlighting is `REQUIRED` and would need the same treatment.
+blocks) and poppler-qt6 (PDF embeds) come from the Linux distribution, so both
+are optional. `NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING` (default `ON`) and
+`NOTEAPPC_WITH_PDFVIEW` (default `ON`, so poppler can be turned off even when
+it is installed - the system poppler-qt6 is built against Qt 6.11 and cannot be
+linked against the 6.7.3 kit) guard the `find_package` calls in
+`libs/render/CMakeLists.txt` and `libs/ext/pdfview/CMakeLists.txt`. With
+either off or the package missing, `CodeHighlighter`/`PdfPage` compile without
+it: `CodeHighlighter::isAvailable()` and `PdfPage::isAvailable()` report
+`false`, `highlight()` returns no token formats, and code blocks still render,
+monospaced and uncoloured. The tests that need either skip (`GTEST_SKIP`) when
+`isAvailable()` is false, and the PDF-support test asserts whichever the build
+chose.
 
-**Checked 2026-09-23: both are now optional, and the tree was built against
-6.7.3.** `NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING` (default `ON`) and
-`NOTEAPPC_WITH_PDFVIEW` (default `ON`, so poppler can be turned off even when it
-is installed - the system poppler-qt6 here is built against Qt 6.11 and
-cannot be linked against the 6.7.3 kit) now guard the `find_package` calls in
-`libs/render/CMakeLists.txt` and `libs/ext/pdfview/CMakeLists.txt`. With either off or the package missing,
-`CodeHighlighter`/`PdfPage` compile without it: `CodeHighlighter::isAvailable()`
-and `PdfPage::isAvailable()` report `false`, `highlight()` returns no token
-formats, and code blocks still render, monospaced and uncoloured. The two
-`CodeHighlighterTest` cases in `tests/test_editor.cpp` skip
-(`GTEST_SKIP`) when `isAvailable()` is false rather than failing.
-
-Built with `CMAKE_PREFIX_PATH` pointed at the Android kit's `gcc_64` sibling
-build (`$QT_HOST`, a desktop Qt 6.7.3 build
-matching the `android_arm64_v8a` one) and both new options `OFF`, in a
-separate `build-qt673/` directory. No Qt module the root `CMakeLists.txt`
-asks for (`Widgets Svg Sql Concurrent Network`, optional `OpenGLWidgets` and
-`Test`) is missing from the kit - configure succeeds cleanly.
-
-**The tree does not build end to end against 6.7.3 yet - blocked upstream of
-noteAppC's own code.** `libs/vault`, `libs/theme`, `libs/settings` and
-`libs/render` (with the options above) all compile clean, and their test
-suites (`test_vault`, `test_settings`, `test_theme`, `test_icons`) build and
-pass. But md4qt - fetched by `FetchContent` and pinned to commit
-`e48716a41c1cf7f91b130fe3d3cc1c524e3b404a` (v5.1.4) - fails to compile itself
-under 6.7.3, in its own vendored sources, before noteAppC's code that depends
-on it (`libs/markdown`, and everything downstream: `libs/index`,
-`libs/editor`, `libs/ui`, the app, and their tests) is ever reached. Two Qt
-6.8+ APIs, both inside md4qt's own tree (fetched to
-`_deps/md4qt-src/src/`, not part of this repository - not edited here):
-
-| file:line | API (Qt 6.8+) | 6.7-compatible replacement |
-|---|---|---|
-| `text_stream.h:242` | `QString(QStringView)` - `QString`'s new implicit-conversion constructor from a view | `view().sliced(pos, len).toString().replace(...)` - call `.toString()` on the view first |
-| `atx_heading_parser.cpp:211` | `QString(QStringView)`, same constructor, over `currentLine.view()` | `currentLine.view().toString()` |
-| `utils.cpp:120` | `QString(QChar::fromUcs4(c))` - `QChar::fromUcs4`'s Qt 6.8 return type gained an implicit conversion to `QString` that 6.7's does not have | `QString::fromUcs4(&c, 1)` |
-| `utils.cpp:138` | same as above, the decimal-entity branch | `QString::fromUcs4(&c, 1)` |
-
-All four are variations on the same change: `QString` gained more ways to be
-built from a view in 6.8.
-
-**Re-checked 2026-09-23, after search, graph, canvas, bases, tabs/splits,
-workspaces and query/HTML blocks all landed.** Same build, same patch, no
-new failures: the desktop build of the Android kit's Qt 6.7.3
-(`build-android-qt673`, both options off) compiles clean and passes
-all 16 suites, and the ordinary desktop build (system Qt 6.11) passes 16/16
-full and 12/12 with every optional module off
-(`build-android-desktop-build`, `build-android-desktop-minimal`
-- `tools/check.sh`'s own two configurations, run from dedicated build dirs). So the code written since the
-first check still uses nothing from Qt 6.8+; md4qt's four conversions above
-remain the only blocker, and nothing needed replacing this time.
-
-**Resolved the same day.** `cmake/patch-md4qt.sh` applies the four
-replacements when md4qt is fetched, the way `cmake/patch-microtex.sh` already
-patches MicroTeX; each is the explicit spelling of the same conversion and
-compiles on 6.11 too. With it, a fresh build against the 6.7.3 kit, both
-options off, **builds the whole tree and passes all 9 test suites** - and
-still passes all 9 on the system Qt 6.11 with both options on. So noteAppC's
-own code uses no Qt 6.8+ API; md4qt's four conversions were the only
-blockers. The one test that failed on 6.7.3 asserted that PDF support was
-present in a build that had switched it off; it now asserts whichever the
-build chose.
+**Building against Qt 6.7.3.** `CMAKE_PREFIX_PATH` points at the Android kit's
+`gcc_64` sibling build (`$QT_HOST`, a desktop Qt 6.7.3 build matching the
+`android_arm64_v8a` one), with both options above `OFF`, in a separate build
+directory. Every Qt module the root `CMakeLists.txt` asks for
+(`Widgets Svg Sql Concurrent Network`, optional `OpenGLWidgets` and `Test`) is
+in the kit. md4qt, fetched by `FetchContent`, used four Qt 6.8+ conversions
+(`QString` built from a `QStringView`, and `QString(QChar::fromUcs4(c))`) that
+do not compile on 6.7; `cmake/patch-md4qt.sh` replaces them with their
+explicit spellings when md4qt is fetched, the way `cmake/patch-microtex.sh`
+patches MicroTeX, and they compile on 6.11 too. noteAppC's own code uses no
+Qt 6.8+ API.
 
 To repeat the check:
 
@@ -262,25 +219,18 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build-qt673
 ```
 
 That desktop build of the Android kit's Qt proves the API surface, not that
-the app runs on a phone. **Built for real 2026-09-23**: a debug arm64 APK,
-signed with the Android debug key. The touch-mode editor it needs is still
-open - this is packaging and CMake only, no UI change.
+the app runs on a phone. A debug arm64 APK, signed with the Android debug key,
+builds too (see "Build it"); the touch-mode editor it needs is not written, so
+this is packaging and CMake only.
 
-**One more dependency was missing.** `yaml-cpp` (frontmatter, Bases) was
-linked as a bare `yaml-cpp` name in `libs/markdown` and `libs/ext/bases`,
-which is not a CMake target either package exports (Arch's yaml-cpp only
-exports the namespaced `yaml-cpp::yaml-cpp`) - it worked on desktop only
-because CMake fell back to passing `-lyaml-cpp` straight to the linker,
-resolved by luck from the system library path. The Android NDK sysroot has
-no yaml-cpp at all, so that fallback would simply fail to link. The root
-`CMakeLists.txt` now calls `find_package(yaml-cpp)` for real, falling back to
-`FetchContent` (pinned to the `0.8.0` tag's commit, built as a static
-library, same pattern as md4qt and tinyxml2) only when that comes up empty;
-both paths land on the `yaml-cpp::yaml-cpp` target name, so neither consumer
-needed further changes. yaml-cpp's own `cmake_minimum_required` predates what
-CMake 4.4.3 (installed here) still accepts, so the Android configure also
-needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` - harmless, it only affects that
-one fetched dependency's own policy floor.
+**yaml-cpp.** The root `CMakeLists.txt` calls `find_package(yaml-cpp)` and
+falls back to `FetchContent` (pinned to the `0.8.0` tag's commit, built as a
+static library, the same pattern as md4qt and tinyxml2) when that comes up
+empty, because the Android NDK sysroot has no yaml-cpp. Both paths land on the
+`yaml-cpp::yaml-cpp` target. yaml-cpp's own `cmake_minimum_required` predates
+what current CMake accepts, so the Android configure also needs
+`-DCMAKE_POLICY_VERSION_MINIMUM=3.5`; it only affects that one fetched
+dependency.
 
 **Modules as Qt static plugins (`NOTEAPPC_STATIC_MODULES`).** Android loads only
 native libraries packaged in the APK, so the loadable modules of
@@ -318,8 +268,6 @@ the executable with both module classes inside it and no `NEEDED` entry for
 `libnotolith-ink*`, and `test_modules` lists, loads and attaches a static test
 module (`tests/fakemodule/FakeStaticModule.cpp`); `test_window` and
 `test_hwfont` run their ink and glyph-studio tests against the static modules.
-Not checked: an Android build, because there is no Android toolchain for it in
-this configuration.
 
 **What is off, and why.** Four of the five options `docs/PLUGINS.md` lists as
 Tier 1 have a system dependency with no arm64 build in this toolchain -
@@ -367,7 +315,7 @@ exactly as it already does on a desktop build without Qt Multimedia.
 **Build it.** The placeholders are `$QT_ANDROID` (the Qt 6.7.3
 `android_arm64_v8a` kit), `$QT_HOST` (the matching desktop Qt 6.7.3, `gcc_64`),
 `$ANDROID_SDK_ROOT`, `$ANDROID_NDK_ROOT` (NDK 26.1.10909125) and `$JAVA_HOME`
-(JDK 17); those versions are the ones used here.
+(JDK 17); those are the versions the build is known to work with.
 
 ```sh
 JAVA_HOME=$JAVA_HOME \
@@ -400,7 +348,7 @@ Artifact:
 `build-android/apps/noteAppC/android-build/build/outputs/apk/debug/android-build-debug.apk`,
 18 MB, signed with the `Android Debug` certificate (`apksigner verify
 --print-certs`). `aapt2 dump badging` confirms `package:
-io.github.jernejmarcic.noteAppC`, `sdkVersion:'26'`, `targetSdkVersion:'34'`,
+io.github.jernejmarcic.Notolith`, `sdkVersion:'26'`, `targetSdkVersion:'34'`,
 a single `INTERNET` permission and `native-code: 'arm64-v8a'`. `unzip -l`
 confirms `lib/arm64-v8a/libnoteAppC_arm64-v8a.so` (15 MB, every noteAppC
 library statically linked into it), every linked Qt library

@@ -5,7 +5,7 @@ tags: [demo, embeds, pdf]
 # PDF embeds
 
 Target file: `assets/graphviz-dot-manual.pdf`, a real 9-page manual page
-(source and licence in `demo-assets.md`), chosen specifically so every page
+(source and licence in `docs/DEMO-ASSETS.md`), chosen specifically so every page
 argument below has real, different pages to show.
 Page lists, ranges, `all`, `#height=` and the slide/column/grid layouts are
 all shown below; any that do not render fall back to page one or a plain link.

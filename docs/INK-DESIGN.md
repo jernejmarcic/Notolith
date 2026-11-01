@@ -1,19 +1,19 @@
-# Ink core and loadable modules: design (Spec 1 and 1b)
+# Ink core and loadable modules: design
 
-Status: approved design, with the results of the pen input test (section 11) folded in.
+Design reference, with the results of the pen input test (section 10) folded in.
 
 Notolith gets handwriting: pen input, whole handwritten notes, sketch sections
 inside Markdown notes, pen markup over Markdown text, PDF, images and EPUB,
 local handwriting recognition, and a handwriting font made from the user's own
-writing. This spec covers the first two cycles:
+writing. This document covers what is built:
 
-- **Spec 1**: the loadable-module mechanism, the editor seams, the `.ink`
-  format and the ink core (A), with a basic handwritten-note tab (B without
-  `.rnote`).
-- **Spec 1b**: the glyph studio, in parallel with Spec 1 from milestone A0.
+- the loadable-module mechanism, the editor seams, the `.ink` format and the
+  ink core, with a basic handwritten-note tab (without `.rnote`);
+- the glyph studio.
 
-Every later piece has its own spec. The decisions they inherit are fixed in
-section 2, so nothing here has to be re-decided later.
+The later pieces (`.rnote`, sketch sections, markup over text, ink on PDF,
+images and EPUB, recognition, font training) are not built. The decisions they
+inherit are fixed in section 2, so nothing here has to be re-decided later.
 
 ## 1. Intent
 
@@ -44,15 +44,15 @@ Success criteria:
 5. **Open format**: `.ink` is plain and documented. A second program could
    read it from section 5 alone.
 
-## 2. Decisions for the whole roadmap
+## 2. Decisions for all ink work
 
-Later specs build on these decisions without re-asking.
+Later work builds on these decisions without re-asking.
 
 ### Input
 
 | Topic | Decision |
 |---|---|
-| Pen | Draws. The eraser end erases. The lower barrel button is a held eraser and the upper one a held lasso (Rnote's defaults). These are a bonus, not the way in: some pens (e.g. the FydeTab Duo's) have no eraser end and no working buttons (pen input test, section 11), so every tool (pen, eraser, lasso, shapes, text, and the highlighter when it arrives) is reachable from the toolbar and by a keyboard shortcut with no pen hardware at all. |
+| Pen | Draws. The eraser end erases. The lower barrel button is a held eraser and the upper one a held lasso (Rnote's defaults). These are a bonus, not the way in: some pens (e.g. the FydeTab Duo's) have no eraser end and no working buttons (pen input test, section 10), so every tool (pen, eraser, lasso, shapes, text, and the highlighter when it arrives) is reachable from the toolbar and by a keyboard shortcut with no pen hardware at all. |
 | Pressure | Normalised per device by a learned maximum (setting `ink.pressureMax`, default 1.0, stored per device name): one pen (the FydeTab Duo's) never reports above 0.657, so raw pressure would make every line thin. |
 | Touch | Scrolls and pinch-zooms. It never draws. |
 | Mouse | Draws only while mouse inking is explicitly on. Otherwise it behaves as it does now, inside ink areas too. |
@@ -66,7 +66,7 @@ Later specs build on these decisions without re-asking.
 | `.ink` format | Plain JSON, written by `QJsonDocument::toJson(Compact)` with no custom emitter. The reader sniffs the gzip magic bytes (`1f 8b`) from v1 and inflates such a file (read is supported, in the editor and in the host's index reader); the writer always produces plain JSON. |
 | Paper | Chosen per note from Rnote's four layouts. The default is A4 pages stacked downward, with a page added as the ink grows. |
 | Typed text box | It is the real Markdown editor (canvas text-card pattern), so links, tags and formatting work in it. |
-| Search | Text boxes are indexed now. Recognised handwriting is indexed later, by Spec 6. |
+| Search | Text boxes are indexed now. Recognised handwriting is indexed later, with recognition. |
 | `.rnote` | Opened, edited and saved as `.rnote`, with lossless pass-through of anything the model does not know. "Save as .ink" and "Export as .rnote" are commands. |
 | Companion files | One hidden companion file per host file under a tidy folder, `Sketches/` by default, mirroring the vault path:<br>- `Uni/Networks/Lecture 3.md` uses `Sketches/Uni/Networks/Lecture 3.ink`.<br>- `paper.pdf` uses `Sketches/paper.pdf.ink`.<br>It holds the sketch sections and the markup. It follows the host file on rename, move and delete. |
 | PDF ink | Stored in the companion file, with pressure, plus a "Flatten into PDF" command. |
@@ -85,34 +85,33 @@ Later specs build on these decisions without re-asking.
 
 | Topic | Decision |
 |---|---|
-| Recognition | Local only, and confirm before creating a link: nothing is created from recognised handwriting without a confirmation. The engine is chosen in Spec 6 by a benchmark on real handwriting samples; PP-OCRv6 is a candidate and Tesseract the fallback, neither is a decision. Results are stored inside the `.ink` file. Hand-written `[[link]]`, `#tag`, headings and checkboxes are detected. The model weights are an optional data download, not a module. |
-| Font | Version 1 (Spec 7) is captured studio samples: several variants per letter, cycled with an OpenType `calt` feature, built with fontTools. A style model (SDT, DeepVecFont v2) is added only if v1 is judged not hand-written enough. Every glyph is approved by eye. This default may be overruled. |
+| Recognition | Local only, and confirm before creating a link: nothing is created from recognised handwriting without a confirmation. The engine is chosen by a benchmark on real handwriting samples; PP-OCRv6 is a candidate and Tesseract the fallback, neither is a decision. Results are stored inside the `.ink` file. Hand-written `[[link]]`, `#tag`, headings and checkboxes are detected. The model weights are an optional data download, not a module. |
+| Font | Version 1 is captured studio samples: several variants per letter, cycled with an OpenType `calt` feature, built with fontTools. A style model (SDT, DeepVecFont v2) is added only if v1 is judged not hand-written enough. Every glyph is approved by eye. This default may be overruled. |
 | Glyph samples | Stored in the vault under `Handwriting/<font>/`, so they can be synced to a training machine. |
 
 ### Delivery
 
 | Topic | Decision |
 |---|---|
-| Order | Spec 1, with 1b alongside it. Then 2 (`.rnote`), 3 (sketch sections), 4 (markup over text), 5 (PDF, image and EPUB), 6 (recognition) and 7 (font training and build). |
+| Order | The core and the glyph studio first. Then `.rnote`, sketch sections, markup over text, PDF, image and EPUB ink, recognition, and font training and build. |
 
 ## 3. Blocks and install units
 
 Each block lives under `libs/ext/<name>` and has its own CMake option and
 its own runtime feature id. There are two install units (packages) in this
-spec: `notolith-ink` (the ink core library plus the ink module, and later
+design: `notolith-ink` (the ink core library plus the ink module, and later
 the rnote, markup and recognition hooks) and `notolith-hwfont` (the font
-module, which depends on `notolith-ink` for the core library). Only Spec 1
-and 1b blocks are built by this spec; the rest of the table fixes names so
-the seams fit them.
+module, which depends on `notolith-ink` for the core library). Only the ink core, the ink module and the glyph
+studio are built; the rest of the table fixes names so the seams fit them.
 
-| Block | Directory | Install unit | CMake option | Feature id | Spec |
+| Block | Directory | Install unit | CMake option | Feature id | Built |
 |---|---|---|---|---|---|
-| ink core library | libs/ext/ink/core | `libnotolith-inkcore.so`, package notolith-ink | `NOTEAPPC_WITH_INK` | - | 1 |
-| ink module (handwritten-note tab, later sketch sections) | libs/ext/ink | `notolith-ink.so`, package notolith-ink | `NOTEAPPC_WITH_INK` | `ink` | 1, 3 |
-| rnote | libs/ext/rnote | `notolith-ink-rnote.so`, package notolith-ink | `NOTEAPPC_WITH_RNOTE` | shares `ink` | 2 |
-| markup | libs/ext/inkmarkup | `notolith-ink-markup.so`, package notolith-ink | `NOTEAPPC_WITH_INK_MARKUP` | `ink-markup` | 4 |
-| recognition | libs/ext/hwr + tools/hwr_worker | `notolith-hwr.so` + worker, package notolith-ink | `NOTEAPPC_WITH_HWR` | `handwriting-recognition` | 6 |
-| handwriting font | libs/ext/hwfont + tools/hwfont_worker | `notolith-hwfont.so` + worker, package notolith-hwfont | `NOTEAPPC_WITH_HWFONT` | `handwriting-font` | 1b, 7 |
+| ink core library | libs/ext/ink/core | `libnotolith-inkcore.so`, package notolith-ink | `NOTEAPPC_WITH_INK` | - | yes |
+| ink module (handwritten-note tab, later sketch sections) | libs/ext/ink | `notolith-ink.so`, package notolith-ink | `NOTEAPPC_WITH_INK` | `ink` | yes (sketch sections later) |
+| rnote | libs/ext/rnote | `notolith-ink-rnote.so`, package notolith-ink | `NOTEAPPC_WITH_RNOTE` | shares `ink` | no |
+| markup | libs/ext/inkmarkup | `notolith-ink-markup.so`, package notolith-ink | `NOTEAPPC_WITH_INK_MARKUP` | `ink-markup` | no |
+| recognition | libs/ext/hwr + tools/hwr_worker | `notolith-hwr.so` + worker, package notolith-ink | `NOTEAPPC_WITH_HWR` | `handwriting-recognition` | no |
+| handwriting font | libs/ext/hwfont + tools/hwfont_worker | `notolith-hwfont.so` + worker, package notolith-hwfont | `NOTEAPPC_WITH_HWFONT` | `handwriting-font` | studio only |
 
 Dependencies:
 - **One direction only.** Modules link `libnotolith-inkcore.so`. Nothing in
@@ -208,7 +207,7 @@ libraries.
 - every seam is a null `std::function` or an empty map;
 - the editor pays one registry lookup per file open and per wikilink
   resolution, and nothing per paint or per viewport event (the per-paint
-  pointer checks belong to seams 2 and 3, which Spec 3 builds).
+  pointer checks belong to seams 2 and 3, which the sketch-section work builds).
 
 **Follow-up, out of scope:** canvas, bases, pdfview, imageview, epub, graph
 and publish could move to the same mechanism and shrink the base binary.
@@ -274,9 +273,9 @@ order is ascending `(layer, t)`, as in Rnote.
 | `shape` | `kind` (`line`, `arrow`, `rect`, `ellipse`, `polyline`, `polygon`), `points`, `style` |
 | `textbox` | `rect` `[x, y, w, h]`, `markdown` (source text) |
 | `image` | `rect` and `path`, a vault-relative file. Never embedded pixels. |
-| `group` | `items` (a list of `t`) plus a payload. Later specs use it for markup anchors, sections and recognition results. |
+| `group` | `items` (a list of `t`) plus a payload. Later work uses it for markup anchors, sections and recognition results. |
 
-**Sketch sections (Spec 3, reserved now)**: a companion file holds several
+**Sketch sections (not built, reserved)**: a companion file holds several
 sections as `{"type": "section", "id": "s1", ...}` groups addressed by the
 embed fragment `#s1`. Version 1 readers keep them by pass-through.
 
@@ -295,29 +294,28 @@ embed fragment `#s1`. Version 1 readers keep them by pass-through.
 **Size**: about 18 bytes per point. A heavy note of 100 000 points is about
 1.8 MB.
 
-The format is documented for users in `docs/INK.md`, written as part of this
-spec's implementation.
+The format is documented for users in `docs/INK.md`.
 
 ## 6. Editor and index seams
 
 These are generic and carry no ink types. The glue passes `std::function`
 objects and small abstract interfaces, as `setSpelling` does
-(MarkdownEditor.h:220-228). Spec 1 builds seams 1, 2 and 6, which the
-handwritten-note tab and the module host need. This spec declares seams 1, 2
-and 6 and builds 1 and 6; seams 3, 4 and 5 are specified here so Specs 3 and
-4 fit, and are built in those specs.
+(MarkdownEditor.h:220-228). Seams 1 and 6 are built, which the
+handwritten-note tab and the module host need; seam 2 is declared. Seams 3, 4
+and 5 are specified here so sketch sections and markup over text fit, and are
+built with them.
 
-| Seam | Built in | What it does |
+| Seam | Status | What it does |
 |---|---|---|
-| 1. View factories by suffix | Spec 1 | `ModuleHost::registerView(suffixes, factory)`. `MainWindow::isViewFile` (MainWindow.cpp:6275) and `openView` (MainWindow.cpp:6297) consult the map after the built-in kinds, gated by `featureOn(id)`. This is the only change to the routing. Wikilink resolution (MainWindow.cpp:3891, ~1288) picks up the new suffixes through `isViewFile`. |
-| 2. Tablet routing in the editor | Spec 3 (declared in 1) | A `tabletEvent` path in `viewportEvent` (MarkdownEditor.h:1091). If a block view or the overlay claims the point, the event is forwarded and accepted. Otherwise it is ignored, so Qt synthesises the mouse event exactly as today. |
-| 3. Block view object | Spec 3 | `setFileEmbedView(suffixes, factory)` beside `setFileEmbedRenderer` (MarkdownEditor.h:527). The object paints into the editor's painter, takes events over its rectangle, reports a height for a width, and calls back with a changed rectangle. |
-| 4. Overlay and text geometry | Spec 4 | A painted overlay after `paintBlocks` (MarkdownEditor.cpp:4538). Three geometry calls become public: `offsetAt` (h:1938), a new `rectsForRange`, and per-character rectangles. |
-| 5. Wrap a range | Spec 4 | A public `wrapRange(Range, marker)`. It never toggles (unlike `toggleWrap`, EditingCommands.cpp:951-985), pushes one undo step and works in Reading mode. |
-| 6. Foreign-file index reader | Spec 1 | `Indexer::setForeignReader(suffix, reader)`, modelled on `setNotebookReader` (Indexer.h:66). It returns body text, links and tags for `.ink`, which feed search, backlinks, the graph and the quick switcher. The `.ink` reader is host-side: `MainWindow` registers it next to the `.ipynb` one (`updateNotebookIndex()`), parsing the JSON with `QJsonDocument` and returning the markdown of every `textbox` item. It never loads a module and `libs/ui` links no ink library; the key names are duplicated as string literals, with a comment pointing at section 5. The host reader inflates a gzip-compressed `.ink` too (zlib, one member, at most 16 MiB inflated, the same as its plain-file cap); a file over 16 MiB is not indexed. It is registered for every window whether or not the ink module is installed, loaded or switched on (it is never gated on the feature). |
+| 1. View factories by suffix | built | `ModuleHost::registerView(suffixes, factory)`. `MainWindow::isViewFile` (MainWindow.cpp:6275) and `openView` (MainWindow.cpp:6297) consult the map after the built-in kinds, gated by `featureOn(id)`. This is the only change to the routing. Wikilink resolution (MainWindow.cpp:3891, ~1288) picks up the new suffixes through `isViewFile`. |
+| 2. Tablet routing in the editor | declared, not wired | A `tabletEvent` path in `viewportEvent` (MarkdownEditor.h:1091). If a block view or the overlay claims the point, the event is forwarded and accepted. Otherwise it is ignored, so Qt synthesises the mouse event exactly as today. |
+| 3. Block view object | not built | `setFileEmbedView(suffixes, factory)` beside `setFileEmbedRenderer` (MarkdownEditor.h:527). The object paints into the editor's painter, takes events over its rectangle, reports a height for a width, and calls back with a changed rectangle. |
+| 4. Overlay and text geometry | not built | A painted overlay after `paintBlocks` (MarkdownEditor.cpp:4538). Three geometry calls become public: `offsetAt` (h:1938), a new `rectsForRange`, and per-character rectangles. |
+| 5. Wrap a range | not built | A public `wrapRange(Range, marker)`. It never toggles (unlike `toggleWrap`, EditingCommands.cpp:951-985), pushes one undo step and works in Reading mode. |
+| 6. Foreign-file index reader | built | `Indexer::setForeignReader(suffix, reader)`, modelled on `setNotebookReader` (Indexer.h:66). It returns body text, links and tags for `.ink`, which feed search, backlinks, the graph and the quick switcher. The `.ink` reader is host-side: `MainWindow` registers it next to the `.ipynb` one (`updateNotebookIndex()`), parsing the JSON with `QJsonDocument` and returning the markdown of every `textbox` item. It never loads a module and `libs/ui` links no ink library; the key names are duplicated as string literals, with a comment pointing at section 5. The host reader inflates a gzip-compressed `.ink` too (zlib, one member, at most 16 MiB inflated, the same as its plain-file cap); a file over 16 MiB is not indexed. It is registered for every window whether or not the ink module is installed, loaded or switched on (it is never gated on the feature). |
 
-Seam 2 is declared in Spec 1, because the module host struct carries it, but
-it is wired only in Spec 3.
+Seam 2 is declared, because the module host struct carries it, but it is wired
+only when sketch sections are built.
 
 ## 7. The ink core (libnotolith-inkcore)
 
@@ -396,12 +394,12 @@ after the gesture settles, off-thread.
 **Backgrounds.** One pattern tile per period via `drawTiledPixmap`. The
 seven page styles of a Rnote fork (branch `jernej/features`) are ported with attribution.
 
-### Tools in Spec 1
+### Tools
 
 | Tool | Behaviour |
 |---|---|
 | Pen | Width and colour from the toolbar. |
-| Highlighter | Not in Spec 1. Its only effect is on text (applying `==` to covered characters, in Markdown notes and in text boxes), and over handwriting or an empty page it does nothing. So it arrives with the text geometry in Spec 4. The `highlighter` layer exists in the model only so that `.rnote` highlighter strokes keep their paint order. |
+| Highlighter | Not built. Its only effect is on text (applying `==` to covered characters, in Markdown notes and in text boxes), and over handwriting or an empty page it does nothing. So it arrives with the text geometry (seam 4). The `highlighter` layer exists in the model only so that `.rnote` highlighter strokes keep their paint order. |
 | Eraser | Two modes, as in Rnote: stroke (removes the whole stroke) and split (cuts strokes where it passes). |
 | Lasso and rectangle select | Move, resize, delete, copy and paste within the document. |
 | Shapes | Line, arrow, rectangle, ellipse. |
@@ -447,7 +445,7 @@ seven page styles of a Rnote fork (branch `jernej/features`) are ported with att
   closing or quitting asks, or autosaves, through the same path as a file
   tab.
 
-## 9. Spec 1b: glyph studio (hwfont module shell)
+## 9. Glyph studio (hwfont module shell)
 
 - **The module.** It is a separate module and package (notolith-hwfont).
   It links `libnotolith-inkcore.so` only.
@@ -474,25 +472,9 @@ seven page styles of a Rnote fork (branch `jernej/features`) are ported with att
   `.ink`, its document carrying a `glyph` object
   `{codepoint, baseline, xHeight, ascender}` (a key the v1 format
   pass-through already tolerates).
-- **Not in 1b.** Training, variants, approval and the font build belong to
-  Spec 7.
+- **Not built.** Training, variants, approval and the font build.
 
-## 10. Milestone A0
-
-A0 is the smallest slice that unblocks Spec 1b. After it, the rest of Spec 1
-and Spec 1b proceed in separate worktrees and build directories.
-
-A0 contains:
-- the `Stroke` and `InkDocument` model;
-- the input state machine, with the modeler;
-- the outline composer;
-- a single-page `InkCanvas` with pen, eraser, undo and redo;
-- the `.ink` reader and writer;
-- the module mechanism (section 4), with seam 1.
-
-A0 leaves out layouts, the tile cache, lasso, shapes and text boxes.
-
-## 11. Pen input test
+## 10. Pen input test
 
 **Results on a FydeTab Duo** (himax-stylus, GNOME/mutter):
 - tip only: no eraser end is reported;
@@ -513,20 +495,16 @@ a follow-up check on the same tool.
   event rate per second. It also has a scribble area.
 - **Who runs it.** By hand, on a FydeTab Duo (GNOME/mutter) and a Wacom
   2-in-1 (Hyprland).
-- **What it settles before A0 code is written:**
+- **What it settled before the ink code was written:**
   - whether the eraser end is detected;
   - the barrel-button mapping;
   - the real event rate;
   - whether fractional scaling offsets the pen position.
 
-## 12. Testing
+## 11. Testing
 
-The house rules apply:
-- tests run through ctest only;
-- builds and worktrees go in `/tmp`, under
-  `systemd-run --user --scope -p MemoryMax=8G`;
-- window tests run offscreen or headless;
-- tests never touch the real keyring, config or home.
+Tests run through ctest only. Window tests run offscreen or headless, and
+tests never touch the real keyring, config or home.
 
 ### Unit tests (`tests/test_ink.cpp`)
 
@@ -581,10 +559,9 @@ Measured in `tools/bench` with and without the module directory, as ratios
 | Five times the strokes | About five times the tile work, not more. |
 | Zoom settle, viewport re-rasterised | Under 100 ms, off-thread. |
 
-Results go in docs/PERFORMANCE.md, with a new row and a fix entry if
-anything needed changing.
+Results go in docs/PERFORMANCE.md.
 
-## 13. Out of scope (YAGNI)
+## 12. Out of scope (YAGNI)
 
 Out of scope everywhere:
 - tilt and rotation;
@@ -595,22 +572,22 @@ Out of scope everywhere:
 - typing text rendered in the user's handwriting;
 - Tier 2 ABI changes for ink.
 
-Out of Spec 1, built in later specs:
-- `.rnote` (Spec 2);
-- sketch sections, seams 2 and 3 (Spec 3). Spec 3 must also hide the
+Not built yet:
+- `.rnote`;
+- sketch sections, seams 2 and 3. They must also hide the
   `Sketches/` companion files from the file tree, the quick switcher and
   search, and rewrite the embed lines when a note is renamed;
-- markup over text, seams 4 and 5 (Spec 4). Spec 4 must test a mid-word `==`
+- markup over text, seams 4 and 5. It must test a mid-word `==`
   in the parser and against Obsidian's behaviour;
-- moving PDF, image and EPUB onto the ink core (Spec 5);
-- recognition (Spec 6), whose engine is chosen there by a benchmark on
+- moving PDF, image and EPUB onto the ink core;
+- recognition, whose engine is chosen by a benchmark on
   real handwriting samples;
-- font training and build (Spec 7).
+- font training and build.
 
 Generating letter variants for the font is not stroke synthesis in the
-sense cut above. It stays, in Spec 7.
+sense cut above. It stays, with font training.
 
-## 14. Risks
+## 13. Risks
 
 - **The cost-when-absent claim depends on `QPluginLoader::metaData()` not
   loading the library.** The first module test and bench verify it before
@@ -618,10 +595,9 @@ sense cut above. It stays, in Spec 7.
 - **Pen behaviour differs per compositor.** The pen input test decides the
   mapping before code depends on it. The test matrix is GNOME on a FydeTab
   Duo and Hyprland on a Wacom 2-in-1.
-- **ink-stroke-modeler pins Abseil 20250512.** The system has
-  20260817. System Abseil is required; if it does not build the modeler, the
-  ink core stays off until the modeler pin is moved. There is no bundled
-  Abseil.
+- **ink-stroke-modeler pins Abseil 20250512.** System Abseil is required; if
+  the system's version does not build the modeler, the ink core stays off
+  until the modeler pin is moved. There is no bundled Abseil.
 - **SDT's coverage of Latin letters and `čšž` is unverified.** This does not
-  affect this spec, and font v1 does not use SDT. Spec 7 tests it on real
+  affect this design, and font v1 does not use SDT. Font training tests it on real
   studio samples only if v1 is judged not hand-written enough.

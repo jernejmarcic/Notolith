@@ -1,4 +1,4 @@
-# Stage 13, a Tier 1 module (docs/PLUGINS.md): Jupyter-style code execution.
+# A Tier 1 module (docs/PLUGINS.md): Jupyter-style code execution.
 # Built only with NOTEAPPC_WITH_NOTEBOOK on and libzmq found (root
 # CMakeLists.txt) - PkgConfig::ZMQ is libzmq's own pkg-config name, kept as
 # the target name every other optional dependency here uses (SODIUM,

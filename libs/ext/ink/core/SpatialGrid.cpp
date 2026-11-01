@@ -40,7 +40,7 @@ void SpatialGrid::insert(qint64 t, const QRectF &bounds)
         || std::abs(bounds.right()) > kMaxCoord || std::abs(bounds.bottom()) > kMaxCoord;
     const Range range = rangeOf(bounds);
     if (far || range.count > kMaxCellsPerItem) {
-        // ponytail: linear scan per query; fine while oversize items are rare (a background image,
+        // Limit: linear scan per query; fine while oversize items are rare (a background image,
         // a malformed rect). A coarse second grid level if documents ever hold thousands of them.
         m_oversize.emplace_back(t, bounds);
         return;

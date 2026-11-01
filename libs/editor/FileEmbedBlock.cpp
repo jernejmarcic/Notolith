@@ -227,7 +227,7 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
 
 QImage MarkdownEditor::renderNoteEmbed(const QString &slice, int width, const QString &fromNote) const
 {
-    // ponytail: a long note is cut at kMaxNoteEmbedHeight where Obsidian
+    // Limit: a long note is cut at kMaxNoteEmbedHeight where Obsidian
     // scrolls inside the embed. Notes embedded in the slice are drawn the
     // same way, now, one level down (layoutNoteEmbed); `fromNote` joined to
     // the ancestors is the cycle guard.
@@ -373,7 +373,7 @@ QPixmap MarkdownEditor::ensureEpubCoverAsync(const QString &path, qint64 mtime, 
     if (it != d->m_epubCoverCache.constEnd())
         return it->pending ? QPixmap() : it->cover;
     if (d->m_epubCoverCache.size() >= 64)
-        d->m_epubCoverCache.clear(); // ponytail: a flush, not an LRU; a card asks again
+        d->m_epubCoverCache.clear(); // Limit: a flush, not an LRU; a card asks again
     d->m_epubCoverCache.insert(key, EpubCoverEntry{true, QPixmap()});
     // Through m_lifeline, as the PDF pages: a read that outlives the editor is dropped.
     (void)QtConcurrent::run([this, lifeline = d->m_lifeline, key, path] {
@@ -744,7 +744,7 @@ void MarkdownEditor::prepareTextEmbeds(BlockView &view, const QList<const EmbedS
     if (embeds.isEmpty())
         return;
 
-    // ponytail: one width budget for the whole block; a full-width cell on
+    // Limit: one width budget for the whole block; a full-width cell on
     // an indented line (a list item, a nested callout) runs past its right
     // edge. Per-line budgets if anyone embeds full-width files in lists.
     const qreal maxWidth = contentWidth() - (view.callout ? 28 : 0);

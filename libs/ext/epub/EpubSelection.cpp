@@ -248,7 +248,7 @@ void EpubView::handleContentMousePress(QMouseEvent *event)
         return;
 
     if (turnPageOnMarginClick(event->pos()))
-        return; // task 4: click the margins to turn a page instead of starting a selection there
+        return; // click the margins to turn a page instead of starting a selection there
 
     const HitPoint hit = hitTest(event->pos());
     if (hit.spineIndex < 0)
@@ -345,7 +345,7 @@ void EpubView::handleContentContextMenu(QContextMenuEvent *event)
 
 namespace {
 /// Column 0 data roles a TOC row carries beyond Qt::UserRole (the spine
-/// index, already in use before this task): where to find this row's real
+/// index): where to find this row's real
 /// children once it is actually expanded, and whether that has happened yet
 /// - see populateTocTree()/onTocExpanded().
 constexpr int kTocEntryPointerRole = Qt::UserRole + 1;
@@ -354,8 +354,8 @@ constexpr int kTocPopulatedRole = Qt::UserRole + 2;
 
 void EpubView::buildToc()
 {
-    // Not called from load() any more - see setTocVisible()'s own comment
-    // (task 2). What runs here is itself lazy per node too: a synthetic
+    // Not called from load() any more - see setTocVisible()'s own comment.
+    // What runs here is itself lazy per node too: a synthetic
     // 2000-entry TOC used to cost roughly a third of open time built eagerly
     // three levels deep; now only the level actually being shown is ever
     // materialised as QTreeWidgetItems - see populateTocTree/onTocExpanded.

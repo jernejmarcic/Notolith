@@ -1,4 +1,4 @@
-/// The editing behaviours from PLAN.md 4.6: auto-pairs, list continuation,
+/// The editing behaviours: auto-pairs, list continuation,
 /// checkbox toggling, line moves, the formatting commands and find/replace.
 ///
 /// They live beside MarkdownEditor.cpp rather than in it because they are all
@@ -539,7 +539,7 @@ bool MarkdownEditor::inCodeFenceAt(qsizetype offset) const
     // all of them (a block starts or ends on each) its answer stands; when
     // one is new, the parse's state before the oldest fence, flipped once per
     // fence line, is the answer.
-    // ponytail: only that run (at most 100 lines) is read, so a fence typed
+    // Limit: only that run (at most 100 lines) is read, so a fence typed
     // above a blank line the caret has since crossed is missed until the parse
     // lands; ``` and ~~~ are not told apart.
     const QStringView text(d->m_text);
@@ -585,7 +585,7 @@ bool MarkdownEditor::decoratedFenceAt(qsizetype offset) const
         if (it->block.end <= offset && it->depth == 0) {
             // A fence nothing closes runs to the end of the note, so what is
             // typed after the last line the parse saw is still inside it.
-            // ponytail: any fence-looking last line counts as the closing one
+            // Limit: any fence-looking last line counts as the closing one
             // (``` and ~~~ are not told apart, nor an info string), as in
             // inCodeFenceAt above.
             const qsizetype lastLine = lineStartOf(d->m_text, qMax(it->block.start, it->block.end - 1));

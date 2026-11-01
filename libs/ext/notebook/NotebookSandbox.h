@@ -30,8 +30,7 @@ struct SandboxRequest {
     QStringList readOnlyBinds;   ///< extra ro binds, e.g. the vault root for `![[x.py]]`
 };
 
-/// What is actually installed, checked once at startup rather than assumed -
-/// stage 13's "check what is installed before building on it".
+/// What is actually installed, checked once at startup rather than assumed.
 struct SandboxAvailability {
     bool bubblewrap = false;
     /// A container tier (gVisor/Firecracker/a container runtime) is

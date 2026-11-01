@@ -25,8 +25,8 @@ struct Note {
 };
 
 /// A vault is a directory of Markdown files, the same thing Obsidian means by
-/// the word. Stateless beyond its root path: the index and the watcher arrive
-/// in Phase 1.
+/// the word. Stateless beyond its root path: the index and the watcher live
+/// elsewhere.
 class Vault {
 public:
     Vault() = default;

@@ -9,9 +9,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # No C++20 modules anywhere in this project - every file uses #include - so
 # CMake's module scanning is pure overhead: a scan step per source and a dyndep
-# file per target. It is also what crashed ninja 1.13.2 on a no-op rebuild, an
-# assertion in Plan::RefreshDyndepDependents, which made a failed build look
-# like a successful one to anything that only read its tail.
+# file per target.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -125,10 +123,8 @@ option(NOTEAPPC_WITH_HWFONT "Build the handwriting-font glyph studio module (lib
 # Tier 2 (docs/PLUGINS.md): runtime plugins, each loaded inside its own
 # `noteAppC-plugin-host` process (tools/plugin_host), never in the app. No
 # external dependency at this level - only Qt, libdl and bubblewrap when
-# present; NOTEAPPC_WITH_QUICKJS (tools/plugin_host/CMakeLists.txt) is the
-# separate, still-off option for a second, scripted engine. Desktop only,
-# by nature (docs/PLUGINS.md): off on Android regardless of this option,
-# the same as the tools directory it lives under.
+# present. Desktop only, by nature (docs/PLUGINS.md): off on Android
+# regardless of this option, the same as the tools directory it lives under.
 option(NOTEAPPC_WITH_PLUGINS "Build the out-of-process plugin host and its app-side glue" ON)
 # The first Tier 2 plugin that is not a test fixture (docs/PLUGINS.md,
 # "AI plugin"): a local Ollama server, or an OpenAI-compatible/Anthropic

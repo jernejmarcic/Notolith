@@ -19,8 +19,7 @@ before litehtml sees the markup. What a script element says is shown in its
 place instead, in `--text-error` and bold: an HTML block draws it as text
 (libs/editor/HtmlBlock.cpp layoutHtml), an inline `<script>...</script>` keeps
 its tags showing (inlineHTMLpairs). Links open only http, https and mailto,
-from notes and PDFs alike, so a `javascript:` URI is never handed on. The
-plugin manifest's QuickJS engine kind is a seam with no engine behind it.
+from notes and PDFs alike, so a `javascript:` URI is never handed on.
 
 ## HTML edited in place
 
@@ -787,7 +786,7 @@ the same flag (`PdfOptions::codeStyler`, `Options::parse`). A note with
   on. PDF export waits (at most 10 s) for `referencesPending()` to clear before
   it lays out for the page. `setRemoteReferences(false)` (the default, from the
   `editor.remoteReferences` setting) keeps every URL from being requested.
-  ponytail: a target missing at layout time is not watched for; it shows when
+  Limit: a target missing at layout time is not watched for; it shows when
   the block is next laid out.
 
 Tests: `CodeStylerTest.*` (parser, tests/test_markdown.cpp),
@@ -1109,7 +1108,7 @@ every run only after the drill-down. `MainWindow::applyFeatures` passes
 while the setting is on (see SEARCH.md, `meta:`). Tests: 
 `WindowTest.TheMetaNotesPane*`, `AltBracketJumps*`, `ChangingTheDelimiters*`
 (vault mode: `TheMetaNotesPaneVaultMode*`).
-Fixture: `fixtures/demo-vault/notes/Meta notes.md`; to see the pane in
+Fixture: `demo/Editor/Meta Notes.md`; to see the pane in
 `noteAppC_shot`, put `[editor]` / `meta-notes = true` in a private
 `$XDG_CONFIG_HOME/noteAppC/settings.ini` and set `NOTEAPPC_SHOT_KEEP_CONFIG=1`.
 
@@ -1321,7 +1320,7 @@ GPU acceleration (`editor.gpuAcceleration`, Settings, Editor) is Automatic by
 default: OpenGL on a screen with a fractional scale, where raster has to
 repaint the whole note on every scroll step, and raster elsewhere, where it is
 faster. On and Off force it; a settings file from before Automatic keeps its
-`true` or `false`. The numbers are in [PERFORMANCE.md](PERFORMANCE.md), fix 33.
+`true` or `false`. The numbers are in [PERFORMANCE.md](PERFORMANCE.md), "Scrolling and GPU acceleration".
 
 Tests: `tests/test_touch.cpp` (its own binary: a test touchscreen is
 registered for the whole process).

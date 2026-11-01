@@ -1281,9 +1281,9 @@ int main(int argc, char **argv)
     return RUN_ALL_TESTS();
 }
 
-// The full-text table is keyed by the file's id. Nothing reads it until the
-// search grammar lands, so these guard it: a stale or duplicated row would be
-// invisible until Phase 5 and then look like a parser bug.
+// The full-text table is keyed by the file's id. These guard it: a stale or
+// duplicated row would be invisible until search used it and then look like a
+// parser bug.
 TEST_F(IndexTest, ACacheFromAnOlderSchemaIsRebuiltNotTrusted)
 {
     // What a machine still holds from before links gained `tname`: version 2,
@@ -1580,7 +1580,7 @@ TEST(SearchPerfTest, SearchTimeScalesWithVaultSizeNotQuadratically)
     // confirm-and-locate pass that quietly becomes quadratic - e.g. by
     // re-scanning already-seen candidates, or by re-reading tags/headings/
     // tasks per note instead of once per search - the kind of bug this
-    // project has hit twice already (see docs/PERFORMANCE.md, fixes 2 and 3).
+    // project has hit twice already (see docs/PERFORMANCE.md, "Indexing and queries").
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
     const int small = 500;
     const int large = small * 5;
@@ -1622,7 +1622,7 @@ TEST(IndexerThreadTest, AColdIndexLeavesTheEventLoopFree)
 {
     // The scan writes on a thread of its own and the Index's thread takes
     // only each chunk's names. Writing every note there held the loop for
-    // the whole index, 0.18 ms a note (docs/PERFORMANCE.md, fix 18).
+    // the whole index, 0.18 ms a note (docs/PERFORMANCE.md, "Indexing and queries").
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
     QTemporaryDir dir;
     writeNotes(dir, QStringLiteral("Note"), 3000);

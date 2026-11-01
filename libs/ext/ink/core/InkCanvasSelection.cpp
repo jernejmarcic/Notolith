@@ -168,7 +168,7 @@ void InkCanvas::dragSelection(const QPointF &documentPos)
     m_dragTransform = transform;
     const QRectF oldBounds = m_selectionBounds;
     const QRect oldPaint = selectionPaintRect();
-    // ponytail: every sample re-maps the whole selection from its originals; a selection of tens of thousands of points
+    // Limit: every sample re-maps the whole selection from its originals; a selection of tens of thousands of points
     // would want the drag shown as a transformed image and the real mapping done once at release.
     for (const Item &original : m_dragOriginals)
         m_document.replaceItem(original.t, transformItem(original, transform));

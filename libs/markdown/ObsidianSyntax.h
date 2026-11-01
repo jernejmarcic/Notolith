@@ -15,7 +15,7 @@ namespace noteAppC {
 /// md4qt 5 has no plugin hook, so this runs as a pass over the source with the
 /// ranges md4qt already claimed (code, math, raw HTML, frontmatter) masked
 /// out. Scanning the source rather than the parsed text is what keeps every
-/// offset true, which the live-preview editor of Phase 2 depends on.
+/// offset true, which the live-preview editor depends on.
 class ObsidianSyntax {
 public:
     struct Result {

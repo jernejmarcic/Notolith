@@ -81,7 +81,7 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
             const auto &pts = item->stroke->points;
             hit = std::any_of(pts.begin(), pts.end(), [&](const StrokePoint &p) { return region.contains(QPointF(p.x, p.y)); });
             // And a segment that crosses the region with no point inside it (a sparse stroke through a box): the brief's
-            // "outline intersects", on the centreline. ponytail: a segment is tested against every edge of the region
+            // "outline intersects", on the centreline. Limit: a segment is tested against every edge of the region
             // (one edge list per call, a box cull per segment); a huge sparse stroke under a huge lasso is the ceiling.
             if (!hit && pts.size() >= 2) {
                 if (edges.empty())
@@ -106,7 +106,7 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
             const QRectF box = item->bounds();
             hit = region.contains(box.center()) || (region.intersects(box) && !box.contains(region.boundingRect()));
         } else if (item->type == Item::Type::Shape) {
-            // Its ink: a lasso inside a rectangle that touches no edge selects nothing. ponytail: one stroker run per
+            // Its ink: a lasso inside a rectangle that touches no edge selects nothing. Limit: one stroker run per
             // candidate shape (those whose box meets the region's box), a large drawing of shapes under one lasso is the ceiling.
             hit = shapePath(*item->shape).intersects(region);
         }

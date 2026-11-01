@@ -9,8 +9,7 @@ wikilinks each, so the name table and resolution do real work) and carry
 frontmatter, tags, a list, a task, a table and a fenced code block. The seed is
 fixed, so two runs produce the same vault and two timings compare.
 
-The budget is 20 000 notes in under 5 s. That was 39.8 s until the
-full-text table stopped being scanned per note; see the commit that says so.
+The budget is 20 000 notes in under 5 s.
 """
 
 import os, random, sys, textwrap

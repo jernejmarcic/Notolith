@@ -87,7 +87,7 @@ NotebookOutput::Kind kindFromName(const QString &name)
     return NotebookOutput::Kind::Text;
 }
 
-/// Seeds not yet written (seedNotebookCache). ponytail: kept until their key
+/// Seeds not yet written (seedNotebookCache). Limit: kept until their key
 /// is read, written or removed, so a session that opens many notebooks and
 /// scrolls through none holds their unseen outputs in memory; flush them to
 /// disk on a worker if that ever shows in RSS.

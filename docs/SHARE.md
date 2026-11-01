@@ -55,7 +55,7 @@ character. A position does not depend on which edits the receiver holds.
   as fresh as the document.
 - Native: `'P' 0x01`, then `0` (start of the note) or `1 client clock` (right
   after that item), varints as in an update; resolving finds the run and counts
-  the visible units before it (O(runs), a `ponytail:` in the code). Yrs: a yrs
+  the visible units before it (O(runs), a `Limit:` in the code). Yrs: a yrs
   sticky index (`Assoc::Before`) in its own v1 encoding, made and read by
   `ncrdt_encode_position` / `ncrdt_resolve_position` in `yrs-ffi`; bytes from a
   peer must be at most 64, decode, re-encode to the same bytes and name the
@@ -115,7 +115,7 @@ the top of `CrdtDocNative.cpp`.
   at the *same* offset (typing backwards) may interleave; Yrs has the same
   profile. Fugue would fix that; it is not promised or tested.
 
-Known limits, each marked `ponytail:` in the code:
+Known limits, each marked `Limit:` in the code:
 
 - No garbage collection: tombstones and the run arena are never freed, so a
   long editing history only grows.
@@ -207,29 +207,20 @@ adds about 0.8 MB to a stripped test executable (measured against the same execu
 ## The link layer (libs/ext/link)
 
 Identity and the peer-to-peer `Node` (libdatachannel data channels, signed
-offers, mDNS discovery over avahi) are not written here: they are
-Hearth's link layer, vendored. No Qt.
+offers, mDNS discovery over avahi) are a vendored copy of the link layer of
+Hearth, the author's separate peer-to-peer chat project. No Qt.
 
-- **Canonical home: Hearth.** The files are listed in Hearth's
-  `tools/link-files.txt`: `libs/core/{identity,debuglog}`, `libs/net/{node,tailnet}`,
-  their two test files and `proto/link.proto`. They are copied to
-  `libs/ext/link/{core,net,proto}` with the include paths unchanged, and
-  `libs/ext/link/LINK_SOURCE` records the Hearth commit, its date and the manifest.
-  Only `libs/ext/link/CMakeLists.txt` and `LINK_SOURCE` are Notolith's own. A copy,
-  not a submodule or a fetch, so both repositories build on their own.
-- **Re-vendor:** commit the fix in Hearth first (its tests green), then
-  `sh tools/vendor_link.sh <hearth checkout>` and commit
-  `chore(link): vendor hearth@<sha>`. The script copies the committed tree at Hearth's
-  HEAD, never the working copy, and refuses a Hearth tree with uncommitted changes.
-- **The rule: fix in Hearth first, never patch `libs/ext/link/{core,net,proto}`.**
-  `sh tools/vendor_link.sh --check <hearth checkout>` diffs the copy (and its file
-  set) against the commit in `LINK_SOURCE` and exits 1 on any drift; ctest
-  `link_vendor_check` runs it against `NOTEAPPC_HEARTH_DIR` (set it to
-  a Hearth checkout to run the check) and skips when it is not set.
+- **What is vendored:** `libs/core/{identity,debuglog}`, `libs/net/{node,tailnet}`,
+  their two test files and `proto/link.proto`, copied to
+  `libs/ext/link/{core,net,proto}` with the include paths unchanged. Only
+  `libs/ext/link/CMakeLists.txt` is Notolith's own. A copy, not a submodule or a
+  fetch, so the repository builds on its own.
+- **Changing it:** the copy is kept in step with Hearth's link layer, so a fix
+  to `libs/ext/link/{core,net,proto}` belongs in Hearth too.
 - **What Notolith will pass** (wired by the engine): `Node::Config`
   `signatureDomain = "notolith"` and `serviceType = "_notolith._tcp"`, so a Notolith
   node and a Hearth node never see or accept each other, and its own debug log via
-  `setDebugLogPath()` (left alone, it logs into Hearth's directory).
+  `setDebugLogPath()` (`$XDG_STATE_HOME/noteAppC/link.log`; left alone, it logs into Hearth's directory).
 - **Build:** `NOTEAPPC_WITH_SHARE` (on by default) builds `noteAppC_link`. It needs
   libdatachannel, avahi-client, protobuf, nlohmann_json and libsodium; when any is
   missing the option is silently off and the rest of the app builds as before.

@@ -17,7 +17,7 @@ QString stripAnsi(const QString &text)
 }
 
 /// A carriage return rewrites the line it is on (tqdm, a progress counter):
-/// only what follows the last one on a line stays. ponytail: whole-line
+/// only what follows the last one on a line stays. Limit: whole-line
 /// rewrites, not a terminal's overwrite-in-place, which is all those print.
 QString resolveCarriageReturns(QString text)
 {

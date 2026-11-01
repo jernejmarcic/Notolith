@@ -89,7 +89,7 @@ constexpr std::size_t channelCount = 3;
 // A device of another account appends account || the account's cert signature.
 constexpr std::size_t proofSize = 32 + 64, certProofSize = proofSize + 32 + 64;
 constexpr auto proofTimeout = std::chrono::seconds(5); // TCP accept to proof, TLS and upgrade included
-// Password login (phase 5): sized to fall in neither proofSize nor
+// Password login: sized to fall in neither proofSize nor
 // certProofSize, so the first message dispatches unambiguously (node.h).
 constexpr std::size_t loginUsernameSize = 32;
 constexpr std::size_t loginProveSize = 64;
@@ -235,7 +235,7 @@ struct Handshake {
     PublicKey provenAccount{};
     std::string address;             // addressKey of the remote host
 
-    // Password login (phase 5): set once onLoginBegin has answered, so the
+    // Password login: set once onLoginBegin has answered, so the
     // next message is the prove frame instead of a fresh dispatch.
     std::optional<std::string> loginUsername;
     PublicKey loginPub{};
@@ -749,7 +749,7 @@ struct Node::Impl {
                 // rather than refuse a new one outright - a spread-out scan
                 // (one /48, or a few dozen addresses) would otherwise wedge
                 // every slot open and lock out any address it hasn't tried yet.
-                // ponytail: O(table size) scan, only on the full-table path.
+                // Limit: O(table size) scan, only on the full-table path.
                 auto oldest = std::min_element(buckets.begin(), buckets.end(),
                                                [](auto& a, auto& b) { return a.second.last < b.second.last; });
                 if (oldest != buckets.end())
@@ -800,7 +800,7 @@ struct Node::Impl {
         auto* d = static_cast<Impl*>(userdata);
         if (state != AVAHI_CLIENT_S_RUNNING || d->group)
             return;
-        // ponytail: IPv4 only; IPv6 link-local needs scope ids in the WebSocket URL
+        // Limit: IPv4 only; IPv6 link-local needs scope ids in the WebSocket URL
         d->group = avahi_entry_group_new(c, nullptr, nullptr);
         const std::string name = d->cfg.serviceNamePrefix + fingerprint(d->self.publicKey());
         const std::string txt = "pk=" + hex(d->self.publicKey());

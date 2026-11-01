@@ -461,7 +461,7 @@ bool parseReference(const QString &text, const Range &content, const Range &bloc
 }
 
 /// The line-comment token a language would use, which is what `#|` options are
-/// written behind so the block still compiles (PLAN.md 16.2).
+/// written behind so the block still compiles.
 QString commentPrefix(const QString &language)
 {
     static const QHash<QString, QString> prefixes = {
@@ -1211,7 +1211,7 @@ void groupCodeFenceTabs(const QString &text, QList<CodeFenceSpan> &fences)
     }
 }
 
-/// `:::` containers (PLAN.md 16.1). md4qt reads the fence lines as ordinary
+/// `:::` containers. md4qt reads the fence lines as ordinary
 /// paragraph text, so they are found here in the source, where the offsets are
 /// already true. Nesting goes by fence length, as in MyST: `::::` wraps `:::`.
 const QRegularExpression &colonFenceRe()

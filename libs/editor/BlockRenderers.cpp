@@ -417,7 +417,7 @@ QStringList MarkdownEditor::foldState() const
     if (d->m_folds.isEmpty())
         return {}; // not a string built per heading and list parent of a note nobody folded
     QStringList state;
-    // ponytail: a note folded all the way down stores a line per heading and
+    // Limit: a note folded all the way down stores a line per heading and
     // list parent (about 80 kB for a megabyte of notes); cap it if that shows.
     for (const auto &[offset, key] : foldSites()) {
         const auto fold = d->m_folds.constFind(offset);

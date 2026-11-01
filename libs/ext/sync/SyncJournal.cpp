@@ -258,7 +258,7 @@ void SyncJournal::addState(const QByteArray &entityID, const State &state)
     q.addBindValue(state.own ? 1 : 0);
     q.addBindValue(state.seq);
     q.exec();
-    // ponytail: 32 states per note; a device offline longer than that for one note falls back to a conflict copy, never to loss
+    // Limit: 32 states per note; a device offline longer than that for one note falls back to a conflict copy, never to loss
     QSqlQuery prune(m_db);
     prune.prepare(QStringLiteral("DELETE FROM states WHERE entityID=? AND id NOT IN "
                                  "(SELECT id FROM states WHERE entityID=? ORDER BY id DESC LIMIT ?)"));

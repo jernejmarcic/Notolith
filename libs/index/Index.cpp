@@ -995,7 +995,7 @@ QStringList Index::linkTargets() const
     }
     // From the names kept in memory, already in order, not a second pass over
     // the table: sorting them on every name change was most of the cost.
-    // ponytail: ordered by UTF-16 unit, which differs from the table's byte
+    // Limit: ordered by UTF-16 unit, which differs from the table's byte
     // order only between U+E000-U+FFFF and characters outside the BMP.
     QStringList names;
     names.reserve(qsizetype(m_nameCounts.size()));
@@ -1096,7 +1096,7 @@ void Index::eachMatch(const QString &databasePath, const SearchQuery &query, int
 
         // Tags, headings and tasks are loaded whole rather than filtered to
         // just these candidates (no IN-list, no bind-parameter ceiling to
-        // worry about) - ponytail: a full scan of three small tables per
+        // worry about) - Limit: a full scan of three small tables per
         // call. Skipped entirely when the query never reads them, which is
         // the common case (a handful of bare words never touches any of the
         // three), so the cost that remains scales with how much of the vault
@@ -1418,7 +1418,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             // reach the same file from the new one, note or attachment alike
             // (neither the index nor Obsidian's name lookup covers a path to
             // an image). A wikilink is found by name and stays as it is.
-            // ponytail: only a path that exists relative to the old folder;
+            // Limit: only a path that exists relative to the old folder;
             // one that resolved by name alone (a bare `a.md`) is left to
             // that lookup.
             if (wiki || movedPath(fromPath).isEmpty() || target.startsWith(QLatin1Char('/')))
@@ -1489,7 +1489,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         else
             remove(absolutePath);
     };
-    // ponytail: every foreign file today is JSON (.ipynb, .ink); a reader for another format needs its own escape.
+    // Limit: every foreign file today is JSON (.ipynb, .ink); a reader for another format needs its own escape.
     const auto jsonEscaped = [](const QString &text) {
         const QByteArray array = QJsonDocument(QJsonArray{text}).toJson(QJsonDocument::Compact); // ["..."]
         return QString::fromUtf8(array.mid(2, array.size() - 4));

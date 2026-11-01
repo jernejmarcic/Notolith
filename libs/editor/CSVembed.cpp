@@ -43,7 +43,7 @@ namespace noteAppC {
 namespace {
 
 constexpr int kCSVmaxRows = 500;
-// ponytail: every shown cell is a QTextLayout built on the UI thread on each
+// Limit: every shown cell is a QTextLayout built on the UI thread on each
 // relayout (a width change repeats it per frame). This budget keeps a
 // worst-case relayout under 10 ms on the dev machine (numbers in
 // docs/EDITOR.md); the upgrade is laying out only the rows near the viewport.
@@ -237,7 +237,7 @@ void MarkdownEditor::relayCSVblocks(const QString &path)
 
 void MarkdownEditor::watchCSV(const QString &path)
 {
-    // ponytail: one watcher per editor, a watch per path asked about and no
+    // Limit: one watcher per editor, a watch per path asked about and no
     // eviction before the feature goes off - fine for a note's handful of
     // tables, wasteful for an editor that walks hundreds of notes (hover
     // previews). Upgrade: one watcher shared by every editor, and an LRU of

@@ -263,7 +263,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
                          ? entry.results.viewNames.at(entry.results.shownView)
                          : QString();
 
-    // ponytail: a flat cap rather than virtualised scrolling - the simplest
+    // Limit: a flat cap rather than virtualised scrolling - the simplest
     // thing that stops a huge base from costing a huge layout. Upgrade path
     // if a vault-sized base view turns out to be a real use case: page the
     // cached BaseTableData itself instead of capping what is shown.
