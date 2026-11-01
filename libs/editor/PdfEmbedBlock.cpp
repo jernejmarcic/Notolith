@@ -196,9 +196,9 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
     pdfMetadata(pdfPath, mtime, count, sizes);
     view.extrasMut().pdfPageCount = count;
     if (count <= 0) {
-        // No poppler to ask (the notolith-pdfview package is not installed) is not a broken file.
+        // No poppler to ask (a build without poppler-qt6) is not a broken file.
         view.extrasMut().pdfError = PdfPage::isAvailable() ? tr("could not open as a PDF")
-                                               : tr("PDF support is not installed (the notolith-pdfview package)");
+                                               : tr("PDF viewing needs Notolith built with poppler-qt6");
         view.height = view.textTop + 24;
         view.laidOut = true;
         return true;

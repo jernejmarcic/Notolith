@@ -7110,7 +7110,7 @@ QString MainWindow::pdfViewerProblem() const
             return tr("The PDF viewer is switched off in Settings, Core plugins");
         return tr("The PDF viewer could not be loaded");
     }
-    return tr("PDF support is not installed (the notolith-pdfview package)");
+    return tr("PDF viewing needs Notolith built with poppler-qt6");
 }
 
 bool MainWindow::isViewFile(const QString &path) const
