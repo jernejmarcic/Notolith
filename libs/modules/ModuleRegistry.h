@@ -48,7 +48,7 @@ public:
 
     /// PROJECT_VERSION "-" a random per-build-directory token "-" Qt6_VERSION: same build only.
     static QString ABItag();
-    /// NOTEAPPC_MODULE_DIRS (':'-separated) when set - the tests and the bench - else <libdir>/noteAppC/modules alone.
+    /// NOTEAPPC_MODULE_DIRS (':'-separated) when set - the tests and the bench - else <libdir>/notolith/modules alone.
     static QStringList defaultDirectories();
     using SuffixPredicate = std::function<bool(const QString &suffix)>;
     /// Reads every *.so's manifest with QPluginLoader::metaData(), which does

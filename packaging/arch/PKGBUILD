@@ -1,8 +1,5 @@
-# Builds Notolith from the source tree this file sits in (packaging/arch of a
-# git clone), so there is no release tarball to fetch:
+# Builds Notolith from the tagged git source, in the usual AUR way:
 #
-#   git clone https://github.com/jernejmarcic/Notolith
-#   cd Notolith/packaging/arch
 #   makepkg -si
 #
 # makepkg builds in src/ and pkg/ beside this file. It also runs the test
@@ -19,10 +16,10 @@
 # Sync, note sharing, encrypted notes, the AI plugin and remote content are
 # CMake options that default to OFF and are not turned on here.
 #
-# The first build fetches md4qt, MicroTeX and tinyxml2 (pinned in the root
-# CMakeLists.txt), yaml-cpp when it is not installed, and ink-stroke-modeler
-# (pinned in libs/ext/ink/core/CMakeLists.txt), so it needs the network.
-# source=() cannot pin them without tarballs.
+# Everything the build needs is in source=(), each at a pinned commit, so build() and check() need no network:
+# CMake is told where each FetchContent dependency is (FETCHCONTENT_SOURCE_DIR_*) and not to download anything.
+# yaml-cpp is the system package (it is in depends), so it is not fetched.
+# The commits are the ones named in CMakeLists.txt and libs/ext/ink/core/CMakeLists.txt; change both together.
 
 pkgbase=notolith
 pkgname=('notolith' 'notolith-ink' 'notolith-hwfont' 'notolith-pdfview')
@@ -31,14 +28,22 @@ pkgname=('notolith' 'notolith-ink' 'notolith-hwfont' 'notolith-pdfview')
 pkgver=0.1.0beta1
 pkgrel=1
 arch=('x86_64')
+url='https://github.com/jernejmarcic/Notolith'
 license=('GPL-3.0-or-later')
 # abseil-cpp is the system Abseil that the ink core requires (docs/INK.md): without it the ink
 # packages would silently not be built.
 # poppler-qt6 is the PDF module's, not the application's: the executable links none of it.
 makedepends=('cmake' 'ninja' 'git' 'gtest' 'abseil-cpp' 'poppler-qt6')
+# The application first, then md4qt, MicroTeX, tinyxml2 and ink-stroke-modeler (their directories in src/ are the repository names).
+source=('git+https://github.com/jernejmarcic/Notolith.git#tag=v0.1.0-beta.1'
+        'git+https://invent.kde.org/libraries/md4qt.git#commit=e48716a41c1cf7f91b130fe3d3cc1c524e3b404a'
+        'git+https://github.com/NanoMichael/MicroTeX.git#commit=0e3707f6dafebb121d98b53c64364d16fefe481d'
+        'git+https://github.com/leethomason/tinyxml2.git#commit=321ea883b7190d4e85cae5512a12e5eaa8f8731f'
+        'git+https://github.com/google/ink-stroke-modeler.git#commit=f2388813b0b25bc3e33d143d369a8367ab2e30c8')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 # A distribution's makepkg.conf may target the build machine's own CPU
-# (CachyOS ships -march=native, and target-cpu=native for Rust). noteAppC takes
+# (CachyOS ships -march=native, and target-cpu=native for Rust). Notolith takes
 # none at all - it has to run on any x86-64 machine, see docs/PLATFORMS.md - so
 # the package must not carry one either. Each function runs in its own shell,
 # so build() and check() both call this.
@@ -49,12 +54,34 @@ _noNativeCPU() {
     export CFLAGS CXXFLAGS RUSTFLAGS
 }
 
-build() {
-    _noNativeCPU
-    cmake -S "$startdir/../.." -B build -G Ninja \
+# FetchContent does not run a dependency's PATCH_COMMAND when it is given a source directory, so the two patches
+# CMake would have applied (cmake/patch-md4qt.sh, cmake/patch-microtex.sh, each run in the dependency's own
+# directory) are applied here.
+prepare() {
+    (cd "$srcdir/md4qt" && sh "$srcdir/Notolith/cmake/patch-md4qt.sh")
+    (cd "$srcdir/MicroTeX" && sh "$srcdir/Notolith/cmake/patch-microtex.sh")
+}
+
+# The one configure step: build directory, then CMake options. CMake's libexec directory is /usr/libexec; Arch keeps
+# it in /usr/lib (the plugin host goes to /usr/lib/notolith).
+_configure() {
+    local buildDir=$1
+    shift
+    cmake -S "$srcdir/Notolith" -B "$buildDir" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
-        -DBUILD_TESTING=OFF
+        -DCMAKE_INSTALL_LIBEXECDIR=lib \
+        -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+        -DFETCHCONTENT_SOURCE_DIR_MD4QT="$srcdir/md4qt" \
+        -DFETCHCONTENT_SOURCE_DIR_MICROTEX="$srcdir/MicroTeX" \
+        -DFETCHCONTENT_SOURCE_DIR_TINYXML2="$srcdir/tinyxml2" \
+        -DFETCHCONTENT_SOURCE_DIR_INK_STROKE_MODELER="$srcdir/ink-stroke-modeler" \
+        "$@"
+}
+
+build() {
+    _noNativeCPU
+    _configure build -DBUILD_TESTING=OFF
     cmake --build build
 }
 
@@ -62,15 +89,17 @@ build() {
 # build() down), so this configures a second tree with them on.
 check() {
     _noNativeCPU
-    cmake -S "$startdir/../.." -B build-test -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_TESTING=ON
+    _configure build-test -DBUILD_TESTING=ON
     cmake --build build-test
     QT_QPA_PLATFORM=offscreen ctest --test-dir build-test --output-on-failure
 }
 
 package_notolith() {
     pkgdesc='A Markdown note app for developers'
+    # What is built into the binary besides the application's own GPL: md4qt, MicroTeX and yaml-cpp (MIT), tinyxml2
+    # (Zlib), Lucide icons (ISC) and MicroTeX's fonts (SIL OFL 1.1, the Knuth licence and the dsrom licence).
+    # THIRD-PARTY.md has the texts.
+    license=('GPL-3.0-or-later' 'MIT' 'Zlib' 'ISC' 'OFL-1.1' 'LicenseRef-Knuth' 'LicenseRef-dsrom')
     # The package was called noteappc before the app was named Notolith.
     conflicts=('noteappc')
     replaces=('noteappc')
@@ -81,12 +110,12 @@ package_notolith() {
              'bubblewrap' 'util-linux')
     optdepends=('hunspell-en_gb: British English spelling'
                 'hunspell-en_us: American English spelling')
-    # cmake --install also puts LICENSE and THIRD-PARTY.md in usr/share/licenses/notolith.
+    # cmake --install also puts LICENSE and THIRD-PARTY.md in usr/share/licenses/notolith, and the plugin host
+    # in usr/lib/notolith.
     DESTDIR="$pkgdir" cmake --install build
     # The modules belong to their own packages; the base application never links them.
     # (usr/lib is what CMake's GNUInstallDirs gives on Arch with prefix /usr; the packages below name it the same way.)
-    rm -r "$pkgdir/usr/lib/noteAppC/modules"
-    rmdir --ignore-fail-on-non-empty "$pkgdir/usr/lib/noteAppC"
+    rm -r "$pkgdir/usr/lib/notolith/modules"
 }
 
 package_notolith-ink() {
@@ -96,18 +125,18 @@ package_notolith-ink() {
     # Versioned: a module only loads in the build that made it (the ABI tag), so pacman must not mix versions.
     depends=("notolith=$pkgver-$pkgrel" 'abseil-cpp')
     # One install unit: later markup and recognition hooks go into this module.
-    install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
+    install -Dm755 -t "$pkgdir/usr/lib/notolith/modules" \
         build/modules/libnotolith-inkcore.so build/modules/notolith-ink.so
     # The Apache-2.0 text of ink-stroke-modeler is in THIRD-PARTY.md.
-    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$startdir/../../LICENSE" "$startdir/../../THIRD-PARTY.md"
+    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$srcdir/Notolith/LICENSE" "$srcdir/Notolith/THIRD-PARTY.md"
 }
 
 package_notolith-hwfont() {
     pkgdesc='Notolith glyph studio: capture your handwriting letter by letter'
     # No manifest "dependencies" key: pacman enforces this one.
     depends=("notolith-ink=$pkgver-$pkgrel")
-    install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" build/modules/notolith-hwfont.so
-    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$startdir/../../LICENSE" "$startdir/../../THIRD-PARTY.md"
+    install -Dm755 -t "$pkgdir/usr/lib/notolith/modules" build/modules/notolith-hwfont.so
+    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$srcdir/Notolith/LICENSE" "$srcdir/Notolith/THIRD-PARTY.md"
 }
 
 package_notolith-pdfview() {
@@ -116,7 +145,7 @@ package_notolith-pdfview() {
     # Both libraries install side by side: the module finds libnotolith-pdfpage.so through $ORIGIN, the
     # application finds the same file by directory (libs/render/PdfPage.cpp).
     depends=("notolith=$pkgver-$pkgrel" 'poppler-qt6')
-    install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
+    install -Dm755 -t "$pkgdir/usr/lib/notolith/modules" \
         build/modules/libnotolith-pdfpage.so build/modules/notolith-pdfview.so
-    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$startdir/../../LICENSE" "$startdir/../../THIRD-PARTY.md"
+    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$srcdir/Notolith/LICENSE" "$srcdir/Notolith/THIRD-PARTY.md"
 }

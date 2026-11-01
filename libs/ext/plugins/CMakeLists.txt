@@ -1,5 +1,5 @@
 # Tier 2 (docs/PLUGINS.md): runtime plugins, loaded only inside a separate
-# `noteAppC-plugin-host` process, never in the app. Split into two targets so
+# `notolith-plugin-host` process, never in the app. Split into two targets so
 # the host tool can link "only Qt6::Core and a small protocol library"
 # rather than the app-side QProcess
 # orchestration it has no use for.
@@ -36,3 +36,7 @@ add_library(noteAppC_plugins STATIC
 # noteAppC_ui, noteAppC_editor, noteAppC_index's CMakeLists.txt).
 set_target_properties(noteAppC_plugins PROPERTIES AUTOMOC ON)
 target_link_libraries(noteAppC_plugins PUBLIC noteAppC_plugin_protocol Qt6::Core PRIVATE noteAppC_sandbox noteAppC_xdg)
+# Where the installed notolith-plugin-host lives (tools/plugin_host installs it there); PluginHost::hostBinaryPath.
+target_compile_definitions(noteAppC_plugins PRIVATE NOTEAPPC_LIBEXECDIR="${CMAKE_INSTALL_FULL_LIBEXECDIR}/notolith")
+# Where PluginRegistry also looks for plugins: the AI plugin installs there (the root CMakeLists.txt).
+target_compile_definitions(noteAppC_plugins PRIVATE NOTEAPPC_PLUGINS_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/notolith/plugins")

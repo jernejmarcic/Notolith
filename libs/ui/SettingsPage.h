@@ -96,6 +96,8 @@ private:
     QWidget *buildEditorPage();
     QWidget *buildFilesPage();
     QWidget *buildAboutPage();
+    /// The full GPL text in a read-only dialog.
+    void showLicence();
     QWidget *buildHotkeysPage();
     QWidget *buildCorePluginsPage();
     QWidget *buildCommunityPluginsPage();

@@ -203,7 +203,7 @@ TEST(Scheme, findsALooseCSSFileNotJustAnObsidianThemeFolder)
     // Obsidian only ever installs a theme as <name>/theme.css; a person
     // dropping a bare .css file into the themes directory must still get a
     // scheme out of it, named after the file and read the same way.
-    writeFile(vault.filePath(QStringLiteral(".obsidian/noteAppC-themes/Loose.css")),
+    writeFile(vault.filePath(QStringLiteral(".obsidian/notolith-themes/Loose.css")),
               QStringLiteral(".theme-dark { --color-base-00: #202020; }"));
 
     const QList<SchemeInfo> schemes = Scheme::available(vault.path());
@@ -218,18 +218,24 @@ TEST(Scheme, findsALooseCSSFileNotJustAnObsidianThemeFolder)
 TEST(Scheme, findsVaultSchemesAndInstalledObsidianThemes)
 {
     QTemporaryDir vault;
-    writeFile(vault.filePath(QStringLiteral(".obsidian/noteAppC-themes/Mine.json")),
+    writeFile(vault.filePath(QStringLiteral(".obsidian/notolith-themes/Mine.json")),
               QStringLiteral(R"({"name":"Mine","dark":{}})"));
+    // The folder's old name is still read.
+    writeFile(vault.filePath(QStringLiteral(".obsidian/noteAppC-themes/Older.json")),
+              QStringLiteral(R"({"name":"Older","dark":{}})"));
     writeFile(vault.filePath(QStringLiteral(".obsidian/themes/Minimal/theme.css")),
               QStringLiteral(".theme-dark { --color-base-00: #000000; }"));
 
     const QList<SchemeInfo> schemes = Scheme::available(vault.path());
-    ASSERT_EQ(schemes.size(), 2);
+    ASSERT_EQ(schemes.size(), 3);
     EXPECT_EQ(schemes.at(0).name, QStringLiteral("Mine"));
     EXPECT_FALSE(schemes.at(0).obsidianCSS);
+    // Sorted by name, so the old folder's scheme comes last.
     EXPECT_EQ(schemes.at(1).name, QStringLiteral("Minimal"));
     EXPECT_TRUE(schemes.at(1).obsidianCSS);
     EXPECT_TRUE(schemes.at(1).inVault);
+    EXPECT_EQ(schemes.at(2).name, QStringLiteral("Older"));
+    EXPECT_TRUE(schemes.at(2).inVault);
 
     // An installed Obsidian theme applies like any other scheme.
     const Theme theme = Scheme::apply(schemes.at(1).path, Theme::Mode::Dark);

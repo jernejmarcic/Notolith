@@ -62,7 +62,7 @@ not exist until the module did.
 
 ### Tier 1b: loadable modules - compiled against the host, dlopen'd on first use
 
-A module is a Qt plugin (`QPluginLoader`) found in `<libdir>/noteAppC/modules`
+A module is a Qt plugin (`QPluginLoader`) found in `<libdir>/notolith/modules`
 (`NOTEAPPC_MODULE_DIRS` replaces it in `-DNOTEAPPC_DEV_ENV_OVERRIDES=ON` builds only). Its manifest is read without loading it; the library
 loads the first time one of its suffixes is opened or one of its commands runs. Nothing else
 loads a module: indexing never does. Three packages ship by default (the sharing engine, `notolith-share`, only with `NOTEAPPC_WITH_SHARE`, docs/OFFLINE.md): `notolith-ink` (the ink core library
@@ -101,8 +101,9 @@ A plugin is a directory:
 
 `~/.local/share/notolith/plugins` is where a plugin is installed for one user. A
 package installs one for everybody in `notolith/plugins` under any `$XDG_DATA_DIRS`
-entry (`/usr/share/notolith/plugins`); both are scanned, and the user's wins when two
-carry the same id.
+entry (`/usr/share/notolith/plugins`) or under the library directory
+(`/usr/lib/notolith/plugins`); all are scanned, and the user's wins when two carry the
+same id.
 
 `plugin.ini` is INI for the same reason `settings.ini` is: a person can read
 and edit it. The real shape, from `examples/plugins/word-stats/plugin.ini`:
@@ -135,7 +136,7 @@ network = false
 clipboard = false
 ```
 
-**Process model.** One `noteAppC-plugin-host --plugin <dir>` process per
+**Process model.** One `notolith-plugin-host --plugin <dir>` process per
 *enabled* plugin, not per installed one. The app starts it lazily - after the
 first paint, and only the first time something the plugin declared is
 actually needed: its command run from the palette, its code-block language
@@ -168,6 +169,8 @@ block. A header-only C++ convenience wrapper is `include/noteappc/plugin.hpp`
 `plugins/ai/`, uses it) - `examples/plugins/word-stats` is plain C against
 the bare header instead, on purpose, as the shortest proof the ABI itself
 works.
+
+The plugin API headers (`plugin.h`, `plugin.hpp`) are GPL-3.0-or-later.
 
 `NOTEAPPC_PLUGIN_API` is `3`. Version 2 added `active_selection_text` to the
 host table, so a plugin can read what the user selected (the way

@@ -50,7 +50,7 @@ endif()
 set(NOTEAPPC_ABI_TAG "${PROJECT_VERSION}-${NOTEAPPC_ABI_TOKEN}-${Qt6_VERSION}")
 
 # The loadable modules (libs/modules) as Qt static plugins, linked into the executable instead of dlopen'ed
-# from <libdir>/noteAppC/modules. Android has no module directory and loads only libraries packaged in the
+# from <libdir>/notolith/modules. Android has no module directory and loads only libraries packaged in the
 # APK, so there it is the only way (docs/PLATFORMS.md, "Mobile"); a desktop build can switch it on to test
 # the path. Off, the default build is unchanged: every module is a shared object. Only the modules that go
 # through noteappc_add_static_module (ink, hwfont) change; the PDF and share modules stay shared, as their
@@ -160,7 +160,7 @@ option(NOTEAPPC_WITH_IMAGEVIEW "Highlight, draw on and annotate images, in a sid
 option(NOTEAPPC_WITH_INK "Build the ink core and the handwritten-note module (libs/ext/ink)" ON)
 option(NOTEAPPC_WITH_HWFONT "Build the handwriting-font glyph studio module (libs/ext/hwfont)" ON)
 # Tier 2 (docs/PLUGINS.md): runtime plugins, each loaded inside its own
-# `noteAppC-plugin-host` process (tools/plugin_host), never in the app. No
+# `notolith-plugin-host` process (tools/plugin_host), never in the app. No
 # external dependency at this level - only Qt, libdl and bubblewrap when
 # present. Desktop only, by nature (docs/PLUGINS.md): off on Android
 # regardless of this option, the same as the tools directory it lives under.
@@ -328,7 +328,7 @@ set(tinyxml2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(tinyxml2_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(tinyxml2
     GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
-    GIT_TAG 10.0.0
+    GIT_TAG 321ea883b7190d4e85cae5512a12e5eaa8f8731f # 10.0.0
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(tinyxml2)
 
@@ -566,16 +566,14 @@ if(NOT ANDROID)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/notolith)
     install(FILES docs/DEMO-ASSETS.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/notolith)
-    # The AI plugin ships as part of the package, the same layout
-    # ~/.local/share/notolith/plugins/ai/ uses (docs/PLUGINS.md). The registry
-    # scans every $XDG_DATA_HOME/$XDG_DATA_DIRS entry (PluginRegistry::pluginsRoots()),
-    # so a packaged install finds it, but it does not self-enable the plugin -
-    # that is still the user opting in from the Community plugins settings
-    # page, same as any plugin they installed by hand.
+    # The AI plugin (off by default, built only with NOTEAPPC_WITH_AI_PLUGIN, never in the Arch package) installs
+    # its whole directory, library and plugin.ini, under the library directory: PluginRegistry::pluginsRoots()
+    # also scans <libdir>/notolith/plugins. An install of it still does not enable it; that is the user opting
+    # in from the Community plugins settings page, same as any plugin they installed by hand.
     if(TARGET ai)
-        install(TARGETS ai LIBRARY DESTINATION ${CMAKE_INSTALL_DATADIR}/notolith/plugins/ai)
+        install(TARGETS ai LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/notolith/plugins/ai)
         install(FILES plugins/ai/plugin.ini
-            DESTINATION ${CMAKE_INSTALL_DATADIR}/notolith/plugins/ai)
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/notolith/plugins/ai)
     endif()
     # MicroTeX's symbol tables, which MathRenderer finds under <data dir>/notolith/microtex/res. Its fonts
     # are compiled in (libs/render/CMakeLists.txt).

@@ -47,7 +47,7 @@ struct PluginAppCallbacks {
         askUser;
 };
 
-/// One running (or not yet started) `noteAppC-plugin-host` process for one
+/// One running (or not yet started) `notolith-plugin-host` process for one
 /// enabled plugin (docs/PLUGINS.md, Tier 2). Owns the QProcess, the sandbox
 /// and rlimit setup, the framed protocol on both ends, permission
 /// enforcement on every host->app request, per-request timeouts and

@@ -14,7 +14,7 @@ target_include_directories(noteAppC_ai_provider PUBLIC ${CMAKE_CURRENT_SOURCE_DI
 target_link_libraries(noteAppC_ai_provider PUBLIC Qt6::Core PkgConfig::CURL noteAppC_xdg)
 
 # MODULE, not SHARED: loaded exclusively with dlopen() inside
-# noteAppC-plugin-host, the same as word-stats.
+# notolith-plugin-host, the same as word-stats.
 add_library(ai MODULE plugin.cpp)
 target_include_directories(ai PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(ai PRIVATE noteAppC_ai_provider Qt6::Core)

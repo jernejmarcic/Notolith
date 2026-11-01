@@ -21,7 +21,7 @@ set_target_properties(noteAppC_modules PROPERTIES AUTOMOC ON)
 target_link_libraries(noteAppC_modules PUBLIC noteAppC_modules_headers noteAppC_settings noteAppC_theme noteAppC_vault)
 target_include_directories(noteAppC_modules PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_compile_definitions(noteAppC_modules PRIVATE
-    NOTEAPPC_MODULE_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/noteAppC/modules")
+    NOTEAPPC_MODULE_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/notolith/modules")
 
 # A module as a Qt static plugin (NOTEAPPC_STATIC_MODULES): the module's one source file compiled with
 # QT_STATICPLUGIN into a static library, which the executable links and imports with Q_IMPORT_PLUGIN

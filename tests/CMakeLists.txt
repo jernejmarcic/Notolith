@@ -592,7 +592,7 @@ if(TARGET noteAppC_pdfview)
 endif()
 
 # The runtime plugin host (docs/PLUGINS.md, Tier 2) - libs/ext/plugins plus a
-# real noteAppC-plugin-host process and the word-stats example/fixture
+# real notolith-plugin-host process and the word-stats example/fixture
 # plugin, built by the tree only when NOTEAPPC_WITH_PLUGINS is on.
 if(TARGET noteAppC_plugins)
     add_executable(test_plugins_host test_plugins_host.cpp)
@@ -686,6 +686,11 @@ if(TARGET notolith-inkcore)
     set_target_properties(test_inkindex PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
     add_test(NAME inkindex COMMAND test_inkindex)
 endif()
+
+# --version prints the version, the copyright line and the GPL notice (libs/ui/LicenseText.h).
+add_test(NAME cli_version COMMAND noteAppC --version)
+set_tests_properties(cli_version PROPERTIES PASS_REGULAR_EXPRESSION
+    "Notolith [0-9][^\n]*\nCopyright \\(C\\) 2026 Jernej\nNotolith comes with ABSOLUTELY NO WARRANTY\\. It is free software, and you are welcome to redistribute it under the terms of the GNU General Public License, version 3 or \\(at your option\\) any later version\\.")
 
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none
 # sees the modules installed on the machine (NOTEAPPC_MODULE_DIRS, below).

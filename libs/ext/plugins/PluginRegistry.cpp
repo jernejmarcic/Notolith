@@ -48,6 +48,8 @@ QStringList PluginRegistry::pluginsRoots()
     QStringList roots;
     for (const QString &data : xdgSearchDirs(XDGroot::Data))
         roots << data + QLatin1Char('/') + kAppDirName + QStringLiteral("/plugins");
+    // A plugin with native code goes in the library directory, not under share: the one the package was installed to.
+    roots << QStringLiteral(NOTEAPPC_PLUGINS_LIBDIR);
     return roots;
 }
 

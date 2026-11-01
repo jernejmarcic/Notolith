@@ -39,5 +39,5 @@ else()
         BUILD_WITH_INSTALL_RPATH ON)
     target_include_directories(notolith-ink PRIVATE ${CMAKE_CURRENT_BINARY_DIR}) # manifest.json for Q_PLUGIN_METADATA
     target_link_libraries(notolith-ink PRIVATE noteAppC_ink)
-    install(TARGETS notolith-ink LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+    install(TARGETS notolith-ink LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/notolith/modules)
 endif()

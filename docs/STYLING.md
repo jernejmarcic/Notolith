@@ -439,7 +439,7 @@ its `key: value` lines.
 
 Pick a colour scheme on the settings page's Appearance tab. A theme file goes
 in `~/.config/notolith/themes/` (or under `$XDG_CONFIG_HOME`), or in a vault's
-own `.obsidian/themes/` or `.obsidian/noteAppC-themes/` to travel with that
+own `.obsidian/themes/` or `.obsidian/notolith-themes/` to travel with that
 vault. Three forms are read from any of those directories:
 
 - **A noteAppC scheme**: `Mine.json`, a `dark` and/or `light` object of token

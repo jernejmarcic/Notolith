@@ -76,5 +76,5 @@ target_link_libraries(notolith-inkcore
 # its headers are included as <ink_stroke_modeler/...>.
 target_include_directories(notolith-inkcore PRIVATE ${ink_stroke_modeler_SOURCE_DIR})
 if(NOT NOTEAPPC_STATIC_MODULES)
-    install(TARGETS notolith-inkcore LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+    install(TARGETS notolith-inkcore LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/notolith/modules)
 endif()

@@ -9,7 +9,7 @@
 namespace noteAppC {
 
 /// What loads a plugin's code inside the host process and runs its three
-/// hooks. One `noteAppC-plugin-host` process picks exactly one Engine,
+/// hooks. One `notolith-plugin-host` process picks exactly one Engine,
 /// decided by `plugin.ini`'s `engine` key (PluginManifest::engine()); the
 /// host's main.cpp and the protocol do not care which one is running.
 class Engine {

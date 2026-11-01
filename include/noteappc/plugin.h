@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* Public C ABI for a noteAppC runtime plugin (docs/PLUGINS.md, Tier 2).
  *
  * A plugin is a shared library (`libfoo.so`) loaded with dlopen() inside
- * `noteAppC-plugin-host`, never inside the app itself - see
+ * `notolith-plugin-host`, never inside the app itself - see
  * tools/plugin_host. This header is the only thing a plugin author needs:
  * plain C, so the ABI survives a difference in compiler, libstdc++ or Qt
  * version between the app and a third-party plugin built against an older

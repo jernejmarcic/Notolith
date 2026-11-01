@@ -32,7 +32,7 @@ class ShareStore {
 public:
     explicit ShareStore(QString directory);
 
-    /// `<GenericDataLocation>/noteAppC/share/<16 hex of sha256 of the vault path>`,
+    /// `$XDG_DATA_HOME/notolith/share/<16 hex of sha256 of the vault path>`,
     /// the same digest shape as sync's and history's per-vault directories.
     static QString directoryFor(const QString &vaultRoot);
 

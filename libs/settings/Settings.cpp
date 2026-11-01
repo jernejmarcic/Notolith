@@ -645,7 +645,7 @@ static QList<Settings::Feature> &mutableFeatures()
         {"canvas", QT_TRANSLATE_NOOP("Settings", "Canvas"),
          QT_TRANSLATE_NOOP("Settings", "Open .canvas files as boards of cards and connections."), true},
         {"community-plugins", QT_TRANSLATE_NOOP("Settings", "Community plugins"),
-         QT_TRANSLATE_NOOP("Settings", "Load plugins from ~/.local/share/notolith/plugins, each in its own "
+         QT_TRANSLATE_NOOP("Settings", "Load plugins from the plugins folder in Notolith's data directory, each in its own "
                                        "sandboxed process, with only the permissions you grant it."),
          false},
         {"daily-notes", QT_TRANSLATE_NOOP("Settings", "Daily notes"),

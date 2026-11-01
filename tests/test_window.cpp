@@ -1600,6 +1600,34 @@ TEST_F(WindowTest, APandocOutputThatIsALinkToAUsersFileIsNeverCopied)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// The sandbox is given the one file the person chose: a link to a file is refused, not followed.
+TEST_F(WindowTest, PandocImportRefusesALinkToTheFile)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QTemporaryDir inputs;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    usePandoc(fakePandoc(bin, "echo imported > out.md"));
+    QFile real(inputs.filePath(QStringLiteral("Real.docx")));
+    ASSERT_TRUE(real.open(QIODevice::WriteOnly));
+    real.write("x");
+    real.close();
+    const QString link = inputs.filePath(QStringLiteral("Link.docx"));
+    ASSERT_TRUE(QFile::link(real.fileName(), link));
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, link), Q_ARG(QString, QString()));
+        EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("not offered")))
+            << window.statusBar()->currentMessage().toStdString();
+        EXPECT_EQ(window.findChild<noteAppC::pandoc::Runner *>(), nullptr) << "pandoc was started on a link";
+        EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Link.md"))));
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // Several documents dropped at once are all imported, one after the other, and a failure does not stop the rest.
 TEST_F(WindowTest, PandocImportsEveryDroppedFileInTurn)
 {
@@ -3338,6 +3366,38 @@ TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)
     ASSERT_NE(newFolder, nullptr);
     newFolder->click();
     EXPECT_TRUE(QDir(path(QStringLiteral("New folder"))).exists());
+}
+
+TEST_F(WindowTest, AboutPageShowsTheGPLNoticeAndTheFullLicence)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openSettings();
+
+    auto *notice = settingsWidget<QLabel>(window, QStringLiteral("settingsAboutNotice"));
+    ASSERT_NE(notice, nullptr);
+    EXPECT_TRUE(notice->text().contains(QStringLiteral("ABSOLUTELY NO WARRANTY")));
+    auto *copyright = settingsWidget<QLabel>(window, QStringLiteral("settingsAboutCopyright"));
+    ASSERT_NE(copyright, nullptr);
+    EXPECT_EQ(copyright->text(), QStringLiteral("Copyright (C) 2026 Jernej"));
+
+    auto *button = settingsWidget<QPushButton>(window, QStringLiteral("settingsAboutLicenceButton"));
+    ASSERT_NE(button, nullptr);
+    // The dialog is modal: read it from a timer, then close it so click() returns.
+    QString shown;
+    QTimer::singleShot(200, [&shown] {
+        auto *dialog = qApp->activeModalWidget();
+        if (!dialog)
+            return;
+        if (auto *view = dialog->findChild<QPlainTextEdit *>())
+            shown = view->toPlainText();
+        dialog->close();
+    });
+    button->click();
+    EXPECT_TRUE(shown.contains(QStringLiteral("GNU GENERAL PUBLIC LICENSE")));
+    EXPECT_TRUE(shown.contains(QStringLiteral("Version 3, 29 June 2007")));
 }
 
 TEST_F(WindowTest, SettingsPageOpensAndClosesRestoringThePreviousNote)

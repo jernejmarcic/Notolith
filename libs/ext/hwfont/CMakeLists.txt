@@ -29,5 +29,5 @@ else()
         BUILD_WITH_INSTALL_RPATH ON)
     target_include_directories(notolith-hwfont PRIVATE ${CMAKE_CURRENT_BINARY_DIR}) # manifest.json for Q_PLUGIN_METADATA
     target_link_libraries(notolith-hwfont PRIVATE noteAppC_hwfont)
-    install(TARGETS notolith-hwfont LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+    install(TARGETS notolith-hwfont LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/notolith/modules)
 endif()
