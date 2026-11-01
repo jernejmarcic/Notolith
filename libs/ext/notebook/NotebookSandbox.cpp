@@ -3,6 +3,9 @@
 #include "Bubblewrap.h"
 #include "SyscallFilter.h"
 
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 
 namespace noteAppC::notebook {
@@ -23,21 +26,13 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
                  const SandboxRequest &request, QString *outProgram, QStringList *outArgs,
                  SandboxTier *usedTier, int *filterFD)
 {
-    if (filterFD)
-        *filterFD = -1;
+    *filterFD = -1;
+    *usedTier = tier == SandboxTier::Wasm ? SandboxTier::Wasm : SandboxTier::Bubblewrap;
     const QString bwrap = QStandardPaths::findExecutable(QStringLiteral("bwrap"));
-    if (tier == SandboxTier::Host) {
-        *outProgram = program;
-        *outArgs = args;
-        *usedTier = SandboxTier::Host;
-        return;
-    }
     if (bwrap.isEmpty()) {
-        // Refused, never quietly run as the user: a block that did not ask
-        // for tier 0 does not get it.
+        // Refused, never quietly run as the user.
         outProgram->clear();
         outArgs->clear();
-        *usedTier = SandboxTier::Bubblewrap;
         return;
     }
 
@@ -45,12 +40,9 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     // build: /usr and a few /etc entries read-only, /bin, /lib, /lib64 and /sbin as
     // symlinks into /usr (Arch's merged-usr layout, which is what both of
     // those already assume), /proc and /dev handed out fresh, /tmp an empty
-    // tmpfs. What is specific to a kernel: transport is always "ipc" (see
+    // tmpfs of a fixed size. What is specific to a kernel: transport is always "ipc" (see
     // KernelProcess), so there is no TCP port to reach even on the host -
-    // --unshare-net costs the kernel nothing it was using and denies it
-    // outright, which TexCompiler cannot do (a TeX engine may need to reach
-    // a proxy) and PluginHost only does when a plugin was not granted the
-    // network permission.
+    // --unshare-net costs the kernel nothing it was using and denies it outright.
     // /etc is the few entries sandbox::etcBinds names, not all of it: a cell
     // is user-run code, but the machine id and hostname still have no
     // business in a note's saved output. Added for a cell: the timezone
@@ -66,7 +58,7 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
         QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/sbin"),
         QStringLiteral("--proc"), QStringLiteral("/proc"),
         QStringLiteral("--dev"), QStringLiteral("/dev"),
-        QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
+        QStringLiteral("--size"), QStringLiteral("67108864"), QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
     };
     for (const QString &path : request.readOnlyBinds)
         wrapped << QStringLiteral("--ro-bind") << path << path;
@@ -77,37 +69,52 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     // leaves for its own late binds, and for the same reason.
     wrapped << QStringLiteral("--bind") << request.runtimeDir << request.runtimeDir;
 
-    // No --unshare-pid, unlike PluginHost's sandbox: bwrap(1) says that with
-    // a pid namespace it "runs a minimal pid 1 process in the sandbox...
-    // detects when the initial application process (pid 2) dies and reports
-    // its exit status back to the original spawner" - reporting an exit
-    // status is all it documents doing; it does not forward signals sent to
-    // the outer process into the namespace. KernelProcess::interrupt() and
-    // stop() both rely on the pid QProcess sees being the kernel itself, not
-    // an unrelated reaper one level removed - without --unshare-pid, and
-    // with no other fork in the way, bwrap execs the kernel in its own
-    // place, so that pid *is* the kernel. The cost is real but small: a
-    // sandboxed kernel can see (not touch - the other unshares still stand)
-    // the host's process list.
-    wrapped << QStringLiteral("--unshare-user-try") << QStringLiteral("--unshare-ipc")
-           << QStringLiteral("--unshare-uts")
-           << QStringLiteral("--unshare-cgroup-try") << QStringLiteral("--unshare-net")
-           << QStringLiteral("--clearenv") << QStringLiteral("--setenv") << QStringLiteral("PATH")
-           << QStringLiteral("/usr/bin:/bin")
-           // No real HOME is bound; a kernel that insists on one (IPython's
-           // profile directory, matplotlib's config cache) gets the runtime
-           // directory instead, already read-write and private to this run.
-           << QStringLiteral("--setenv") << QStringLiteral("HOME") << request.runtimeDir
-           << QStringLiteral("--die-with-parent") << QStringLiteral("--new-session")
-           << QStringLiteral("--chdir") << request.runtimeDir;
+    // Its own pid namespace too: a cell sees its own processes and nothing of the host's (no
+    // /proc/<pid>/environ of the app or the session, no /proc/<pid>/root). bwrap runs a small init as pid 1
+    // there and the cell below it, so a signal for the cell goes to it by way of /proc (see
+    // KernelProcess::interrupt); killing bwrap takes the namespace with it (--die-with-parent).
+    // The user namespace is required, not best effort, and nothing inside can make another.
+    wrapped << QStringLiteral("--unshare-user") << QStringLiteral("--disable-userns") << QStringLiteral("--unshare-ipc")
+            << QStringLiteral("--unshare-uts") << QStringLiteral("--unshare-cgroup") << QStringLiteral("--unshare-pid")
+            << QStringLiteral("--unshare-net") << QStringLiteral("--cap-drop") << QStringLiteral("ALL")
+            << QStringLiteral("--clearenv") << QStringLiteral("--setenv") << QStringLiteral("PATH")
+            << QStringLiteral("/usr/bin:/bin")
+            // No real HOME is bound; a kernel that insists on one (IPython's
+            // profile directory, matplotlib's config cache) gets the runtime
+            // directory instead, already read-write and private to this run.
+            << QStringLiteral("--setenv") << QStringLiteral("HOME") << request.runtimeDir
+            << QStringLiteral("--die-with-parent") << QStringLiteral("--new-session")
+            << QStringLiteral("--chdir") << request.runtimeDir;
     wrapped << QStringLiteral("--") << program;
     wrapped += args;
-    if (filterFD)
-        *filterFD = sandbox::addSyscallFilter(wrapped);
-
+    // No filter or no process limit, no run.
+    if (!sandbox::limitProcesses(wrapped, request.processes) || (*filterFD = sandbox::addSyscallFilter(wrapped)) < 0) {
+        outProgram->clear();
+        outArgs->clear();
+        return;
+    }
     *outProgram = bwrap;
     *outArgs = wrapped;
-    *usedTier = SandboxTier::Bubblewrap;
+}
+
+QString oversizeMessage(const QString &source, qint64 maxBytes)
+{
+    const qint64 bytes = source.toUtf8().size();
+    if (maxBytes <= 0 || bytes <= maxBytes)
+        return {};
+    return QCoreApplication::translate("NotebookSandbox",
+                                       "Not run: this block is %1 KiB, over the %2 KiB limit (Settings: notebooks.maxRunnableBytes, 0 lifts it)")
+        .arg((bytes + 1023) / 1024)
+        .arg((maxBytes + 1023) / 1024);
+}
+
+QString confinedBind(const QString &path, const QString &vaultRoot)
+{
+    const QString real = QFileInfo(path).canonicalFilePath();
+    const QString root = QFileInfo(vaultRoot).canonicalFilePath();
+    if (real.isEmpty() || root.isEmpty() || root == QLatin1String("/") || root == QDir::home().canonicalPath())
+        return {};
+    return real == root || real.startsWith(root + QLatin1Char('/')) ? real : QString();
 }
 
 } // namespace noteAppC::notebook

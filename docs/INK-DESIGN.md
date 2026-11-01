@@ -156,7 +156,7 @@ paint, and a pipe cannot do that inside the 10 ms rule.
 ### Discovery and loading
 
 1. **Directories.** `<libdir>/noteAppC/modules/` only. The environment
-   variable `NOTEAPPC_MODULE_DIRS` replaces it (used by tests). A vault
+   variable `NOTEAPPC_MODULE_DIRS` replaces it (used by tests; only in `-DNOTEAPPC_DEV_ENV_OVERRIDES=ON` builds). A vault
    switch does not rescan: the scan is once per window (the registry is a `MainWindow` member), by design. On Android
    the modules are linked in as Qt static plugins (`Q_IMPORT_PLUGIN`) and
    the registry also lists `QPluginLoader::staticPlugins()`.

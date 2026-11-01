@@ -214,9 +214,7 @@ print("a fresh python3 process, no kernel")
 
 ## sandbox
 
-Blocks run in a sandbox with no network and none of your files. `#| sandbox:
-host` asks to run as you, which is honoured only when Settings > Core plugins
-"Let notes run code outside the sandbox" is on, and `#| sandbox: wasm` runs
+Blocks run in a sandbox with no network and none of your files, always. `#| sandbox: wasm` runs
 the block as a WebAssembly module under `wasmtime`. With no interpreter module
 set for python in `notebooks.wasmModules`, this block should refuse to run and
 say "no WebAssembly module set for "python" blocks":

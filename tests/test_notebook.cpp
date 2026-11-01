@@ -17,11 +17,13 @@
 #include <QJsonDocument>
 #include <QFile>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
 
+#include "Bubblewrap.h"
 #include "DirectRunner.h"
 #include "Ipynb.h"
 #include "KernelProcess.h"
@@ -183,6 +185,30 @@ TEST(NotebookCacheTest, RoundTripsAndMissesCleanly)
 
 // --- the tier-1 sandbox --------------------------------------------------------
 
+namespace {
+
+/// `program args` wrapped for tier 1 as the app does it, started with the syscall filter's descriptor handed to the
+/// child. False when there is nothing to run (no bubblewrap, no libseccomp).
+bool startWrapped(QProcess &process, const SandboxRequest &request, const QString &program, const QStringList &arguments,
+                  SandboxTier *used = nullptr)
+{
+    QString wrapped;
+    QStringList args;
+    SandboxTier tier = SandboxTier::Bubblewrap;
+    int filterFD = -1;
+    wrapCommand(SandboxTier::Bubblewrap, program, arguments, request, &wrapped, &args, &tier, &filterFD);
+    if (used)
+        *used = tier;
+    if (wrapped.isEmpty())
+        return false;
+    process.setChildProcessModifier([filterFD] { noteAppC::sandbox::keepInChild(filterFD); });
+    process.start(wrapped, args);
+    close(filterFD);
+    return true;
+}
+
+} // namespace
+
 TEST(NotebookSandboxTest, Tier1DeniesReadingAFileOutsideTheAllowlist)
 {
     if (!detectSandboxAvailability().bubblewrap)
@@ -200,16 +226,12 @@ TEST(NotebookSandboxTest, Tier1DeniesReadingAFileOutsideTheAllowlist)
 
     SandboxRequest request;
     request.runtimeDir = runtimeDir.path();
-    QString program;
-    QStringList args;
     SandboxTier used;
-    wrapCommand(SandboxTier::Bubblewrap, QStringLiteral("/usr/bin/cat"), {secretPath}, request, &program,
-               &args, &used);
-    ASSERT_EQ(used, SandboxTier::Bubblewrap);
-
     QProcess sandboxed;
     sandboxed.setStandardOutputFile(QProcess::nullDevice());
-    sandboxed.start(program, args);
+    if (!startWrapped(sandboxed, request, QStringLiteral("/usr/bin/cat"), {secretPath}, &used))
+        GTEST_SKIP() << "no bubblewrap with libseccomp";
+    ASSERT_EQ(used, SandboxTier::Bubblewrap);
     ASSERT_TRUE(sandboxed.waitForFinished(5000));
     // Denied: the path simply does not exist inside the sandbox's own
     // mount namespace, so `cat` exits non-zero.
@@ -238,20 +260,15 @@ TEST(NotebookSandboxTest, Tier1AllowsReadingInsideTheRuntimeDir)
 
     SandboxRequest request;
     request.runtimeDir = runtimeDir.path();
-    QString program;
-    QStringList args;
-    SandboxTier used;
-    wrapCommand(SandboxTier::Bubblewrap, QStringLiteral("/usr/bin/cat"), {allowed.fileName()}, request,
-               &program, &args, &used);
-
     QProcess sandboxed;
-    sandboxed.start(program, args);
+    if (!startWrapped(sandboxed, request, QStringLiteral("/usr/bin/cat"), {allowed.fileName()}))
+        GTEST_SKIP() << "no bubblewrap with libseccomp";
     ASSERT_TRUE(sandboxed.waitForFinished(5000));
     EXPECT_EQ(sandboxed.exitCode(), 0);
     EXPECT_EQ(sandboxed.readAllStandardOutput(), QByteArrayLiteral("fine"));
 }
 
-TEST(NotebookSandboxTest, WithoutBubblewrapTier1IsRefusedNotRunAsTheUser)
+TEST(NotebookSandboxTest, WithoutBubblewrapNothingRunsAsTheUser)
 {
     const QByteArray path = qgetenv("PATH");
     QTemporaryDir empty;
@@ -259,18 +276,60 @@ TEST(NotebookSandboxTest, WithoutBubblewrapTier1IsRefusedNotRunAsTheUser)
     qputenv("PATH", empty.path().toUtf8());
     SandboxRequest request;
     request.runtimeDir = empty.path();
+    // Every tier, the WebAssembly one included, is refused: there is no tier that runs outside the sandbox.
+    const auto refused = [&](SandboxTier tier) {
+        QString program = QStringLiteral("unset");
+        QStringList args{QStringLiteral("unset")};
+        SandboxTier used;
+        int filterFD = 0;
+        wrapCommand(tier, QStringLiteral("/usr/bin/true"), {}, request, &program, &args, &used, &filterFD);
+        return program.isEmpty() && args.isEmpty() && filterFD == -1;
+    };
+    const bool tier1 = refused(SandboxTier::Bubblewrap);
+    const bool wasm = refused(SandboxTier::Wasm);
+    // The kernel launcher and the diagram/TeX/pandoc command line say no as well.
+    KernelSpec spec;
+    spec.name = QStringLiteral("sleeper");
+    spec.argv = {QStringLiteral("/usr/bin/sleep"), QStringLiteral("30")};
+    KernelProcess kernel;
+    const bool kernelStarted = kernel.start(spec, SandboxTier::Bubblewrap, {});
+    const noteAppC::sandbox::Command diagram = noteAppC::sandbox::bubblewrapCommand(empty.path(), QStringLiteral("/usr/bin/true"), {});
+    qputenv("PATH", path);
+    EXPECT_TRUE(tier1);
+    EXPECT_TRUE(wasm);
+    EXPECT_FALSE(kernelStarted);
+    EXPECT_TRUE(kernel.error().contains(QStringLiteral("bubblewrap")));
+    EXPECT_TRUE(diagram.program.isEmpty());
+}
+
+TEST(NotebookSandboxTest, TheCommandLineHasTheNamespacesTheFilterAndNoCapabilities)
+{
+    if (!detectSandboxAvailability().bubblewrap)
+        GTEST_SKIP() << "bubblewrap not installed";
+    QTemporaryDir runtimeDir;
+    ASSERT_TRUE(runtimeDir.isValid());
+    SandboxRequest request;
+    request.runtimeDir = runtimeDir.path();
     QString program;
     QStringList args;
-    SandboxTier used = SandboxTier::Host;
-    wrapCommand(SandboxTier::Bubblewrap, QStringLiteral("/usr/bin/true"), {}, request, &program, &args,
-                &used);
-    const QString refused = program;
-    // Tier 0, which a block has to ask for and Settings has to allow, is
-    // unchanged.
-    wrapCommand(SandboxTier::Host, QStringLiteral("/usr/bin/true"), {}, request, &program, &args, &used);
-    qputenv("PATH", path);
-    EXPECT_TRUE(refused.isEmpty());
-    EXPECT_EQ(program, QStringLiteral("/usr/bin/true"));
+    SandboxTier used;
+    int filterFD = -1;
+    wrapCommand(SandboxTier::Bubblewrap, QStringLiteral("/usr/bin/true"), {}, request, &program, &args, &used, &filterFD);
+    if (program.isEmpty())
+        GTEST_SKIP() << "built without libseccomp";
+    close(filterFD);
+    for (const char *flag : {"--unshare-pid", "--unshare-net", "--unshare-user", "--unshare-ipc", "--unshare-uts",
+                             "--unshare-cgroup", "--disable-userns", "--die-with-parent", "--new-session", "--clearenv",
+                             "--seccomp"})
+        EXPECT_TRUE(args.contains(QLatin1String(flag))) << flag;
+    EXPECT_FALSE(args.contains(QStringLiteral("--unshare-user-try")));
+    EXPECT_FALSE(args.contains(QStringLiteral("--share-net")));
+    // Nothing of the home directory or the session is bound, and the process count is limited inside.
+    for (const QString &argument : std::as_const(args))
+        EXPECT_NE(argument, QDir::homePath());
+    EXPECT_TRUE(args.contains(QStringLiteral("--nproc=256")));
+    // The filter is part of the options, before the "--" that ends them.
+    EXPECT_LT(args.indexOf(QStringLiteral("--seccomp")), args.indexOf(QStringLiteral("--")));
 }
 
 TEST(NotebookSandboxTest, Tier1FiltersTheSyscallsThatLeaveANamespace)
@@ -503,14 +562,6 @@ TEST(NotebookKernelFeatureTest, ABlocksVariablesLiveOnInItsNotesKernelOnly)
     EXPECT_FALSE(runThrough(controller, kernelRequest(QStringLiteral("a.md")), QStringLiteral("print(x)")).ok);
     EXPECT_EQ(joinedText(runThrough(controller, kernelRequest(QStringLiteral("b.md")), QStringLiteral("print(y)"))).trimmed(),
               QStringLiteral("7"));
-
-    // The sandbox tier is part of which kernel it is: a host block never sees
-    // a sandboxed kernel's variables, nor the other way round.
-    NotebookController::RunRequest host = kernelRequest(QStringLiteral("b.md"));
-    host.tier = SandboxTier::Host;
-    EXPECT_FALSE(runThrough(controller, host, QStringLiteral("print(y)")).ok);
-    EXPECT_EQ(controller.runningKernelCount(QStringLiteral("b.md")), 2);
-    EXPECT_TRUE(runThrough(controller, host, QStringLiteral("z = 1\nprint(z)")).ok);
 
     controller.shutdownAll();
 }
@@ -1058,10 +1109,10 @@ TEST(DirectRunnerTest, TheSandboxKeepsOtherFilesOut)
     const auto result = runDirect(QStringLiteral("bash"), QStringLiteral("cat '%1' || echo refused\n").arg(secret.fileName()));
     ASSERT_TRUE(result.has_value());
     EXPECT_FALSE(textOf(*result).contains(QStringLiteral("do not read")));
-    // The host tier, opted into, does read it: the sandbox is what stopped it.
-    const auto host = runDirect(QStringLiteral("bash"), QStringLiteral("cat '%1'\n").arg(secret.fileName()), SandboxTier::Host);
-    ASSERT_TRUE(host.has_value());
-    EXPECT_TRUE(textOf(*host).contains(QStringLiteral("do not read")));
+    // The same read, unsandboxed, works: the sandbox is what stopped it.
+    QFile direct(secret.fileName());
+    ASSERT_TRUE(direct.open(QIODevice::ReadOnly));
+    EXPECT_EQ(direct.readAll(), QByteArrayLiteral("do not read"));
 }
 
 // --- the WebAssembly tier ----------------------------------------------------
@@ -1257,8 +1308,6 @@ TEST(WasmTierTest, TheTierIsPartOfTheCacheKey)
     const QString source = QStringLiteral("print(1)");
     EXPECT_NE(notebookCacheKey(QStringLiteral("python"), source, SandboxTier::Bubblewrap),
               notebookCacheKey(QStringLiteral("python"), source, SandboxTier::Wasm));
-    EXPECT_NE(notebookCacheKey(QStringLiteral("python"), source, SandboxTier::Host),
-              notebookCacheKey(QStringLiteral("python"), source, SandboxTier::Wasm));
 }
 
 // ASan caught this one: erasing a kernel session killed its process, and
@@ -1271,7 +1320,7 @@ TEST(KernelProcessTest, DestroyingARunningProcessEmitsNoFinished)
     spec.name = QStringLiteral("sleeper");
     spec.argv = {QStringLiteral("sleep"), QStringLiteral("30")};
     auto process = std::make_unique<KernelProcess>();
-    if (!process->start(spec, SandboxTier::Host, {}))
+    if (!process->start(spec, SandboxTier::Bubblewrap, {}))
         GTEST_SKIP() << process->error().toStdString();
     int finished = 0;
     QObject::connect(process.get(), &KernelProcess::finished, [&finished](int) { ++finished; });
@@ -1762,9 +1811,8 @@ TEST(IpynbTest, ACellsOwnSandboxLineChoosesTheKeyItsOutputIsSeededUnder)
     const QString wasm = QStringLiteral("#| sandbox: wasm\nprint(1)");
     EXPECT_TRUE(seeded(wasm, SandboxTier::Wasm));
     EXPECT_FALSE(seeded(wasm, SandboxTier::Bubblewrap));
-    // Host runs in tier 1 unless Settings allows it, so either key finds it.
+    // There is no host tier: that cell runs in tier 1 and is found under its key.
     const QString host = QStringLiteral("#| sandbox: host\nprint(2)");
-    EXPECT_TRUE(seeded(host, SandboxTier::Host));
     EXPECT_TRUE(seeded(host, SandboxTier::Bubblewrap));
 }
 
@@ -2367,4 +2415,197 @@ TEST(IpynbWriteBackTest, EditingTheLastCellKeepsItsIDOutputsAndAttachments)
         EXPECT_EQ(edited.value(QStringLiteral("outputs")), kept.value(QStringLiteral("outputs"))) << lastIsCode;
         EXPECT_EQ(dumped(cellAt(merged, 0)), dumped(cellAt(file, 0))) << "the first is the file's own";
     }
+}
+
+// --- what a cell can see and do ----------------------------------------------------
+
+namespace {
+
+bool sandboxUsable()
+{
+    // Whether a trivial cell runs: bwrap installed, user namespaces allowed here, libseccomp built in.
+    const auto result = runDirect(QStringLiteral("bash"), QStringLiteral("echo ok\n"));
+    return result && result->ok && textOf(*result).trimmed() == QStringLiteral("ok");
+}
+
+} // namespace
+
+TEST(DirectRunnerTest, ACellSeesNeitherTheHostsProcessesNorTheHomeDirectory)
+{
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || !sandboxUsable())
+        GTEST_SKIP() << "bash or a usable bubblewrap is not available";
+    // Its own pid namespace: /proc lists the cell's own few processes, never this one, and no pid of the host.
+    const QString script = QStringLiteral(
+        "n=0; for p in /proc/[0-9]*; do n=$((n+1)); done; echo count=$n\n"
+        "[ -e /proc/%1 ] && echo sees-the-app || echo does-not-see-the-app\n"
+        "kill -0 %1 2>/dev/null && echo can-signal-the-app || echo cannot-signal-the-app\n"
+        "ls '%2' >/dev/null 2>&1 && echo home-visible || echo home-hidden\n"
+        "ls /home >/dev/null 2>&1 && echo slash-home-visible || echo slash-home-hidden\n")
+                               .arg(QCoreApplication::applicationPid())
+                               .arg(QDir::homePath());
+    const auto result = runDirect(QStringLiteral("bash"), script);
+    ASSERT_TRUE(result.has_value());
+    const QString text = textOf(*result);
+    EXPECT_TRUE(text.contains(QStringLiteral("does-not-see-the-app"))) << text.toStdString();
+    EXPECT_TRUE(text.contains(QStringLiteral("cannot-signal-the-app"))) << text.toStdString();
+    EXPECT_TRUE(text.contains(QStringLiteral("home-hidden"))) << text.toStdString();
+    EXPECT_TRUE(text.contains(QStringLiteral("slash-home-hidden"))) << text.toStdString();
+    static const QRegularExpression count(QStringLiteral("count=(\\d+)"));
+    const QRegularExpressionMatch match = count.match(text);
+    ASSERT_TRUE(match.hasMatch()) << text.toStdString();
+    EXPECT_LT(match.captured(1).toInt(), 10) << "only the cell's own processes";
+}
+
+TEST(DirectRunnerTest, ACellCannotReachTheNetworkOrTheHostEnvironment)
+{
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || !sandboxUsable())
+        GTEST_SKIP() << "bash or a usable bubblewrap is not available";
+    qputenv("NOTEAPPC_TEST_SECRET", "hunter2");
+    const auto result = runDirect(QStringLiteral("bash"),
+                                  QStringLiteral("echo \"[$NOTEAPPC_TEST_SECRET]\"; ls /sys/class/net | tr '\\n' ' '; echo\n"
+                                                 "cat /proc/net/dev | wc -l\n"));
+    qunsetenv("NOTEAPPC_TEST_SECRET");
+    ASSERT_TRUE(result.has_value());
+    const QString text = textOf(*result);
+    EXPECT_TRUE(text.contains(QStringLiteral("[]"))) << text.toStdString();
+    EXPECT_FALSE(text.contains(QStringLiteral("hunter2")));
+    // Only the loopback (down): no interface of the host.
+    EXPECT_FALSE(text.contains(QStringLiteral("eth")) || text.contains(QStringLiteral("wl")) || text.contains(QStringLiteral("enp")));
+}
+
+TEST(DirectRunnerTest, TheSyscallFilterAnswersPermissionDeniedToTheCallsThatLeaveASandbox)
+{
+#if defined(__x86_64__)
+    if (!DirectRunner::canRun(QStringLiteral("python")) || !sandboxUsable())
+        GTEST_SKIP() << "python or a usable bubblewrap is not available";
+    // Raw syscalls by number (x86-64): ptrace, mount, unshare, setns, keyctl, bpf, userfaultfd, perf_event_open,
+    // io_uring_setup, kexec_load, init_module, personality with a changed domain.
+    const auto result = runDirect(QStringLiteral("python"), QStringLiteral(
+        "import ctypes\n"
+        "libc = ctypes.CDLL(None, use_errno=True)\n"
+        "names = {101: 'ptrace', 165: 'mount', 272: 'unshare', 308: 'setns', 250: 'keyctl', 321: 'bpf',\n"
+        "         323: 'userfaultfd', 298: 'perf_event_open', 425: 'io_uring_setup', 246: 'kexec_load',\n"
+        "         175: 'init_module', 135: 'personality'}\n"
+        "for number, name in names.items():\n"
+        "    ctypes.set_errno(0)\n"
+        "    argument = 0x0040000 if name == 'personality' else 0\n"
+        "    result = libc.syscall(number, argument, 0, 0, 0, 0, 0)\n"
+        "    print(name, result, ctypes.get_errno())\n"
+        "ctypes.set_errno(0)\n"
+"print('personality-default', libc.syscall(135, 0) >= 0)\n"));
+    ASSERT_TRUE(result.has_value());
+    const QString text = textOf(*result);
+    for (const char *name : {"ptrace", "mount", "unshare", "setns", "keyctl", "bpf", "userfaultfd", "perf_event_open",
+                             "io_uring_setup", "kexec_load", "init_module", "personality"})
+        EXPECT_TRUE(text.contains(QStringLiteral("%1 -1 1\n").arg(QLatin1String(name)))) << name << "\n" << text.toStdString();
+    EXPECT_TRUE(text.contains(QStringLiteral("personality-default True"))) << text.toStdString();
+#else
+    GTEST_SKIP() << "the syscall numbers here are x86-64's";
+#endif
+}
+
+TEST(DirectRunnerTest, ACellIsHeldToItsMemoryAndProcessLimits)
+{
+    if (!DirectRunner::canRun(QStringLiteral("python")) || !sandboxUsable())
+        GTEST_SKIP() << "python or a usable bubblewrap is not available";
+    const auto memory = runDirect(QStringLiteral("python"), QStringLiteral(
+        "try:\n    block = bytearray(16 << 30)\n    print('allocated')\nexcept MemoryError:\n    print('refused')\n"));
+    ASSERT_TRUE(memory.has_value());
+    EXPECT_EQ(textOf(*memory).trimmed(), QStringLiteral("refused"));
+    const auto forks = runDirect(QStringLiteral("python"), QStringLiteral(
+        "import os, time\nn = 0\ntry:\n    while n < 5000:\n        if os.fork() == 0:\n            time.sleep(20)\n            os._exit(0)\n"
+        "        n += 1\nexcept OSError:\n    pass\nprint('forked', n)\n"));
+    ASSERT_TRUE(forks.has_value());
+    static const QRegularExpression forked(QStringLiteral("forked (\\d+)"));
+    const QRegularExpressionMatch match = forked.match(textOf(*forks));
+    ASSERT_TRUE(match.hasMatch()) << textOf(*forks).toStdString();
+    EXPECT_LT(match.captured(1).toInt(), 300) << "a fork bomb stops at the process limit";
+    EXPECT_GT(match.captured(1).toInt(), 1);
+    // Output beyond the cap ends the run, on either channel.
+    const auto flood = runDirect(QStringLiteral("bash"), QStringLiteral("yes >&2\n"), SandboxTier::Bubblewrap, 20'000);
+    ASSERT_TRUE(flood.has_value());
+    EXPECT_FALSE(flood->ok);
+    EXPECT_LT(flood->wallMs, 15'000);
+}
+
+TEST(DirectRunnerTest, ABlocksOwnTimeoutIsClamped)
+{
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || !sandboxUsable())
+        GTEST_SKIP() << "bash or a usable bubblewrap is not available";
+    // `#| timeout: 86400` is honoured only up to five minutes: this checks the setting is read, not waited for.
+    DirectRunner runner;
+    DirectRunner::Request request;
+    request.language = QStringLiteral("bash");
+    request.source = QStringLiteral("sleep 0.1\n");
+    request.timeoutMs = 86'400'000;
+    std::optional<NotebookRunResult> result;
+    runner.run(request, [&result](NotebookRunResult r) { result = r; });
+    ASSERT_TRUE(QTest::qWaitFor([&] { return result.has_value(); }, 30'000));
+    EXPECT_TRUE(result->ok);
+}
+
+TEST(NotebookSandboxTest, ABigBlockIsNotRun)
+{
+    EXPECT_TRUE(oversizeMessage(QString(1000, QLatin1Char('x')), 0).isEmpty()) << "0 lifts the limit";
+    EXPECT_TRUE(oversizeMessage(QString(1000, QLatin1Char('x')), 1000).isEmpty());
+    const QString message = oversizeMessage(QString(65537, QLatin1Char('x')), 65536);
+    EXPECT_FALSE(message.isEmpty());
+    EXPECT_TRUE(message.contains(QStringLiteral("notebooks.maxRunnableBytes")));
+    // Bytes, not characters.
+    EXPECT_FALSE(oversizeMessage(QString(600, QChar(0x00e9)), 1000).isEmpty());
+}
+
+TEST(NotebookSandboxTest, ARunnableEmbedsFolderIsBoundOnlyInsideTheVault)
+{
+    QTemporaryDir vault;
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(vault.isValid() && elsewhere.isValid());
+    QDir(vault.path()).mkdir(QStringLiteral("scripts"));
+    const QString inside = vault.filePath(QStringLiteral("scripts"));
+    EXPECT_EQ(confinedBind(inside, vault.path()), QFileInfo(inside).canonicalFilePath());
+    EXPECT_TRUE(confinedBind(elsewhere.path(), vault.path()).isEmpty());
+    // A symlink in the vault pointing out of it.
+    const QString link = vault.filePath(QStringLiteral("out"));
+    ASSERT_TRUE(QFile::link(elsewhere.path(), link));
+    EXPECT_TRUE(confinedBind(link, vault.path()).isEmpty());
+    // A vault that is the whole home directory or the disk hands nothing over.
+    EXPECT_TRUE(confinedBind(QDir::homePath(), QDir::homePath()).isEmpty());
+    EXPECT_TRUE(confinedBind(QStringLiteral("/usr"), QStringLiteral("/")).isEmpty());
+}
+
+TEST(KernelProcessTest, InterruptReachesTheProcessInsideThePidNamespace)
+{
+    if (!sandboxUsable())
+        GTEST_SKIP() << "a usable bubblewrap is not available";
+    QTemporaryDir runtimeRoot;
+    ASSERT_TRUE(runtimeRoot.isValid());
+    qputenv("JUPYTER_RUNTIME_DIR", runtimeRoot.path().toUtf8());
+    KernelSpec spec;
+    spec.name = QStringLiteral("interruptible");
+    spec.argv = {QStringLiteral("python3"), QStringLiteral("-c"),
+                 QStringLiteral("import os, signal, sys, time\n"
+                                "def stop(*a):\n    os._exit(7)\n"
+                                "signal.signal(signal.SIGINT, stop)\n"
+                                "open(os.path.join(os.path.dirname(sys.argv[1]), 'ready'), 'w').write(str(os.getpid()))\n"
+                                "time.sleep(60)\n"),
+                 QStringLiteral("{connection_file}")};
+    spec.argv[0] = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    KernelProcess process;
+    if (spec.argv[0].isEmpty() || !process.start(spec, SandboxTier::Bubblewrap, {}))
+        GTEST_SKIP() << process.error().toStdString();
+    int exitCode = -1;
+    bool finished = false;
+    QObject::connect(&process, &KernelProcess::finished, [&](int code) { exitCode = code; finished = true; });
+    const QString ready = QFileInfo(process.connectionInfo().ip).absolutePath() + QStringLiteral("/ready");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo::exists(ready) || finished; }, 20'000));
+    ASSERT_FALSE(finished);
+    // It is pid 2 of its own namespace (bwrap's init is 1): a number no host process has been given by the
+    // namespace's own count, and not the one QProcess started.
+    QFile pidFile(ready);
+    ASSERT_TRUE(pidFile.open(QIODevice::ReadOnly));
+    EXPECT_LT(pidFile.readAll().toInt(), 100);
+    process.interrupt();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return finished; }, 10'000));
+    EXPECT_EQ(exitCode, 7) << "SIGINT arrived in the cell, not at the wrapper";
+    qunsetenv("JUPYTER_RUNTIME_DIR");
 }

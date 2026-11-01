@@ -113,6 +113,12 @@ An import never uses the extra-arguments setting. (The export cannot run sandbox
 to find its own docx template.) A picture that cannot be copied is reported once, after the note is made, and the
 note says so where it would have been instead of linking a file that is not there.
 
+**Pandoc itself runs inside the same bubblewrap and seccomp sandbox as code blocks** (no network, no home directory,
+a private `/tmp`, CPU, memory and file-size limits, a timeout). An import sees only the one file it was given. An
+export sees the note's folder, pandoc's own resource folders and the reference document read-only, and writes to a
+scratch directory that is copied to the chosen target when pandoc succeeds. Without `bwrap` and libseccomp neither
+runs; there is no unsandboxed path.
+
 **Several files** dropped at once are imported one after another; cancelling one stops the rest.
 
 **Lossy:** comments, tracked changes, headers and footers, styles beyond headings, lists, tables,

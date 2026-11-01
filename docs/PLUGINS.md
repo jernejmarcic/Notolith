@@ -63,7 +63,7 @@ not exist until the module did.
 ### Tier 1b: loadable modules - compiled against the host, dlopen'd on first use
 
 A module is a Qt plugin (`QPluginLoader`) found in `<libdir>/noteAppC/modules`
-(`NOTEAPPC_MODULE_DIRS` replaces it). Its manifest is read without loading it; the library
+(`NOTEAPPC_MODULE_DIRS` replaces it in `-DNOTEAPPC_DEV_ENV_OVERRIDES=ON` builds only). Its manifest is read without loading it; the library
 loads the first time one of its suffixes is opened or one of its commands runs. Nothing else
 loads a module: indexing never does. Three packages ship by default (the sharing engine, `notolith-share`, only with `NOTEAPPC_WITH_SHARE`, docs/OFFLINE.md): `notolith-ink` (the ink core library
 and the ink module), `notolith-hwfont` (depends on `notolith-ink`), `notolith-pdfview` (the

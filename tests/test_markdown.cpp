@@ -1154,7 +1154,7 @@ TEST(CodeOptionTest, ImplicitFalseIsAnOption)
     EXPECT_TRUE(off.extra.isEmpty()); // an option, not an unknown key
 }
 
-TEST(CodeOptionTest, SandboxWasmIsItsOwnTierNotHost)
+TEST(CodeOptionTest, SandboxWasmIsItsOwnTierAndHostDoesNotExist)
 {
     const auto optionsOf = [](const QString &line) {
         const Decorations decorations = decorationsOf(QStringLiteral("```python\n") + line + QStringLiteral("print(1)\n```\n"));
@@ -1163,13 +1163,11 @@ TEST(CodeOptionTest, SandboxWasmIsItsOwnTierNotHost)
     };
     CodeOptions options = optionsOf(QStringLiteral("#| sandbox: wasm\n"));
     EXPECT_TRUE(options.sandboxWasm);
-    EXPECT_FALSE(options.sandboxHost);
     EXPECT_TRUE(optionsOf(QStringLiteral("#| sandbox: WASM\n")).sandboxWasm);
+    // There is no tier outside the sandbox to ask for: "host" is read as the default one.
     options = optionsOf(QStringLiteral("#| sandbox: host\n"));
-    EXPECT_TRUE(options.sandboxHost);
     EXPECT_FALSE(options.sandboxWasm);
     options = optionsOf(QStringLiteral("#| sandbox: bubblewrap\n"));
-    EXPECT_FALSE(options.sandboxHost);
     EXPECT_FALSE(options.sandboxWasm);
 }
 
@@ -1189,7 +1187,6 @@ TEST(CodeOptionTest, QuartoExecutionKeysAreParsed)
     const CodeOptions &options = decorations.codeOptions.first();
     EXPECT_FALSE(options.eval); // a notebook block that never runs
     EXPECT_TRUE(options.echo);
-    EXPECT_FALSE(options.sandboxHost);
     EXPECT_EQ(options.extra.value(QStringLiteral("warning")), QStringLiteral("false"));
     EXPECT_EQ(options.extra.value(QStringLiteral("label")), QStringLiteral("fig-one"));
     // The options themselves render nothing.

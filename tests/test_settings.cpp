@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QLockFile>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -83,7 +84,8 @@ TEST(Settings, canvasSnapsToObjectsButNotToTheGridByDefault)
 TEST(Settings, whatRunsAnotherPersonsCodeIsOffUntilAskedFor)
 {
     const Settings settings;
-    EXPECT_FALSE(settings.boolean(QStringLiteral("notebooks.allowHostTier")));
+    EXPECT_EQ(settings.integer(QStringLiteral("notebooks.maxRunnableBytes")), 65536);
+    EXPECT_FALSE(settings.isVaultTrusted(QStringLiteral("/tmp")));
     EXPECT_FALSE(settings.boolean(QStringLiteral("notebooks.sharedKernel")));
     EXPECT_FALSE(settings.boolean(Settings::featureKey("community-plugins")));
 }
@@ -199,6 +201,33 @@ TEST(Settings, DeletedFilesDefaultsToTheSystemTrashAndFollowsObsidiansTrashOptio
     EXPECT_EQ(loadWith("local"), QStringLiteral("local"));
     EXPECT_EQ(loadWith("none"), QStringLiteral("permanent"));
     EXPECT_EQ(loadWith("nonsense"), QStringLiteral("system")) << "an unknown value is not taken";
+}
+
+TEST(Settings, aVaultIsUntrustedUntilTheUserSaysSoAndTheChoiceIsKeptInTheUsersOwnConfig)
+{
+    QTemporaryDir home;
+    QTemporaryDir vault;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    writeFile(vault.filePath(QStringLiteral(".obsidian/core-plugins.json")), QStringLiteral(R"({"graph":false})"));
+
+    Settings untrusted = Settings::load(vault.path());
+    EXPECT_FALSE(untrusted.isVaultTrusted(vault.path()));
+    EXPECT_FALSE(untrusted.boolean(Settings::featureKey("graph"))) << "a vault can turn a feature off, trusted or not";
+
+    untrusted.setVaultTrusted(vault.path(), true);
+    QString error;
+    ASSERT_TRUE(untrusted.save(&error)) << error.toStdString();
+    const Settings trusted = Settings::load(vault.path());
+    EXPECT_TRUE(trusted.isVaultTrusted(vault.path()));
+    // The trust is in the user's file and nowhere in the vault.
+    EXPECT_FALSE(QFileInfo::exists(vault.filePath(QStringLiteral(".obsidian/noteAppC.json"))));
+    EXPECT_FALSE(trusted.isVaultTrusted(home.path()));
+
+    Settings again = trusted;
+    again.setVaultTrusted(vault.path(), false);
+    EXPECT_FALSE(again.isVaultTrusted(vault.path()));
+    qputenv("XDG_CONFIG_HOME", previous);
 }
 
 TEST(Settings, aVaultsCorePluginsSwitchFeaturesInEitherForm)
@@ -539,7 +568,13 @@ TEST(Hotkeys, noteAppCsOwnFileWinsOverTheVaultsAndIsTheOnlyOneWritten)
     own.insert(QStringLiteral("editor:toggle-italics"), {}); // unbound
     ASSERT_TRUE(noteAppC::Hotkeys::save(own));
 
-    const noteAppC::Hotkeys::Bindings bindings = noteAppC::Hotkeys::load(vault.path());
+    // An untrusted vault's file is not read at all: it could bind any command to any key. Only noteAppC's own is.
+    const noteAppC::Hotkeys::Bindings untrusted = noteAppC::Hotkeys::load(vault.path());
+    EXPECT_FALSE(untrusted.contains(QStringLiteral("editor:toggle-bold"))) << "the vault's key, untrusted";
+    EXPECT_EQ(untrusted.value(QStringLiteral("app:open-settings")), QList{QKeySequence(Qt::CTRL | Qt::Key_Semicolon)});
+    EXPECT_EQ(noteAppC::Hotkeys::load(vault.path(), false), untrusted);
+
+    const noteAppC::Hotkeys::Bindings bindings = noteAppC::Hotkeys::load(vault.path(), true);
     EXPECT_EQ(bindings.value(QStringLiteral("editor:toggle-bold")),
               QList{QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B)}) << "the vault's own key";
     EXPECT_EQ(bindings.value(QStringLiteral("app:open-settings")),

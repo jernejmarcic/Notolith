@@ -13,4 +13,4 @@ add_library(noteAppC_pandoc STATIC
 
 set_target_properties(noteAppC_pandoc PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_pandoc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_pandoc PUBLIC Qt6::Core noteAppC_markdown noteAppC_vault)
+target_link_libraries(noteAppC_pandoc PUBLIC Qt6::Core noteAppC_markdown noteAppC_vault noteAppC_sandbox)

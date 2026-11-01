@@ -17,7 +17,7 @@ namespace noteAppC::sandbox {
 
 #ifdef NOTEAPPC_HAVE_SECCOMP
 /// The syscall filter every bwrap sandbox here gets (code blocks, plugins,
-/// TeX), as compiled BPF in a memfd for bwrap's `--seccomp`. The
+/// TeX, diagrams, pandoc), as compiled BPF in a memfd for bwrap's `--seccomp`. The
 /// namespaces already decide what the sandboxed program can see; this
 /// takes away the kernel interfaces it has no use for and that are the
 /// usual way out of a namespace sandbox - the same idea as Flatpak's and
@@ -35,27 +35,41 @@ static int compileSyscallFilter()
     if (!filter)
         return -1;
     bool ok = true;
-    for (const int call : {
+    // By name, so a call this architecture has no number for (the legacy ones on AArch64) is skipped: what
+    // cannot be called needs no rule.
+    for (const char *name : {
              // Other processes' memory, and the kernel's own.
-             SCMP_SYS(ptrace), SCMP_SYS(process_vm_readv), SCMP_SYS(process_vm_writev),
-             SCMP_SYS(kexec_load), SCMP_SYS(kexec_file_load), SCMP_SYS(init_module),
-             SCMP_SYS(finit_module), SCMP_SYS(delete_module), SCMP_SYS(reboot),
-             SCMP_SYS(swapon), SCMP_SYS(swapoff), SCMP_SYS(acct), SCMP_SYS(syslog),
-             SCMP_SYS(quotactl),
+             "ptrace", "process_vm_readv", "process_vm_writev", "pidfd_getfd", "kcmp", "process_madvise",
+             "kexec_load", "kexec_file_load", "init_module", "finit_module", "delete_module", "create_module",
+             "get_kernel_syms", "query_module", "reboot", "swapon", "swapoff", "acct", "syslog", "quotactl",
+             "quotactl_fd", "_sysctl", "nfsservctl", "uselib", "lookup_dcookie",
+             // Raw hardware, the clock and the host's names.
+             "iopl", "ioperm", "modify_ldt", "vm86", "vm86old", "pciconfig_read", "pciconfig_write",
+             "pciconfig_iobase", "settimeofday", "clock_settime", "clock_adjtime", "adjtimex", "sethostname",
+             "setdomainname", "memfd_secret",
+             // NUMA placement of pages the sandbox does not own.
+             "mbind", "migrate_pages", "move_pages", "set_mempolicy", "set_mempolicy_home_node",
              // Rearranging the namespaces bwrap set up, or making new ones:
              // a fresh user namespace hands back every capability inside it.
-             SCMP_SYS(unshare), SCMP_SYS(setns), SCMP_SYS(mount), SCMP_SYS(umount2),
-             SCMP_SYS(pivot_root), SCMP_SYS(chroot), SCMP_SYS(open_tree), SCMP_SYS(move_mount),
-             SCMP_SYS(fsopen), SCMP_SYS(fsconfig), SCMP_SYS(fsmount), SCMP_SYS(fspick),
+             "unshare", "setns", "mount", "umount", "umount2", "pivot_root", "chroot", "open_tree",
+             "move_mount", "fsopen", "fsconfig", "fsmount", "fspick", "mount_setattr",
              // The kernel keyring is not namespaced; a file handle names a
              // file outside the mount namespace.
-             SCMP_SYS(keyctl), SCMP_SYS(add_key), SCMP_SYS(request_key),
-             SCMP_SYS(open_by_handle_at),
-             // Large kernel surfaces no block needs.
-             SCMP_SYS(bpf), SCMP_SYS(perf_event_open), SCMP_SYS(userfaultfd),
-             SCMP_SYS(io_uring_setup), SCMP_SYS(io_uring_enter), SCMP_SYS(io_uring_register),
-         })
+             "keyctl", "add_key", "request_key", "open_by_handle_at",
+             // Large kernel surfaces no block needs, and the usual stepping stones of a kernel exploit.
+             "bpf", "perf_event_open", "userfaultfd", "io_uring_setup", "io_uring_enter", "io_uring_register",
+             "fanotify_init", "fanotify_mark",
+         }) {
+        const int call = seccomp_syscall_resolve_name(name);
+        if (call == __NR_SCMP_ERROR)
+            continue;
         ok = ok && seccomp_rule_add(filter, SCMP_ACT_ERRNO(EPERM), call, 0) == 0;
+    }
+    // personality(2) switches the execution domain (READ_IMPLICIT_EXEC, ADDR_NO_RANDOMIZE...), which weakens
+    // the layout randomisation a kernel exploit has to guess past. Only the plain Linux domain (0) stays
+    // allowed. (libseccomp takes one comparison per argument, so the query value 0xffffffff is denied too.)
+    if (const int personality = seccomp_syscall_resolve_name("personality"); personality != __NR_SCMP_ERROR)
+        ok = ok && seccomp_rule_add(filter, SCMP_ACT_ERRNO(EPERM), personality, 1, SCMP_A0(SCMP_CMP_NE, 0)) == 0;
     // clone(2) with CLONE_NEWUSER is unshare by another name. clone3 passes
     // its flags in a struct seccomp cannot read, so it answers ENOSYS and
     // glibc falls back to clone, which is checked. The flags are clone's
@@ -81,7 +95,7 @@ static int compileSyscallFilter()
     }
     seccomp_release(filter);
     if (fd < 0)
-        qWarning("sandbox: the syscall filter could not be built; bubblewrap alone");
+        qWarning("sandbox: the syscall filter could not be built; nothing is run");
     return fd;
 }
 #endif
@@ -109,6 +123,7 @@ int addSyscallFilter(QStringList &bwrapArguments)
     return fd;
 #else
     Q_UNUSED(bwrapArguments);
+    qWarning("sandbox: built without libseccomp; nothing is run");
     return -1;
 #endif
 }

@@ -49,6 +49,13 @@ endif()
 # below that reaches the network or encrypts (NETWORK, AI_PLUGIN, SYNC, ENCRYPTION, SHARE_YRS, SHARE) is OFF; a
 # developer turns one on knowing what it adds. Docs: docs/OFFLINE.md.
 option(NOTEAPPC_WITH_NETWORK "Fetch remote content: reference blocks and icons from a URL, DICT word lookup (Qt6::Network clients)" OFF)
+# Native code is loaded from places an environment variable could name only in a developer's build: the
+# NOTEAPPC_MODULE_DIRS list of module directories and the NOTEAPPC_PLUGIN_HOST binary are ignored unless this is
+# ON, which it is by default only when the tests are built (-DBUILD_TESTING=ON). A release leaves it OFF.
+option(NOTEAPPC_DEV_ENV_OVERRIDES "Honour NOTEAPPC_MODULE_DIRS and NOTEAPPC_PLUGIN_HOST (tests, development)" ${BUILD_TESTING})
+if(NOTEAPPC_DEV_ENV_OVERRIDES)
+    add_compile_definitions(NOTEAPPC_DEV_ENV_OVERRIDES)
+endif()
 option(NOTEAPPC_STATIC_MODULES "Build the loadable modules as Qt static plugins linked into the executable" ${noteappc_static_default})
 
 # Neither dependency is in the Android Qt kit, so both can be turned off for a
@@ -219,11 +226,14 @@ if(NOTEAPPC_WITH_SHARE AND NOT ANDROID AND TARGET PkgConfig::AVAHI AND TARGET Pk
     set(NOTEAPPC_HAVE_LINK ON)
 endif()
 
-# Optional: the syscall filter every bubblewrap sandbox gets (libs/sandbox).
-# Without it the sandboxes are bubblewrap's namespaces alone.
+# The syscall filter every bubblewrap sandbox gets (libs/sandbox) is mandatory at run time: a build without
+# libseccomp still builds, but code blocks, plugins, diagrams, TeX and pandoc then refuse to run.
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(SECCOMP QUIET IMPORTED_TARGET libseccomp)
+endif()
+if(NOT TARGET PkgConfig::SECCOMP)
+    message(WARNING "libseccomp not found: nothing that needs the sandbox (code blocks, plugins, diagrams, TeX, pandoc) will run")
 endif()
 
 add_compile_options(-Wall -Wextra)

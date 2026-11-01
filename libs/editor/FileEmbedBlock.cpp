@@ -20,7 +20,6 @@
 
 #include <algorithm>
 
-#include <QDesktopServices>
 #include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
@@ -413,13 +412,13 @@ void MarkdownEditor::deliverEpubCover(const QString &key, const QString &path, Q
 }
 
 bool MarkdownEditor::handleFileCardClick(const BlockView &view, const QPoint &point, qreal left,
-                                         qreal top) const
+                                         qreal top)
 {
     if (!view.x().isFileCard)
         return false;
     if (!view.x().fileCardRect.translated(left, top).contains(point))
         return false;
-    QDesktopServices::openUrl(QUrl::fromLocalFile(view.x().fileCardPath));
+    emit openFileRequested(view.x().fileCardPath);
     return true;
 }
 
@@ -971,7 +970,7 @@ bool MarkdownEditor::handleEmbedCellClick(const BlockView &view, const QPoint &p
         if (cell.isNote)
             emit linkActivated(cell.openPath);
         else if (!cell.openPath.isEmpty())
-            QDesktopServices::openUrl(QUrl::fromLocalFile(cell.openPath));
+            emit openFileRequested(cell.openPath);
         return true;
     }
     return false;

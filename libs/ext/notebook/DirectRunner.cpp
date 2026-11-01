@@ -1,6 +1,6 @@
 #include "DirectRunner.h"
 
-#include "SyscallFilter.h"
+#include "Bubblewrap.h"
 
 #include <QElapsedTimer>
 #include <QFile>
@@ -191,6 +191,11 @@ QString withoutAnsi(QString text)
 }
 
 constexpr qint64 kMaxOutput = 1 << 20; // a runaway print loop stops here
+/// A block's own `#| timeout:` is honoured up to here, and its limits follow: a cell is user-started code of
+/// a note anyone may have written.
+constexpr int kMaxTimeoutMs = 300'000;
+constexpr rlim_t kMemoryBytes = 4ULL * 1024 * 1024 * 1024; // RLIMIT_DATA: what is committed, not what a JIT reserves
+constexpr rlim_t kFileBytes = 256ULL * 1024 * 1024;       // the biggest file a cell writes (a compiled binary, a log)
 constexpr qint64 kWasmMemory = qint64(1) << 30; // a guest's linear memory, 1 GiB
 
 /// `path` with its symlinks resolved, bound into the sandbox unless it is
@@ -373,7 +378,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     sandbox.readOnlyBinds = request.readOnlyBinds;
     QString program;
     QStringList args;
-    SandboxTier used = SandboxTier::Host;
+    SandboxTier used = SandboxTier::Bubblewrap;
     int filterFD = -1;
     if (wasm) {
         // The guest sees the block's directory as /cell and nothing else, and
@@ -399,7 +404,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
         // wasmtime bug with the user's files and network, and no seccomp.
         if (program.isEmpty()) {
             delete running;
-            return fail(tr("code runs only inside bubblewrap's sandbox; install bubblewrap"));
+            return fail(tr("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap"));
         }
         used = SandboxTier::Wasm;
     } else {
@@ -407,7 +412,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
                     &filterFD);
         if (program.isEmpty()) {
             delete running;
-            return fail(tr("code runs only inside bubblewrap's sandbox; install bubblewrap"));
+            return fail(tr("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap"));
         }
     }
 
@@ -415,19 +420,34 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     running->process->setProgram(program);
     running->process->setArguments(args);
     running->process->setWorkingDirectory(dir);
-    // Nothing of the real home: caches and histories land in the throwaway
-    // directory.
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("HOME"), dir);
-    env.insert(QStringLiteral("TMPDIR"), dir);
+    // bwrap gets none of the app's environment (the sandbox sets its own PATH and HOME): nothing of the
+    // session's tokens, and nothing of the real home - caches and histories land in the throwaway directory.
+    QProcessEnvironment env;
+    env.insert(QStringLiteral("PATH"), QStringLiteral("/usr/bin:/bin"));
     running->process->setProcessEnvironment(env);
     running->process->setStandardInputFile(QProcess::nullDevice());
-    running->process->setChildProcessModifier([filterFD] { sandbox::keepInChild(filterFD); });
+    const int timeoutMs = request.timeoutMs > 0 ? qMin(request.timeoutMs, kMaxTimeoutMs) : kMaxTimeoutMs;
+    sandbox::Limits limits;
+    limits.data = kMemoryBytes;
+    limits.fileSize = kFileBytes;
+    limits.cpuSeconds = rlim_t(timeoutMs / 1000 + 5);
+    limits.openFiles = 1024;
+    running->process->setChildProcessModifier([filterFD, limits] { sandbox::prepareChild(limits, filterFD); });
 
-    connect(running->process, &QProcess::readyReadStandardOutput, this, [running] {
-        if (running->process->bytesAvailable() > kMaxOutput)
-            running->process->kill();
-    });
+    // Output beyond the cap stops the run, on either channel.
+    const auto capped = [running] {
+        QProcess *process = running->process;
+        const QProcess::ProcessChannel was = process->readChannel();
+        process->setReadChannel(QProcess::StandardOutput);
+        bool tooMuch = process->bytesAvailable() > kMaxOutput;
+        process->setReadChannel(QProcess::StandardError);
+        tooMuch = tooMuch || process->bytesAvailable() > kMaxOutput;
+        process->setReadChannel(was);
+        if (tooMuch)
+            process->kill();
+    };
+    connect(running->process, &QProcess::readyReadStandardOutput, this, capped);
+    connect(running->process, &QProcess::readyReadStandardError, this, capped);
     connect(running->process, &QProcess::finished, this, [this, running](int code, QProcess::ExitStatus status) {
         NotebookRunResult result;
         result.hasRun = true;
@@ -473,7 +493,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
         deliver(result);
     });
     running->timeout.setSingleShot(true);
-    running->timeout.setInterval(request.timeoutMs);
+    running->timeout.setInterval(timeoutMs);
     connect(&running->timeout, &QTimer::timeout, this, [running] {
         running->timedOut = true;
         running->process->kill();

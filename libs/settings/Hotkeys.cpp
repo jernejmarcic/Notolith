@@ -56,10 +56,10 @@ QString Hotkeys::filePath()
     return QDir(Settings::configDirectory()).filePath(QStringLiteral("hotkeys.json"));
 }
 
-Hotkeys::Bindings Hotkeys::load(const QString &vaultRoot)
+Hotkeys::Bindings Hotkeys::load(const QString &vaultRoot, bool vaultTrusted)
 {
     Bindings bindings;
-    if (!vaultRoot.isEmpty())
+    if (vaultTrusted && !vaultRoot.isEmpty())
         merge(bindings, readObject(QDir(vaultRoot).filePath(QStringLiteral(".obsidian/hotkeys.json"))));
     merge(bindings, readObject(filePath()));
     return bindings;

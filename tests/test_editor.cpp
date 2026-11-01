@@ -3931,43 +3931,42 @@ TEST(NotebookBlockTest, RunOptionsShowOutputsBelow)
     EXPECT_FALSE(forceRunSeen);
 }
 
-TEST(NotebookBlockTest, EvalFalseNeverRunsAndSandboxHostIsPassedOn)
+TEST(NotebookBlockTest, EvalFalseNeverRuns)
 {
     const QString note = QStringLiteral("```python\n#| eval: false\nprint(1)\n```\n\n"
                                         "```python\n#| sandbox: host\nprint(2)\n```\n");
     auto editor = editorWith(note);
-    QList<bool> hostRequests;
-    editor->setNotebookRunner([&hostRequests](const QString &, const QString &, bool forceRun,
+    QList<bool> wasmRequests;
+    editor->setNotebookRunner([&wasmRequests](const QString &, const QString &, bool forceRun,
                                               const MarkdownEditor::NotebookRunOptions &options,
                                               const MarkdownEditor::NotebookDeliver &deliver) {
         if (forceRun)
-            hostRequests.append(options.sandboxHost);
+            wasmRequests.append(options.sandboxWasm);
         QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
     });
     QTest::qWait(20);
     EXPECT_FALSE(editor->notebookInfoAt(note.indexOf(QStringLiteral("print(1)"))).eligible);
     EXPECT_FALSE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(1)"))));
     ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(2)"))));
-    EXPECT_EQ(hostRequests, QList<bool>{true}); // asked for; the window decides whether to honour it
+    EXPECT_EQ(wasmRequests, QList<bool>{false}); // "host" is no tier: the block runs as the default one
 }
 
-TEST(NotebookBlockTest, SandboxWasmIsPassedOnAndIsNotHost)
+TEST(NotebookBlockTest, SandboxWasmIsPassedOn)
 {
     const QString note = QStringLiteral("```python\n#| sandbox: wasm\nprint(3)\n```\n");
     auto editor = editorWith(note);
-    QList<QPair<bool, bool>> requests;
+    QList<bool> requests;
     editor->setNotebookRunner([&requests](const QString &, const QString &, bool forceRun,
                                           const MarkdownEditor::NotebookRunOptions &options,
                                           const MarkdownEditor::NotebookDeliver &deliver) {
         if (forceRun)
-            requests.append({options.sandboxHost, options.sandboxWasm});
+            requests.append(options.sandboxWasm);
         QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
     });
     QTest::qWait(20);
     ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(3)"))));
     ASSERT_EQ(requests.size(), 1);
-    EXPECT_FALSE(requests.first().first);
-    EXPECT_TRUE(requests.first().second);
+    EXPECT_TRUE(requests.first());
 }
 
 TEST(NotebookBlockTest, AnEmbeddedScriptRunsFromItsOwnFolder)
@@ -5462,6 +5461,29 @@ TEST(TexCompilerTest, ADocumentCannotReadAFileOutsideItsOwnDirectory)
     const TexCompiler::Result result = TexCompiler::compile(path);
     EXPECT_FALSE(result.ok) << "the sandbox must hide files outside the compile directory";
     EXPECT_TRUE(result.log.contains(QLatin1String("not found"))) << result.log.toStdString();
+}
+
+TEST(TexCompilerTest, WithoutBubblewrapNothingIsCompiled)
+{
+    if (!TexCompiler::isAvailable())
+        GTEST_SKIP() << "no pdflatex on PATH";
+    // A PATH that has the engine and no bwrap: TeX is not run unsandboxed instead.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QDir().mkpath(dir.filePath(QStringLiteral("bin"))));
+    ASSERT_TRUE(QFile::link(TexCompiler::enginePath(), dir.filePath(QStringLiteral("bin/pdflatex"))));
+    const QString path = dir.filePath(QStringLiteral("doc.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("\\documentclass{article}\\begin{document}no sandbox, no run\\end{document}\n");
+    }
+    const QByteArray oldPath = qgetenv("PATH");
+    qputenv("PATH", dir.filePath(QStringLiteral("bin")).toUtf8());
+    const TexCompiler::Result result = TexCompiler::compile(path);
+    qputenv("PATH", oldPath);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.error.contains(QLatin1String("bubblewrap"))) << result.error.toStdString();
 }
 
 TEST(MarkdownEditorTest, TexMathsAloneRendersThroughMicroTeX)

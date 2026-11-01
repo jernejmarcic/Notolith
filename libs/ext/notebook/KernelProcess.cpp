@@ -1,19 +1,19 @@
 #include "KernelProcess.h"
 #include "ConfigFile.h"
 
-#include "SyscallFilter.h"
+#include "Bubblewrap.h"
 
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcessEnvironment>
 #include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QUuid>
 
 #include <csignal>
-#include <sys/resource.h>
 #include <unistd.h>
 
 namespace noteAppC::notebook {
@@ -101,11 +101,15 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     wrapCommand(tier, argv.constFirst(), argv.mid(1), request, &program, &args, &m_tierUsed,
                 &filterFD);
     if (program.isEmpty()) {
-        m_error = QStringLiteral("code runs only inside bubblewrap's sandbox; install bubblewrap");
+        m_error = QStringLiteral("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap");
         return false;
     }
 
     m_process = std::make_unique<QProcess>();
+    // What bwrap itself is started with: no part of the app's environment (the sandbox inside gets its own).
+    QProcessEnvironment bare;
+    bare.insert(QStringLiteral("PATH"), QStringLiteral("/usr/bin:/bin"));
+    m_process->setProcessEnvironment(bare);
     m_process->setProgram(program);
     m_process->setArguments(args);
     m_process->setStandardInputFile(QProcess::nullDevice());
@@ -121,11 +125,11 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     // interpreter, not a small out-of-process command - but still a ceiling:
     // a runaway `while True: x = x + [0]*10**6` is killed, not left to
     // pressure the rest of the machine.
-    m_process->setChildProcessModifier([filterFD] {
-        rlimit memory{4ULL * 1024 * 1024 * 1024, 4ULL * 1024 * 1024 * 1024};
-        setrlimit(RLIMIT_AS, &memory);
-        sandbox::keepInChild(filterFD);
-    });
+    sandbox::Limits limits;
+    limits.addressSpace = 4ULL * 1024 * 1024 * 1024;
+    limits.fileSize = 1ULL * 1024 * 1024 * 1024;
+    limits.openFiles = 4096;
+    m_process->setChildProcessModifier([filterFD, limits] { sandbox::prepareChild(limits, filterFD); });
     connect(m_process.get(), &QProcess::finished, this,
            [this](int exitCode, QProcess::ExitStatus) { emit finished(exitCode); });
 
@@ -163,30 +167,50 @@ qint64 KernelProcess::processId() const
     return m_process ? m_process->processId() : 0;
 }
 
+namespace {
+
+/// The first child of `pid`, 0 when it has none. /proc/<pid>/task/<pid>/children is the kernel-provided,
+/// race-free way to name it without shelling out to `ps`.
+qint64 firstChildOf(qint64 pid)
+{
+    QFile children(QStringLiteral("/proc/%1/task/%1/children").arg(pid));
+    if (!children.open(QIODevice::ReadOnly))
+        return 0;
+    return children.readAll().trimmed().split(' ').value(0).toLongLong();
+}
+
+bool isBubblewrap(qint64 pid)
+{
+    QFile name(QStringLiteral("/proc/%1/comm").arg(pid));
+    return name.open(QIODevice::ReadOnly) && name.readAll().trimmed() == "bwrap";
+}
+
+} // namespace
+
 qint64 KernelProcess::realKernelPid() const
 {
-    // Under SandboxTier::Host, processId() already is the kernel. Under
-    // SandboxTier::Bubblewrap it is not, even with --unshare-pid left out
-    // (NotebookSandbox's own comment): bwrap still forks once - confirmed
-    // by hand, not just read off its man page, which documents none of
-    // this - before it execs the kernel into that child, and the outer
-    // process QProcess sees has no signal handler that forwards anything
-    // to it. /proc/<pid>/task/<pid>/children is the kernel-provided,
-    // race-free way to name that one child without shelling out to `ps`.
-    if (m_tierUsed != SandboxTier::Bubblewrap)
-        return processId();
-    QFile children(QStringLiteral("/proc/%1/task/%1/children").arg(processId()));
-    if (!children.open(QIODevice::ReadOnly))
-        return processId();
-    const qint64 child = children.readAll().trimmed().split(' ').value(0).toLongLong();
-    return child > 0 ? child : processId();
+    // processId() is bwrap's. In its pid namespace bwrap forks once for the namespace's pid 1 (itself, still
+    // named bwrap) and that one forks again for the kernel, so the kernel is found by going down through
+    // the bwrap processes: signals sent to the outer ones are not forwarded. The kernel is a process of
+    // the namespace and, being neither its pid 1 nor an ancestor, takes an ordinary SIGINT from outside.
+    qint64 pid = processId();
+    for (int depth = 0; depth < 4 && pid > 0 && isBubblewrap(pid); ++depth) {
+        const qint64 child = firstChildOf(pid);
+        if (child <= 0)
+            break;
+        pid = child;
+    }
+    return pid;
 }
 
 void KernelProcess::interrupt()
 {
     if (!isRunning())
         return;
-    ::kill(pid_t(realKernelPid()), SIGINT);
+    const qint64 pid = realKernelPid();
+    // Never the wrapper itself: SIGINT would only kill bwrap, and the namespace with it.
+    if (pid > 0 && !isBubblewrap(pid))
+        ::kill(pid_t(pid), SIGINT);
 }
 
 } // namespace noteAppC::notebook

@@ -136,7 +136,6 @@ bool MarkdownEditor::requestNotebookIntrospection(bool inspect, bool tellWhenNon
     NotebookRunOptions options;
     for (const CodeOptions &declared : d->m_decorations.codeOptions) {
         if (declared.block.overlaps(fence->content)) {
-            options.sandboxHost = declared.sandboxHost;
             options.sandboxWasm = declared.sandboxWasm;
             options.kernel = declared.kernel;
             break;

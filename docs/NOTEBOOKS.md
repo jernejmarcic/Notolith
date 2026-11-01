@@ -39,8 +39,7 @@ so nothing starts a kernel unasked), or `#| kernel: on` for one block, runs a
 block in the language's Jupyter kernel instead of a fresh process. A note gets
 one kernel per language, started by its first block and gone when the window
 closes: what one block sets, the next one sees, as in a notebook. Another note
-has its own kernel, and so does a block that asked for the host tier, so a
-sandboxed block never shares state with an unsandboxed one.
+has its own kernel.
 
 The kernel is a client of the Jupyter messaging protocol (ZeroMQ), so any
 kernelspec on the machine is a language; `#| kernel: python3` names one
@@ -118,7 +117,7 @@ the note stays clean CommonMark anywhere else:
 | `cache: false` | nothing is kept: a reopened note shows no output |
 | `timeout: 5` | stop after 5 s (a kernel is interrupted) |
 | `kernel: on`, `off`, `python3` | see above |
-| `sandbox: host`, `sandbox: wasm` | see below |
+| `sandbox: wasm` | see below (`sandbox: host` is gone: every block is sandboxed) |
 | `implicit: false` | the note's implicit code is not added to this block |
 
 ## Implicit code
@@ -182,16 +181,35 @@ a reopened note shows only output that matches the code as written.
 
 ## Sandbox
 
-By default a block runs under bubblewrap: `/usr` and a few `/etc` entries (the
-loader cache, fonts, the timezone, the passwd, group and nsswitch files; not the
-machine id or hostname) read-only, a
-fresh empty `/tmp`, no network, and nothing of the home directory - only
-its own temporary directory, which is its `HOME` too. Built with libseccomp,
-it also cannot make namespaces or mounts, ptrace, reach the kernel keyring,
-load BPF or modules, use io_uring, or type into the terminal (`TIOCSTI`):
-those calls answer "operation not permitted". `#| sandbox: host` in
-the block asks to run as you, unsandboxed; it is refused unless allowed in
-settings.
+Every block, kernel and wasm module runs under bubblewrap, and there is no way
+to run one as you. Inside: `/usr` and a few `/etc` entries (the loader cache,
+fonts, the timezone, the passwd, group and nsswitch files; not the machine id
+or hostname) read-only, a fresh empty size-capped `/tmp`, no network, its own
+pid, user, ipc, uts and cgroup namespaces (a block sees only its own
+processes, none of the app's), no capabilities, and nothing of the home
+directory or the vault - only its own temporary directory, which is its `HOME`
+too. A seccomp filter (libseccomp, required) makes namespaces and mounts,
+ptrace, the kernel keyring, BPF, modules, io_uring, perf, userfaultfd and
+`TIOCSTI` answer "operation not permitted". The limits: CPU time, data
+memory, file size, open files and processes (`prlimit` inside), a wall-clock
+timeout, and 1 MiB of output. Without `bwrap` or libseccomp no block runs; there
+is no unsandboxed fallback, and a kernel, a diagram, a TeX or a pandoc
+run is refused the same way, with a message.
+
+Nothing runs by itself: a block or kernel starts only on a click or command.
+A block over `notebooks.maxRunnableBytes` (default 64 KiB; `0` lifts it; set in
+Settings only, never from a vault) is not run, and the status bar says why.
+
+### Trusting a vault
+
+A vault is untrusted until you trust it ("Vault: Trust or stop trusting this
+vault" in the command palette); the choice is kept in your own settings,
+never in the vault. In an untrusted vault the vault's own `hotkeys.json` and
+any vault setting that would switch a feature on are ignored, each block asks
+before it runs (Run, Trust this vault, Cancel), and opening a file from a
+file card or "Open in default app" asks first, naming the file and its type.
+Executables and `.desktop` files are never handed to the desktop, trusted
+vault or not.
 
 A note shared with other devices (docs/SHARE.md) holds code anyone in the
 share may have written. Its blocks never leave the sandbox, whatever the

@@ -216,13 +216,6 @@ protected:
         backendUnderTest = GetParam();
         setShareFeature(true);
     }
-    void TearDown() override
-    {
-        // A test that turns these on, failing halfway, must not leave them on for the next.
-        Settings settings = Settings::load();
-        settings.setValue(QStringLiteral("notebooks.allowHostTier"), false);
-        settings.save();
-    }
 };
 
 INSTANTIATE_TEST_SUITE_P(Engines, ShareWindowTest,
@@ -509,11 +502,8 @@ TEST_P(ShareWindowTest, ASharedNotesBlockRunsOnlyOnceAllowed)
     EXPECT_EQ(asked, 2) << "an allowed block does not ask again";
 }
 
-TEST_P(ShareWindowTest, ASharedNotesBlockNeverLeavesTheSandbox)
+TEST_P(ShareWindowTest, ASharedNotesHostRequestRunsInTheSandboxAfterTheApproval)
 {
-    Settings settings = Settings::load();
-    settings.setValue(QStringLiteral("notebooks.allowHostTier"), true);
-    ASSERT_TRUE(settings.save());
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QString marker = QUuid::createUuid().toString(QUuid::Id128);
     const QString note = QStringLiteral("```python\n#| sandbox: host\nprint('ran')  # %1\n```\n\nend\n").arg(marker);
@@ -526,16 +516,11 @@ TEST_P(ShareWindowTest, ASharedNotesBlockNeverLeavesTheSandbox)
     const qsizetype block = editor->noteText().indexOf(QStringLiteral("print"));
     ASSERT_TRUE(editor->notebookInfoAt(block).eligible);
     ASSERT_TRUE(editor->runNotebookBlockAt(block));
-    EXPECT_TRUE(b.window->statusBar()->currentMessage().contains(QStringLiteral("shared note")))
-        << b.window->statusBar()->currentMessage().toStdString();
     ASSERT_TRUE(waitFor([&] { return !editor->notebookInfoAt(block).running; }, 30000));
 }
 
 TEST_P(ShareWindowTest, ASharedNoteStaysGuardedWhileSharingIsOff)
 {
-    Settings settings = Settings::load();
-    settings.setValue(QStringLiteral("notebooks.allowHostTier"), true);
-    ASSERT_TRUE(settings.save());
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QString marker = QUuid::createUuid().toString(QUuid::Id128);
     const QString note = QStringLiteral("```python\n#| sandbox: host\nprint('ran')  # %1\n```\n\nend\n").arg(marker);
@@ -559,8 +544,6 @@ TEST_P(ShareWindowTest, ASharedNoteStaysGuardedWhileSharingIsOff)
     ASSERT_TRUE(editor->notebookInfoAt(block).eligible);
     ASSERT_TRUE(editor->runNotebookBlockAt(block));
     EXPECT_EQ(asked, 1) << "the store still says whose text this is";
-    EXPECT_TRUE(b.window->statusBar()->currentMessage().contains(QStringLiteral("shared note")))
-        << b.window->statusBar()->currentMessage().toStdString();
     ASSERT_TRUE(waitFor([&] { return !editor->notebookInfoAt(block).running; }, 30000));
 }
 
