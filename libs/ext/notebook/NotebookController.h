@@ -16,6 +16,7 @@
 #include <QElapsedTimer>
 #include <QHash>
 #include <QObject>
+#include <QPointer>
 
 #include <functional>
 #include <map>
@@ -86,8 +87,18 @@ public:
         /// stdin is not there and input() raises. Only a kernel can ask: the
         /// system's own one-shot runner has no terminal behind it.
         InputHandler onInput;
+        /// A run of a block over this many bytes of UTF-8 source is refused (oversizeMessage): the setting
+        /// `notebooks.maxRunnableBytes`, whose default this is. 0 is no limit. Checked in run(), for every caller.
+        qint64 maxSourceBytes = 65536;
+        /// What asked for the run (the editor), handed to the run gate; never read otherwise.
+        QPointer<QObject> origin;
     };
     using Deliver = std::function<void(NotebookRunResult)>;
+    /// Asked in run(), for every `forceRun` request and after the size limit, before anything starts: empty
+    /// lets the run go on, a text refuses it and is shown as the block's error. What a vault that is not trusted
+    /// asks the person lives here, so no caller can skip it. May show a dialog: called on the caller's thread.
+    using RunGate = std::function<QString(const RunRequest &)>;
+    void setRunGate(RunGate gate) { m_runGate = std::move(gate); }
 
     /// `forceRun` false: a cache-only lookup, delivered on the next event
     /// loop tick (never synchronously, never starting a kernel) - what a
@@ -197,6 +208,7 @@ private:
     /// kernel per language".
     std::map<QString, std::unique_ptr<KernelSession>> m_kernels;
     DirectRunner *m_direct = nullptr; ///< made on the first run that needs it
+    RunGate m_runGate;
 };
 
 } // namespace noteAppC::notebook

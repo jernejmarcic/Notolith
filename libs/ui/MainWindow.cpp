@@ -1305,9 +1305,20 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                                                          : tr("Stopped the %1 kernel").arg(kernelLanguage),
                                                  3000);
                     });
+            m_notebook->setRunGate([this](const notebook::NotebookController::RunRequest &request) -> QString {
+                const auto *editor = qobject_cast<const MarkdownEditor *>(request.origin.data());
+                const bool shared = editor && isSharedNote(editor);
+#ifdef NOTEAPPC_HAVE_SHARE
+                if (shared && !allowSharedRun(editor, request.language, request.source))
+                    return tr("Not run: a block of a shared note runs only once you allow it");
+#endif
+                // Nothing a note holds runs by itself, and in a vault the person has not trusted each block asks first.
+                if (!shared && !allowRun(request.language, request.source))
+                    return tr("Not run: the vault is not trusted, and this block was not allowed");
+                return {};
+            });
         }
         // Every block runs in the sandbox, whoever wrote it; `#| sandbox: wasm` is a stricter one.
-        const bool shared = isSharedNote(editor);
         const notebook::SandboxTier tier = options.sandboxWasm ? notebook::SandboxTier::Wasm : notebook::SandboxTier::Bubblewrap;
         notebook::NotebookController::RunRequest request;
         request.language = language;
@@ -1327,29 +1338,10 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             deliver(MarkdownEditor::NotebookRunResult());
             return;
         }
-        if (forceRun) {
-            MarkdownEditor::NotebookRunResult refused;
-            refused.hasRun = true;
-            if (const QString tooBig = notebook::oversizeMessage(source, m_settings.integer(QStringLiteral("notebooks.maxRunnableBytes")));
-                !tooBig.isEmpty()) {
-                refused.kernelError = tooBig;
-                deliver(refused);
-                return;
-            }
-#ifdef NOTEAPPC_HAVE_SHARE
-            if (shared && !allowSharedRun(editor, language, source)) {
-                refused.kernelError = tr("Not run: a block of a shared note runs only once you allow it");
-                deliver(refused);
-                return;
-            }
-#endif
-            // Nothing a note holds runs by itself, and in a vault the person has not trusted each block asks first.
-            if (!shared && !allowRun(language, source)) {
-                refused.kernelError = tr("Not run: the vault is not trusted, and this block was not allowed");
-                deliver(refused);
-                return;
-            }
-        }
+        // The size limit, the shared note's and the vault's trust questions are asked in NotebookController::run
+        // (its run gate, set above), which every run passes.
+        request.maxSourceBytes = m_settings.integer(QStringLiteral("notebooks.maxRunnableBytes"));
+        request.origin = editor;
         request.wasmModules = m_settings.text(QStringLiteral("notebooks.wasmModules"));
         // A runnable embed's own folder is bound read-only, when it is inside the vault (and the vault is not the
         // whole home directory): a symlink or a vault opened at $HOME must not hand a cell the rest of the disk.

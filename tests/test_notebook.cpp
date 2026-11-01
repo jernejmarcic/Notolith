@@ -2916,3 +2916,58 @@ TEST(KernelClientTest, ASocketSwappedForALinkAfterTheConnectIsNotFollowedOnRecon
     close(target);
 }
 
+// --- the one place every run passes -------------------------------------------------------
+
+TEST(NotebookControllerTest, TheSizeLimitAndTheRunGateAreAskedByRunItselfForEveryCaller)
+{
+    QTemporaryDir marks;
+    ASSERT_TRUE(marks.isValid());
+    const QString mark = marks.filePath(QStringLiteral("ran"));
+    NotebookController controller;
+    const auto ask = [&](const QString &source, bool forceRun) {
+        NotebookController::RunRequest request;
+        request.language = QStringLiteral("bash");
+        request.source = source;
+        request.cache = false;
+        std::optional<NotebookRunResult> answer;
+        controller.run(request, forceRun, [&answer](NotebookRunResult r) { answer = r; });
+        (void)QTest::qWaitFor([&] { return answer.has_value(); }, 30'000);
+        return answer;
+    };
+
+    // Over the default limit (64 KiB): refused, with the setting's name, and nothing started.
+    const QString big = QStringLiteral("touch '%1'\n#").arg(mark) + QString(70'000, QLatin1Char('x'));
+    auto refused = ask(big, true);
+    ASSERT_TRUE(refused.has_value());
+    EXPECT_TRUE(refused->hasRun);
+    EXPECT_TRUE(refused->kernelError.contains(QStringLiteral("notebooks.maxRunnableBytes"))) << refused->kernelError.toStdString();
+    EXPECT_FALSE(QFileInfo::exists(mark));
+
+    // A gate that says no: the message is the block's error, and nothing runs. It sees the request.
+    QStringList seen;
+    controller.setRunGate([&seen](const NotebookController::RunRequest &request) {
+        seen << request.language;
+        return QStringLiteral("Not run: a test said no");
+    });
+    refused = ask(QStringLiteral("touch '%1'\n").arg(mark), true);
+    ASSERT_TRUE(refused.has_value());
+    EXPECT_EQ(refused->kernelError, QStringLiteral("Not run: a test said no"));
+    EXPECT_EQ(seen, QStringList{QStringLiteral("bash")});
+    EXPECT_FALSE(QFileInfo::exists(mark));
+
+    // A cache lookup is neither run nor asked about.
+    const auto lookup = ask(big, false);
+    ASSERT_TRUE(lookup.has_value());
+    EXPECT_TRUE(lookup->kernelError.isEmpty());
+    EXPECT_EQ(seen.size(), 1);
+
+    // A gate that says yes lets the run go on, in the sandbox. The marker is written where the cell can see it:
+    // its own temporary directory is the only writable place, so ask for output instead.
+    controller.setRunGate([](const NotebookController::RunRequest &) { return QString(); });
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || !sandboxUsable())
+        GTEST_SKIP() << "bash or a usable bubblewrap is not available";
+    const auto allowed = ask(QStringLiteral("echo allowed\n"), true);
+    ASSERT_TRUE(allowed.has_value());
+    EXPECT_TRUE(allowed->kernelError.isEmpty()) << allowed->kernelError.toStdString();
+    EXPECT_EQ(textOf(*allowed).trimmed(), QStringLiteral("allowed"));
+}
