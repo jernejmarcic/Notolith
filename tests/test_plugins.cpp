@@ -308,6 +308,55 @@ TEST_F(DailyNotesTest, TemplateOutsideTheVaultIsNotRead)
     }
 }
 
+// Fails on the old code: the template was read through the link and copied into the new note.
+TEST_F(DailyNotesTest, ATemplateThatIsALinkOutOfTheVaultIsNotRead)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    const QString secret = QDir(outside.path()).filePath(QStringLiteral("secret.md"));
+    write(secret, "outside words\n");
+    const QString vaultRoot = QDir(dir.path()).filePath(QStringLiteral("vault"));
+    ASSERT_TRUE(QDir().mkpath(vaultRoot));
+    ASSERT_TRUE(QFile::link(secret, QDir(vaultRoot).filePath(QStringLiteral("tpl.md"))));
+
+    DailyNotes notes(vaultRoot, DailyNotes::Config{{}, QStringLiteral("YYYY-MM-DD"), QStringLiteral("tpl")});
+    QString error;
+    const QString path = notes.ensureNote(QDate(2026, 9, 23), &error);
+    ASSERT_FALSE(path.isEmpty()) << error.toStdString();
+    EXPECT_EQ(readAll(path), QByteArray());
+}
+
+TEST_F(DailyNotesTest, ARootThatIsNotThereRefusesToCreateAnything)
+{
+    const QString vaultRoot = QDir(dir.path()).filePath(QStringLiteral("nowhere"));
+    DailyNotes notes(vaultRoot, DailyNotes::Config{{}, QStringLiteral("YYYY-MM-DD"), {}});
+    QString error;
+    EXPECT_TRUE(notes.ensureNote(QDate(2026, 9, 23), &error).isEmpty());
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(vaultRoot));
+}
+
+// Fails on the old code: the link was listed as a template and read.
+TEST(TemplatesFolder, ATemplateThatIsALinkOutOfTheVaultIsMissing)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    const QString secret = QDir(outside.path()).filePath(QStringLiteral("secret.md"));
+    write(secret, "outside words\n");
+    QTemporaryDir vault;
+    ASSERT_TRUE(vault.isValid());
+    ASSERT_TRUE(QDir().mkpath(QDir(vault.path()).filePath(QStringLiteral("tpl"))));
+    write(QDir(vault.path()).filePath(QStringLiteral("tpl/mine.md")), "mine\n");
+    ASSERT_TRUE(QFile::link(secret, QDir(vault.path()).filePath(QStringLiteral("tpl/Meeting.md"))));
+
+    Templates templates(vault.path(), Templates::Config{QStringLiteral("tpl"), {}, {}});
+    EXPECT_EQ(templates.list(), QStringList{QStringLiteral("mine")});
+    QString out, error;
+    EXPECT_FALSE(templates.render(QStringLiteral("Meeting"), QStringLiteral("T"), &out, &error));
+    EXPECT_TRUE(out.isEmpty());
+    EXPECT_TRUE(templates.render(QStringLiteral("mine"), QStringLiteral("T"), &out, &error)) << error.toStdString();
+}
+
 TEST(TemplatesFolder, FolderThatLeavesTheVaultListsTheVaultInstead)
 {
     QTemporaryDir outside;
@@ -334,6 +383,40 @@ protected:
 
     QTemporaryDir dir;
 };
+
+// Fails on the old code: the vault's bookmarks.json was taken at its word, and a click opened the file.
+TEST_F(BookmarksTest, TheVaultsOwnFileCannotBookmarkSomethingOutsideTheVault)
+{
+    write(obsidianBookmarksPath(), R"({
+        "items": [
+            {"type": "file", "path": "../secret.md"},
+            {"type": "file", "path": "/etc/hostname"},
+            {"type": "file", "path": "a/../Note.md"},
+            {"type": "group", "title": "G", "items": [
+                {"type": "file", "path": "x/../../up.md"},
+                {"type": "file", "path": "Sub/Other.md"}
+            ]}
+        ]
+    })");
+    {
+        Bookmarks bookmarks(dir.path());
+        bookmarks.load();
+        const QList<BookmarkItem> &items = bookmarks.items();
+        ASSERT_EQ(items.size(), 2);
+        EXPECT_EQ(items.at(0).path, QStringLiteral("a/../Note.md")); // stays in, whatever its spelling
+        ASSERT_EQ(items.at(1).items.size(), 1);
+        EXPECT_EQ(items.at(1).items.at(0).path, QStringLiteral("Sub/Other.md"));
+    }
+    // What this app saved itself is its own to say: a note outside the vault bookmarked by the user stays.
+    Bookmarks own(dir.path());
+    own.addNote(QStringLiteral("../loose.md"), QString(), QString());
+    QString error;
+    ASSERT_TRUE(own.save(&error)) << error.toStdString();
+    Bookmarks again(dir.path());
+    again.load();
+    ASSERT_FALSE(again.items().isEmpty());
+    EXPECT_EQ(again.items().last().path, QStringLiteral("../loose.md"));
+}
 
 TEST_F(BookmarksTest, ImportsObsidianShapeWithoutWritingTheVault)
 {

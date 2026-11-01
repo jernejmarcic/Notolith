@@ -56,6 +56,12 @@ QString Templates::folderAbsolute() const
     return m_config.folder.isEmpty() || folder.isEmpty() ? m_vaultRoot : folder;
 }
 
+// Always true for the app's own templates folder (no vault).
+bool Templates::inVault(const QString &path) const
+{
+    return m_vaultRoot.isEmpty() || Vault::resolvesInside(m_vaultRoot, path);
+}
+
 QStringList Templates::list() const
 {
     QStringList out;
@@ -66,7 +72,10 @@ QStringList Templates::list() const
     QDirIterator it(base.path(), QStringList{QStringLiteral("*.md")}, QDir::Files,
                     QDirIterator::Subdirectories);
     while (it.hasNext()) {
-        QString relative = base.relativeFilePath(it.next());
+        const QString file = it.next();
+        if (!inVault(file))
+            continue;
+        QString relative = base.relativeFilePath(file);
         relative.chop(3); // ".md"
         out << relative;
     }
@@ -79,6 +88,11 @@ bool Templates::render(const QString &templateName, const QString &noteTitle, QS
 {
     const QString path = QDir(folderAbsolute()).filePath(templateName + QStringLiteral(".md"));
     Note note;
+    if (!inVault(path)) { // a template that is a link out of the vault is missing
+        if (error)
+            *error = QStringLiteral("%1 is outside the vault").arg(path);
+        return false;
+    }
     if (!Vault::read(path, note, error))
         return false;
     if (out) {

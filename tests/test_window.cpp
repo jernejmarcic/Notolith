@@ -5874,6 +5874,68 @@ TEST_F(WindowTest, ARelativeEmbedInTheInactiveSplitPaneSurvivesTheOtherPanesInde
     EXPECT_FALSE(left->displayText().contains(QStringLiteral("img.png"))) << "still the picture";
 }
 
+// Fails on the old code: the fallbacks were lexical, so ".." and an absolute target drew a file outside the vault.
+TEST_F(WindowTest, AnEmbedThatLeavesTheVaultIsNotDrawn)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    QImage picture(32, 32, QImage::Format_RGB32);
+    picture.fill(Qt::red);
+    const QString outsidePicture = QDir(outside.path()).filePath(QStringLiteral("out.png"));
+    ASSERT_TRUE(picture.save(outsidePicture));
+    ASSERT_TRUE(picture.save(path(QStringLiteral("in.png"))));
+    ASSERT_TRUE(QFile::link(outside.path(), path(QStringLiteral("away"))));
+    write(QStringLiteral("A.md"),
+          "![[in.png]]\n\n![[" + outsidePicture.toUtf8() + "]]\n\n![[../" + QFileInfo(outside.path()).fileName().toUtf8()
+              + "/out.png]]\n\n![[away/out.png]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("A.md")));
+    settleIndexer(window);
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size()); // off the lines that are looked at
+    QTest::qWait(300);
+    const QString shown = editor->displayText();
+    EXPECT_FALSE(shown.contains(QStringLiteral("in.png"))) << "the picture in the vault is drawn";
+    EXPECT_TRUE(shown.contains(QStringLiteral("out.png"))) << "none of the three that leave it is";
+    EXPECT_EQ(shown.count(QStringLiteral("out.png")), 3);
+}
+
+// Fails on the old code: a workspace.json handed over with the vault opened any file on launch.
+TEST_F(WindowTest, AWorkspaceTabOutsideTheVaultIsSkipped)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    QFile secret(QDir(outside.path()).filePath(QStringLiteral("Secret.md")));
+    ASSERT_TRUE(secret.open(QIODevice::WriteOnly));
+    secret.write("outside secret words\n");
+    secret.close();
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    const auto leaf = [](const QString &file) {
+        return QStringLiteral(R"({"type": "tabs", "children": [{"type": "leaf", "state": {"type": "markdown", "state": {"file": "%1"}}}]})")
+            .arg(file);
+    };
+    write(QStringLiteral(".obsidian/workspace.json"),
+          (QStringLiteral(R"({"main": {"type": "split", "direction": "vertical", "children": [)") + leaf(QStringLiteral("Welcome.md"))
+           + QLatin1Char(',') + leaf(secret.fileName()) + QLatin1Char(',')
+           + leaf(QStringLiteral("../") + QFileInfo(outside.path()).fileName() + QStringLiteral("/Secret.md"))
+           + QStringLiteral("]}}")).toUtf8());
+    MainWindow window;
+    window.openVault(dir.path());
+    bool welcome = false;
+    for (QTabBar *bar : window.findChildren<QTabBar *>(QStringLiteral("noteTabs"))) {
+        for (int i = 0; i < bar->count(); ++i) {
+            EXPECT_NE(bar->tabText(i), QStringLiteral("Secret")) << "opened a file outside the vault";
+            welcome = welcome || bar->tabText(i) == QStringLiteral("Welcome");
+        }
+    }
+    EXPECT_TRUE(welcome) << "the tab that is inside the vault still opens (the signal works)";
+    for (MarkdownEditor *editor : tabEditors(window))
+        EXPECT_FALSE(editor->noteText().contains(QStringLiteral("outside secret")));
+}
+
 // The tab's Leaf is freed at once, its editor a moment later: an editor that is still
 // asked about a link in between must not read the Leaf (nor resolve as if it were open).
 TEST_F(WindowTest, AClosedTabsEditorNeverReadsItsFreedLeafForALink)

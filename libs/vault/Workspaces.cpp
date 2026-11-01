@@ -3,10 +3,12 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
 
 #include "ConfigFile.h"
+#include "Vault.h"
 
 namespace noteAppC {
 
@@ -27,6 +29,27 @@ QJsonObject readJSON(const QString &path)
     return QJsonDocument::fromJson(file.readAll()).object();
 }
 
+/// `value` without the "file" of any tab that names something outside `vaultRoot` (absolute, or climbing out
+/// with ".."): the vault's own workspace.json is not trusted to say what to open. The tab itself stays, empty.
+QJsonValue withoutFilesOutside(const QJsonValue &value, const QString &vaultRoot)
+{
+    if (value.isArray()) {
+        QJsonArray out;
+        for (const QJsonValue &item : value.toArray())
+            out.append(withoutFilesOutside(item, vaultRoot));
+        return out;
+    }
+    if (!value.isObject())
+        return value;
+    QJsonObject object = value.toObject();
+    const QString file = object.value(QStringLiteral("file")).toString();
+    if (!file.isEmpty() && Vault::pathInside(vaultRoot, file).isEmpty())
+        object.remove(QStringLiteral("file"));
+    for (auto it = object.begin(); it != object.end(); ++it)
+        it.value() = withoutFilesOutside(it.value(), vaultRoot);
+    return object;
+}
+
 } // namespace
 
 QJsonObject Workspaces::read(const QString &vaultRoot, const QString &fileName, XDGroot root)
@@ -34,7 +57,9 @@ QJsonObject Workspaces::read(const QString &vaultRoot, const QString &fileName, 
     const QString own = QDir(ownDirectory(vaultRoot, root)).filePath(fileName);
     if (QFileInfo::exists(own))
         return readJSON(own);
-    return readJSON(QDir(vaultRoot).filePath(QStringLiteral(".obsidian/") + fileName));
+    // The vault's copy came with the vault, not from this app.
+    return withoutFilesOutside(readJSON(QDir(vaultRoot).filePath(QStringLiteral(".obsidian/") + fileName)), vaultRoot)
+        .toObject();
 }
 
 bool Workspaces::write(const QString &vaultRoot, const QString &fileName, XDGroot root, const QJsonObject &json)

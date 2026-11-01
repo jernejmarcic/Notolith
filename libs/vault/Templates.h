@@ -53,6 +53,7 @@ public:
 
 private:
     QString folderAbsolute() const;
+    bool inVault(const QString &path) const;
 
     QString m_vaultRoot;
     Config m_config;

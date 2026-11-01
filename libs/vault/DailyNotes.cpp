@@ -68,12 +68,8 @@ QString DailyNotes::ensureNote(const QDate &date, QString *error) const
         return path;
 
     // A link inside the vault that points out of it is no better than a "..".
-    QFileInfo folderInfo(QFileInfo(path).absolutePath());
-    while (!folderInfo.exists() && !folderInfo.isSymLink())
-        folderInfo = QFileInfo(folderInfo.path());
-    const QString realRoot = QFileInfo(m_vaultRoot).canonicalFilePath();
-    const QString realFolder = folderInfo.canonicalFilePath();
-    if (realFolder != realRoot && !realFolder.startsWith(realRoot + QLatin1Char('/'))) {
+    // (An empty or missing root fails here too.)
+    if (!Vault::resolvesInside(m_vaultRoot, QFileInfo(path).absolutePath())) {
         if (error)
             *error = QStringLiteral("%1 is outside the vault").arg(path);
         return {};
@@ -94,7 +90,8 @@ QString DailyNotes::ensureNote(const QDate &date, QString *error) const
         // A missing or unreadable template is not a reason to fail creating
         // the note - it opens empty, same as Obsidian when the template file
         // has gone away.
-        if (Vault::read(templateAbsolute, templateNote)) {
+        // A link out of the vault is no template either: missing.
+        if (Vault::resolvesInside(m_vaultRoot, templateAbsolute) && Vault::read(templateAbsolute, templateNote)) {
             const QString title = QFileInfo(path).completeBaseName();
             // {{date}}/{{time}} with no format of their own fall back to the
             // Templates plugin's own date/time format, same as Obsidian: the

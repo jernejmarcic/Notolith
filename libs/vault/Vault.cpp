@@ -137,17 +137,30 @@ bool Vault::isConfinedPath(const QString &relativePath, bool leafMayBeLink) cons
     const QFileInfo leaf(absolute(relativePath));
     if (!leafMayBeLink && leaf.isSymLink())
         return false;
+    return resolvesInside(leaf.path());
+}
+
+bool Vault::resolvesInside(const QString &absolutePath) const
+{
+    return isValid() && resolvesInside(m_root, absolutePath);
+}
+
+bool Vault::resolvesInside(const QString &root, const QString &absolutePath)
+{
     // The nearest ancestor that is there (a dangling link counts: its
     // canonical path is empty, so it fails below) decides where a new folder
-    // or file would really land.
+    // or file would really land. Links on the way are followed.
     // Checked, not held open - a link swapped in between this and a write
     // wins the race; writeBytesNoFollow() closes that for a sync write.
-    QFileInfo dir(leaf.path());
+    if (absolutePath.isEmpty())
+        return false; // not "here"
+    QFileInfo dir(QDir::cleanPath(absolutePath));
     while (!dir.exists() && !dir.isSymLink())
         dir = QFileInfo(dir.path());
     const QString real = dir.canonicalFilePath();
-    const QString root = QFileInfo(m_root).canonicalFilePath();
-    return real == root || real.startsWith(root + QLatin1Char('/'));
+    const QString realRoot = root.isEmpty() ? QString() : QFileInfo(root).canonicalFilePath();
+    return !real.isEmpty() && !realRoot.isEmpty()
+        && (real == realRoot || real.startsWith(realRoot + QLatin1Char('/')));
 }
 
 QString Vault::attachmentFolderFor(const QString &setting, const QString &notePath) const
@@ -163,7 +176,7 @@ QString Vault::attachmentFolderFor(const QString &setting, const QString &notePa
         folder = QDir::cleanPath(noteFolder + QLatin1Char('/') + wanted.mid(2));
     else
         folder = QDir::cleanPath(absolute(wanted));
-    return contains(folder) ? folder : m_root;
+    return contains(folder) && resolvesInside(folder) ? folder : m_root; // a linked folder is not inside
 }
 
 QString Vault::uniqueAttachmentPath(const QString &folder, const QString &fileName)
@@ -173,7 +186,9 @@ QString Vault::uniqueAttachmentPath(const QString &folder, const QString &fileNa
     const QString suffix = info.suffix();
     const QDir dir(folder);
     QString path = dir.filePath(fileName);
-    for (int n = 1; QFileInfo::exists(path); ++n) {
+    // A link is taken too, a dangling one included: a write would go through it.
+    const auto taken = [](const QString &p) { return QFileInfo::exists(p) || QFileInfo(p).isSymLink(); };
+    for (int n = 1; taken(path); ++n) {
         path = dir.filePath(suffix.isEmpty() ? QStringLiteral("%1 %2").arg(base).arg(n)
                                              : QStringLiteral("%1 %2.%3").arg(base).arg(n).arg(suffix));
     }
@@ -406,7 +421,7 @@ QString Vault::createNote(const QString &folderRelative, const QString &baseName
     // An absolute folder or one climbing with .. would land outside (a link's
     // target can be either).
     const QString folderAbsolute = QDir::cleanPath(folderRelative.isEmpty() ? m_root : absolute(folderRelative));
-    if (!contains(folderAbsolute) || baseName.contains(QLatin1Char('/'))) {
+    if (!contains(folderAbsolute) || !resolvesInside(folderAbsolute) || baseName.contains(QLatin1Char('/'))) {
         if (error)
             *error = kOutsideError;
         return {};
@@ -450,7 +465,7 @@ QString Vault::createFolder(const QString &parentRelative, const QString &baseNa
     }
 
     const QString parentAbsolute = QDir::cleanPath(parentRelative.isEmpty() ? m_root : absolute(parentRelative));
-    if (!contains(parentAbsolute) || baseName.contains(QLatin1Char('/'))) {
+    if (!contains(parentAbsolute) || !resolvesInside(parentAbsolute) || baseName.contains(QLatin1Char('/'))) {
         if (error)
             *error = kOutsideError;
         return {};
@@ -668,6 +683,18 @@ bool Vault::moveToTrash(const QString &absolutePath, QString *error) const
     const QString trashFolder = relativeFolder == QLatin1String(".")
                                     ? m_root + QLatin1String("/.trash")
                                     : m_root + QLatin1String("/.trash/") + relativeFolder;
+    // A link as .trash, or on the way below it, would carry the file out of the vault.
+    QString walked = m_root + QLatin1String("/.trash");
+    bool linked = QFileInfo(walked).isSymLink();
+    for (const QString &part : relativeFolder == QLatin1String(".") ? QStringList() : relativeFolder.split(QLatin1Char('/'))) {
+        walked += QLatin1Char('/') + part;
+        linked = linked || QFileInfo(walked).isSymLink();
+    }
+    if (linked || !resolvesInside(trashFolder)) {
+        if (error)
+            *error = QStringLiteral("the trash folder is a link or outside the vault, so %1 was not moved").arg(absolutePath);
+        return false;
+    }
     if (!QDir().mkpath(trashFolder)) {
         if (error)
             *error = QStringLiteral("cannot create %1").arg(trashFolder);

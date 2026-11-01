@@ -66,10 +66,18 @@ public:
     /// out of it is not). The file itself may not be a symlink unless
     /// `leafMayBeLink`. Nothing need exist.
     bool isConfinedPath(const QString &relativePath, bool leafMayBeLink = false) const;
+    /// Whether `absolutePath`, links followed, really is inside the vault (its
+    /// nearest existing ancestor is, when it does not exist yet). Unlike
+    /// contains(), a symlink out of the vault does not pass.
+    bool resolvesInside(const QString &absolutePath) const;
+    /// The same against any `root`, for the settings that hold a root and not a
+    /// Vault (daily notes, templates). False when `root` does not exist.
+    static bool resolvesInside(const QString &root, const QString &absolutePath);
     /// Where a new attachment for `notePath` goes, by Obsidian's
     /// attachmentFolderPath: "" or "/" the vault root, "./" the note's own
     /// folder, "./sub" a folder beneath it, anything else a folder in the
-    /// vault. Never outside the vault. Not created here.
+    /// vault. Never outside the vault, a linked folder included (the root then).
+    /// Not created here.
     QString attachmentFolderFor(const QString &setting, const QString &notePath) const;
     /// `folder`/`fileName`, or with " 1", " 2" ... inserted before the
     /// extension when that already exists - the same collision rule

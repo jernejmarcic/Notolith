@@ -965,11 +965,15 @@ QString MainWindow::resolveLinkFrom(const QString &target, const QString &notePa
     const QString resolved = m_index.resolve(target, notePath);
     if (!resolved.isEmpty())
         return m_vault.absolute(resolved);
-    const QString beside = QFileInfo(notePath).absolutePath() + QLatin1Char('/') + target;
-    if (QFileInfo::exists(beside))
-        return beside;
-    const QString fromRoot = m_vault.absolute(target);
-    return QFileInfo::exists(fromRoot) ? fromRoot : QString();
+    // The vault's own text names these, so ".." or an absolute target (or a link)
+    // must not lead out of the vault.
+    for (const QString &candidate : {QFileInfo(notePath).absolutePath() + QLatin1Char('/') + target,
+                                     m_vault.absolute(target)}) {
+        const QString path = QDir::cleanPath(candidate);
+        if (QFileInfo::exists(path) && m_vault.resolvesInside(path))
+            return path;
+    }
+    return {};
 }
 
 QWidget *MainWindow::buildMainArea()
@@ -1903,9 +1907,9 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
             return QString();
         }
         const QString path = Vault::uniqueAttachmentPath(attachmentFolder(note), name);
-        QSaveFile file(path);
-        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-            statusBar()->showMessage(tr("Could not save %1: %2").arg(name, file.errorString()), 5000);
+        QString writeError;
+        if (!Vault::writeBytes(path, bytes, &writeError)) { // refuses a link at the path
+            statusBar()->showMessage(tr("Could not save %1: %2").arg(name, writeError), 5000);
             return QString();
         }
         return QStringLiteral("![[") + QFileInfo(path).fileName() + QStringLiteral("]]");
@@ -4480,9 +4484,7 @@ void MainWindow::startRecording()
     QDir().mkpath(folder);
     // Obsidian's name for it; a second in the same second gets " 1".
     const QString base = QStringLiteral("Recording ") + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMddHHmmss"));
-    QString path = QDir(folder).filePath(base + QLatin1Char('.') + suffix);
-    for (int n = 1; QFileInfo::exists(path); ++n)
-        path = QDir(folder).filePath(QStringLiteral("%1 %2.%3").arg(base).arg(n).arg(suffix));
+    const QString path = Vault::uniqueAttachmentPath(folder, base + QLatin1Char('.') + suffix);
     if (!m_recorder) {
         m_recorder = new AudioRecorder(this);
         connect(m_recorder, &AudioRecorder::finished, this, [this](const QString &file, const QString &error) {
