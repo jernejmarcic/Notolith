@@ -5936,6 +5936,28 @@ TEST_F(WindowTest, AWorkspaceTabOutsideTheVaultIsSkipped)
         EXPECT_FALSE(editor->noteText().contains(QStringLiteral("outside secret")));
 }
 
+// Fails on the old code: a canvas card, an embed or a base row named "../x.md" and it was opened.
+TEST_F(WindowTest, APathFromThePanesThatLeavesTheVaultIsNotOpened)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    QFile secret(QDir(outside.path()).filePath(QStringLiteral("Secret.md")));
+    ASSERT_TRUE(secret.open(QIODevice::WriteOnly));
+    secret.write("outside secret words\n");
+    secret.close();
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    const QString climbing = QStringLiteral("../") + QFileInfo(outside.path()).fileName() + QStringLiteral("/Secret.md");
+    for (const QString &bad : {climbing, secret.fileName()}) {
+        emit editor->fileEmbedActivated(bad);
+        EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n")) << bad.toStdString();
+    }
+    emit editor->fileEmbedActivated(QStringLiteral("Projects/Crlf.md")); // control: inside still opens
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("one\ntwo\n"));
+}
+
 // The tab's Leaf is freed at once, its editor a moment later: an editor that is still
 // asked about a link in between must not read the Leaf (nor resolve as if it were open).
 TEST_F(WindowTest, AClosedTabsEditorNeverReadsItsFreedLeafForALink)

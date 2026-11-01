@@ -3255,10 +3255,16 @@ void MainWindow::applyFeatures()
          [this, parent] {
              m_bookmarks = new BookmarksPane(parent);
              m_bookmarks->setVaultRoot(m_vault.isValid() ? m_vault.root() : QString());
-             connect(m_bookmarks, &BookmarksPane::noteActivated, this, &MainWindow::openRelative);
+             // Bookmarks are this app's own (the vault's file is filtered when read), so a note
+             // outside the vault that was bookmarked stays openable.
+             const auto openBookmark = [this](const QString &relativePath) {
+                 if (m_vault.isValid() && !relativePath.isEmpty())
+                     openNote(m_vault.absolute(relativePath));
+             };
+             connect(m_bookmarks, &BookmarksPane::noteActivated, this, openBookmark);
              connect(m_bookmarks, &BookmarksPane::headingActivated, this,
-                     [this](const QString &relativePath, const QString &subpath) {
-                         openRelative(relativePath);
+                     [this, openBookmark](const QString &relativePath, const QString &subpath) {
+                         openBookmark(relativePath);
                          jumpToHeading(subpath);
                      });
              connect(m_bookmarks, &BookmarksPane::searchActivated, this,
@@ -4254,18 +4260,29 @@ void MainWindow::leaveSettings()
     m_mainStack->setCurrentIndex(0);
 }
 
+// The path of a canvas card, an embed or a base row comes from the vault's own text:
+// ".." or an absolute one does not open anything outside it.
+QString MainWindow::insideVault(const QString &relativePath) const
+{
+    if (relativePath.isEmpty() || !m_vault.isValid())
+        return {};
+    const QString path = QDir::cleanPath(m_vault.absolute(relativePath));
+    return m_vault.contains(path) ? path : QString();
+}
+
 void MainWindow::openRelative(const QString &relativePath)
 {
-    if (!relativePath.isEmpty() && m_vault.isValid())
-        openNote(m_vault.absolute(relativePath));
+    if (const QString path = insideVault(relativePath); !path.isEmpty())
+        openNote(path);
 }
 
 void MainWindow::openRelativeInNewTab(const QString &relativePath)
 {
-    if (relativePath.isEmpty() || !m_vault.isValid())
+    const QString path = insideVault(relativePath);
+    if (path.isEmpty())
         return;
     newTab();
-    openNote(m_vault.absolute(relativePath));
+    openNote(path);
 }
 
 void MainWindow::refreshOpenVaultFiles()
