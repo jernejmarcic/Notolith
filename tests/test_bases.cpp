@@ -485,6 +485,17 @@ TEST(BaseFileTest, InvalidYamlFails)
     EXPECT_FALSE(error.isEmpty());
 }
 
+// A sort entry or a group with no `direction:` is an undefined node; reading its type used to throw out of parse().
+TEST(BaseFileTest, SortAndGroupWithoutADirectionParse)
+{
+    auto file = BaseFile::parse(QStringLiteral("views:\n  - type: table\n    sort:\n      - property: rating\n"
+                                               "    groupBy:\n      property: category\n"));
+    ASSERT_TRUE(file.has_value());
+    ASSERT_EQ(file->views().first().sort.size(), 1);
+    EXPECT_EQ(file->views().first().sort.first().direction, SortDirection::Ascending);
+    EXPECT_EQ(file->views().first().groupBy.direction, SortDirection::Ascending);
+}
+
 TEST(BaseFileTest, NoViewsGetsAnImplicitTable)
 {
     auto file = BaseFile::parse(QStringLiteral("formulas:\n  x: \"1\"\n"));
