@@ -1,5 +1,7 @@
 # Sharing a note (in progress)
 
+> Not in the default build: `-DNOTEAPPC_WITH_SHARE=ON` (docs/OFFLINE.md).
+
 Live co-editing of one note between people, peer to peer. This page covers the
 parts that exist: the text CRDT, the link layer, the engine and the session
 that ties a note's editors to it. The dialogs (invitation, who has access), the
@@ -221,7 +223,7 @@ Hearth, the author's separate peer-to-peer chat project. No Qt.
   `signatureDomain = "notolith"` and `serviceType = "_notolith._tcp"`, so a Notolith
   node and a Hearth node never see or accept each other, and its own debug log via
   `setDebugLogPath()` (`$XDG_STATE_HOME/notolith/link.log`; left alone, it logs into Hearth's directory).
-- **Build:** `NOTEAPPC_WITH_SHARE` (on by default) builds `noteAppC_link`. It needs
+- **Build:** `NOTEAPPC_WITH_SHARE` (off by default) builds the share side of the window, the CRDT and `noteAppC_link`. It needs
   libdatachannel, avahi-client, protobuf, nlohmann_json and libsodium; when any is
   missing the option is silently off and the rest of the app builds as before.
 - **Tests:** ctest `link` runs Hearth's `Node.*` and `Tailnet.*` suites unchanged:

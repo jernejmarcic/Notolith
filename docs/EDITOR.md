@@ -516,6 +516,8 @@ nothing.
 
 ### Look up, and what leaves the machine
 
+> Not in the default build: `-DNOTEAPPC_WITH_NETWORK=ON` (docs/OFFLINE.md). The default menu has "Search the web" only.
+
 "Look up" asks a DICT server (RFC 2229, `libs/ui/DictClient`) for the word on
 every database it has - on dict.org that includes WordNet (definitions and
 `[syn: ...]`) and a thesaurus. Servers come from the "Dictionary server"
@@ -785,7 +787,9 @@ the same flag (`PdfOptions::codeStyler`, `Options::parse`). A note with
   `setReferenceReadHookForTests` is how the tests see which thread the read ran
   on. PDF export waits (at most 10 s) for `referencesPending()` to clear before
   it lays out for the page. `setRemoteReferences(false)` (the default, from the
-  `editor.remoteReferences` setting) keeps every URL from being requested.
+  `editor.remoteReferences` setting) keeps every URL from being requested. Only in a
+  `NOTEAPPC_WITH_NETWORK` build (docs/OFFLINE.md): the default build has no URL code here and
+  a URL shows a notice.
   Limit: a target missing at layout time is not watched for; it shows when
   the block is next laid out.
 

@@ -4,6 +4,8 @@ tags: [demo, editor, encryption]
 
 # Encrypted notes
 
+> Not in the default build: `-DNOTEAPPC_WITH_ENCRYPTION=ON` (docs/OFFLINE.md).
+
 What to look for: a note can be kept encrypted on disk as `Name.mdlock` and
 read only in Notolith, with a password. Its text is decrypted in memory when it
 opens and never written anywhere in plain form. This is Settings > Core

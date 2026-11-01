@@ -19,6 +19,8 @@ and nothing else, so it cannot write, reach the network or touch the clipboard.
 
 ## The AI plugin
 
+> Not in the default build: `-DNOTEAPPC_WITH_AI_PLUGIN=ON` (docs/OFFLINE.md).
+
 `plugins/ai/` is a first-party plugin for a local Ollama server or an
 OpenAI-compatible or Anthropic API. Its commands (summarize, ask a question,
 rewrite, continue writing, translate, proofread) appear in the palette once it

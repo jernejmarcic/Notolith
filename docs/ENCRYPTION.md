@@ -1,9 +1,11 @@
 # Encrypted notes
 
+> Not in the default build: `-DNOTEAPPC_WITH_ENCRYPTION=ON` (docs/OFFLINE.md).
+
 A note can be kept encrypted on disk and read only in this app, with a
 password. Its text is decrypted in memory when the note opens and never
 written anywhere in plain form. `libs/ext/crypt`, behind
-`NOTEAPPC_WITH_ENCRYPTION` (on when libsodium is found), and the "Encrypted
+`NOTEAPPC_WITH_ENCRYPTION` (off by default; needs libsodium), and the "Encrypted
 notes" switch in Core plugins.
 
 ## Using it

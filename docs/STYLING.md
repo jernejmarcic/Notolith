@@ -402,8 +402,9 @@ caret in the block, which then shows as the lines above. A vault file is read
 off the UI thread (the block says "Loading..." until it lands) and read again
 when it changes on disk. A file that is not there says so in the block.
 
-**Remote files.** A `link:` URL is fetched only while Settings > Editor >
-"Fetch remote references" is on, and **that setting is off by default**: the
+**Remote files.** A `link:` URL exists only in a `NOTEAPPC_WITH_NETWORK`
+build (docs/OFFLINE.md; the default build shows a notice). It is fetched only while Settings > Editor >
+"Fetch remote content" is on, and **that setting is off by default**: the
 block then shows a notice and the title still links to the URL, and nothing is
 sent anywhere. Chosen over on-by-default because a note someone sent you could
 otherwise make your machine request any address; vault files are the

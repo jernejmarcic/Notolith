@@ -31,14 +31,15 @@ directories where it keeps settings and caches still carry it. The binary is
 - **Core plugins** - search with Obsidian's grammar, backlinks and unlinked
   mentions, outgoing links, tags, outline, bookmarks, daily notes, templates,
   page preview, PDF export, pandoc export and import, hotkeys, a command
-  palette (Ctrl+P), and a right-click menu with word lookup (definitions from
-  a DICT server).
+  palette (Ctrl+P), and a right-click menu with a web search.
 - **Modules** - spellcheck, graph view (global and local), canvas (JSON
   Canvas), bases (`.base` views), a PDF viewer with annotation, image
-  annotation, handwritten notes with pen input, encrypted notes, code blocks
-  run through a Jupyter kernel, Git-backed note history, end-to-end encrypted
-  sync to an optional server, peer-to-peer note sharing, and static-site
-  publishing. Each can be switched off at build time.
+  annotation, handwritten notes with pen input, code blocks run through a
+  Jupyter kernel, Git-backed note history, and static-site publishing. Each
+  can be switched off at build time.
+- **Offline** - the default build has no networking and no encryption. Sync,
+  note sharing, encrypted notes, the AI plugin, word lookup and remote content
+  are not in the default build: see `docs/OFFLINE.md`.
 - **Plugins** - out-of-process plugins, sandboxed with bubblewrap.
 - **Themes** - dark by default, Obsidian's token names and values, custom
   colour schemes, an importer for any Obsidian theme in the vault, and
@@ -57,30 +58,29 @@ cd Notolith/packaging/arch
 makepkg -si --nocheck
 ```
 
-This builds and installs five packages together: `notolith`, `notolith-ink`,
-`notolith-hwfont`, `notolith-pdfview` and `notolith-share`. The first build
-needs network access (see the header of `packaging/arch/PKGBUILD`).
+This builds and installs four packages together: `notolith`, `notolith-ink`,
+`notolith-hwfont` and `notolith-pdfview`. The first build needs network access
+to fetch its sources (see the header of `packaging/arch/PKGBUILD`); the
+installed app uses none.
 
 Update: `git pull`, then `makepkg -sif --nocheck` in `packaging/arch`.
 
 Uninstall:
 
 ```sh
-sudo pacman -Rns notolith notolith-ink notolith-hwfont notolith-pdfview notolith-share
+sudo pacman -Rns notolith notolith-ink notolith-hwfont notolith-pdfview
 ```
 
 ### Other Linux: build from source
 
 Needs Qt 6.7 or newer (`qt6-base`, `qt6-svg`, `qt6-multimedia`), a C++20
-compiler, CMake 3.28 or newer, Ninja, and Rust 1.95 or newer (cargo builds the
-note-sharing backend). The list below uses Arch package names; most are
-optional and switched off cleanly when missing.
+compiler, CMake 3.28 or newer and Ninja. The list below uses Arch package
+names; most are optional and switched off cleanly when missing.
 
 - Always: `qt6-base` `qt6-svg` `yaml-cpp` `cmake` `ninja` `git`
 - Optional modules: `qt6-multimedia` `hunspell` `syntax-highlighting`
-  `litehtml` `libgit2` `libarchive` `curl` `libsodium` `qtkeychain-qt6`
-  `zeromq` `libseccomp` `abseil-cpp` `poppler-qt6` `protobuf`
-  `libdatachannel` `avahi` `nlohmann-json` `rust`
+  `litehtml` `libgit2` `libarchive` `zeromq` `libseccomp` `abseil-cpp`
+  `poppler-qt6`
 - At run time: `bubblewrap` (sandboxes code blocks, TeX and plugins)
 - Tests: `gtest`
 
@@ -116,8 +116,8 @@ cmake --build build
 QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 ```
 
-`sh tools/check.sh` builds and tests both the full configuration and one with
-every optional module off.
+`sh tools/check.sh` builds and tests the default configuration, one with every
+networked and encrypting option on, and one with every optional module off.
 
 Documentation, in `docs/`:
 
@@ -128,9 +128,10 @@ Documentation, in `docs/`:
 - `ANNOTATIONS.md` - image annotation
 - `INK.md`, `INK-DESIGN.md` - handwritten notes: usage and design
 - `NOTEBOOKS.md` - running code blocks
-- `ENCRYPTION.md` - encrypted notes
-- `SYNC.md` - end-to-end encrypted sync
-- `SHARE.md` - peer-to-peer note sharing
+- `OFFLINE.md` - what the default build leaves out, and the options that bring it back
+- `ENCRYPTION.md` - encrypted notes (not in the default build)
+- `SYNC.md` - end-to-end encrypted sync (not in the default build)
+- `SHARE.md` - peer-to-peer note sharing (not in the default build)
 - `PLUGINS.md` - the plugin system
 - `PANDOC.md` - pandoc export and import
 - `PERFORMANCE.md` - measurements and what was tried

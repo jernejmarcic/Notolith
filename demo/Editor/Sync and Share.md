@@ -4,6 +4,8 @@ tags: [demo, editor, sync, share]
 
 # Sync and share
 
+> Not in the default build: `-DNOTEAPPC_WITH_SYNC=ON` and `-DNOTEAPPC_WITH_SHARE=ON` (docs/OFFLINE.md).
+
 What to look for: two features that need a second machine or a server, so this
 note says what to expect rather than showing it. Neither does anything until
 you ask: with the plugin off nothing is constructed.

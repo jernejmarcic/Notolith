@@ -65,7 +65,7 @@ not exist until the module did.
 A module is a Qt plugin (`QPluginLoader`) found in `<libdir>/noteAppC/modules`
 (`NOTEAPPC_MODULE_DIRS` replaces it). Its manifest is read without loading it; the library
 loads the first time one of its suffixes is opened or one of its commands runs. Nothing else
-loads a module: indexing never does. Four packages ship: `notolith-ink` (the ink core library
+loads a module: indexing never does. Three packages ship by default (the sharing engine, `notolith-share`, only with `NOTEAPPC_WITH_SHARE`, docs/OFFLINE.md): `notolith-ink` (the ink core library
 and the ink module), `notolith-hwfont` (depends on `notolith-ink`), `notolith-pdfview` (the
 PDF viewer module, and `libnotolith-pdfpage.so`, poppler behind a three-function C face that
 PDF embeds and the hover preview resolve by name on first use from any thread, so the base
@@ -196,6 +196,9 @@ interface with one method per plugin hook; `NativeEngine` (`dlopen`, the C
 ABI above) is the only engine. `plugin.ini`'s `engine` key accepts only
 `native`; any other value makes the manifest invalid.
 
+The `network` permission exists only in a `NOTEAPPC_WITH_NETWORK` build (docs/OFFLINE.md): in the default
+build a manifest's `network = true` is ignored and every plugin runs with its network namespace unshared.
+
 **Capability allowlist, enforced on every request.** `plugin.ini`'s
 `[permissions]` declares what a plugin *wants*: `read-notes`, `write-notes`,
 `network`, `clipboard`. What it actually gets is a separate, user-controlled
@@ -324,7 +327,7 @@ build that has the module. It is the pattern the next module copies.
 
 ### AI plugin
 
-`plugins/ai/` (`NOTEAPPC_WITH_AI_PLUGIN`, on by default), an optional
+`plugins/ai/` (`NOTEAPPC_WITH_AI_PLUGIN`, off by default: not in the default build, docs/OFFLINE.md), an optional
 first-party integration with a local Ollama server or an OpenAI-compatible
 or Anthropic HTTP API. It is what the `timeout-ms`, `env-passthrough`
 and `[commands]` manifest keys and the `active_selection_text` host

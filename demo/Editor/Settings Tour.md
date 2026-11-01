@@ -11,9 +11,9 @@ shows its effect.
 | page | what is there | see |
 | --- | --- | --- |
 | Appearance | colour scheme, fonts and size, inline title, file icons, formatting colours | [[Themes and Colours]], [[Files and Explorer]] |
-| Editor | default view, line length, line numbers, auto-pairs, vim keys, spellcheck, dictionary server, folding, code block colours, list numbers and bullets, table handles, meta notes, word count options, tab width, GPU painting | [[Modes and Folding]], [[Vim Mode]], [[List Display]], [[Table Editing]], [[Meta Notes]], [[Spellcheck and Look Up]] |
-| Files and links | attachment folder, where new notes go, hidden file types, encrypted note lock, autosave, deleted files, wikilinks, link updates, file recovery interval and a "Snapshots" View button | [[Files and Explorer]], [[Encrypted Notes]], [[Note History]] |
-| Core plugins | one switch per feature, canvas snapping, sync account, notebook options, diagram switches and the tool each one runs (Mermaid, PlantUML, TikZ, Graphviz), daily note and template formats | [[Feature Tour]] |
+| Editor | default view, line length, line numbers, auto-pairs, vim keys, spellcheck, folding, code block colours, list numbers and bullets, table handles, meta notes, word count options, tab width, GPU painting | [[Modes and Folding]], [[Vim Mode]], [[List Display]], [[Table Editing]], [[Meta Notes]], [[Spellcheck and Look Up]] |
+| Files and links | attachment folder, where new notes go, hidden file types, autosave, deleted files, wikilinks, link updates, file recovery interval and a "Snapshots" View button | [[Files and Explorer]], [[Encrypted Notes]], [[Note History]] |
+| Core plugins | one switch per feature, canvas snapping, notebook options, diagram switches and the tool each one runs (Mermaid, PlantUML, TikZ, Graphviz), daily note and template formats | [[Feature Tour]] |
 | Community plugins | the switch for third-party plugins and the list | [[Community Plugins]] |
 | Hotkeys | every command, a filter box, rebinding, a clash shown on both rows | [[Navigation]] |
 | About | the version, a line about the app and the path of the settings file | none |

@@ -4,6 +4,8 @@ tags: [demo, editor, spellcheck]
 
 # Spellcheck and Look up
 
+> "Look up" is not in the default build (`-DNOTEAPPC_WITH_NETWORK=ON`, docs/OFFLINE.md); the menu has "Search the web".
+
 What to look for: words the dictionary does not know get a wavy underline in
 the theme's error colour, in live preview and reading view; the right-click
 menu offers suggestions, adds a word to your dictionary and, on a word you

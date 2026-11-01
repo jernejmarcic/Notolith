@@ -63,8 +63,8 @@ start: main
 end: +3
 ```
 
-A web link shows a notice, since fetching remote files is off until Settings >
-Editor > "Fetch remote references" is turned on:
+A web link shows a notice, since fetching remote files is not in the default
+build (`-DNOTEAPPC_WITH_NETWORK=ON`, docs/OFFLINE.md):
 
 ```reference
 link: https://github.com/mayurankv/Obsidian-Code-Styler/blob/main/README.md
