@@ -1225,10 +1225,14 @@ QWidget *SettingsPage::buildCommunityPluginsPage()
                                               plugin.manifest.requestedPermissions().cend());
             std::sort(requested.begin(), requested.end());
             for (const PluginPermission permission : requested) {
-                const QString what = permission == PluginPermission::ReadNotes    ? tr("Read notes")
-                                     : permission == PluginPermission::WriteNotes ? tr("Change notes")
-                                     : permission == PluginPermission::Network    ? tr("Use the network")
-                                                                                  : tr("Use the clipboard");
+                QString what = permission == PluginPermission::ReadNotes    ? tr("Read notes")
+                               : permission == PluginPermission::WriteNotes ? tr("Change notes")
+                               : permission == PluginPermission::Network    ? tr("Use the network")
+                                                                            : tr("Use the clipboard");
+                // With the network, the plugin also gets the environment variables its manifest names
+                // (PluginHost::sandboxArguments), so the row says which.
+                if (permission == PluginPermission::Network && !plugin.manifest.envPassthrough().isEmpty())
+                    what = tr("Use the network; reads %1").arg(plugin.manifest.envPassthrough().join(QStringLiteral(", ")));
                 auto *grant = new ToggleSwitch(this);
                 grant->setObjectName(QStringLiteral("settingsPluginPermission_") + id + QLatin1Char('_')
                                      + PluginManifest::permissionID(permission));
