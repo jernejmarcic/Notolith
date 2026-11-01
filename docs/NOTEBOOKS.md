@@ -225,9 +225,10 @@ any vault setting that would switch a feature on or lower a safety are ignored
 (the Obsidian `trashOption` and `promptDelete`, which could make Delete
 permanent and silent, and `cssTheme`; only your own settings set those), each block asks
 before it runs (Run, Trust this vault, Cancel), and opening a file from a
-file card or "Open in default app" asks first, naming the file and its type.
-Executables and `.desktop` files are never handed to the desktop, trusted
-vault or not.
+file card or a link inside a note asks first, naming the file and its type.
+The file tree's "Open in default app" is your own request and opens without
+asking. Programs, launchers and scripts (executables, `.desktop` files and
+the like) are never handed to the desktop by either, trusted vault or not.
 
 A note shared with other devices (docs/SHARE.md) holds code anyone in the
 share may have written. Its blocks never leave the sandbox, whatever the
