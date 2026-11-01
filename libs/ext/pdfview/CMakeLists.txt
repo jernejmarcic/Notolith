@@ -25,7 +25,7 @@ message(STATUS "noteAppC: PDF embeds and viewer enabled (poppler-qt6)")
 
 configure_file(manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/manifest.json @ONLY)
 
-# The poppler half of PdfPage, a SHARED library next to the module (as notolith-inkcore).
+# The poppler half of PdfPage, a SHARED library next to the module.
 add_library(notolith-pdfpage SHARED PdfPageImpl.cpp PdfPageImpl.h)
 set_target_properties(notolith-pdfpage PROPERTIES
     OUTPUT_NAME notolith-pdfpage
@@ -43,7 +43,7 @@ install(TARGETS notolith-pdfpage LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/not
 # Headers only from the host's static libraries: a second copy of Settings, or of PdfPage, inside the
 # .so would be a second set of tables. The symbols resolve from the executable that loads the module
 # (ENABLE_EXPORTS, ResolveAllSymbolsHint), so the two binaries that link this library name the host
-# libraries themselves. Same rule, same reason as libs/ext/ink.
+# libraries themselves. The same rule as the PDF page library above.
 add_library(noteAppC_pdfview STATIC
     PdfAnnotationCommands.cpp
     PdfAnnotationCommands.h

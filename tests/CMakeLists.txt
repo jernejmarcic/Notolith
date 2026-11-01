@@ -104,7 +104,7 @@ noteappc_fake_module(fake_noid "" "${NOTEAPPC_ABI_TAG}" fakenoid FakeModule.cpp)
 noteappc_fake_module(fake_notmodule fake-notmodule "${NOTEAPPC_ABI_TAG}" fakenotmod NotAModule.cpp)
 noteappc_fake_module(fake_unresolved fake-unresolved "${NOTEAPPC_ABI_TAG}" fakeunres FakeModule.cpp FAKE_UNRESOLVED)
 # NOTEAPPC_STATIC_MODULES (Android): the same discovery for a module linked into the executable. The test
-# module is a Qt static plugin in test_modules itself, imported there (Q_IMPORT_PLUGIN) like main.cpp imports ink.
+# module is a Qt static plugin in test_modules itself, imported there (Q_IMPORT_PLUGIN).
 if(NOTEAPPC_STATIC_MODULES)
     set(FAKE_ID fake-static)
     set(FAKE_ABI "${NOTEAPPC_ABI_TAG}")
@@ -126,10 +126,6 @@ add_dependencies(test_modules ${NOTEAPPC_FAKE_MODULE_TARGETS})
 if(NOTEAPPC_STATIC_MODULES)
     target_link_libraries(test_modules PRIVATE fake_static)
     target_compile_definitions(test_modules PRIVATE NOTEAPPC_STATIC_FAKE)
-endif()
-if(TARGET notolith-ink) # the case of the real module, copied away from its core library
-    target_compile_definitions(test_modules PRIVATE NOTEAPPC_INK_MODULE_PATH="$<TARGET_FILE:notolith-ink>")
-    add_dependencies(test_modules notolith-ink)
 endif()
 # The no-load gate is its own ctest entry (M1): in a process where another test had already
 # mapped fake_good, "the scan did not load it" would prove nothing. The filter is in the
@@ -161,24 +157,11 @@ endif()
 add_test(NAME window_modules_adopt COMMAND test_window --gtest_filter=${noteappc_window_adopt})
 set_tests_properties(window_modules_adopt PROPERTIES ENVIRONMENT "NOTEAPPC_WINDOW_ADOPT_ENTRY=1")
 # Modules load into the test's process: export the host symbols, and point the
-# registry at the build's modules (the fake ones; the real ones are added below).
+# registry at the build's modules (the fake ones, then the real ones in ${CMAKE_BINARY_DIR}/modules).
 set_target_properties(test_window PROPERTIES ENABLE_EXPORTS ON)
 add_dependencies(test_window ${NOTEAPPC_FAKE_MODULE_TARGETS})
-# The real ink module sits behind the fake ones: ${CMAKE_BINARY_DIR}/modules holds notolith-ink.so
-# and the libnotolith-inkcore.so it needs (neither exists with NOTEAPPC_WITH_INK off).
 set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT
     "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules:${CMAKE_BINARY_DIR}/modules")
-if(TARGET notolith-ink)
-    add_dependencies(test_window notolith-ink)
-    target_compile_definitions(test_window PRIVATE NOTEAPPC_HAVE_INK_MODULE) # the ink tests in test_window.cpp
-    # The ink tests read the canvas of the module's view (document(), tool(), zoom()): the core library is
-    # the one the module loads (same soname, found in modules/), never a second copy of InkView.
-    target_link_libraries(test_window PRIVATE notolith-inkcore)
-    set_property(TARGET test_window APPEND PROPERTY BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
-elseif(TARGET notolith-ink-static) # NOTEAPPC_STATIC_MODULES: the same tests, the module a static plugin of test_window
-    target_compile_definitions(test_window PRIVATE NOTEAPPC_HAVE_INK_MODULE NOTEAPPC_STATIC_INK)
-    target_link_libraries(test_window PRIVATE notolith-ink-static notolith-inkcore)
-endif()
 # The PDF viewer module sits in the same directory (libs/ext/pdfview): the window tests that open a PDF, and the
 # ones that check what is mapped before one is opened, need it built.
 if(TARGET notolith-pdfview)
@@ -212,7 +195,7 @@ if(TARGET notolith-pdfview)
     list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-pdfview> $<TARGET_FILE:notolith-pdfpage>)
     # A module takes the host's symbols from the executable: it must not carry a copy of a host library.
     add_test(NAME needed_pdfview COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-pdfview>
-        "libnoteAppC_" "libnotolith-ink")
+        "libnoteAppC_")
     add_test(NAME needed_pdfpage COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-pdfpage>
         "libnoteAppC_")
 endif()
@@ -226,9 +209,7 @@ if(TARGET notolith-share)
     noteappc_lazy_test(lazy_share_off ShareOffMapsNothing "${noteappc_lazy_modules}")
     noteappc_lazy_test(lazy_share_missing ShareWithoutTheModuleSaysWhatIsMissing)
     list(APPEND noteappc_exe_forbidden "protobuf" "datachannel" "avahi")
-    if(NOT TARGET notolith-ink-static) # a static ink module links the stroke modeler, and so Abseil, into the executable
-        list(APPEND noteappc_exe_forbidden "absl")
-    endif()
+    list(APPEND noteappc_exe_forbidden "absl")
     list(APPEND noteappc_symbol_modules $<TARGET_FILE:notolith-share>)
     add_test(NAME needed_share COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_needed.sh $<TARGET_FILE:notolith-share>
         "libnoteAppC_")
@@ -281,24 +262,6 @@ if(noteappc_offline_needed_pattern OR noteappc_offline_symbols_pattern)
     set_tests_properties(offline_selftest PROPERTIES WILL_FAIL TRUE)
 endif()
 
-# The glyph studio (libs/ext/hwfont): until noteAppC_hwfont exists this block does nothing.
-# test_hwfont drives the studio view and the module through the registry, so it
-# links the host (noteAppC_ui) and the static hwfont library only: the module
-# is loaded from ${CMAKE_BINARY_DIR}/modules, never linked. IsolatedHome.cpp is
-# added to every test_* target by the loop at the end of this file.
-if(TARGET noteAppC_hwfont)
-    add_executable(test_hwfont test_hwfont.cpp)
-    target_link_libraries(test_hwfont PRIVATE noteAppC_hwfont noteAppC_ui Qt6::Test GTest::gtest)
-    set_target_properties(test_hwfont PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
-    add_test(NAME hwfont COMMAND test_hwfont)
-    set_tests_properties(hwfont PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
-    if(TARGET notolith-hwfont)
-        add_dependencies(test_hwfont notolith-hwfont)
-    elseif(TARGET notolith-hwfont-static) # NOTEAPPC_STATIC_MODULES: the module is a static plugin of this executable
-        target_link_libraries(test_hwfont PRIVATE notolith-hwfont-static)
-        target_compile_definitions(test_hwfont PRIVATE NOTEAPPC_STATIC_HWFONT)
-    endif()
-endif()
 target_compile_definitions(test_window PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
 foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
     if(TARGET ${module})
@@ -502,7 +465,7 @@ endif()
 # of the real home.
 if(TARGET noteAppC_shareengine)
     add_executable(test_share test_share.cpp)
-    # The engine takes the host's CrdtDoc, store and crypto as headers only (the ink rule); here they are linked in.
+    # The engine takes the host's CrdtDoc, store and crypto as headers only; here they are linked in.
     target_link_libraries(test_share PRIVATE noteAppC_shareengine noteAppC_sharebase noteAppC_share_crdt noteAppC_sync
         Qt6::Test GTest::gtest)
     # The wire format of the build before Presence gained positions, as package notolith.share.v0, to read
@@ -647,47 +610,6 @@ add_test(NAME lists COMMAND test_lists)
 add_executable(test_wordkeys test_wordkeys.cpp)
 target_link_libraries(test_wordkeys PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
 add_test(NAME wordkeys COMMAND test_wordkeys)
-
-# The ink core (libs/ext/ink/core): model, format, outline, input, canvas.
-if(TARGET notolith-inkcore)
-    add_executable(test_ink test_ink.cpp)
-    find_package(ZLIB REQUIRED) # the gzip helper in the format tests (imported targets are directory-scoped)
-    target_link_libraries(test_ink PRIVATE notolith-inkcore Qt6::Test GTest::gtest ZLIB::ZLIB)
-    target_compile_definitions(test_ink PRIVATE NOTEAPPC_INK_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/fixtures/ink/golden")
-    set_target_properties(test_ink PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
-    add_test(NAME ink COMMAND test_ink)
-    set_tests_properties(ink PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    # The position and overlay maths again at device pixel ratio 2 (the FydeTab Duo's scale is fractional, 1.67): the offscreen platform honours QT_SCALE_FACTOR.
-    add_test(NAME ink_dpr2 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
-    set_tests_properties(ink_dpr2 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
-    # A fractional ratio: a cell is 341.33 logical px wide, still a whole 512 device px.
-    add_test(NAME ink_dpr15 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
-    set_tests_properties(ink_dpr15 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5")
-    # The tab itself (InkView, the static library the module links), without dlopen: what it does about a
-    # file that changes under it and about a newer file. The host's Settings, Theme, Vault and ModuleView come from noteAppC_modules.
-    if(TARGET noteAppC_ink)
-        add_executable(test_inkview test_inkview.cpp)
-        # noteAppC_editor: InkView draws a text box with MarkdownEditor, which the module takes from the host.
-        target_link_libraries(test_inkview PRIVATE noteAppC_ink noteAppC_modules noteAppC_editor Qt6::Test GTest::gtest)
-        set_target_properties(test_inkview PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
-        add_test(NAME inkview COMMAND test_inkview)
-        set_tests_properties(inkview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    endif()
-endif()
-
-# The host-side .ink text-box reader: JSON only, no module, no inkcore.
-find_package(ZLIB REQUIRED)
-add_executable(test_inktextboxes test_inktextboxes.cpp)
-target_link_libraries(test_inktextboxes PRIVATE noteAppC_ui Qt6::Test GTest::gtest_main ZLIB::ZLIB)
-add_test(NAME inktextboxes COMMAND test_inktextboxes)
-
-# An .ink note in the index after a rename (the host reader plus inkcore, to prove the file still opens).
-if(TARGET notolith-inkcore)
-    add_executable(test_inkindex test_inkindex.cpp)
-    target_link_libraries(test_inkindex PRIVATE noteAppC_ui noteAppC_index noteAppC_vault notolith-inkcore Qt6::Test GTest::gtest)
-    set_target_properties(test_inkindex PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
-    add_test(NAME inkindex COMMAND test_inkindex)
-endif()
 
 # --version prints the version, the copyright line and the GPL notice (libs/ui/LicenseText.h).
 add_test(NAME cli_version COMMAND noteAppC --version)

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Jernej Marčič
-# The loadable-module tier (docs/PLUGINS.md, "Tier 1.5"; spec section 4):
+# The loadable-module tier (docs/PLUGINS.md, "Tier 1b"):
 # the plugin interface a module implements, the ModuleHost seam struct the
 # window fills, the ModuleView widget base, and the registry that discovers
 # modules by metadata and loads one on first use.
@@ -26,8 +26,8 @@ target_compile_definitions(noteAppC_modules PRIVATE
     NOTEAPPC_MODULE_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/notolith/modules")
 
 # A module as a Qt static plugin (NOTEAPPC_STATIC_MODULES): the module's one source file compiled with
-# QT_STATICPLUGIN into a static library, which the executable links and imports with Q_IMPORT_PLUGIN
-# (apps/noteAppC/main.cpp). ModuleRegistry::scan lists it through QPluginLoader::staticPlugins(); nothing
+# QT_STATICPLUGIN into a static library, which the executable links and imports with Q_IMPORT_PLUGIN.
+# ModuleRegistry::scan lists it through QPluginLoader::staticPlugins(); nothing
 # is constructed until the first ensureLoaded. The caller configure_file's manifest.json into its own binary
 # directory first, as for the shared build (Q_PLUGIN_METADATA FILE "manifest.json").
 #   noteappc_add_static_module(<target> <source> <library the module needs>)

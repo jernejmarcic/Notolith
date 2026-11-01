@@ -40,7 +40,7 @@ find_package(Qt6 6.7 QUIET COMPONENTS OpenGLWidgets)
 find_package(Qt6 6.7 QUIET COMPONENTS Test)
 qt_standard_project_setup()
 
-# The ABI tag every loadable module carries (spec section 4): same build only.
+# The ABI tag every loadable module carries (docs/PLUGINS.md, Tier 1b): same build only.
 # The token is random, made once per build directory and kept in the cache: two
 # builds of one commit never share a tag, and a source tarball without git needs
 # no hash. Reconfiguring keeps it; a fresh build directory gets a new one.
@@ -55,7 +55,7 @@ set(NOTEAPPC_ABI_TAG "${PROJECT_VERSION}-${NOTEAPPC_ABI_TOKEN}-${Qt6_VERSION}")
 # from <libdir>/notolith/modules. Android has no module directory and loads only libraries packaged in the
 # APK, so there it is the only way (docs/PLATFORMS.md, "Mobile"); a desktop build can switch it on to test
 # the path. Off, the default build is unchanged: every module is a shared object. Only the modules that go
-# through noteappc_add_static_module (ink, hwfont) change; the PDF and share modules stay shared, as their
+# through noteappc_add_static_module change; the PDF and share modules stay shared, as their
 # poppler and protobuf stacks are not in the Android kit (those options are off there).
 if(ANDROID)
     set(noteappc_static_default ON)
@@ -142,7 +142,7 @@ endif()
 option(NOTEAPPC_WITH_PUBLISH "Export a vault as a static website (libs/ext/publish)" ON)
 # PDF view, a Tier 1 module: opens a vault's PDFs in a tab instead of handing
 # them to the system viewer - continuous scroll, zoom, find, outline, links,
-# and annotation (highlight/underline/strike-out/ink/note/box) saved into the
+# and annotation (highlight/underline/strike-out/note/box) saved into the
 # PDF itself - and the poppler half of PDF embeds in a note (libnotolith-pdfpage.so).
 # Both are loadable (libs/ext/pdfview): the executable links no poppler, and a
 # session that never meets a PDF never maps it. Needs poppler-qt6 (GPL); this
@@ -153,14 +153,6 @@ option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 # draw on and note, the marks kept in a sidecar note beside it. Qt Widgets
 # only - no new dependency - so it has no tool to look for, just this switch.
 option(NOTEAPPC_WITH_IMAGEVIEW "Highlight, draw on and annotate images, in a sidecar note" ON)
-# Handwriting (docs/INK.md, spec docs/INK-DESIGN.md):
-# the ink core as a shared library and the handwritten-note tab as a loadable
-# module (libs/ext/ink), the glyph studio as another (libs/ext/hwfont). Off,
-# nothing ink is built and the app has no ink symbol; on, the modules are
-# separate install units the base binary never links (spec section 3).
-# ink-stroke-modeler is fetched and pinned in libs/ext/ink/core/CMakeLists.txt.
-option(NOTEAPPC_WITH_INK "Build the ink core and the handwritten-note module (libs/ext/ink)" ON)
-option(NOTEAPPC_WITH_HWFONT "Build the handwriting-font glyph studio module (libs/ext/hwfont)" ON)
 # Tier 2 (docs/PLUGINS.md): runtime plugins, each loaded inside its own
 # `notolith-plugin-host` process (tools/plugin_host), never in the app. No
 # external dependency at this level - only Qt, libdl and bubblewrap when
@@ -446,20 +438,6 @@ endif()
 if(NOTEAPPC_WITH_IMAGEVIEW)
     add_subdirectory(libs/ext/imageview)
 endif()
-if(NOTEAPPC_WITH_INK AND NOT ANDROID)
-    # System Abseil is required: there is no bundled copy. Without it the ink
-    # core and the note module are not built, and the rest of the app is unchanged.
-    find_package(absl QUIET)
-    if(absl_FOUND)
-        add_subdirectory(libs/ext/ink)
-    else()
-        message(STATUS "Abseil not found: the ink core and the handwritten-note module are not built (install abseil-cpp)")
-        set(NOTEAPPC_WITH_INK OFF)
-    endif()
-endif()
-if(NOTEAPPC_WITH_HWFONT AND TARGET notolith-inkcore)
-    add_subdirectory(libs/ext/hwfont)
-endif()
 if(NOTEAPPC_WITH_PLUGINS)
     add_subdirectory(libs/ext/plugins)
 endif()
@@ -503,8 +481,6 @@ noteappc_module(bases NOTEAPPC_WITH_BASES TARGET noteAppC_bases)
 noteappc_module(epub NOTEAPPC_WITH_EPUB TARGET noteAppC_epub)
 noteappc_module(publish NOTEAPPC_WITH_PUBLISH TARGET noteAppC_publish)
 noteappc_module(pdfview NOTEAPPC_WITH_PDFVIEW TARGET notolith-pdfview)
-noteappc_module(ink NOTEAPPC_WITH_INK TARGET notolith-inkcore)
-noteappc_module(hwfont NOTEAPPC_WITH_HWFONT TARGET notolith-hwfont)
 noteappc_module(plugins NOTEAPPC_WITH_PLUGINS TARGET noteAppC_plugins)
 noteappc_module(notebook NOTEAPPC_WITH_NOTEBOOK TARGET noteAppC_notebook)
 noteappc_module(sync NOTEAPPC_WITH_SYNC TARGET noteAppC_sync)

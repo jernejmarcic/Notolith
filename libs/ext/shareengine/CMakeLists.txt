@@ -26,7 +26,7 @@ target_include_directories(noteAppC_shareengine PUBLIC ${CMAKE_CURRENT_SOURCE_DI
     $<TARGET_PROPERTY:noteAppC_share_crdt,INTERFACE_INCLUDE_DIRECTORIES>)
 protobuf_generate(TARGET noteAppC_shareengine IMPORT_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
     PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
-# Headers only from the host's libraries (the ink rule, libs/ext/ink): a second CrdtDoc or SyncCrypto inside
+# Headers only from the host's libraries (the rule libs/ext/pdfview follows): a second CrdtDoc or SyncCrypto inside
 # the .so would be a second copy of the tables, and a CrdtDoc * crosses the boundary through doc(). Their
 # symbols and ShareEngineBase's moc come from the executable (ENABLE_EXPORTS, ResolveAllSymbolsHint), so a
 # binary that links this library - test_share - names noteAppC_sharebase, noteAppC_share_crdt and
