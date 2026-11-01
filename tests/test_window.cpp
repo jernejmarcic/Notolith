@@ -3183,6 +3183,24 @@ TEST_F(WindowTest, CreateNewCanvasMakesAnEmptyOneAndOpensIt)
 }
 #endif
 
+// The hint with "Open folder..." sits over the workspace only while no vault is open.
+TEST_F(WindowTest, AWindowWithNoVaultOffersToOpenOne)
+{
+    MainWindow window;
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    auto *hint = window.findChild<QWidget *>(QStringLiteral("emptyState"));
+    ASSERT_NE(hint, nullptr);
+    EXPECT_FALSE(hint->isVisible()) << "not before the start knows there is no vault to reopen";
+    window.openVault(dir.path());
+    EXPECT_FALSE(hint->isVisible());
+    window.closeVault();
+    EXPECT_TRUE(hint->isVisible());
+    EXPECT_NE(hint->findChild<QPushButton *>(), nullptr);
+    window.openVault(dir.path());
+    EXPECT_FALSE(hint->isVisible());
+}
+
 TEST_F(WindowTest, ANarrowWindowFoldsBothSidebarsAndGivesThemBack)
 {
     MainWindow window;

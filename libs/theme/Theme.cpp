@@ -699,7 +699,7 @@ QTreeView#fileExplorer QLineEdit {
 
 /* Main area: tab strip, inline title, editor -------------------------- */
 
-QWidget#mainArea, QWidget#editorArea {
+QWidget#mainArea, QWidget#editorArea, QWidget#emptyState {
     background: %{--background-primary};
 }
 QWidget#tabStrip {

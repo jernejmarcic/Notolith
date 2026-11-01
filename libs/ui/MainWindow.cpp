@@ -54,6 +54,7 @@
 #include <QSet>
 #include <QSettings>
 #include <QSplitter>
+#include <QStackedLayout>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyle>
@@ -993,10 +994,29 @@ QWidget *MainWindow::buildMainArea()
     m_workspace->addWidget(group->widget);
     activateLeaf(newLeaf(group));
 
-    auto *notesLayout = new QVBoxLayout(notesPage);
+    // The workspace with the first-run hint stacked over it: shown only while no vault is open
+    // (showEmptyState), so a window that is about to open one never flashes it.
+    auto *notesLayout = new QStackedLayout(notesPage);
+    notesLayout->setStackingMode(QStackedLayout::StackAll);
     notesLayout->setContentsMargins(0, 0, 0, 0);
-    notesLayout->setSpacing(0);
-    notesLayout->addWidget(m_workspace, 1);
+    notesLayout->addWidget(m_workspace);
+    m_emptyState = new QWidget(notesPage);
+    m_emptyState->setObjectName(QStringLiteral("emptyState"));
+    m_emptyState->setAutoFillBackground(true);
+    // Stacked over the workspace, so it must not raise the area's minimum width: a narrow window folds the sidebars.
+    m_emptyState->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    auto *emptyLayout = new QVBoxLayout(m_emptyState);
+    emptyLayout->setAlignment(Qt::AlignCenter);
+    auto *emptyLabel = new QLabel(tr("No vault open. Open a folder of Markdown notes to start."), m_emptyState);
+    emptyLabel->setWordWrap(true);
+    emptyLabel->setAlignment(Qt::AlignCenter);
+    auto *emptyButton = new QPushButton(tr("Open folder..."), m_emptyState);
+    connect(emptyButton, &QPushButton::clicked, this, &MainWindow::chooseVault);
+    emptyLayout->addWidget(emptyLabel, 0, Qt::AlignCenter);
+    emptyLayout->addWidget(emptyButton, 0, Qt::AlignCenter);
+    notesLayout->addWidget(m_emptyState);
+    notesLayout->setCurrentWidget(m_emptyState); // raises it; show() comes with it, so hide after
+    m_emptyState->hide();
 
     // A window of its own, sized like a dialog: a page as wide as the main
     // area stretches every row across an ultrawide screen.
@@ -1432,6 +1452,20 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             m_notebook->interruptKernel(language, notePathOf(editor));
     });
 #endif
+    // A reference block's header: a note opens in a tab and a URL in the browser; any other file of the
+    // vault is left alone (the file tree has "Open in default app").
+    connect(editor, &MarkdownEditor::referenceActivated, this, [this](const QString &target) {
+        if (target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+            || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
+            QDesktopServices::openUrl(QUrl(target));
+        else if (!m_vault.isValid()
+                 || !QFileInfo(target).canonicalFilePath().startsWith(QDir(m_vault.root()).canonicalPath() + QLatin1Char('/')))
+            return; // the editor only offers vault files; this is the second lock
+        else if (Vault::isNote(target))
+            openNote(target);
+        else // a click on what looks like a title never hands a vault file to xdg-open: that is an explicit command
+            statusBar()->showMessage(tr("%1 is not a note: open it from the file tree").arg(QFileInfo(target).fileName()), 5000);
+    });
 #ifdef NOTEAPPC_HAVE_BASES
     // ```base blocks: the notes and the evaluation both on the pool (the
     // notes are 54 ms on 20 000); the vault is copied here, on the UI
@@ -1451,20 +1485,6 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 result.rows.append({row.cells, row.notePath});
             deliver(result);
         });
-    });
-    // A reference block's header: a note opens in a tab and a URL in the browser; any other file of the
-    // vault is left alone (the file tree has "Open in default app").
-    connect(editor, &MarkdownEditor::referenceActivated, this, [this](const QString &target) {
-        if (target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
-            || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
-            QDesktopServices::openUrl(QUrl(target));
-        else if (!m_vault.isValid()
-                 || !QFileInfo(target).canonicalFilePath().startsWith(QDir(m_vault.root()).canonicalPath() + QLatin1Char('/')))
-            return; // the editor only offers vault files; this is the second lock
-        else if (Vault::isNote(target))
-            openNote(target);
-        else // a click on what looks like a title never hands a vault file to xdg-open: that is an explicit command
-            statusBar()->showMessage(tr("%1 is not a note: open it from the file tree").arg(QFileInfo(target).fileName()), 5000);
     });
     connect(editor, &MarkdownEditor::baseRowActivated, this, [this](const QString &relativePath) {
         openRelative(relativePath);
@@ -5630,6 +5650,7 @@ void MainWindow::closeVault()
     updateTitle();
     updateWordCount();
     statusBar()->showMessage(tr("Vault closed"), 3000);
+    m_emptyState->show();
 }
 
 void MainWindow::openSingleFile(const QString &path)
@@ -5696,6 +5717,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
             }
         } else {
             updateTitle();
+            m_emptyState->show();
         }
         break;
     }
@@ -8650,6 +8672,8 @@ void MainWindow::updateTitle()
 
     syncTabs(m_active->group);
     m_vaultLabel->setText(m_vault.isValid() ? m_vault.name() : tr("No vault open"));
+    if (m_vault.isValid() || m_openMode == OpenMode::SingleFile)
+        m_emptyState->hide();
 
     if (m_vaultMenuButton) {
         if (m_openMode == OpenMode::SingleFile && !m_active->notePath.isEmpty())

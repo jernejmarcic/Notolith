@@ -1086,6 +1086,7 @@ QLabel *m_vimStatus = nullptr;
     bool allowSharedRun(const MarkdownEditor *editor, const QString &language, const QString &source);
 #endif
     QLabel *m_vaultLabel = nullptr;
+    QWidget *m_emptyState = nullptr; ///< "Open folder..." over the workspace while no vault is open
     QWidget *m_sidebar = nullptr;
     QWidget *m_rightSidebar = nullptr;
     QStackedWidget *m_rightPanes = nullptr;
