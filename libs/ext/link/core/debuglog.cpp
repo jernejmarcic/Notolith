@@ -32,10 +32,14 @@ Log& log()
 
 std::string defaultPath()
 {
+    // The spec ignores a relative XDG_STATE_HOME; with no usable HOME either there is nowhere to log.
     const char* state = std::getenv("XDG_STATE_HOME");
     const char* home = std::getenv("HOME");
-    fs::path base = state && *state ? fs::path(state) : fs::path(home ? home : "/tmp") / ".local" / "state";
-    return (base / "hearth" / "hearth.log").string();
+    if (state && state[0] == '/')
+        return (fs::path(state) / "hearth" / "hearth.log").string();
+    if (home && home[0] == '/')
+        return (fs::path(home) / ".local" / "state" / "hearth" / "hearth.log").string();
+    return {};
 }
 
 // Must hold l.m.
@@ -43,6 +47,8 @@ bool openLocked(Log& l)
 {
     if (l.path.empty())
         l.path = defaultPath();
+    if (l.path.empty())
+        return false;
     const fs::path dir = fs::path(l.path).parent_path();
     std::error_code ec;
     if (!dir.empty() && fs::create_directories(dir, ec))

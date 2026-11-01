@@ -19,7 +19,7 @@ extern std::atomic<bool> debugLogEnabled;
 }
 inline bool debugLogOn() { return detail::debugLogEnabled.load(std::memory_order_relaxed); }
 
-// Where the log goes; default $XDG_STATE_HOME/hearth/hearth.log (~/.local/state).
+// Where the log goes; default $XDG_STATE_HOME/hearth/hearth.log (~/.local/state), and no log when neither is an absolute path.
 // The default is computed lazily at the first write, so a path set before anything
 // logs (even with HEARTH_DEBUG/LINK_DEBUG on) is the one used. An app vendoring the
 // link layer must call setDebugLogPath() at startup, or it logs into Hearth's directory.

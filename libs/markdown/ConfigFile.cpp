@@ -1,17 +1,110 @@
 #include "ConfigFile.h"
 
+#include <QCryptographicHash>
 #include <QDir>
+#include <QFileInfo>
 #include <QFile>
+#include <QStandardPaths>
 #include <QTextStream>
 
 namespace noteAppC {
 
+namespace {
+
+/// The variable's value when it is an absolute path, else empty.
+QString absoluteEnvironment(const char *name)
+{
+    const QString value = QString::fromLocal8Bit(qgetenv(name));
+    return QDir::isAbsolutePath(value) ? QDir::cleanPath(value) : QString();
+}
+
+/// A colon-separated variable's absolute entries; the default when it is unset or empty.
+QStringList absoluteEntries(const char *name, const QString &fallback)
+{
+    QString value = QString::fromLocal8Bit(qgetenv(name));
+    if (value.isEmpty())
+        value = fallback;
+    QStringList entries;
+    for (const QString &entry : value.split(QLatin1Char(':'), Qt::SkipEmptyParts)) {
+        if (QDir::isAbsolutePath(entry))
+            entries << QDir::cleanPath(entry);
+    }
+    return entries;
+}
+
+} // namespace
+
+QString xdgRoot(XDGroot root)
+{
+    if (root == XDGroot::Runtime) {
+        const QString given = absoluteEnvironment("XDG_RUNTIME_DIR");
+        if (!given.isEmpty())
+            return given;
+        // Unset, or relative and so invalid: Qt makes a directory of its own (/tmp/runtime-<user>); a relative
+        // value would come back as it is, and is no answer.
+        const QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+        return QDir::isAbsolutePath(runtime) ? QDir::cleanPath(runtime) : QString();
+    }
+    struct Variable {
+        const char *name;
+        const char *home;
+    };
+    static constexpr Variable variables[] = {{"XDG_CONFIG_HOME", "/.config"},
+                                             {"XDG_DATA_HOME", "/.local/share"},
+                                             {"XDG_STATE_HOME", "/.local/state"},
+                                             {"XDG_CACHE_HOME", "/.cache"}};
+    const Variable &variable = variables[static_cast<int>(root)];
+    const QString value = absoluteEnvironment(variable.name);
+    return value.isEmpty() ? QDir::cleanPath(QDir::homePath() + QLatin1String(variable.home)) : value;
+}
+
+QString appDir(XDGroot root, const QString &sub)
+{
+    const QString base = xdgRoot(root);
+    if (base.isEmpty())
+        return {};
+    const QString dir = base + QLatin1Char('/') + kAppDirName;
+    return sub.isEmpty() ? dir : dir + QLatin1Char('/') + sub;
+}
+
+QStringList xdgSearchDirs(XDGroot root)
+{
+    QStringList dirs{xdgRoot(root)};
+    if (root == XDGroot::Config)
+        dirs << absoluteEntries("XDG_CONFIG_DIRS", QStringLiteral("/etc/xdg"));
+    else if (root == XDGroot::Data)
+        dirs << absoluteEntries("XDG_DATA_DIRS", QStringLiteral("/usr/local/share:/usr/share"));
+    return dirs;
+}
+
+bool ensurePrivateDir(const QString &path)
+{
+    const QString clean = QDir::cleanPath(QDir(path).absolutePath());
+    if (QFileInfo(clean).isDir())
+        return true;
+    // Each missing component by itself: QDir::mkpath() has no way to say 0700.
+    QString built;
+    for (const QString &part : clean.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+        built += QLatin1Char('/') + part;
+        if (QFileInfo(built).isDir())
+            continue;
+        if (!QDir().mkdir(built, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)
+            && !QFileInfo(built).isDir())
+            return false;
+    }
+    return true;
+}
+
+QString vaultDigest(const QString &root)
+{
+    const QString absolute = QDir(root).absolutePath();
+    return QString::fromLatin1(
+        QCryptographicHash::hash(absolute.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
+}
+
 QString configFilePath(const QString &name)
 {
-    const QByteArray xdg = qgetenv("XDG_CONFIG_HOME");
-    const QString base = xdg.isEmpty() ? QDir::homePath() + QStringLiteral("/.config")
-                                       : QString::fromLocal8Bit(xdg);
-    return QDir(base).filePath(QStringLiteral("noteAppC/") + name);
+    return appDir(XDGroot::Config, name);
 }
 
 QHash<QString, QMap<QString, QString>> readINIsections(const QString &path)
