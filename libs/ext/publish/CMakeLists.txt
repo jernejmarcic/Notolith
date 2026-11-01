@@ -10,6 +10,8 @@
 add_library(noteAppC_publish STATIC
     Slugs.h
     Slugs.cpp
+    SafeAttachment.h
+    SafeAttachment.cpp
     SafeHtml.h
     SafeHtml.cpp
     PageBody.h

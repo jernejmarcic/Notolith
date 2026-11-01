@@ -367,30 +367,26 @@ bool Vault::isCleanRelativePath(const QString &relativePath)
 }
 
 namespace {
-/// Opens the folder `parts` (all but the leaf) under `root`, one openat(O_NOFOLLOW) per component, so a link
-/// anywhere on the way fails instead of leading out. `create` makes the missing folders in the descriptor already
-/// held. Returns -1 with `*err` set (ENOENT when a folder is absent and `create` is off).
-int openFolderNoFollow(const QString &root, const QStringList &parts, bool create, int *err, QString *failedPart)
+/// Opens the folder `parts` (all but the leaf) under the folder `rootFd` (borrowed, not closed), one
+/// openat(O_NOFOLLOW) per component, so a link anywhere on the way fails instead of leading out. `create` makes
+/// the missing folders in the descriptor already held. Returns a new descriptor the caller owns, or -1 with
+/// `*err` set (ENOENT when a folder is absent and `create` is off).
+int openFolderNoFollow(int rootFd, const QStringList &parts, bool create, int *err, QString *failedPart)
 {
-    Fd dir(::open(QFile::encodeName(root).constData(), O_PATH | O_DIRECTORY | O_CLOEXEC));
-    if (dir.fd < 0) {
-        *err = errno;
-        if (failedPart)
-            failedPart->clear();
-        return -1;
-    }
+    Fd dir; // what has been walked into; the root itself stays the caller's
+    int current = rootFd;
     for (int i = 0; i < parts.size() - 1; ++i) {
         const QByteArray name = parts.at(i).toUtf8();
         constexpr int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
-        int next = ::openat(dir.fd, name.constData(), flags);
+        int next = ::openat(current, name.constData(), flags);
         if (next < 0 && errno == ENOENT && create) {
-            if (::mkdirat(dir.fd, name.constData(), 0755) < 0 && errno != EEXIST) {
+            if (::mkdirat(current, name.constData(), 0755) < 0 && errno != EEXIST) {
                 *err = errno;
                 if (failedPart)
                     *failedPart = parts.at(i);
                 return -1;
             }
-            next = ::openat(dir.fd, name.constData(), flags); // a link raced in is refused here
+            next = ::openat(current, name.constData(), flags); // a link raced in is refused here
         }
         if (next < 0) {
             *err = errno;
@@ -399,12 +395,69 @@ int openFolderNoFollow(const QString &root, const QStringList &parts, bool creat
             return -1;
         }
         dir.reset(next);
+        current = next;
     }
-    const int out = dir.fd;
-    dir.fd = -1; // handed over
-    return out;
+    if (dir.fd >= 0) {
+        const int out = dir.fd;
+        dir.fd = -1; // handed over
+        return out;
+    }
+    const int copy = ::fcntl(rootFd, F_DUPFD_CLOEXEC, 0);
+    if (copy < 0)
+        *err = errno;
+    return copy;
 }
+
+/// A descriptor on the folder at `path`, links on the way followed (it is the caller's chosen path).
+int openRootPath(const QString &path, int *err)
+{
+    const int fd = ::open(QFile::encodeName(path).constData(), O_PATH | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0)
+        *err = errno;
+    return fd;
+}
+
+bool writeAt(int rootFd, const QString &relativePath, const QByteArray &bytes, QString *error, bool sync);
+bool readAt(int rootFd, const QString &relativePath, QByteArray *out, qint64 maxBytes);
+bool removeAt(int rootFd, const QString &relativePath, QString *error);
 } // namespace
+
+Vault::HeldFolder::HeldFolder(int fd) : m_fd(fd) {}
+
+Vault::HeldFolder::HeldFolder(HeldFolder &&other) noexcept : m_fd(other.m_fd)
+{
+    other.m_fd = -1;
+}
+
+Vault::HeldFolder &Vault::HeldFolder::operator=(HeldFolder &&other) noexcept
+{
+    if (this != &other) {
+        if (m_fd >= 0)
+            ::close(m_fd);
+        m_fd = other.m_fd;
+        other.m_fd = -1;
+    }
+    return *this;
+}
+
+Vault::HeldFolder::~HeldFolder()
+{
+    if (m_fd >= 0)
+        ::close(m_fd);
+}
+
+Vault::HeldFolder Vault::HeldFolder::open(const QString &path, QString *error)
+{
+    const int fd = ::open(QFile::encodeName(path).constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0 && error)
+        *error = QStringLiteral("cannot open %1 as a folder (a link is refused): %2").arg(path, errnoText(errno));
+    return HeldFolder(fd);
+}
+
+QString Vault::HeldFolder::realPath() const
+{
+    return m_fd < 0 ? QString() : QFileInfo(QStringLiteral("/proc/self/fd/%1").arg(m_fd)).canonicalFilePath();
+}
 
 bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &bytes, QString *error) const
 {
@@ -418,6 +471,25 @@ bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &by
 
 bool Vault::writeBytesNoFollowUnder(const QString &root, const QString &relativePath, const QByteArray &bytes,
                                     QString *error, bool sync)
+{
+    int err = 0;
+    Fd rootFd(openRootPath(root, &err));
+    if (rootFd.fd < 0) {
+        if (error)
+            *error = QStringLiteral("cannot open the vault: %1").arg(errnoText(err));
+        return false;
+    }
+    return writeAt(rootFd.fd, relativePath, bytes, error, sync);
+}
+
+bool Vault::writeBytesNoFollowUnder(const HeldFolder &root, const QString &relativePath, const QByteArray &bytes,
+                                    QString *error, bool sync)
+{
+    return writeAt(root.fd(), relativePath, bytes, error, sync);
+}
+
+namespace {
+bool writeAt(int rootFd, const QString &relativePath, const QByteArray &bytes, QString *error, bool sync)
 {
     const auto fail = [error](const QString &what) {
         if (error)
@@ -433,7 +505,7 @@ bool Vault::writeBytesNoFollowUnder(const QString &root, const QString &relative
 
     int err = 0;
     QString failedPart;
-    Fd dir(openFolderNoFollow(root, parts, true, &err, &failedPart));
+    Fd dir(openFolderNoFollow(rootFd, parts, true, &err, &failedPart));
     if (dir.fd < 0) {
         if (failedPart.isEmpty())
             return fail(QStringLiteral("cannot open the vault: %1").arg(errnoText(err)));
@@ -475,14 +547,32 @@ bool Vault::writeBytesNoFollowUnder(const QString &root, const QString &relative
     return true;
 }
 
+} // namespace
+
 bool Vault::readFileNoFollowUnder(const QString &root, const QString &relativePath, QByteArray *out, qint64 maxBytes)
 {
     out->clear();
-    if (!isCleanRelativePath(relativePath))
+    int err = 0;
+    Fd rootFd(openRootPath(root, &err));
+    return rootFd.fd >= 0 && readAt(rootFd.fd, relativePath, out, maxBytes);
+}
+
+bool Vault::readFileNoFollowUnder(const HeldFolder &root, const QString &relativePath, QByteArray *out,
+                                  qint64 maxBytes)
+{
+    out->clear();
+    return readAt(root.fd(), relativePath, out, maxBytes);
+}
+
+namespace {
+bool readAt(int rootFd, const QString &relativePath, QByteArray *out, qint64 maxBytes)
+{
+    out->clear();
+    if (!Vault::isCleanRelativePath(relativePath))
         return false;
     const QStringList parts = relativePath.split(QLatin1Char('/'));
     int err = 0;
-    Fd dir(openFolderNoFollow(root, parts, false, &err, nullptr));
+    Fd dir(openFolderNoFollow(rootFd, parts, false, &err, nullptr));
     if (dir.fd < 0)
         return false;
     // O_NONBLOCK so that a named pipe in the place of a file cannot hold the open.
@@ -514,18 +604,38 @@ bool Vault::readFileNoFollowUnder(const QString &root, const QString &relativePa
     return true;
 }
 
+} // namespace
+
 bool Vault::removeNoFollowUnder(const QString &root, const QString &relativePath, QString *error)
+{
+    int err = 0;
+    Fd rootFd(openRootPath(root, &err));
+    if (rootFd.fd < 0) {
+        if (error)
+            *error = QStringLiteral("%1 was not removed: %2").arg(relativePath, errnoText(err));
+        return false;
+    }
+    return removeAt(rootFd.fd, relativePath, error);
+}
+
+bool Vault::removeNoFollowUnder(const HeldFolder &root, const QString &relativePath, QString *error)
+{
+    return removeAt(root.fd(), relativePath, error);
+}
+
+namespace {
+bool removeAt(int rootFd, const QString &relativePath, QString *error)
 {
     if (error)
         error->clear();
-    if (!isCleanRelativePath(relativePath)) {
+    if (!Vault::isCleanRelativePath(relativePath)) {
         if (error)
             *error = QStringLiteral("%1 is not a path inside the folder").arg(relativePath);
         return false;
     }
     const QStringList parts = relativePath.split(QLatin1Char('/'));
     int err = 0;
-    Fd dir(openFolderNoFollow(root, parts, false, &err, nullptr));
+    Fd dir(openFolderNoFollow(rootFd, parts, false, &err, nullptr));
     if (dir.fd < 0) {
         // A folder that is gone or a link on the way: nothing is removed, and only a link is worth saying.
         if (error && err != ENOENT)
@@ -540,6 +650,8 @@ bool Vault::removeNoFollowUnder(const QString &root, const QString &relativePath
     }
     return true;
 }
+
+} // namespace
 
 bool Vault::writeNoteNoFollow(const QString &relativePath, const Note &note, QString *error) const
 {

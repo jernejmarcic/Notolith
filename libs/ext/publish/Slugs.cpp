@@ -54,6 +54,14 @@ QString Slugs::defaultPagePath(const QString &vaultRelativePath)
     return slugged.join(QLatin1Char('/')) + QStringLiteral(".html");
 }
 
+bool Slugs::isReservedOutput(const QString &path)
+{
+    // The folders and files the exporter writes itself are not a note's to take.
+    return path.startsWith(QLatin1String("attachments/")) || path.startsWith(QLatin1String("tags/"))
+        || path == QLatin1String("index.html") || path == QLatin1String("site.css")
+        || path == QLatin1String("search.js") || path == QLatin1String("search-index.json");
+}
+
 QString Slugs::permalinkOverride(const QString &raw)
 {
     QString path = raw.trimmed();
@@ -79,6 +87,8 @@ QString Slugs::permalinkOverride(const QString &raw)
     path = safe.join(QLatin1Char('/'));
     if (!path.endsWith(QLatin1String(".html"), Qt::CaseInsensitive))
         path += QStringLiteral(".html");
+    if (isReservedOutput(path))
+        return {};
     return path;
 }
 

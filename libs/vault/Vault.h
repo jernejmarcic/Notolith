@@ -108,6 +108,28 @@ public:
     /// Copies `source` over `target` through a temporary file beside it and a rename, so a failed copy leaves
     /// the earlier `target` as it was (an export replacing a file).
     static bool copyReplacing(const QString &source, const QString &target, QString *error = nullptr);
+    /// A folder held open by descriptor: every write, read and remove through it lands in the folder that was
+    /// opened, whatever its name is made to point at afterwards. open() refuses a link as the folder itself.
+    /// Move-only; the descriptor is closed with it.
+    class HeldFolder {
+    public:
+        HeldFolder() = default;
+        HeldFolder(HeldFolder &&other) noexcept;
+        HeldFolder &operator=(HeldFolder &&other) noexcept;
+        HeldFolder(const HeldFolder &) = delete;
+        HeldFolder &operator=(const HeldFolder &) = delete;
+        ~HeldFolder();
+        /// Opens `path` with O_DIRECTORY|O_NOFOLLOW; not open (and `*error` set) when it cannot be.
+        static HeldFolder open(const QString &path, QString *error = nullptr);
+        bool isOpen() const { return m_fd >= 0; }
+        int fd() const { return m_fd; }
+        /// Where the held folder really is now (links resolved), asked of the descriptor and not of a name.
+        QString realPath() const;
+
+    private:
+        explicit HeldFolder(int fd);
+        int m_fd = -1;
+    };
     /// Whether `relativePath` is a clean relative path: no empty, "." or ".." segment (so not absolute either),
     /// no backslash, no NUL. Lexical only.
     static bool isCleanRelativePath(const QString &relativePath);
@@ -115,16 +137,21 @@ public:
     /// skips the fsync, for a folder of many files that can be made again.
     static bool writeBytesNoFollowUnder(const QString &root, const QString &relativePath, const QByteArray &bytes,
                                         QString *error = nullptr, bool sync = true);
+    static bool writeBytesNoFollowUnder(const HeldFolder &root, const QString &relativePath, const QByteArray &bytes,
+                                        QString *error = nullptr, bool sync = true);
     /// Reads the regular file `relativePath` under `root` through a held folder descriptor: a link on any
     /// folder of the way, or as the file itself, makes it fail, and what is read is the file that was opened
     /// (fstat), not a path looked at before. False when it is missing, not a regular file or larger than
     /// `maxBytes` (when not negative); `*out` is then empty.
     static bool readFileNoFollowUnder(const QString &root, const QString &relativePath, QByteArray *out,
                                       qint64 maxBytes = -1);
+    static bool readFileNoFollowUnder(const HeldFolder &root, const QString &relativePath, QByteArray *out,
+                                      qint64 maxBytes = -1);
     /// Removes the file `relativePath` under `root` without following a link: one on any folder of the way means
     /// nothing is removed, and a link as the file itself is removed, not what it points at. False when nothing
     /// was removed; `*error` is then set only when that is a refusal and not a file that was not there.
     static bool removeNoFollowUnder(const QString &root, const QString &relativePath, QString *error = nullptr);
+    static bool removeNoFollowUnder(const HeldFolder &root, const QString &relativePath, QString *error = nullptr);
     /// encode() then writeBytesNoFollow(); fails for a `lossy` note.
     bool writeNoteNoFollow(const QString &relativePath, const Note &note, QString *error = nullptr) const;
 

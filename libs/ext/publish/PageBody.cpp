@@ -15,6 +15,7 @@
 #include "CodeHighlighter.h"
 #include "MermaidCache.h"
 #include "ObsidianSyntax.h"
+#include "SafeAttachment.h"
 #include "SafeHtml.h"
 #include "Slugs.h"
 #include "TaskStates.h"
@@ -61,27 +62,9 @@ bool within(const Range &r, const Range &region)
 /// for at all (so those still fall back to a plain download link).
 QString mediaKindOf(const QString &path)
 {
-    const QString ext = QFileInfo(path).suffix().toLower();
-    static const QSet<QString> images = {QStringLiteral("png"), QStringLiteral("jpg"),
-                                         QStringLiteral("jpeg"), QStringLiteral("gif"),
-                                         QStringLiteral("svg"), QStringLiteral("webp"),
-                                         QStringLiteral("bmp")};
-    static const QSet<QString> audio = {QStringLiteral("mp3"), QStringLiteral("wav"),
-                                        QStringLiteral("ogg"), QStringLiteral("m4a"),
-                                        QStringLiteral("flac"), QStringLiteral("opus"),
-                                        QStringLiteral("3gp")};
-    static const QSet<QString> video = {QStringLiteral("mp4"), QStringLiteral("webm"),
-                                        QStringLiteral("mov"), QStringLiteral("mkv"),
-                                        QStringLiteral("ogv")};
-    if (images.contains(ext))
-        return QStringLiteral("image");
-    if (audio.contains(ext))
-        return QStringLiteral("audio");
-    if (video.contains(ext))
-        return QStringLiteral("video");
-    if (ext == QLatin1String("pdf"))
-        return QStringLiteral("pdf");
-    return QStringLiteral("file");
+    // Only what a site may carry (SafeAttachment): anything else is "file", which is never linked.
+    const QString kind = SafeAttachment::kindOfSuffix(QFileInfo(path).suffix().toLower());
+    return kind.isEmpty() ? QStringLiteral("file") : kind;
 }
 
 /// One node in the block-level forest built per region: enough to sort, dedup
@@ -1463,7 +1446,9 @@ private:
             return QStringLiteral("<a class=\"pdf-embed\" href=\"%1\">%2</a>")
                   .arg(escapeAttr(pageHref), escapeHtml(alias));
         }
-        return QStringLiteral("<a href=\"%1\">%2</a>").arg(escapeAttr(href), escapeHtml(alias));
+        // Not a kind a site carries (html, xml, script, anything unknown): named, never linked, never copied.
+        return QStringLiteral("<span class=\"unresolved\" title=\"only images, audio, video and PDF files are published\">%1</span>")
+              .arg(escapeHtml(alias));
     }
 
     QString attachmentHref(const QString &relativePath) const

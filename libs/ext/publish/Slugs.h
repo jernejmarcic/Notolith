@@ -55,6 +55,10 @@ struct Slugs {
     /// tag called "active".
     static QString tagPagePath(const QString &tagName);
 
+    /// True for a path the exporter writes itself: index.html, site.css, search.js, search-index.json and
+    /// anything under attachments/ or tags/.
+    static bool isReservedOutput(const QString &path);
+
     /// Makes every path in `paths` unique in place, appending "-2", "-3", ...
     /// to the final path segment (before ".html") of each path that repeats
     /// one seen earlier in the list - so the first occurrence, in whatever

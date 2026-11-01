@@ -5262,14 +5262,31 @@ void MainWindow::publishSite()
             return;
         }
         QString message = tr("Published %n page(s)", nullptr, result.counts.pages);
+        // What was not published or not touched, named: an attachment that is not a passive file or is a link out
+        // of the vault, a note that links out of it, and a file left in place because it changed since the
+        // last publish.
         const QStringList &left = result.counts.skippedAttachments;
+        const QStringList &leftNotes = result.counts.skippedNotes;
+        const QStringList &kept = result.counts.leftInPlace;
+        QStringList sections;
         if (!left.isEmpty()) {
             message += tr(", %n attachment(s) left out", nullptr, int(left.size()));
-            // Named: a file that links out of the vault, or is not a plain file, is not copied into a site.
-            QMessageBox::information(this, tr("Publish"),
-                                     tr("These attachments were left out of the site, because each is a link out of "
-                                        "the vault or not a regular file:\n\n%1").arg(left.join(QLatin1Char('\n'))));
+            sections << tr("These attachments were left out of the site, because each is a link out of the vault, "
+                           "not a regular file, or not an image, audio, video or PDF file:\n%1")
+                            .arg(left.join(QLatin1Char('\n')));
         }
+        if (!leftNotes.isEmpty()) {
+            message += tr(", %n note(s) left out", nullptr, int(leftNotes.size()));
+            sections << tr("These notes were left out of the site, because each is a link to a file outside the "
+                           "vault:\n%1").arg(leftNotes.join(QLatin1Char('\n')));
+        }
+        if (!kept.isEmpty()) {
+            message += tr(", %n file(s) left in place", nullptr, int(kept.size()));
+            sections << tr("These files were left in place, because they changed since the last publish:\n%1")
+                            .arg(kept.join(QLatin1Char('\n')));
+        }
+        if (!sections.isEmpty())
+            QMessageBox::information(this, tr("Publish"), sections.join(QStringLiteral("\n\n")));
         statusBar()->showMessage(message, 5000);
     });
     // Publisher queries the index on the thread that calls it, and an Index
