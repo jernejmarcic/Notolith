@@ -60,3 +60,34 @@ for old, new in steps:
 open(path, "w").write(text)
 print("patched " + path)
 PY
+
+# The same note shape, a footnote with a "|" in it, followed by a blank line and a second footnote, sends
+# BlockParser::process round its do-while without the line moving, adding a table row to the queue each time.
+# A block that is still not done after this many turns without taking a character of the line is cut off.
+python3 - src/block_parser.cpp <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+marker = "notolith: stalled blocks"
+if marker in text:
+    sys.exit(0)
+old = """    BlockState state = BlockState::None;
+
+    do {
+        state = processOneTime(currentLine, stream, doc, parent, ctx, path, fileName, linksToParse);
+    } while (!ctx.children().isEmpty() && ctx.children().head().block() && !currentLine.atEnd());
+"""
+new = """    BlockState state = BlockState::None;
+    int stalled = 0; // """ + marker + """
+
+    do {
+        const auto before = currentLine.position();
+        state = processOneTime(currentLine, stream, doc, parent, ctx, path, fileName, linksToParse);
+        stalled = currentLine.position() == before ? stalled + 1 : 0;
+    } while (!ctx.children().isEmpty() && ctx.children().head().block() && !currentLine.atEnd() && stalled < 64);
+"""
+if text.count(old) != 1:
+    sys.exit("patch-md4qt: BlockParser::process in src/block_parser.cpp is not what the stall cap expects")
+open(path, "w").write(text.replace(old, new))
+print("patched " + path)
+PY

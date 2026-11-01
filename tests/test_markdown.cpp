@@ -543,11 +543,13 @@ TEST(TagTest, AColonFencesAttributesAreNotTags)
     EXPECT_EQ(tagNames(parse(text)), QStringList{QStringLiteral("real")});
 }
 
-// md4qt 5.1.4 discarded and rewound to the footnote's line for ever on this, queueing a context each time until
-// memory ran out (cmake/patch-md4qt.sh caps the rewinds). Found by tools/fuzz.
+// md4qt 5.1.4 discarded and rewound to the footnote's line for ever on these (or, for a blank line and a second
+// footnote after it, went round one loop without the line moving), queueing a context each time until memory ran
+// out (cmake/patch-md4qt.sh caps both). Found by tools/fuzz.
 TEST(FootnoteTest, ADefinitionWithAPipeAndAnIndentedLineAfterItIsParsed)
 {
-    for (const char *note : {"[^1]: a|b\n l\n", "x\n[^1]: a|b\n    c\n", "[^1]: Foot | n\n l\xef\xbf\xbd" "Siew.\n"}) {
+    for (const char *note : {"[^1]: a|b\n l\n", "x\n[^1]: a|b\n    c\n", "[^1]: Foot | n\n l\xef\xbf\xbd" "Siew.\n",
+                              "[^1]: a|\n\n[^2]: c\n", "[^1]: a|b\n\n[^1]: c\n"}) {
         QElapsedTimer timer;
         timer.start();
         parse(QString::fromUtf8(note));
