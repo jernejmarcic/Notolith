@@ -15,12 +15,12 @@ plain and a click opens the file with the system.
 
 The book is `assets/sample.epub`: a two-chapter EPUB 3 made for this vault (see
 `docs/DEMO-ASSETS.md`), with a nav document, a stylesheet and a cover that is the
-neovim logo.
+gradient image.
 
 ## The card
 
-Expect the neovim logo as the cover at the left of the card, then the name
-"sample.epub" and its size (about 8 KB):
+Expect the gradient as the cover at the left of the card, then the name
+"sample.epub" and its size (about 17 KB):
 
 ![[sample.epub]]
 

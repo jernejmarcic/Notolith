@@ -52,7 +52,7 @@ print("this line of dashes is inside the code block, not a slide break")
 
 ## A picture
 
-![[nvim-logo.png|120]]
+![[gradient.png|120]]
 
 ---
 

@@ -53,7 +53,7 @@ copy can still be reached unambiguously by its full path:
 
 ## Links to attachments
 
-A wikilink straight to an image file, not a note: [[nvim-logo.png]]. See
+A wikilink straight to an image file, not a note: [[gradient.png]]. See
 [[Image Embeds]] for the same file actually embedded rather than just
 linked to.
 

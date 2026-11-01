@@ -46,7 +46,7 @@ the wheel; it should not close while the pointer is on it.
 ## An image
 
 An image link previews as the picture, scaled to fit. Hover
-[[nvim-logo.png]].
+[[gradient.png]].
 
 ## A page of a PDF
 
