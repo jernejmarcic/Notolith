@@ -116,7 +116,7 @@ note says so where it would have been instead of linking a file that is not ther
 **Pandoc itself runs inside the same bubblewrap and seccomp sandbox as code blocks** (no network, no home directory,
 a private `/tmp` and `/dev/shm`, CPU, memory and file-size limits, a 1 GiB cgroup where systemd has a user manager, a
 timeout). A link in the scratch directory, where pandoc's output is looked for, is never taken for it. An import sees only the one file it was given. An
-export sees the note's folder, pandoc's own resource folders and the reference document read-only, and writes to a
+export sees the note's folder, the vault, its attachment folder and the reference document read-only, and writes to a
 scratch directory that is copied to the chosen target when pandoc succeeds. Without `bwrap` and libseccomp neither
 runs; there is no unsandboxed path.
 

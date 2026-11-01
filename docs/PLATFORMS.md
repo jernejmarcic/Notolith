@@ -131,11 +131,11 @@ to make is mode 0700.
 
 | root | what |
 |---|---|
-| `$XDG_CONFIG_HOME/notolith` (`~/.config`) | `settings.ini`, `hotkeys.json`, `callouts.ini`, `codeblocks.ini`, `tasks.ini`, `dictionary.txt`, `plugins.ini`, `themes/`, `templates/`, `plugins/<id>/` |
+| `$XDG_CONFIG_HOME/notolith` (`~/.config`) | `settings.ini`, `hotkeys.json`, `callouts.ini`, `codeblocks.ini`, `tasks.ini`, `dictionary.txt`, `plugins.ini`, `themes/`, `templates/` |
 | `$XDG_DATA_HOME/notolith` (`~/.local/share`) | per vault under `vaults/<digest>/`: `bookmarks.json`, `icons.json`, `workspaces.json`; and `recovery/`, `pdf-recovery/`, `history/`, `sync/`, `share/`, user-installed `plugins/` |
 | `$XDG_STATE_HOME/notolith` (`~/.local/state`) | `vaults.ini`, `window.ini` (geometry, splitter, publish choices), `epub-positions.ini`, `notolith.log`, `link.log`, per vault `vaults/<digest>/workspace.json` and `graph.json` |
 | `$XDG_CACHE_HOME/notolith` (`~/.cache`) | the vault index (`vaults/<digest>/index.db`), `remote-images/`, `tex/`, `mermaid/` and the other diagram caches, `notebook/`, `epub/` |
-| `$XDG_RUNTIME_DIR/notolith` | the single-instance sockets and locks, `settings.lock`, `notolith.log.lock`, `link-<id>.lock`, the notebook kernels' runtime directories |
+| `$XDG_RUNTIME_DIR/notolith` | the single-instance sockets and locks (when there is no usable runtime directory, the sockets go in `$XDG_STATE_HOME/notolith/instance-*.sock` instead), `settings.lock`, `notolith.log.lock`, `link-<id>.lock`, the notebook kernels' runtime directories |
 
 The digest is 16 hex of the SHA-256 of the vault's absolute path (`vaultDigest()`).
 Read-only lookups go through `$XDG_DATA_DIRS` too: plugins in `notolith/plugins` and

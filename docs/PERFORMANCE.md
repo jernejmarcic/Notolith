@@ -178,8 +178,10 @@ The note shown at start is `areas/Note 00000.md`.
 | keystroke, 1 MB note | - | 0.73 ms (bench) | 26.2 ms | as above |
 | peak RSS, vault plus a 1 MB note | 5 000 / 20 000 | 240 / 234 MB (bench `VmHWM`, note outside the vault) | 1 425 / 1 701 MB (RSS right after opening it, note inside the vault) | not the same thing twice: noteAppC's figure is a high-water mark of the bench process, Obsidian's a sample of the summed RSS |
 
-noteAppC is ahead on every row: 4x to 7x on window and note on screen, 21x to
-34x on the cold index (5 000 / 20 000 notes), 6x to 7x less memory (RSS), and
+The ratios below are indicative, not a like-for-like benchmark: the two apps
+were timed with different harnesses (see the caveats), on a machine that was
+not quiet. noteAppC is ahead on every row: 4x to 7x on window and note on
+screen, 21x to 34x on the cold index (5 000 / 20 000 notes), 6x to 7x less memory (RSS), and
 about 9x to 36x on open and keystroke. The "bench" rows are in-process figures and
 not a like-for-like timing against the devtools ones (see the first caveat).
 

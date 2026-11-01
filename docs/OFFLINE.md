@@ -12,6 +12,11 @@ does is a CMake option, `OFF` by default:
 | `NOTEAPPC_WITH_ENCRYPTION` | encrypted notes, `.mdlock` (`ENCRYPTION.md`) | libsodium |
 | `NOTEAPPC_WITH_SHARE`, `NOTEAPPC_WITH_SHARE_YRS` | note sharing (`SHARE.md`) | libdatachannel, avahi, protobuf, nlohmann-json, libsodium, cargo for the yrs backend |
 
+Note sharing finds its peers on the LAN or at a private address. Reaching a
+device by a tailnet address needs that device to be on a tailnet already, which
+needs the `tailscale` client and an account on a Tailscale (or Headscale)
+control server; LAN and loopback do not (`SHARE.md`).
+
 An option that is off compiles none of its code and shows none of its menu
 entries, commands or settings rows. A `.mdlock` file opened in such a build
 says "This build of Notolith cannot open encrypted notes", and a `reference`
@@ -35,7 +40,8 @@ What remains, and why it is not the app talking to a network:
   They are not installed and `offline_exe` / `offline_modules` do not look at
   them.
 - A link or "Search the web" opens the browser through `QDesktopServices` on a
-  click. The app sends nothing.
+  click. The app sends nothing. The default web search is DuckDuckGo
+  (`lookup.webSearchURL`); the browser sends the query, not the app.
 - Notebook kernels talk over libzmq on `ipc://` sockets only, in a sandbox with
   its network namespace unshared.
 - Remote images in notes (`![](https://...)`, `<img src="https://...">`) are fetched only with
