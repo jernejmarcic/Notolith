@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -441,6 +442,25 @@ TEST(StorageMigration, TwoStartsAtTheSameInstantMoveEachFileOnceAndSayNothingOfT
     EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/noteAppC")));
     for (int i = 0; i < many; ++i)
         ASSERT_EQ(read(machine.config + QStringLiteral("/notolith/themes/t%1.json").arg(i)), QByteArray::number(i)) << i;
+}
+
+TEST(StorageMigration, AnEmptyLockLeftByACrashDoesNotHoldTheFilesBackForEver)
+{
+    OldLayout machine;
+    machine.populate();
+    // A start that died between making the lock file and writing its pid into it, long ago.
+    const QString lockDir = machine.root.filePath(QStringLiteral("run/notolith"));
+    ASSERT_TRUE(QDir().mkpath(lockDir));
+    ASSERT_TRUE(QFile::setPermissions(lockDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    QFile lock(lockDir + QStringLiteral("/migrate.lock"));
+    ASSERT_TRUE(lock.open(QIODevice::WriteOnly));
+    ASSERT_TRUE(lock.setFileTime(QDateTime::currentDateTime().addSecs(-3600), QFileDevice::FileModificationTime));
+    lock.close();
+
+    QStringList warnings;
+    EXPECT_GT(migrateStorage(nullptr, &warnings), 0);
+    EXPECT_TRUE(warnings.isEmpty()) << warnings.join(QLatin1Char('\n')).toStdString();
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
 }
 
 TEST(StorageMigration, AFileInTheWayIsSaidOnceWhileOneThatMayStillMoveIsTriedAgain)

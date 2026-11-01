@@ -355,20 +355,25 @@ int migrateStorage(QStringList *lines, QStringList *warnings)
     if (storageMigrationNeed() == MigrationNeed::None)
         return 0;
     // Two starts at the same instant would each move half of the files and find the other's in the way. One
-    // goes first; the other waits, and then finds nothing left to do. Only a dead owner makes the lock stale.
+    // goes first; the other waits until the files are settled and moves nothing: the first one may already have a
+    // window open, and whatever it left is for a later start with no window. A dead owner, or a lock file with no
+    // owner in it (a crash between create and write) older than the stale time, makes the lock stale; a live
+    // owner keeps its file locked, so a long run is not taken over.
     // Without a place for it, or if it cannot be made, the run goes on unlocked, as it did before.
     std::unique_ptr<QLockFile> lock;
     if (const QString path = migrationLockPath(); !path.isEmpty()) {
         lock = std::make_unique<QLockFile>(path);
-        lock->setStaleLockTime(0);
-        // ponytail: a start that waits this long gives up; the files wait for the next one.
-        if (!lock->tryLock(60000) && lock->error() == QLockFile::LockFailedError) {
-            const QString line = QStringLiteral("storage: another start is moving the files of the previous version; "
-                                                "they are left for the next start");
-            if (warnings)
-                warnings->append(line);
-            else
-                qWarning().noquote() << line;
+        lock->setStaleLockTime(5 * 60 * 1000);
+        if (!lock->tryLock(0) && lock->error() == QLockFile::LockFailedError) {
+            // ponytail: a start that waits this long gives up; the files wait for the next one.
+            if (!lock->tryLock(60000) && lock->error() == QLockFile::LockFailedError) {
+                const QString line = QStringLiteral("storage: another start is moving the files of the previous "
+                                                    "version; they are left for the next start");
+                if (warnings)
+                    warnings->append(line);
+                else
+                    qWarning().noquote() << line;
+            }
             return 0;
         }
         if (storageMigrationNeed() == MigrationNeed::None)
