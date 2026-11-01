@@ -21,7 +21,13 @@ needs are visible read-only (a runnable embed: its folder; a pandoc export: the
 note's folder, the vault and its attachment folder). A plugin gets the network
 only if you grant it. If `bwrap` or libseccomp is missing, they refuse to run;
 there is no unsandboxed fallback. A vault is untrusted until you trust it, and
-nothing runs without a click. Details: `docs/NOTEBOOKS.md#sandbox`.
+nothing runs without a click: in an untrusted vault a diagram or plugin fence
+shows its source and a "Render diagram" button, and its tool starts only after
+you say Run. Details: `docs/NOTEBOOKS.md#sandbox`.
+
+Limits on what a vault can ask of the app: a note or notebook over 32 MiB is
+not indexed and does not open, and an HTML block is drawn at most 16384 pixels
+tall and 64 million pixels in all; past that a short notice is drawn instead.
 
 ## What it does not cover
 

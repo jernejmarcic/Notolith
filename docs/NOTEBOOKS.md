@@ -231,6 +231,17 @@ The file tree's "Open in default app" is your own request and opens without
 asking. Programs, launchers and scripts (executables, `.desktop` files and
 the like) are never handed to the desktop by either, trusted vault or not.
 
+Showing a note starts no tool in an untrusted vault. A Mermaid, PlantUML, TikZ
+or Graphviz fence (and a plugin's fence) shows its source and a "Render
+diagram" button instead of the diagram; the button asks the same Run, Trust
+this vault, Cancel question a code block does, and Run draws that one block.
+Trusting the vault draws them all, and a trusted vault draws them as it
+always did. TeX maths and mind maps are drawn in the app itself and stay
+automatic. The regex entries (`/.../`) of a vault's `.obsidian/app.json`
+`userIgnoreFilters` are not applied, or even compiled, until the vault is
+trusted; its plain path filters are. A drag onto a folder of the file tree, or
+"Move to folder", refuses a folder that is a link or leads outside the vault.
+
 A note shared with other devices (docs/SHARE.md) holds code anyone in the
 share may have written. Its blocks never leave the sandbox, whatever the
 setting says, and each one asks before its first run in this app session,
