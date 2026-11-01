@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Jernej Marčič
-// The loadable-module tier (docs/INK-DESIGN.md
-// section 4): discovery by metadata does not load the library; a module loads
+// The loadable-module tier (docs/PLUGINS.md): discovery by metadata does not load the library; a module loads
 // on first use; a wrong ABI tag, a duplicate suffix claim, a manifest without
 // an id, a library that is not a module and an unresolvable library are each
 // reported, never loaded or dropped silently.
@@ -220,7 +219,7 @@ TEST(ModuleRegistryTest, ALibraryThatIsNotAModuleIsReportedAndStaysUnattached)
 }
 
 // No dependency check. A module whose library cannot resolve a symbol (an absent
-// inkcore, in life) fails with the loader's message, which Settings shows.
+// library, in life) fails with the loader's message, which Settings shows.
 TEST(ModuleRegistryTest, AnUnresolvedSymbolFailsTheLoadWithTheLoadersMessage)
 {
     ModuleRegistry registry;
@@ -278,30 +277,6 @@ TEST(ModuleRegistryTest, ABItagIsVersionTokenAndQtVersion)
     EXPECT_TRUE(QRegularExpression(QStringLiteral("^[0-9a-f]{16}$")).match(parts[1]).hasMatch()) << parts[1].toStdString();
     EXPECT_EQ(parts[2], QStringLiteral(QT_VERSION_STR));
 }
-
-#ifdef NOTEAPPC_INK_MODULE_PATH
-// No dependency check in the manifest. An ink module copied to where libnotolith-inkcore.so is
-// not (RUNPATH $ORIGIN is its own directory) fails to load with the loader's message, which Settings
-// shows, instead of crashing. This process never loads the core library, so nothing satisfies the
-// NEEDED entry by soname.
-TEST(ModuleRegistryTest, AnInkModuleWithoutItsCoreLibraryFailsToLoadWithTheLoadersMessage)
-{
-    QTemporaryDir tmp;
-    ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_INK_MODULE_PATH), tmp.filePath(QStringLiteral("notolith-ink.so"))));
-    const QList<ModuleInfo> modules = ModuleRegistry::scan({tmp.path()});
-    ASSERT_EQ(modules.size(), 1);
-    ASSERT_TRUE(modules.first().problem.isEmpty()) << modules.first().problem.toStdString();
-    EXPECT_EQ(modules.first().id, QStringLiteral("ink"));
-    ModuleRegistry registry;
-    useModules(registry, modules);
-    ModuleHost host;
-    QString error;
-    EXPECT_FALSE(registry.ensureLoaded(modules.first(), host, &error));
-    EXPECT_TRUE(error.contains(QStringLiteral("libnotolith-inkcore.so"))) << error.toStdString();
-    EXPECT_FALSE(registry.isLoaded(QStringLiteral("ink")));
-    EXPECT_EQ(registry.loadFailure(QStringLiteral("ink")), error) << "Settings shows what the registry kept";
-}
-#endif
 
 // M10: no per-user module directory.
 TEST(ModuleRegistryTest, DefaultDirectoriesAreTheOverrideOrTheLibdirAlone)

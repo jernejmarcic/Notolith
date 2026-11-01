@@ -154,7 +154,7 @@ protected:
 TEST(ModuleSuffixTest, NoSuffixAsksThePlugins)
 {
     ASSERT_EQ(imagePluginsLoaded(), 0) << "an earlier test loaded them";
-    for (const char *suffix : {"ink", "md", "png", "pdf", "mp3", "glyphs"})
+    for (const char *suffix : {"md", "png", "pdf", "mp3"})
         EXPECT_EQ(MainWindow::isBuiltInSuffixForTests(QString::fromLatin1(suffix)),
                   QByteArray(suffix) == "md" || QByteArray(suffix) == "png" || QByteArray(suffix) == "mp3") // a PDF is the pdfview module's
             << suffix;
