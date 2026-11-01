@@ -40,11 +40,8 @@ constexpr std::array<std::pair<ShapeKind, const char *>, 6> kShapes{{
 constexpr std::array<std::pair<LayoutKind, const char *>, 4> kLayouts{{
     {LayoutKind::Fixed, "fixed"}, {LayoutKind::ContinuousVertical, "continuousVertical"},
     {LayoutKind::SemiInfinite, "semiInfinite"}, {LayoutKind::Infinite, "infinite"}}};
-constexpr std::array<std::pair<Pattern, const char *>, 11> kPatterns{{
-    {Pattern::None, "none"}, {Pattern::Lines, "lines"}, {Pattern::Grid, "grid"}, {Pattern::Dots, "dots"},
-    {Pattern::LinesMargin, "linesMargin"}, {Pattern::GridMajor, "gridMajor"}, {Pattern::MusicStaff, "musicStaff"},
-    {Pattern::Calligraphy, "calligraphy"}, {Pattern::Seyes, "seyes"}, {Pattern::Cornell, "cornell"},
-    {Pattern::HexGrid, "hexGrid"}}};
+constexpr std::array<std::pair<Pattern, const char *>, 4> kPatterns{{
+    {Pattern::None, "none"}, {Pattern::Lines, "lines"}, {Pattern::Grid, "grid"}, {Pattern::Dots, "dots"}}};
 } // namespace
 
 QString pressureCurveName(PressureCurve curve) { return nameOf(kCurves, curve); }

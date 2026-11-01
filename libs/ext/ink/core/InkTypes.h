@@ -11,8 +11,7 @@
 #include <QSizeF>
 #include <QString>
 
-/// The ink model (spec section 5 and 7). Units are CSS px at 96 dpi, as in
-/// Rnote; A4 is 793.701 x 1122.52. Strokes are immutable once finished and
+/// The ink model (spec section 5 and 7). Units are CSS px at 96 dpi; A4 is 793.701 x 1122.52. Strokes are immutable once finished and
 /// shared, so a history snapshot is a vector of pointers.
 namespace noteAppC::ink {
 
@@ -58,7 +57,7 @@ inline constexpr double kArrowHeadLengthInWidths = 3.0;
 struct Shape {
     ShapeKind kind = ShapeKind::Line;
     StrokeStyle style;
-    std::vector<QPointF> points; ///< line/arrow: 2; rect/ellipse: 2 corners; polyline/polygon: n (model types only: no tool draws the last two, .rnote files carry them)
+    std::vector<QPointF> points; ///< line/arrow: 2; rect/ellipse: 2 corners; polyline/polygon: n (model types only: no tool draws the last two, a file may carry them)
     QRectF bounds() const;       ///< the points' box grown by half the width, and by the arrowhead for an Arrow
 };
 
@@ -92,7 +91,7 @@ enum class LayoutKind { Fixed, ContinuousVertical, SemiInfinite, Infinite };
 QString layoutName(LayoutKind layout);
 LayoutKind layoutFromName(const QString &name);
 
-enum class Pattern { None, Lines, Grid, Dots, LinesMargin, GridMajor, MusicStaff, Calligraphy, Seyes, Cornell, HexGrid };
+enum class Pattern { None, Lines, Grid, Dots };
 QString patternName(Pattern pattern);
 Pattern patternFromName(const QString &name);
 

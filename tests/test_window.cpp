@@ -10832,7 +10832,7 @@ TEST_F(InkWindowTest, InkPageMenuChangesPatternAndAddsAPage)
     ASSERT_NE(format, nullptr);
     ASSERT_NE(layout, nullptr);
     ASSERT_NE(add, nullptr);
-    EXPECT_EQ(pattern->count(), 11);
+    EXPECT_EQ(pattern->count(), 4);
     EXPECT_EQ(format->count(), 4) << "A4, A5, Letter, Custom";
     EXPECT_EQ(layout->count(), 4);
     EXPECT_EQ(pattern->currentData().toString(), QStringLiteral("lines"));

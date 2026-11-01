@@ -1,12 +1,8 @@
-// Ported from Rnote (crates/rnote-engine/src/document/background.rs, the gen_*_pattern
-// functions and Background::page_overlay_lines), copyright the Rnote contributors,
-// GPL-3.0-or-later, https://github.com/flxzt/rnote. The page styles beyond the stock
-// six are from the `jernej/features` branch of a Rnote fork.
+// Ported from Rnote (crates/rnote-engine/src/document/background.rs, the gen_*_pattern functions),
+// copyright the Rnote contributors, GPL-3.0-or-later, https://github.com/flxzt/rnote.
 //
-// Rnote tiles an SVG pattern; this draws the same lines directly, and only the lines
-// that meet the exposed rect (visibleLineRange, once per axis). Where the fork's
-// geometry differs from a plain "line at k * period" it wins: a ruled line is a band of
-// kLineWidth whose top edge sits on the cell edge, so its centre is half a width down.
+// Only the lines that meet the exposed rect are drawn (visibleLineRange, once per axis). A ruled
+// line is a band of kLineWidth whose top edge sits on the cell edge, so its centre is half a width down.
 #include "PagePatterns.h"
 
 #include <algorithm>
@@ -15,16 +11,11 @@
 
 #include <QPainter>
 #include <QPen>
-#include <QPolygonF>
 
 namespace noteAppC::ink {
 
 namespace {
 
-constexpr double kSqrtThree = 1.7320508075688772;
-constexpr double kCalligraphyBaselineFraction = 0.6;
-constexpr double kCalligraphyDashPx = 4; ///< SVG "4 4": 4 px on, 4 px off (Qt counts dashes in pen widths)
-constexpr double kCornellSummaryFraction = 0.2;
 constexpr double kMaxLineIndex = std::numeric_limits<int>::max();
 
 QRectF transposed(const QRectF &r) { return QRectF(r.y(), r.x(), r.height(), r.width()); }
@@ -35,15 +26,8 @@ struct Pen {
     QPointF anchor; ///< where line 0 sits: the page's top-left on a paged layout, the document origin on a sheet
     QRectF view; ///< page & exposed, padded by kLinePad: what a line needs to span
     QColor color;
-    QColor marginColor{kMarginColor};
 
-    void set(const QColor &c, double width, double opacity = 1.0, Qt::PenCapStyle cap = Qt::FlatCap) const
-    {
-        QColor withOpacity = c;
-        withOpacity.setAlphaF(c.alphaF() * opacity);
-        QPen pen(withOpacity, width, Qt::SolidLine, cap, Qt::MiterJoin);
-        painter.setPen(pen);
-    }
+    void set(const QColor &c, double width) const { painter.setPen(QPen(c, width, Qt::SolidLine, Qt::FlatCap, Qt::MiterJoin)); }
     /// Rows of a pattern whose content, anchored at k * period, reaches `above` up and `below` down from it.
     LineRange rows(const QRectF &exposed, double period, double above = 0, double below = 0) const
     {
@@ -54,19 +38,19 @@ struct Pen {
     {
         return visibleLineRange(transposed(exposed).adjusted(0, -after, 0, before), transposed(page).adjusted(0, -after, 0, before), anchor.x(), period);
     }
-    void horizontal(double y, double width, double opacity = 1.0) const
+    void horizontal(double y, double width) const
     {
-        set(color, width, opacity);
+        set(color, width);
         painter.drawLine(QPointF(view.left(), y), QPointF(view.right(), y));
     }
-    void vertical(double x, double width, double opacity = 1.0) const
+    void vertical(double x, double width) const
     {
-        set(color, width, opacity);
+        set(color, width);
         painter.drawLine(QPointF(x, view.top()), QPointF(x, view.bottom()));
     }
 };
 
-/// Ruled lines every `period`: Lines, LinesMargin and Cornell.
+/// Ruled lines every `period`.
 void ruledLines(const Pen &pen, const QRectF &exposed, double period)
 {
     const LineRange rows = pen.rows(exposed, period, 0, kLineWidth);
@@ -97,124 +81,12 @@ void dots(const Pen &pen, const QRectF &exposed, QSizeF size)
     pen.painter.setBrush(Qt::NoBrush);
 }
 
-/// A vertical line at `x` from `top` to `bottom` (document px), trimmed to the exposed rect, with square caps.
-void overlayVertical(const Pen &pen, const QColor &color, double x, double top, double bottom)
-{
-    const double from = std::max(top, pen.view.top()), to = std::min(bottom, pen.view.bottom());
-    if (from > to || x < pen.view.left() || x > pen.view.right())
-        return; // outside what is exposed: a reversed line would draw where the line is not
-    pen.set(color, kOverlayLineWidth, 1.0, Qt::SquareCap);
-    pen.painter.drawLine(QPointF(x, from), QPointF(x, to));
-}
-
-void gridMajor(const Pen &pen, const QRectF &exposed, QSizeF size)
-{
-    // Every 5th line is a major one: twice as wide, full opacity, its band starting on the cell edge.
-    const auto style = [](int k, double &width, double &offset, double &opacity) {
-        const bool major = k % kMajorInterval == 0;
-        width = major ? 2 * kLineWidth : kLineWidth;
-        offset = major ? kLineWidth : kLineWidth / 2;
-        opacity = major ? 1.0 : kMinorOpacity;
-    };
-    const LineRange rows = pen.rows(exposed, size.height(), 0, 2 * kLineWidth);
-    const LineRange columns = pen.columns(exposed, size.width(), 0, 2 * kLineWidth);
-    double width, offset, opacity;
-    for (int k = rows.first; k <= rows.last; ++k) {
-        style(k, width, offset, opacity);
-        pen.horizontal(pen.anchor.y() + k * size.height() + offset, width, opacity);
-    }
-    for (int k = columns.first; k <= columns.last; ++k) {
-        style(k, width, offset, opacity);
-        pen.vertical(pen.anchor.x() + k * size.width() + offset, width, opacity);
-    }
-}
-
-void musicStaff(const Pen &pen, const QRectF &exposed, double gap)
-{
-    constexpr double staffLineWidth = 2 * kLineWidth;
-    const double period = gap * kStaffPeriodFactor;
-    const LineRange periods = pen.rows(exposed, period, 0, 4 * gap + staffLineWidth);
-    for (int k = periods.first; k <= periods.last; ++k)
-        for (int line = 0; line < 5; ++line)
-            pen.horizontal(pen.anchor.y() + k * period + line * gap + staffLineWidth / 2, staffLineWidth);
-}
-
-void calligraphy(const Pen &pen, const QRectF &exposed, double period)
-{
-    const LineRange periods = pen.rows(exposed, period, 0, 0.8 * period + 2 * kLineWidth);
-    // The dashes start at the page's left edge; begin on a dash boundary so they do not shift with the exposed rect.
-    const double dash = 2 * kCalligraphyDashPx;
-    const double dashedFrom = pen.anchor.x() + std::floor((pen.view.left() - pen.anchor.x()) / dash) * dash;
-    for (int k = periods.first; k <= periods.last; ++k) {
-        const double top = pen.anchor.y() + k * period;
-        pen.horizontal(top + kLineWidth / 2, kLineWidth);
-        pen.horizontal(top + kCalligraphyBaselineFraction * period + kLineWidth, 2 * kLineWidth);
-        // Drawn dash by dash in one drawLines: a Qt dash pattern counts in pen widths, and under 1 px wide it does not scale as SVG's does.
-        pen.set(pen.color, kLineWidth);
-        for (const double y : {0.3 * period + kLineWidth / 2, 0.8 * period + kLineWidth / 2}) {
-            QList<QLineF> dashes;
-            for (double x = dashedFrom; x < pen.view.right(); x += dash)
-                dashes << QLineF(x, top + y, x + kCalligraphyDashPx, top + y);
-            pen.painter.drawLines(dashes);
-        }
-    }
-}
-
-/// French ruled paper: squares of patternSize.height, three lighter lines between the horizontals, a margin at patternSize.width.
-void seyes(const Pen &pen, const QRectF &exposed, QSizeF size)
-{
-    const double square = size.height();
-    const LineRange rows = pen.rows(exposed, square, 0, 0.75 * square + kLineWidth);
-    const LineRange columns = pen.columns(exposed, square, 0, kLineWidth);
-    for (int k = rows.first; k <= rows.last; ++k) {
-        const double top = pen.anchor.y() + k * square;
-        pen.horizontal(top + kLineWidth / 2, kLineWidth);
-        for (int i = 1; i < 4; ++i)
-            pen.horizontal(top + square * i / 4 + kLineWidth / 2, kLineWidth, kMinorOpacity);
-    }
-    for (int k = columns.first; k <= columns.last; ++k)
-        pen.vertical(pen.anchor.x() + k * square + kLineWidth / 2, kLineWidth);
-    overlayVertical(pen, pen.marginColor, pen.anchor.x() + size.width(), pen.page.top(), pen.page.bottom());
-}
-
-/// Pointy-top hexagons of circumradius r = patternSize.height, drawn as Rnote's tile does: per row the zigzag
-/// along the hexagons' lower edges and the vertical sides, so no edge is stroked twice (a translucent colour
-/// would double there). Rows sit 1.5 r apart; every second row is half a cell over.
-void hexGrid(const Pen &pen, const QRectF &exposed, double r)
-{
-    const double width = kSqrtThree * r, half = width / 2;
-    const LineRange rows = pen.rows(exposed, 1.5 * r, 0.5 * r, r);
-    const LineRange columns = pen.columns(exposed, width, width, width); // a cell reaches half a width either side
-    if (columns.isEmpty())
-        return;
-    pen.set(pen.color, kLineWidth);
-    for (int row = rows.first; row <= rows.last; ++row) {
-        const double centreY = pen.anchor.y() + 1.5 * r * row;
-        const double offset = pen.anchor.x() + (row % 2 ? half : 0.0);
-        QPolygonF zigzag;
-        QList<QLineF> sides;
-        for (int i = columns.first; i <= columns.last; ++i) {
-            const double centreX = offset + i * width;
-            zigzag << QPointF(centreX - half, centreY + 0.5 * r) << QPointF(centreX, centreY + r);
-            sides << QLineF(centreX - half, centreY - 0.5 * r, centreX - half, centreY + 0.5 * r);
-        }
-        const double lastX = offset + columns.last * width + half;
-        zigzag << QPointF(lastX, centreY + 0.5 * r);
-        sides << QLineF(lastX, centreY - 0.5 * r, lastX, centreY + 0.5 * r);
-        pen.painter.drawPolyline(zigzag);
-        pen.painter.drawLines(sides);
-    }
-}
-
 /// The smallest gap between two parallel lines a pattern draws, in document px.
 double finestPeriod(const Background &background)
 {
     const double w = background.patternSize.width(), h = background.patternSize.height();
     switch (background.pattern) {
-    case Pattern::Grid: case Pattern::Dots: case Pattern::GridMajor: return std::min(w, h);
-    case Pattern::Seyes: return h / 4;
-    case Pattern::Calligraphy: return 0.2 * h;
-    case Pattern::HexGrid: return 0.5 * h;
+    case Pattern::Grid: case Pattern::Dots: return std::min(w, h);
     default: return h;
     }
 }
@@ -261,25 +133,6 @@ void paintPattern(QPainter &painter, const Background &background, const QRectF 
     case Pattern::Lines: ruledLines(pen, exposed, size.height()); break;
     case Pattern::Grid: grid(pen, exposed, size); break;
     case Pattern::Dots: dots(pen, exposed, size); break;
-    case Pattern::LinesMargin:
-        ruledLines(pen, exposed, size.height());
-        overlayVertical(pen, pen.marginColor, anchor.x() + size.width(), pageRect.top(), pageRect.bottom());
-        break;
-    case Pattern::GridMajor: gridMajor(pen, exposed, size); break;
-    case Pattern::MusicStaff: musicStaff(pen, exposed, size.height()); break;
-    case Pattern::Calligraphy: calligraphy(pen, exposed, size.height()); break;
-    case Pattern::Seyes: seyes(pen, exposed, size); break;
-    case Pattern::Cornell: {
-        ruledLines(pen, exposed, size.height());
-        const double summaryY = pageRect.bottom() - kCornellSummaryFraction * pageRect.height();
-        overlayVertical(pen, pen.color, anchor.x() + size.width(), pageRect.top(), summaryY);
-        if (summaryY >= pen.view.top() && summaryY <= pen.view.bottom()) {
-            pen.set(pen.color, kOverlayLineWidth, 1.0, Qt::SquareCap);
-            painter.drawLine(QPointF(pen.view.left(), summaryY), QPointF(pen.view.right(), summaryY));
-        }
-        break;
-    }
-    case Pattern::HexGrid: hexGrid(pen, exposed, size.height()); break;
     }
     painter.restore();
 }

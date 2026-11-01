@@ -85,7 +85,7 @@ QImage settledGrab(InkCanvas &canvas)
 
 } // namespace
 
-TEST(InkTypesTest, PressureCurvesMatchRnote)
+TEST(InkTypesTest, PressureCurvesFollowTheirFormulas)
 {
     EXPECT_DOUBLE_EQ(applyPressureCurve(PressureCurve::Const, 4.0, 0.25), 4.0);
     EXPECT_DOUBLE_EQ(applyPressureCurve(PressureCurve::Linear, 4.0, 0.25), 1.0);
@@ -495,11 +495,30 @@ TEST(InkFormatTest, NumbersAreRoundedToThreeDecimals)
     EXPECT_TRUE(writeInk(doc).contains("[1.235,2,0.123,3,4,0.5]")) << writeInk(doc).toStdString();
 }
 
+TEST(InkFormatTest, ARemovedPageStyleOpensAsLines)
+{
+    for (const char *style : {"cornell", "hexGrid", "seyes", "linesMargin", "gridMajor", "musicStaff", "calligraphy", "someFutureStyle"}) {
+        SCOPED_TRACE(style);
+        const QByteArray file = QByteArrayLiteral(
+                                    "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{\"background\":{\"color\":\"#ffffff\",\"pattern\":\"")
+            + style + QByteArrayLiteral("\",\"patternSize\":[120,32],\"patternColor\":\"#c0c8d0\"}},\"items\":[]}\n");
+        InkDocument doc;
+        const InkReadResult read = readInk(file, doc);
+        ASSERT_TRUE(read.ok) << read.error.toStdString();
+        EXPECT_FALSE(read.readOnly);
+        EXPECT_EQ(doc.settings().background.pattern, Pattern::Lines);
+        EXPECT_EQ(doc.settings().background.patternSize, QSizeF(120, 32));
+        InkDocument again;
+        ASSERT_TRUE(readInk(writeInk(doc), again).ok);
+        EXPECT_EQ(again.settings().background.pattern, Pattern::Lines);
+    }
+}
+
 TEST(InkFormatTest, RoundTripsAndKeepsUnknownKeysAndItemTypes)
 {
     const QByteArray original = QByteArrayLiteral(
         "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{\"format\":{\"width\":100,\"height\":200,\"dpi\":96},"
-        "\"background\":{\"color\":\"#ffffff\",\"pattern\":\"cornell\",\"patternSize\":[120,32],\"patternColor\":\"#c0c8d0\"},"
+        "\"background\":{\"color\":\"#ffffff\",\"pattern\":\"grid\",\"patternSize\":[120,32],\"patternColor\":\"#c0c8d0\"},"
         "\"layout\":\"fixed\",\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":400},"
         "\"glyph\":{\"codepoint\":97,\"baseline\":150}},\"futureKey\":true,\"items\":[\n"
         "{\"type\":\"stroke\",\"t\":1,\"layer\":\"highlighter\",\"style\":{\"width\":12,\"color\":\"#ffee0080\",\"pressureCurve\":\"const\"},"
@@ -519,7 +538,7 @@ TEST(InkFormatTest, RoundTripsAndKeepsUnknownKeysAndItemTypes)
     EXPECT_EQ(doc.items()[1].type, Item::Type::Unknown);
     EXPECT_EQ(doc.items()[2].shape->kind, ShapeKind::Rect);
     EXPECT_EQ(doc.settings().layout, LayoutKind::Fixed);
-    EXPECT_EQ(doc.settings().background.pattern, Pattern::Cornell);
+    EXPECT_EQ(doc.settings().background.pattern, Pattern::Grid);
     EXPECT_EQ(doc.settings().background.patternSize, QSizeF(120, 32));
     EXPECT_EQ(doc.pageCount(), 2);
     EXPECT_EQ(doc.settings().extra.value(QStringLiteral("glyph")).toObject().value(QStringLiteral("codepoint")).toInt(), 97);
@@ -2669,7 +2688,7 @@ Background backgroundOf(Pattern pattern)
 {
     Background background;
     background.pattern = pattern;
-    background.patternSize = pattern == Pattern::LinesMargin ? QSizeF(120, 32) : pattern == Pattern::Seyes ? QSizeF(64, 32) : QSizeF(32, 32);
+    background.patternSize = QSizeF(32, 32);
     return background;
 }
 
@@ -2775,10 +2794,7 @@ bool hasInk(const QImage &image, const QRect &area)
 TEST(PagePatternTest, MatchesTheGoldenImages)
 {
     for (const auto &[pattern, name] : {std::pair{Pattern::None, "none"}, {Pattern::Lines, "lines"}, {Pattern::Grid, "grid"},
-                                         {Pattern::Dots, "dots"}, {Pattern::LinesMargin, "linesMargin"},
-                                         {Pattern::GridMajor, "gridMajor"}, {Pattern::MusicStaff, "musicStaff"},
-                                         {Pattern::Calligraphy, "calligraphy"}, {Pattern::Seyes, "seyes"},
-                                         {Pattern::Cornell, "cornell"}, {Pattern::HexGrid, "hexGrid"}}) {
+                                         {Pattern::Dots, "dots"}}) {
         SCOPED_TRACE(name);
         const QImage image = renderPattern(pattern);
         EXPECT_EQ(image.size(), QSize(240, 160));
@@ -2795,8 +2811,7 @@ TEST(PagePatternTest, AnExposedRectPaintsExactlyWhatTheFullPageHasThere)
     // Every pattern, over regions that start mid-period: a line the range wrongly leaves out shows as a difference.
     const QRectF regions[] = {QRectF(137.3, 93.7, 90, 70), QRectF(0, 1060, 200, 62.52), QRectF(700, 11.1, 93.7, 50), QRectF(301, 500, 40, 25)};
     const QRectF window(0, 0, 800, 1130); // the page plus its margin, so the full render is one image
-    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots, Pattern::LinesMargin, Pattern::GridMajor, Pattern::MusicStaff,
-                            Pattern::Calligraphy, Pattern::Seyes, Pattern::Cornell, Pattern::HexGrid}) {
+    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots}) {
         QImage full(800, 1130, QImage::Format_ARGB32_Premultiplied);
         full.fill(Qt::white);
         {
@@ -2885,12 +2900,11 @@ TEST(PagePatternTest, DrawCallsFollowTheExposedRectNotThePageHeight)
 {
     const QRectF tallPage(0, 0, 793.701, 100000.0);
     const QRectF small(0, 50000, 200, 100);
-    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots, Pattern::LinesMargin, Pattern::GridMajor, Pattern::MusicStaff,
-                            Pattern::Calligraphy, Pattern::Seyes, Pattern::Cornell, Pattern::HexGrid}) {
+    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots}) {
         SCOPED_TRACE(patternName(pattern).toStdString());
         EXPECT_GT(drawCalls(backgroundOf(pattern), tallPage, small), 0);
         EXPECT_LT(drawCalls(backgroundOf(pattern), tallPage, small), 300)
-            << "about 5 rows x 8 columns, 100 dashes a row for Calligraphy; the 100 000 px page has 3125 rows";
+            << "about 5 rows x 8 columns; the 100 000 px page has 3125 rows";
     }
     // Lines: one drawLine per ruled line, 100 px at a 32 px period meets 4 of them (padded by kLinePad) at most.
     const int lines = drawCalls(backgroundOf(Pattern::Lines), tallPage, small);
@@ -2906,25 +2920,6 @@ TEST(PagePatternTest, APatternFinerThanADevicePixelIsSkipped)
     fine.patternSize = QSizeF(32, 32);
     EXPECT_EQ(drawCalls(fine, kA4Page, QRectF(0, 0, 1000, 1000), 0.01), 0) << "zoomed out until the lines are 0.32 px apart";
     EXPECT_GT(drawCalls(fine, kA4Page, QRectF(0, 0, 1000, 1000), 1.0), 0);
-}
-
-TEST(PagePatternTest, CornellDrawsTheSummaryLineAtTheBottomFifth)
-{
-    QImage image(200, 100, QImage::Format_ARGB32_Premultiplied);
-    image.fill(Qt::white);
-    {
-        QPainter painter(&image);
-        painter.setRenderHint(QPainter::Antialiasing, false);
-        Background background = backgroundOf(Pattern::Cornell);
-        background.patternSize = QSizeF(50, 1000); // no ruled line inside the page
-        paintPattern(painter, background, QRectF(0, 0, 200, 100), QRectF(0, 0, 200, 100), 1.0);
-    }
-    EXPECT_NE(image.pixel(100, 80), qRgb(255, 255, 255)) << "summary line at 100 - 0.2 * 100";
-    EXPECT_NE(image.pixel(199, 80), qRgb(255, 255, 255)) << "across the whole page";
-    EXPECT_EQ(image.pixel(100, 60), qRgb(255, 255, 255));
-    EXPECT_EQ(image.pixel(100, 95), qRgb(255, 255, 255));
-    EXPECT_NE(image.pixel(50, 40), qRgb(255, 255, 255)) << "margin line at x = patternSize.width, above the summary";
-    EXPECT_EQ(image.pixel(50, 90), qRgb(255, 255, 255)) << "the margin stops at the summary line";
 }
 
 TEST(PagePatternTest, CanvasPaintsThePatternOnEachPageAnchoredToThatPageNotTheDocument)
@@ -3004,27 +2999,13 @@ TEST(PagePatternTest, AnInfiniteSheetKeepsItsPatternOnTheSameDocumentPositionsWh
     EXPECT_TRUE(imagesMatchIn(render(), before, before.rect(), &why)) << "after undo: " << why.toStdString();
 }
 
-TEST(PagePatternTest, AHexRowAnchoredPastThePageFootStillDrawsItsSidesAboveTheFoot)
-{
-    // r = 32, row period 48: rows at 0..480 fit a 520 px page, row 11 (anchor 528) does not, but its sides start at 512.
-    QImage image(300, 520, QImage::Format_ARGB32_Premultiplied);
-    image.fill(Qt::white);
-    {
-        QPainter painter(&image);
-        painter.setRenderHint(QPainter::Antialiasing);
-        paintPattern(painter, backgroundOf(Pattern::HexGrid), QRectF(0, 0, 300, 520), QRectF(0, 0, 300, 520), 1.0);
-    }
-    EXPECT_TRUE(hasInk(image, QRect(54, 513, 3, 6))) << "the side at x = sqrt(3) * 32 on the last 8 px of the page";
-}
-
 TEST(PagePatternTest, DrawCallsAlsoFollowTheExposedRectOnAVeryWidePage)
 {
     const QRectF widePage(0, 0, 100000.0, 1122.52);
     const QRectF small(50000, 500, 100, 200);
-    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots, Pattern::LinesMargin, Pattern::GridMajor, Pattern::MusicStaff,
-                            Pattern::Calligraphy, Pattern::Seyes, Pattern::Cornell, Pattern::HexGrid}) {
+    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots}) {
         SCOPED_TRACE(patternName(pattern).toStdString());
-        EXPECT_LT(drawCalls(backgroundOf(pattern), widePage, small), 300) << "the page has 3125 columns and 12 500 dashes a line";
+        EXPECT_LT(drawCalls(backgroundOf(pattern), widePage, small), 300) << "the page has 3125 columns";
     }
 }
 
@@ -4010,7 +3991,7 @@ TEST(InkToolsTest, TransformMovesAndScalesAStroke)
     EXPECT_EQ(scaled.raw.value(QStringLiteral("mark")).toInt(), 42);
     EXPECT_NEAR(scaled.stroke->points[1].x, 40.0, 1e-9);
     EXPECT_NEAR(scaled.stroke->points[1].y, 120.0, 1e-9);
-    EXPECT_NEAR(scaled.stroke->style.width, 12.0, 1e-9) << "the mean of sx and sy (Rnote)";
+    EXPECT_NEAR(scaled.stroke->style.width, 12.0, 1e-9) << "the mean of sx and sy";
     EXPECT_DOUBLE_EQ(scaled.stroke->points[1].pressure, 0.5);
     EXPECT_NEAR(item.stroke->points[1].x, 20.0, 1e-9) << "the original is untouched";
     const Item moved = transformItem(item, QTransform::fromTranslate(30, -5));

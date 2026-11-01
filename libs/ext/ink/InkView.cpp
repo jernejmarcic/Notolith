@@ -121,10 +121,7 @@ QList<QPair<QString, QVariant>> InkView::layoutChoices()
 QList<QPair<QString, QVariant>> InkView::patternChoices()
 {
     const std::pair<Pattern, QString> labels[] = {
-        {Pattern::None, tr("None")},           {Pattern::Lines, tr("Lines")},         {Pattern::Grid, tr("Grid")},
-        {Pattern::Dots, tr("Dots")},           {Pattern::LinesMargin, tr("Lines with margin")}, {Pattern::GridMajor, tr("Grid with major lines")},
-        {Pattern::MusicStaff, tr("Music staff")}, {Pattern::Calligraphy, tr("Calligraphy")}, {Pattern::Seyes, tr("Seyes")},
-        {Pattern::Cornell, tr("Cornell")},     {Pattern::HexGrid, tr("Hexagonal grid")}};
+        {Pattern::None, tr("None")}, {Pattern::Lines, tr("Lines")}, {Pattern::Grid, tr("Grid")}, {Pattern::Dots, tr("Dots")}};
     QList<QPair<QString, QVariant>> choices;
     for (const auto &[pattern, label] : labels)
         choices.append({label, patternName(pattern)});
