@@ -10,11 +10,12 @@ code, what has been checked, and what has not.
    the default build is plain `-O2 -g`. Watch the packaging: CachyOS's
    `/etc/makepkg.conf` sets `-march=native`, so a package built with `makepkg`
    on a Zen 5 machine uses instructions an older Intel or AMD chip does not
-   have, and crashes there with an illegal instruction. A future `PKGBUILD`
-   must override it, with baseline `x86-64` or at most `x86-64-v2`.
+   have, and crashes there with an illegal instruction. `packaging/arch/PKGBUILD`
+   strips `-march` and `-mtune` from the C and C++ flags and `target-cpu` from
+   `RUSTFLAGS`, which leaves the compiler's baseline `x86-64`.
 2. **No architecture-specific code.** There are no SSE, AVX
    or other x86 intrinsics and no inline assembly anywhere in noteAppC or in
-   the three vendored libraries (md4qt, MicroTeX, tinyxml2). An ARM build -
+   the three libraries fetched at configure time (md4qt, MicroTeX, tinyxml2). An ARM build -
    a Raspberry Pi, an ARM laptop, a phone - has nothing in its way from the
    code itself.
 3. **Raster painting is the default.** It behaves the same on every GPU and

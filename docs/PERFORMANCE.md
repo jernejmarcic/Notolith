@@ -45,10 +45,10 @@ apart, so every step needs new tiles); the zoom row holds the cache to one scree
 "the visible tiles are rendered", and times from the moment the canvas switched its tiles to the new zoom; the module
 rows alternate "present" and "empty" sample by sample. Every number above is the median of the medians of three
 invocations, run as `taskset -c 6-11,18-23 chrt --idle 0 systemd-run --user --scope -q -p MemoryMax=8G`
-(CCD1, SCHED_IDLE, 8 GB), in an isolated XDG home.
+(six cores and their hyperthreads, idle scheduling class, 8 GB cap), in an isolated XDG home.
 
-**The rows are provisional.** A Wine game (`GameThread`, about 650 % CPU, all 24 cores allowed) ran for the
-whole session, CCD1 was 71-77 % idle, and under `chrt --idle` the bench yields to it, so the pool-side rows (tile
+**The rows are provisional.** Another heavy process ran for the whole session, the pinned cores were
+71-77 % idle, and under `chrt --idle` the bench yields to it, so the pool-side rows (tile
 latency, zoom re-render, cold start) are pessimistic and noisy; the rows nearest their gate are the cold-start
 difference and the keystroke ratio. Both use `--phase inkmodules` (61 alternated pairs, 9 rounds of 30 keys, spread
 reported in the row, and a guard that the "present" condition finds the module manifests and the "empty" one finds
@@ -147,8 +147,8 @@ See [Opening a note](#opening-a-note).
 Head-to-head on the development machine: Obsidian 1.14.4 (Electron 43, no
 plugins, never signed in) against noteAppC (Release). Both ran in
 the same headless `cage` (1280x720, real RTX 5080 through GL, so Obsidian was
-GPU-accelerated), in a throwaway `HOME`/XDG tree, pinned to CCD1 (cores
-6-11,18-23) at `nice 19`, one app at a time, interleaved (noteAppC cold, noteAppC
+GPU-accelerated), in a throwaway `HOME`/XDG tree, pinned to cores
+6-11,18-23 at `nice 19`, one app at a time, interleaved (noteAppC cold, noteAppC
 warm, Obsidian cold, Obsidian warm, then the next round). Every cell is the
 **median of 5**, and the machine was not quiet (load average 2 to 5, other
 builds running at idle priority), so read ratios, not milliseconds.

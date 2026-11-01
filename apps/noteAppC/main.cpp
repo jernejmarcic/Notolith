@@ -85,7 +85,8 @@ void setApplicationNames()
 // Every Qt message is also appended to $XDG_STATE_HOME/notolith/notolith.log, one
 // line each, so a bug report can carry what the terminal showed. Each line names
 // its process: every vault runs as its own and they share the file (MessageLog).
-// The earlier handler (Qt's own, when none was set) still runs, so terminal and journal output is unchanged.
+// An earlier handler, if one was installed, still runs. With none, Qt's own is private API, so its stderr line
+// and its abort for qFatal are redone by hand in logMessage: terminal and journal output stay as they were.
 noteAppC::MessageLog *messageLog = nullptr; // never freed: a message may come during static destruction
 QtMessageHandler previousHandler = nullptr;
 
@@ -289,6 +290,8 @@ int main(int argc, char *argv[])
         }
         return *done;
     }
+    // The no-window pass asked this already. It is asked again because another Notolith may have
+    // started and taken the name since, and this is the instance that goes on to serve it.
     noteAppC::SingleInstance instance(noteAppC::SingleInstance::launchFor(argument));
     if (instance.handOver(argument))
         return 0;

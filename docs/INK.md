@@ -374,7 +374,7 @@ The full account, with the numbers, is in `docs/PERFORMANCE.md` under "Handwriti
   symbol tables are +1.19 MB of that). The size gate was written on file size and passes. If size is judged on the text segment, the
   fix is the `-fvisibility=hidden` plus an export macro rework the spec describes.
 - **The bench rows are provisional.** Every Handwriting row in `docs/PERFORMANCE.md` (`noteAppC-bench --phase ink`
-  and `--phase inkcarry`) was measured on a loaded machine, with a Wine game running and one core complex about 75
+  and `--phase inkcarry`) was measured on a loaded machine, with another heavy process running and the pinned cores about 75
   percent idle, so the pool-side rows are pessimistic and noisy. They are provisional until a rerun on an idle machine,
   which is owed; the rows say so themselves.
 
