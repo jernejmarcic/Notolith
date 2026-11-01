@@ -3,6 +3,7 @@
 #include "SafeAttachment.h"
 
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
@@ -33,16 +34,72 @@ QString kindOfSuffix(const QString &suffix)
 
 namespace {
 
-/// The SVG after safeSvg() (no DTD, comments or outside references) with what a browser would run or draw from
-/// elsewhere taken out as well: script, style, foreign content, frames, animation of attributes, every on*
-/// attribute and any value that names a javascript: URL.
+const QString kSvgNS = QStringLiteral("http://www.w3.org/2000/svg");
+const QString kXlinkNS = QStringLiteral("http://www.w3.org/1999/xlink");
+
+/// The SVG elements a site keeps. Anything else, and anything in another namespace, goes with its subtree.
+bool keptElement(const QString &name)
+{
+    static const QSet<QString> kept{
+        QStringLiteral("svg"), QStringLiteral("g"), QStringLiteral("defs"), QStringLiteral("symbol"),
+        QStringLiteral("use"), QStringLiteral("title"), QStringLiteral("desc"), QStringLiteral("path"),
+        QStringLiteral("rect"), QStringLiteral("circle"), QStringLiteral("ellipse"), QStringLiteral("line"),
+        QStringLiteral("polyline"), QStringLiteral("polygon"), QStringLiteral("text"), QStringLiteral("tspan"),
+        QStringLiteral("textPath"), QStringLiteral("linearGradient"), QStringLiteral("radialGradient"),
+        QStringLiteral("stop"), QStringLiteral("pattern"), QStringLiteral("clipPath"), QStringLiteral("mask"),
+        QStringLiteral("marker"), QStringLiteral("image"), QStringLiteral("filter"), QStringLiteral("feBlend"),
+        QStringLiteral("feColorMatrix"), QStringLiteral("feComponentTransfer"), QStringLiteral("feComposite"),
+        QStringLiteral("feConvolveMatrix"), QStringLiteral("feDiffuseLighting"), QStringLiteral("feDisplacementMap"),
+        QStringLiteral("feDistantLight"), QStringLiteral("feDropShadow"), QStringLiteral("feFlood"),
+        QStringLiteral("feFuncA"), QStringLiteral("feFuncB"), QStringLiteral("feFuncG"), QStringLiteral("feFuncR"),
+        QStringLiteral("feGaussianBlur"), QStringLiteral("feImage"), QStringLiteral("feMerge"),
+        QStringLiteral("feMergeNode"), QStringLiteral("feMorphology"), QStringLiteral("feOffset"),
+        QStringLiteral("fePointLight"), QStringLiteral("feSpecularLighting"), QStringLiteral("feSpotLight"),
+        QStringLiteral("feTile"), QStringLiteral("feTurbulence")};
+    return kept.contains(name);
+}
+
+/// A reference that stays in the document: after taking out every space and control character, "#fragment".
+/// `raster` also lets an inline PNG, JPEG, GIF or WebP through (an <image>).
+bool localReference(const QString &value, bool raster)
+{
+    QString v;
+    for (const QChar c : value) {
+        if (c.unicode() > 0x20 && c.unicode() != 0x7f)
+            v += c;
+    }
+    if (v.startsWith(QLatin1Char('#')))
+        return true;
+    static const QRegularExpression inlineRaster(QStringLiteral("^data:image/(png|jpeg|gif|webp)[;,]"),
+                                                 QRegularExpression::CaseInsensitiveOption);
+    return raster && inlineRaster.match(v).hasMatch();
+}
+
+/// Whether every url(...) in `value` points at "#fragment", and nothing is written in a way that hides one.
+bool onlyLocalURLs(const QString &value)
+{
+    if (value.contains(QLatin1Char('\\')))
+        return false; // a CSS escape can spell url( without writing it
+    qsizetype at = 0;
+    while ((at = value.indexOf(QLatin1String("url("), at, Qt::CaseInsensitive)) >= 0) {
+        const qsizetype close = value.indexOf(QLatin1Char(')'), at);
+        if (close < 0)
+            return false;
+        QString target = value.mid(at + 4, close - at - 4).trimmed();
+        if (target.size() > 1 && (target.startsWith(QLatin1Char('"')) || target.startsWith(QLatin1Char('\''))))
+            target = target.mid(1).trimmed();
+        if (!target.startsWith(QLatin1Char('#')))
+            return false;
+        at = close;
+    }
+    return true;
+}
+
+/// The SVG, rebuilt: after safeSvg() (no DTD, comments or outside references), only the allowed SVG elements,
+/// each with only the attributes that run nothing and fetch nothing. The root must be an SVG `svg`; otherwise
+/// the result is empty.
 QByteArray siteSvg(const QByteArray &svg)
 {
-    static const QSet<QString> dropped{
-        QStringLiteral("script"),  QStringLiteral("style"),          QStringLiteral("foreignobject"),
-        QStringLiteral("iframe"),  QStringLiteral("object"),         QStringLiteral("embed"),
-        QStringLiteral("handler"), QStringLiteral("listener"),       QStringLiteral("set"),
-        QStringLiteral("animate"), QStringLiteral("animatemotion"),  QStringLiteral("animatetransform")};
     const QByteArray once = safeSvg(svg);
     if (once.isEmpty())
         return {};
@@ -55,26 +112,36 @@ QByteArray siteSvg(const QByteArray &svg)
     while (!in.atEnd()) {
         switch (in.readNext()) {
         case QXmlStreamReader::StartElement: {
+            const QString name = in.name().toString();
+            const bool isSvg = in.namespaceUri() == kSvgNS;
+            if (depth == 0 && !(isSvg && name == QLatin1String("svg")))
+                return {};
             ++depth;
-            if (skipDepth > 0 || dropped.contains(in.name().toString().toLower())) {
+            if (skipDepth > 0 || !isSvg || !keptElement(name)) {
                 ++skipDepth;
                 break;
             }
-            root = true;
-            writer.writeStartElement(in.qualifiedName().toString());
-            for (const QXmlStreamNamespaceDeclaration &ns : in.namespaceDeclarations()) {
-                if (ns.prefix().isEmpty())
-                    writer.writeDefaultNamespace(ns.namespaceUri().toString());
-                else
-                    writer.writeNamespace(ns.namespaceUri().toString(), ns.prefix().toString());
+            writer.writeStartElement(name);
+            if (!root) {
+                root = true;
+                writer.writeDefaultNamespace(kSvgNS);
+                writer.writeNamespace(kXlinkNS, QStringLiteral("xlink"));
             }
+            const bool raster = name == QLatin1String("image") || name == QLatin1String("feImage");
             for (const QXmlStreamAttribute &a : in.attributes()) {
-                const QString name = a.name().toString().toLower();
+                const QString ns = a.namespaceUri().toString();
+                const QString attr = a.name().toString();
                 const QString value = a.value().toString();
-                if (name.startsWith(QLatin1String("on")) || name == QLatin1String("style")
-                    || value.contains(QLatin1String("javascript:"), Qt::CaseInsensitive))
+                if (!ns.isEmpty() && ns != kSvgNS && ns != kXlinkNS)
                     continue;
-                writer.writeAttribute(a.qualifiedName().toString(), value);
+                if (attr.startsWith(QLatin1String("on"), Qt::CaseInsensitive))
+                    continue;
+                if (attr.compare(QLatin1String("href"), Qt::CaseInsensitive) == 0 && !localReference(value, raster))
+                    continue;
+                if (value.contains(QLatin1String("javascript:"), Qt::CaseInsensitive) || !onlyLocalURLs(value)
+                    || value.contains(QLatin1String("@import"), Qt::CaseInsensitive))
+                    continue;
+                writer.writeAttribute(ns == kXlinkNS ? QStringLiteral("xlink:") + attr : attr, value);
             }
             break;
         }

@@ -15,6 +15,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
 #include <sys/stat.h>
@@ -605,6 +606,116 @@ bool readAt(int rootFd, const QString &relativePath, QByteArray *out, qint64 max
 }
 
 } // namespace
+
+bool Vault::readInside(const QString &path, Note &out, QString *error, bool *leadsOutside) const
+{
+    if (leadsOutside)
+        *leadsOutside = false;
+    const auto fail = [error](const QString &what) {
+        if (error)
+            *error = what;
+        return false;
+    };
+    const QByteArray name = QFile::encodeName(path);
+    // O_NONBLOCK so that a named pipe in the place of a note cannot hold the open.
+    const int raw = ::open(name.constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (raw < 0)
+        return fail(errnoText(errno));
+    const Fd file(raw);
+    struct stat info {};
+    if (::fstat(file.fd, &info) < 0 || !S_ISREG(info.st_mode))
+        return fail(QStringLiteral("%1 is not a regular file").arg(path));
+    const QString real = QFileInfo(QStringLiteral("/proc/self/fd/%1").arg(file.fd)).canonicalFilePath();
+    if (!real.isEmpty()) {
+        if (!resolvesInside(real)) {
+            if (leadsOutside)
+                *leadsOutside = true;
+            return fail(QStringLiteral("%1 leads outside the vault").arg(path));
+        }
+    } else {
+        struct stat link {};
+        if (::lstat(name.constData(), &link) < 0 || S_ISLNK(link.st_mode)) {
+            if (leadsOutside)
+                *leadsOutside = true;
+            return fail(QStringLiteral("%1 is a link, and where it leads cannot be checked").arg(path));
+        }
+    }
+    QByteArray bytes;
+    for (;;) {
+        char buffer[1 << 16];
+        const ssize_t n = ::read(file.fd, buffer, sizeof buffer);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0)
+            return fail(errnoText(errno));
+        if (n == 0)
+            break;
+        bytes.append(buffer, n);
+    }
+    out = decode(bytes);
+    return true;
+}
+
+namespace {
+bool walkFolder(int folderFd, const QString &prefix, int depth,
+                const std::function<bool(const QString &, bool)> &visit, QString *error, bool *stopped)
+{
+    constexpr int maxDepth = 256;
+    const int listFd = ::fcntl(folderFd, F_DUPFD_CLOEXEC, 0);
+    DIR *dir = listFd < 0 ? nullptr : ::fdopendir(listFd);
+    if (!dir) {
+        if (listFd >= 0)
+            ::close(listFd);
+        if (error)
+            *error = QStringLiteral("cannot read %1: %2").arg(prefix.isEmpty() ? QStringLiteral(".") : prefix,
+                                                              errnoText(errno));
+        return false;
+    }
+    QList<QByteArray> names;
+    while (const dirent *entry = ::readdir(dir)) {
+        const QByteArray name(entry->d_name);
+        if (name != "." && name != "..")
+            names << name;
+    }
+    ::closedir(dir);
+    for (const QByteArray &name : std::as_const(names)) {
+        const QString path = prefix + QString::fromUtf8(name);
+        struct stat info {};
+        if (::fstatat(folderFd, name.constData(), &info, AT_SYMLINK_NOFOLLOW) < 0)
+            continue; // gone since it was listed
+        if (!S_ISDIR(info.st_mode)) {
+            if (!visit(path, S_ISREG(info.st_mode))) {
+                *stopped = true;
+                return true;
+            }
+            continue;
+        }
+        if (depth >= maxDepth) {
+            if (error)
+                *error = QStringLiteral("%1 is nested too deep").arg(path);
+            return false;
+        }
+        const Fd sub(::openat(folderFd, name.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+        if (sub.fd < 0) {
+            if (error)
+                *error = QStringLiteral("cannot read %1: %2").arg(path, errnoText(errno));
+            return false;
+        }
+        if (!walkFolder(sub.fd, path + QLatin1Char('/'), depth + 1, visit, error, stopped))
+            return false;
+        if (*stopped)
+            return true;
+    }
+    return true;
+}
+} // namespace
+
+bool Vault::walkNonDirectories(const HeldFolder &root, const std::function<bool(const QString &, bool)> &visit,
+                               QString *error)
+{
+    bool stopped = false;
+    return root.isOpen() && walkFolder(root.fd(), QString(), 0, visit, error, &stopped);
+}
 
 bool Vault::removeNoFollowUnder(const QString &root, const QString &relativePath, QString *error)
 {

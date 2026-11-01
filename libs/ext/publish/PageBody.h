@@ -6,6 +6,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 #include "Decorations.h"
 #include "Metadata.h"
 
@@ -101,6 +103,9 @@ struct RenderEnv {
     const noteAppC::Theme &themeLight;
     int embedDepthLimit = 4;
     bool mindMaps = true; ///< Options::mindMaps
+    /// Whether the attachment (vault-relative path) will be copied into the site; an embed of one that will not
+    /// is written as its plain name, never as an element that points into the attachments folder. Unset: all are.
+    std::function<bool(const QString &)> attachmentAllowed;
 };
 
 /// Renders one note's Markdown to the site's HTML, honouring Obsidian's own

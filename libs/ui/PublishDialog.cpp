@@ -25,7 +25,7 @@ PublishDialog::PublishDialog(const Choices &remembered, const QStringList &notes
 
     m_folder = new QLineEdit(remembered.folder, this);
     m_folder->setObjectName(QStringLiteral("publishFolder"));
-    m_folder->setPlaceholderText(tr("A folder outside the vault, or a subfolder of it"));
+    m_folder->setPlaceholderText(tr("An empty folder, or one a publish used before"));
     auto *browse = new QPushButton(tr("Browse..."), this);
     connect(browse, &QPushButton::clicked, this, [this] {
         const QString folder = QFileDialog::getExistingDirectory(this, tr("Publish to folder"), m_folder->text());
