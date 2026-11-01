@@ -5608,6 +5608,7 @@ void MainWindow::openVault(const QString &path)
     }
     m_openMode = OpenMode::Vault;
     m_vault = vault;
+    m_runsAllowed.clear(); // a click in the vault just left allowed that vault's code, not this one's
     m_fileIcons = FileIcons(m_vault.root());
     m_fileIcons.load();
     resetWorkspace();
@@ -5671,6 +5672,7 @@ void MainWindow::closeVault()
         m_instance->moveTo(SingleInstance::nameForVault(QString()));
     m_openMode = OpenMode::Empty;
     m_vault = Vault();
+    m_runsAllowed.clear();
     m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
     m_index.close();
     updateSync(); // stops syncing the vault just closed
@@ -5702,6 +5704,7 @@ void MainWindow::openSingleFile(const QString &path)
         m_instance->moveTo(SingleInstance::nameForVault(QString()));
     m_openMode = OpenMode::SingleFile;
     m_vault = Vault();
+    m_runsAllowed.clear();
     m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
     m_index.close();
     resetWorkspace();

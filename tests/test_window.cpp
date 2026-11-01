@@ -11037,6 +11037,160 @@ TEST_F(WindowTest, ATrustedVaultDrawsADiagramAtOnceAndAsksNothing)
     WAIT_TRUE(window.fenceRendersForTests() > 0, 10000); // once for each width it was laid out at
 }
 
+// A stranger's document embed runs pdflatex: showing the note starts nothing, a click and a yes does.
+TEST_F(WindowTest, AnUntrustedVaultCompilesNoTexDocumentUntilAClickAndAYes)
+{
+    setTrust(false);
+    write(QStringLiteral("doc.tex"), "\\documentclass{article}\\begin{document}Alpha\\end{document}\n");
+    write(QStringLiteral("Tex.md"), "![[doc.tex]]\n\ntail\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_FALSE(window.vaultTrusted());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Tex.md"))));
+    int asked = 0;
+    bool answer = false;
+    window.setRunApprovalForTests([&](const QString &shown) {
+        ++asked;
+        EXPECT_TRUE(shown.contains(QStringLiteral("Alpha")));
+        return answer;
+    });
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    WAIT_TRUE(!editor->codeBlockImageRectAt(0).isEmpty(), 5000);
+    QTest::qWait(300);
+    EXPECT_EQ(editor->texCompilesForTest(), 0) << "laying the note out started no compile";
+    const QRect placeholder = editor->codeBlockImageRectAt(0);
+    const QPoint button = placeholder.bottomLeft() + QPoint(30, -22);
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, button);
+    EXPECT_EQ(asked, 1);
+    EXPECT_EQ(editor->texCompilesForTest(), 0) << "a no starts nothing";
+    EXPECT_EQ(editor->codeBlockImageRectAt(0), placeholder);
+
+    answer = true;
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, button);
+    EXPECT_EQ(asked, 2);
+    WAIT_TRUE(editor->codeBlockImageRectAt(0).isEmpty(), 5000);
+    if (noteAppC::TexCompiler::isAvailable())
+        EXPECT_EQ(editor->texCompilesForTest(), 1);
+}
+
+TEST_F(WindowTest, TrustingAnUntrustedVaultCompilesItsTexEmbedsWithoutAClick)
+{
+    setTrust(false);
+    write(QStringLiteral("doc.tex"), "\\documentclass{article}\\begin{document}Alpha\\end{document}\n");
+    write(QStringLiteral("Tex.md"), "![[doc.tex]]\n\ntail\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Tex.md"))));
+    window.setRunApprovalForTests([](const QString &) {
+        ADD_FAILURE() << "trusting is not a run";
+        return false;
+    });
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    WAIT_TRUE(!editor->codeBlockImageRectAt(0).isEmpty(), 5000);
+    ASSERT_EQ(editor->texCompilesForTest(), 0);
+
+    window.setVaultTrusted(true);
+    WAIT_TRUE(editor->codeBlockImageRectAt(0).isEmpty(), 5000);
+    if (noteAppC::TexCompiler::isAvailable())
+        WAIT_TRUE(editor->texCompilesForTest() == 1, 5000);
+}
+
+// A yes was for the vault it was given in: another vault with the very same fence asks again.
+TEST_F(WindowTest, AnApprovalDoesNotCarryOverToAnotherVault)
+{
+    setTrust(false);
+    const QByteArray note = "```dot\ndigraph G { Alpha -> Beta }\n```\n\ntail\n";
+    write(QStringLiteral("Dia.md"), note);
+    QTemporaryDir other;
+    ASSERT_TRUE(other.isValid());
+    {
+        QFile file(other.filePath(QStringLiteral("Dia.md")));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(note);
+    }
+    MainWindow window;
+    window.show();
+    window.resize(900, 700);
+    int asked = 0;
+    window.setRunApprovalForTests([&](const QString &) {
+        ++asked;
+        return true;
+    });
+    const auto clickRender = [&] {
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size());
+        const qsizetype block = editor->noteText().indexOf(QStringLiteral("Alpha"));
+        EXPECT_TRUE(QTest::qWaitFor([&] { return !editor->codeBlockImageRectAt(block).isEmpty(); }, 5000));
+        QTest::qWait(300);
+        const QRect rect = editor->codeBlockImageRectAt(block);
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, rect.bottomLeft() + QPoint(30, -22));
+    };
+    window.openVault(dir.path());
+    ASSERT_FALSE(window.vaultTrusted());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Dia.md"))));
+    clickRender();
+    ASSERT_EQ(asked, 1);
+    ASSERT_GT(window.fenceRendersForTests(), 0);
+    const int before = window.fenceRendersForTests();
+
+    window.openVault(other.path());
+    // The editor keeps what it drew for a width; another width is a new picture, which is what asks for a tool.
+    window.resize(window.width() + 240, window.height());
+    ASSERT_FALSE(window.vaultTrusted());
+    ASSERT_TRUE(window.openNote(other.filePath(QStringLiteral("Dia.md"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(500);
+    EXPECT_EQ(window.fenceRendersForTests(), before) << "the second vault's fence started a tool by itself";
+    clickRender();
+    EXPECT_EQ(asked, 2) << "and the click asked again";
+}
+
+#if defined(NOTEAPPC_HAVE_BASES) || defined(NOTEAPPC_HAVE_CANVAS)
+// A file of a vault opens to the same size a note does: a gibibyte one shows a refusal, not a window of memory.
+TEST_F(WindowTest, AHugeBaseOrCanvasIsRefusedOnOpen)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    QStringList names;
+#ifdef NOTEAPPC_HAVE_BASES
+    names << QStringLiteral("huge.base");
+#endif
+#ifdef NOTEAPPC_HAVE_CANVAS
+    names << QStringLiteral("huge.canvas");
+#endif
+    for (const QString &name : std::as_const(names)) {
+        QFile file(dir.filePath(name));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(qint64(1) << 30));
+        QString shown;
+        QTimer::singleShot(100, [&shown] {
+            QTimer *poll = new QTimer;
+            poll->setInterval(50);
+            QObject::connect(poll, &QTimer::timeout, poll, [poll, &shown] {
+                if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                    shown = box->text();
+                    box->accept();
+                    poll->deleteLater();
+                }
+            });
+            poll->start();
+        });
+        QElapsedTimer timer;
+        timer.start();
+        EXPECT_FALSE(window.openNote(path(name))) << name.toStdString();
+        EXPECT_TRUE(shown.contains(QStringLiteral("too large"))) << name.toStdString() << ": " << shown.toStdString();
+        EXPECT_LT(timer.elapsed(), 5000) << name.toStdString() << " was read";
+    }
+}
+#endif
+
 TEST_F(WindowTest, AFileIsOpenedByTheDesktopOnlyAfterAYesInAnUntrustedVaultAndNeverIfItIsAProgram)
 {
     write(QStringLiteral("picture.png"), "not really a picture\n");
