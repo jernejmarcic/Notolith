@@ -6546,6 +6546,10 @@ bool desktopWouldRun(const QFileInfo &info)
         QStringLiteral("rpm"),     QStringLiteral("apk"),   QStringLiteral("pif"),   QStringLiteral("cpl"),
         QStringLiteral("application"), QStringLiteral("service"), QStringLiteral("flatpakref"),
         QStringLiteral("flatpak"), QStringLiteral("snap"),  QStringLiteral("workflow"),
+        QStringLiteral("pyw"),     QStringLiteral("pyz"),   QStringLiteral("phar"),  QStringLiteral("lua"),
+        QStringLiteral("tcl"),     QStringLiteral("command"), QStringLiteral("tool"),
+        // Office files with macros.
+        QStringLiteral("docm"),    QStringLiteral("xlsm"),  QStringLiteral("pptm"),
     };
     if (info.isExecutable() || suffixes.contains(info.suffix().toLower()))
         return true;

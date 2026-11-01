@@ -12302,6 +12302,13 @@ TEST_F(WindowTest, AFileIsOpenedByTheDesktopOnlyAfterAYesInAnUntrustedVaultAndNe
     write(QStringLiteral("launcher.desktop"), "[Desktop Entry]\nType=Application\nExec=/bin/true\n");
     write(QStringLiteral("tool.bin"), "#!/bin/sh\ntrue\n");
     QFile::setPermissions(path(QStringLiteral("tool.bin")), QFile::permissions(path(QStringLiteral("tool.bin"))) | QFile::ExeOwner);
+    // More programs by their suffix alone: no exec bit, no shebang, no magic.
+    QStringList programs = {QStringLiteral("launcher.desktop"), QStringLiteral("tool.bin")};
+    for (const char *suffix : {"pyw", "pyz", "phar", "lua", "tcl", "command", "tool", "docm", "xlsm", "pptm"}) {
+        const QString name = QStringLiteral("plain.") + QLatin1String(suffix);
+        write(name, "just some words\n");
+        programs << name;
+    }
     for (const bool trusted : {false, true}) {
         setTrust(trusted);
         MainWindow window;
@@ -12314,7 +12321,7 @@ TEST_F(WindowTest, AFileIsOpenedByTheDesktopOnlyAfterAYesInAnUntrustedVaultAndNe
             EXPECT_FALSE(type.isEmpty());
             return false;
         });
-        for (const QString &program : {QStringLiteral("launcher.desktop"), QStringLiteral("tool.bin")})
+        for (const QString &program : std::as_const(programs))
             EXPECT_FALSE(window.openFileExternally(path(program))) << program.toStdString();
         EXPECT_TRUE(asked.isEmpty()) << "a program is refused before it is even asked about";
         // An untrusted vault asks about an ordinary file and a no ends it; a trusted one hands it to the
