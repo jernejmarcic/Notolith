@@ -42,7 +42,10 @@ QStringList scopePrefix()
     return prefix;
 }
 
-/// Asked once, by starting a scope around `true`: whether systemd-run is installed and a user manager answers.
+/// Asked once, by starting a scope with a 1 MiB memory cap and reading the cap back from the scope's own cgroup:
+/// whether systemd-run is installed, a user manager answers and its memory controller is really there. A scope
+/// that merely starts proves nothing (cgroup v1, or a manager without the memory controller, take the property
+/// and enforce nothing).
 bool scopesAvailable()
 {
     int state = scopeState.load();
@@ -51,21 +54,24 @@ bool scopesAvailable()
     QStringList probe = scopePrefix();
     bool ok = false;
     if (!probe.isEmpty()) {
-        probe << QStringLiteral("--") << QStringLiteral("/usr/bin/true");
+        probe << QStringLiteral("-p") << QStringLiteral("MemoryMax=1048576") << QStringLiteral("--")
+              << QStringLiteral("/bin/sh") << QStringLiteral("-c")
+              << QStringLiteral("cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup | head -n 1)/memory.max");
         QProcess process;
         QProcessEnvironment bare;
         bare.insert(QStringLiteral("PATH"), QStringLiteral("/usr/bin:/bin"));
         process.setProcessEnvironment(bare);
         const QString program = probe.takeFirst();
         process.start(program, probe);
-        ok = process.waitForFinished(5000) && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+        ok = process.waitForFinished(5000) && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0
+            && process.readAllStandardOutput().trimmed() == "1048576";
         if (process.state() != QProcess::NotRunning)
             process.kill();
     }
     int expected = 0;
     if (scopeState.compare_exchange_strong(expected, ok ? 1 : 2) && !ok)
-        qInfo("sandbox: no systemd user manager to put the sandbox in a cgroup; memory and task caps are the "
-              "per-process rlimits only");
+        qInfo("sandbox: no systemd user manager with a memory controller to put the sandbox in a cgroup; memory and "
+              "task caps are the per-process rlimits only");
     return ok;
 }
 } // namespace

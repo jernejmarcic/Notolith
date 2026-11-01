@@ -381,6 +381,22 @@ TEST(NotebookSandboxTest, TheSandboxIsPutInACgroupWhenAUserManagerCanTakeIt)
     EXPECT_TRUE(args.contains(QStringLiteral("--seccomp")));
 }
 
+TEST(NotebookSandboxTest, ACgroupIsOnlyTrustedWhereTheCapIsReallyThere)
+{
+    if (!noteAppC::sandbox::cgroupLimitsAvailable())
+        GTEST_SKIP() << "no systemd user manager with a memory controller here";
+    // What the probe vouches for: a scope made by limitInCgroup carries the cap in its own cgroup.
+    QString program = QStringLiteral("/bin/sh");
+    QStringList args = {QStringLiteral("-c"),
+                        QStringLiteral("cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup | head -n 1)/memory.max")};
+    noteAppC::sandbox::limitInCgroup(program, args, 3LL << 30);
+    ASSERT_NE(program, QStringLiteral("/bin/sh"));
+    QProcess process;
+    process.start(program, args);
+    ASSERT_TRUE(process.waitForFinished(10000));
+    EXPECT_EQ(process.readAllStandardOutput().trimmed(), QByteArray::number(3LL << 30));
+}
+
 TEST(NotebookSandboxTest, Tier1FiltersTheSyscallsThatLeaveANamespace)
 {
     if (!detectSandboxAvailability().bubblewrap)
