@@ -5,6 +5,8 @@
 #include <QStringList>
 #include <QUrl>
 
+#include <cstring>
+
 #include <archive.h>
 #include <archive_entry.h>
 
@@ -86,6 +88,7 @@ bool EpubArchive::open(const QString &path, QString *error)
     m_names.clear();
     m_nameSet.clear();
     m_path.clear();
+    m_budget = std::make_shared<Budget>(); // a second book starts with nothing spent
 
     ReadStream stream(path);
     if (!stream.isOpen()) {
@@ -95,11 +98,23 @@ bool EpubArchive::open(const QString &path, QString *error)
     }
 
     archive_entry *entry = nullptr;
+    qint64 entries = 0;
+    qint64 nameBytes = 0;
     while (archive_read_next_header(stream.handle(), &entry) == ARCHIVE_OK) {
         // Directory entries carry a trailing '/' in a zip and name nothing a
         // chapter or manifest ever points at; skip them so contains()/read()
         // only ever answer for real files.
         const QString name = QString::fromUtf8(archive_entry_pathname(entry));
+        const char *rawName = archive_entry_pathname(entry);
+        nameBytes += rawName ? qint64(std::strlen(rawName)) : 0;
+        if (++entries > kMaxEntries || nameBytes > kMaxNameBytes) {
+            m_names.clear();
+            m_nameSet.clear();
+            if (error)
+                *error = QStringLiteral("not a readable EPUB (more than %1 entries or %2 MiB of names)")
+                             .arg(kMaxEntries).arg(kMaxNameBytes >> 20);
+            return false;
+        }
         if (!name.isEmpty() && !name.endsWith(QLatin1Char('/'))) {
             m_names << name;
             m_nameSet.insert(name);

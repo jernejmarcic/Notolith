@@ -56,6 +56,10 @@ public:
     /// read() inflates in pieces and stops at the limit, whatever the header says.
     static constexpr qint64 kMaxEntryBytes = qint64(64) << 20;
     static constexpr qint64 kMaxBookBytes = qint64(512) << 20;
+    /// What the header walk in open() accepts: entries and the bytes of their names. A zip
+    /// of millions of tiny entries is refused before it fills the index.
+    static constexpr qint64 kMaxEntries = 100'000;
+    static constexpr qint64 kMaxNameBytes = qint64(16) << 20;
     /// Lower limits, for a test.
     void setLimits(qint64 entryBytes, qint64 bookBytes) { m_entryLimit = entryBytes; m_bookLimit = bookBytes; }
 
