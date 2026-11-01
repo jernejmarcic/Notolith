@@ -65,6 +65,8 @@ public:
     static QString configFile();
     /// Where the app's own memory goes, never the settings file.
     static QString indexFile();
+    /// The recent vaults a `vaults.ini` at `indexPath` names, most recent first; empty when it is not there.
+    static QStringList recentVaultsFrom(const QString &indexPath);
     /// The lock Settings::save() takes, in the runtime directory.
     static QString lockFile();
     static QString themesDirectory();

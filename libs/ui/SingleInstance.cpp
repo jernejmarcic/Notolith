@@ -4,9 +4,8 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QLocalSocket>
+#include <QStandardPaths>
 #include <QThread>
-
-#include <unistd.h>
 
 #include "ConfigFile.h"
 #include "MainWindow.h"
@@ -18,6 +17,8 @@ namespace {
 
 std::unique_ptr<QLockFile> lockFor(const QString &name)
 {
+    if (name.isEmpty())
+        return nullptr; // QLockFile(".lock") would be a file in the current directory
     auto lock = std::make_unique<QLockFile>(name + QStringLiteral(".lock"));
     // Only a dead owner makes the lock stale: a window can run for months.
     lock->setStaleLockTime(0);
@@ -31,6 +32,36 @@ QString lastUsedVault()
     return !last.isEmpty() && QFileInfo(last).isDir() ? last : QString();
 }
 
+bool deliver(const QString &name, const QString &argument, const QByteArray &token)
+{
+    if (name.isEmpty())
+        return false;
+    QLocalSocket socket;
+    socket.connectToServer(name);
+    // Nobody listening fails at once (ServerNotFound); the wait only
+    // matters for an instance that is there.
+    if (!socket.waitForConnected(100))
+        return false;
+    socket.write(token + '\t' + argument.toUtf8().replace('\n', ' ') + '\n');
+    if (!socket.waitForBytesWritten(1000))
+        return false;
+    // Best effort: the line is already queued in the socket, so a
+    // busy instance (opening a big vault) still gets it once it is
+    // free again.
+    socket.waitForReadyRead(1000);
+    return true;
+}
+
+/// What the sockets of a build from before the `notolith` runtime directory start with, `$XDG_RUNTIME_DIR/notolith`;
+/// empty when `$NOTEAPPC_INSTANCE_SOCKET` names them, as it did for that build too.
+QString previousBase()
+{
+    if (!qgetenv("NOTEAPPC_INSTANCE_SOCKET").isEmpty())
+        return {};
+    const QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    return QDir::isAbsolutePath(runtime) ? QDir::cleanPath(runtime) + QStringLiteral("/notolith") : QString();
+}
+
 } // namespace
 
 QString SingleInstance::baseName()
@@ -38,17 +69,21 @@ QString SingleInstance::baseName()
     const QByteArray override = qgetenv("NOTEAPPC_INSTANCE_SOCKET");
     if (!override.isEmpty())
         return QString::fromLocal8Bit(override);
-    // $XDG_RUNTIME_DIR/notolith/instance-<id>.sock; a session without a runtime directory gets a private one
-    // of its own under the temporary directory.
-    QString directory = appDir(XDGroot::Runtime);
-    if (directory.isEmpty())
-        directory = QDir::tempPath() + QStringLiteral("/notolith-") + QString::number(getuid());
-    ensurePrivateDir(directory);
-    return directory + QStringLiteral("/instance");
+    // $XDG_RUNTIME_DIR/notolith/instance-<id>.sock. The directory has to be this user's own and closed to
+    // everyone else, or the sockets and locks in it are not; without one, they go in the state directory under
+    // $HOME. Never a predictable name in /tmp, where another user could have made it first.
+    for (const QString &directory : {appDir(XDGroot::Runtime), appDir(XDGroot::State)}) {
+        if (ensurePrivateDir(directory) && isOwnPrivateDir(directory))
+            return directory + QStringLiteral("/instance");
+    }
+    return {}; // no usable place: the launch is not coordinated with another
 }
 
 QString SingleInstance::nameForVault(const QString &vaultRoot)
 {
+    const QString base = baseName();
+    if (base.isEmpty())
+        return {};
     QString id = QStringLiteral("none");
     if (!vaultRoot.isEmpty()) {
         const QFileInfo info(vaultRoot);
@@ -58,7 +93,7 @@ QString SingleInstance::nameForVault(const QString &vaultRoot)
             key = QDir::cleanPath(info.absoluteFilePath());
         id = QString::fromLatin1(QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha256).toHex().left(16));
     }
-    return baseName() + QLatin1Char('-') + id + QStringLiteral(".sock");
+    return base + QLatin1Char('-') + id + QStringLiteral(".sock");
 }
 
 SingleInstance::Launch SingleInstance::launchFor(const QString &argument)
@@ -88,20 +123,47 @@ SingleInstance::SingleInstance(const Launch &launch)
 
 bool SingleInstance::deliverTo(const QString &name, const QString &argument, const QByteArray &token)
 {
-    QLocalSocket socket;
-    socket.connectToServer(name);
-    // Nobody listening fails at once (ServerNotFound); the wait only
-    // matters for an instance that is there.
-    if (!socket.waitForConnected(100))
+    return deliver(name, argument, token);
+}
+
+QStringList SingleInstance::previousBuildSockets()
+{
+    const QString base = previousBase();
+    if (base.isEmpty())
+        return {};
+    const QFileInfo info(base);
+    const QDir directory(info.absolutePath());
+    QStringList open;
+    for (const QString &file : directory.entryList({info.fileName() + QStringLiteral("-*.sock.lock")}, QDir::Files)) {
+        // That build took the lock for as long as a window ran, and only a dead owner makes it stale.
+        QLockFile lock(directory.filePath(file));
+        lock.setStaleLockTime(0);
+        if (!lock.tryLock(0))
+            open.append(directory.filePath(file).chopped(QStringLiteral(".lock").size()));
+    }
+    return open;
+}
+
+bool SingleInstance::handOverToPreviousBuild(const Launch &launch, const QString &argument, const QByteArray &token)
+{
+    const QStringList open = previousBuildSockets();
+    if (open.isEmpty())
         return false;
-    socket.write(token + '\t' + argument.toUtf8().replace('\n', ' ') + '\n');
-    if (!socket.waitForBytesWritten(1000))
-        return false;
-    // Best effort: the line is already queued in the socket, so a
-    // busy instance (opening a big vault) still gets it once it is
-    // free again.
-    socket.waitForReadyRead(1000);
-    return true;
+    const QString base = baseName();
+    QStringList candidates;
+    for (const QString &name : QStringList{launch.name} + launch.alsoTry) {
+        // The same name in the old place: only the part before the vault's id differs.
+        if (!base.isEmpty() && name.startsWith(base))
+            candidates.append(previousBase() + name.mid(base.size()));
+    }
+    // With the settings not moved yet the vault of a bare launch is not known: any open window will do.
+    if (launch.name.endsWith(QLatin1String("-none.sock")))
+        candidates += open;
+    for (const QString &candidate : std::as_const(candidates)) {
+        if (open.contains(candidate) && deliver(candidate, argument, token))
+            return true;
+    }
+    return false;
 }
 
 SingleInstance::Outcome SingleInstance::reach(const QString &name, QLockFile &lock, const QString &argument,
@@ -126,6 +188,8 @@ bool SingleInstance::handOver(const QString &argument, const QByteArray &token)
         if (deliverTo(other, argument, token))
             return true;
     }
+    if (!m_lock)
+        return false; // no place for a socket: start, unserved
     // A lock holder that never listens is stuck: start anyway.
     return reach(m_name, *m_lock, argument, token, 40, true) == Outcome::Delivered;
 }
@@ -134,6 +198,12 @@ bool SingleInstance::moveTo(const QString &name, const QString &argument, const 
 {
     if (name == m_name)
         return true;
+    if (name.isEmpty()) {
+        m_server.close();
+        m_lock.reset();
+        m_name.clear();
+        return true;
+    }
     const bool handingOver = !argument.isNull();
     auto lock = lockFor(name);
     switch (reach(name, *lock, argument, token, handingOver ? 40 : 1, handingOver)) {
@@ -189,6 +259,8 @@ void SingleInstance::serve(MainWindow *window)
 
 void SingleInstance::listen()
 {
+    // The lock is ours, so a socket file here is a crash's leftover; it outlives a crash in the state directory.
+    QLocalServer::removeServer(m_name);
     if (m_server.listen(m_name))
         return;
     // Unserved but holding the lock, every later launch for this vault would wait two seconds and

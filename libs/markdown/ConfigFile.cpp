@@ -7,6 +7,9 @@
 #include <QStandardPaths>
 #include <QTextStream>
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 namespace noteAppC {
 
 namespace {
@@ -79,6 +82,8 @@ QStringList xdgSearchDirs(XDGroot root)
 
 bool ensurePrivateDir(const QString &path)
 {
+    if (path.isEmpty())
+        return false; // QDir("") is the current directory
     const QString clean = QDir::cleanPath(QDir(path).absolutePath());
     if (QFileInfo(clean).isDir())
         return true;
@@ -93,6 +98,13 @@ bool ensurePrivateDir(const QString &path)
             return false;
     }
     return true;
+}
+
+bool isOwnPrivateDir(const QString &path)
+{
+    struct stat info;
+    return !path.isEmpty() && ::lstat(path.toLocal8Bit().constData(), &info) == 0 && S_ISDIR(info.st_mode)
+           && info.st_uid == ::geteuid() && (info.st_mode & (S_IRWXG | S_IRWXO)) == 0;
 }
 
 QString vaultDigest(const QString &root)

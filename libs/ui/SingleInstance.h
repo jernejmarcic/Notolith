@@ -43,7 +43,9 @@ public:
 
     /// `$NOTEAPPC_INSTANCE_SOCKET` when set (benchmarks and tests that must
     /// not reach a Notolith someone is using), else `instance` in
-    /// `$XDG_RUNTIME_DIR/notolith` (made 0700): the part every per-vault socket name starts with. The
+    /// `$XDG_RUNTIME_DIR/notolith` (made 0700; used only while it is this user's own and closed to others,
+    /// else the state directory takes its place): the part every per-vault socket name starts with. Empty when
+    /// no private directory can be had, and then the names are empty too and nothing is coordinated. The
     /// override is a prefix, not a socket - a directory plus the start of a
     /// file name, `/tmp/run/bench`, gives `/tmp/run/bench-<id>.sock` - so an
     /// isolated run keeps every vault's name apart from the real ones too.
@@ -60,6 +62,17 @@ public:
     /// its vault when it names one (resolveLaunchTarget), with nothing named
     /// the vault the app would reopen. Reads the settings once.
     static Launch launchFor(const QString &argument);
+
+    /// The sockets of windows of a build from before the `notolith` runtime directory
+    /// (`$XDG_RUNTIME_DIR/notolith-<id>.sock`) that are open: those whose lock is held, which only a
+    /// live owner does. Empty when `$NOTEAPPC_INSTANCE_SOCKET` is set.
+    static QStringList previousBuildSockets();
+
+    /// Gives `argument` to the window of such a build that holds what `launch` names, the way handOver()
+    /// would to one of this build; a launch whose vault is not known yet goes to any of them. Its wire
+    /// protocol is the same. True when one took it.
+    static bool handOverToPreviousBuild(const Launch &launch, const QString &argument,
+                                        const QByteArray &token = qgetenv("XDG_ACTIVATION_TOKEN"));
 
     explicit SingleInstance(const QString &name, const QStringList &alsoTry = {});
     explicit SingleInstance(const Launch &launch);
