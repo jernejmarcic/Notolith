@@ -6,11 +6,10 @@
 # suites (check() builds them in a second build directory, with
 # QT_QPA_PLATFORM=offscreen); `makepkg -si --nocheck` skips that.
 #
-# One build, four packages (docs/INK.md): notolith (the application),
-# notolith-ink (the handwriting core library and module), notolith-hwfont
-# (the glyph studio module) and notolith-pdfview (the PDF viewer module and the
-# poppler half of PDF embeds). Install every one of a run together: a module is
-# only loaded by the build that made it (the ABI tag).
+# One build, two packages (docs/PLUGINS.md): notolith (the application) and
+# notolith-pdfview (the PDF viewer module and the poppler half of PDF embeds).
+# Install both of a run together: a module is only loaded by the build that made
+# it (the ABI tag).
 #
 # This is the default build: no networking and no encryption (docs/OFFLINE.md).
 # Sync, note sharing, encrypted notes, the AI plugin and remote content are
@@ -19,10 +18,10 @@
 # Everything the build needs is in source=(), each at a pinned commit, so build() and check() need no network:
 # CMake is told where each FetchContent dependency is (FETCHCONTENT_SOURCE_DIR_*) and not to download anything.
 # yaml-cpp is the system package (it is in depends), so it is not fetched.
-# The commits are the ones named in CMakeLists.txt and libs/ext/ink/core/CMakeLists.txt; change both together.
+# The commits are the ones named in CMakeLists.txt; change both together.
 
 pkgbase=notolith
-pkgname=('notolith' 'notolith-ink' 'notolith-hwfont' 'notolith-pdfview')
+pkgname=('notolith' 'notolith-pdfview')
 # The beta tag is "-beta.1" in CMake; pacman has no hyphen or tilde in a pkgver, and
 # 0.1.0beta1 sorts before 0.1.0 under vercmp.
 pkgver=0.1.0beta1
@@ -30,17 +29,14 @@ pkgrel=1
 arch=('x86_64')
 url='https://github.com/jernejmarcic/Notolith'
 license=('GPL-3.0-or-later')
-# abseil-cpp is the system Abseil that the ink core requires (docs/INK.md): without it the ink
-# packages would silently not be built.
 # poppler-qt6 is the PDF module's, not the application's: the executable links none of it.
-makedepends=('cmake' 'ninja' 'git' 'gtest' 'abseil-cpp' 'poppler-qt6')
-# The application first, then md4qt, MicroTeX, tinyxml2 and ink-stroke-modeler (their directories in src/ are the repository names).
+makedepends=('cmake' 'ninja' 'git' 'gtest' 'poppler-qt6')
+# The application first, then md4qt, MicroTeX and tinyxml2 (their directories in src/ are the repository names).
 source=('git+https://github.com/jernejmarcic/Notolith.git#tag=v0.1.0-beta.1'
         'git+https://invent.kde.org/libraries/md4qt.git#commit=e48716a41c1cf7f91b130fe3d3cc1c524e3b404a'
         'git+https://github.com/NanoMichael/MicroTeX.git#commit=0e3707f6dafebb121d98b53c64364d16fefe481d'
-        'git+https://github.com/leethomason/tinyxml2.git#commit=321ea883b7190d4e85cae5512a12e5eaa8f8731f'
-        'git+https://github.com/google/ink-stroke-modeler.git#commit=f2388813b0b25bc3e33d143d369a8367ab2e30c8')
-sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP' 'SKIP')
+        'git+https://github.com/leethomason/tinyxml2.git#commit=321ea883b7190d4e85cae5512a12e5eaa8f8731f')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
 
 # A distribution's makepkg.conf may target the build machine's own CPU
 # (CachyOS ships -march=native, and target-cpu=native for Rust). Notolith takes
@@ -75,7 +71,6 @@ _configure() {
         -DFETCHCONTENT_SOURCE_DIR_MD4QT="$srcdir/md4qt" \
         -DFETCHCONTENT_SOURCE_DIR_MICROTEX="$srcdir/MicroTeX" \
         -DFETCHCONTENT_SOURCE_DIR_TINYXML2="$srcdir/tinyxml2" \
-        -DFETCHCONTENT_SOURCE_DIR_INK_STROKE_MODELER="$srcdir/ink-stroke-modeler" \
         "$@"
 }
 
@@ -116,27 +111,6 @@ package_notolith() {
     # The modules belong to their own packages; the base application never links them.
     # (usr/lib is what CMake's GNUInstallDirs gives on Arch with prefix /usr; the packages below name it the same way.)
     rm -r "$pkgdir/usr/lib/notolith/modules"
-}
-
-package_notolith-ink() {
-    pkgdesc='Notolith handwritten notes: the ink core library and the .ink module'
-    # ink-stroke-modeler (Apache-2.0) is linked into the core library.
-    license=('GPL-3.0-or-later' 'Apache-2.0')
-    # Versioned: a module only loads in the build that made it (the ABI tag), so pacman must not mix versions.
-    depends=("notolith=$pkgver-$pkgrel" 'abseil-cpp')
-    # One install unit: later markup and recognition hooks go into this module.
-    install -Dm755 -t "$pkgdir/usr/lib/notolith/modules" \
-        build/modules/libnotolith-inkcore.so build/modules/notolith-ink.so
-    # The Apache-2.0 text of ink-stroke-modeler is in THIRD-PARTY.md.
-    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$srcdir/Notolith/LICENSE" "$srcdir/Notolith/THIRD-PARTY.md"
-}
-
-package_notolith-hwfont() {
-    pkgdesc='Notolith glyph studio: capture your handwriting letter by letter'
-    # No manifest "dependencies" key: pacman enforces this one.
-    depends=("notolith-ink=$pkgver-$pkgrel")
-    install -Dm755 -t "$pkgdir/usr/lib/notolith/modules" build/modules/notolith-hwfont.so
-    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$srcdir/Notolith/LICENSE" "$srcdir/Notolith/THIRD-PARTY.md"
 }
 
 package_notolith-pdfview() {

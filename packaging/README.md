@@ -23,12 +23,10 @@ recipes were untested and were removed; they are in the git history.
 
 `arch/PKGBUILD`: `makepkg -si` in `arch/` builds, runs the test suites (in a
 second build directory with tests on) and installs; `--nocheck` skips the
-tests. One build, four packages: `notolith` (the application),
-`notolith-ink` (handwriting core library and module, needs `abseil-cpp`),
-`notolith-hwfont` (glyph studio module, needs `notolith-ink`) and
+tests. One build, two packages: `notolith` (the application) and
 `notolith-pdfview` (PDF viewer module, needs `poppler-qt6`). The module
-packages pin the exact `notolith` version, and all four of one run are
-installed together (`docs/INK.md`). No package has a networking or encryption
+package pins the exact `notolith` version, and both of one run are
+installed together. No package has a networking or encryption
 dependency (`docs/OFFLINE.md`).
 
 The icon is `libs/theme/icons/noteAppC.svg`, installed to
