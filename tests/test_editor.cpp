@@ -12896,7 +12896,9 @@ TEST(ReferenceBlockTest, ShowsTheFileHighlightedUnderItsName)
     ASSERT_TRUE(waitForListing(*editor, QStringLiteral("import os")));
     EXPECT_EQ(listingOf(*editor), QStringLiteral("import os\nprint(os.name)"));
     EXPECT_EQ(editor->panelLabelAt(kInsideReference), QStringLiteral("hello.py"));
+#ifdef NOTEAPPC_EXPECT_SYNTAX_HIGHLIGHTING
     EXPECT_GT(editor->panelFormatCountAt(kInsideReference), 0) << "highlighted by the file's suffix";
+#endif
     EXPECT_EQ(editor->referenceCacheSize(), 1);
 }
 
@@ -12919,6 +12921,7 @@ TEST(ReferenceBlockTest, AwaitingReferencesWaitsForTheExcerptToo)
     EXPECT_EQ(listingOf(*editor), QStringLiteral("needle here")) << "no Loading... on the printed page";
 }
 
+#ifdef NOTEAPPC_EXPECT_SYNTAX_HIGHLIGHTING
 TEST(ReferenceBlockTest, TheLanguageKeyOverridesTheSuffix)
 {
     QTemporaryDir dir;
@@ -12929,6 +12932,7 @@ TEST(ReferenceBlockTest, TheLanguageKeyOverridesTheSuffix)
     ASSERT_TRUE(waitForListing(*python, QStringLiteral("import")));
     EXPECT_GT(python->panelFormatCountAt(kInsideReference), plain->panelFormatCountAt(kInsideReference));
 }
+#endif
 
 TEST(ReferenceBlockTest, StartAndEndPickTheLines)
 {

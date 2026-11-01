@@ -382,6 +382,7 @@ TEST_F(AutosaveTest, EncryptedNotebookAndLossyNotesStaySynchronous)
         EXPECT_FALSE(window.editor()->isModified());
     }
 #endif
+#ifdef NOTEAPPC_HAVE_NOTEBOOK // an .ipynb opens as a note only with the notebook module
     {
         const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
         writeAll(path(QStringLiteral("Analysis.ipynb")), original);
@@ -396,6 +397,7 @@ TEST_F(AutosaveTest, EncryptedNotebookAndLossyNotesStaySynchronous)
         EXPECT_EQ(gate.commits.load(), 0);
         EXPECT_TRUE(readAll(path(QStringLiteral("Analysis.ipynb"))).contains("# Big Title"));
     }
+#endif
     {
         const QString lossy = path(QStringLiteral("Lossy.md"));
         writeAll(lossy, QByteArray("# Lossy \xff\xfe bytes\n"));
