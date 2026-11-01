@@ -37,10 +37,7 @@ const QHash<QString, QString> &keyNames()
 
 QJsonObject readObject(const QString &path)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return {};
-    return QJsonDocument::fromJson(file.readAll()).object();
+    return QJsonDocument::fromJson(readConfigBytes(path)).object();
 }
 
 void merge(Hotkeys::Bindings &into, const QJsonObject &object)

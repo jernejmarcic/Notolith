@@ -4085,10 +4085,9 @@ void MainWindow::wireGraphOptions(GraphView *view)
 {
 #ifdef NOTEAPPC_HAVE_GRAPH
     if (m_vault.isValid()) {
-        QFile own(graphOptionsPath());
-        view->setOptions(own.open(QIODevice::ReadOnly)
-                             ? GraphOptions::fromJson(QJsonDocument::fromJson(own.readAll()).object())
-                             : GraphOptions::readFromVault(m_vault.root()));
+        const QByteArray own = readConfigBytes(graphOptionsPath());
+        view->setOptions(!own.isEmpty() ? GraphOptions::fromJson(QJsonDocument::fromJson(own).object())
+                                        : GraphOptions::readFromVault(m_vault.root()));
     }
     if (!m_graphSave.isSingleShot()) {
         m_graphSave.setSingleShot(true);
@@ -4671,9 +4670,10 @@ void MainWindow::createUniqueNote()
     // The vault's own zk-prefixer.json wins, as Obsidian's daily notes do.
     QString folder = m_settings.text(QStringLiteral("uniqueNote.folder"));
     QString format = m_settings.text(QStringLiteral("uniqueNote.format"));
-    QFile config(QDir(m_vault.root()).filePath(QStringLiteral(".obsidian/zk-prefixer.json")));
-    if (config.open(QIODevice::ReadOnly)) {
-        const QJsonObject json = QJsonDocument::fromJson(config.readAll()).object();
+    const QByteArray config =
+        readConfigBytes(QDir(m_vault.root()).filePath(QStringLiteral(".obsidian/zk-prefixer.json")));
+    if (!config.isEmpty()) {
+        const QJsonObject json = QJsonDocument::fromJson(config).object();
         folder = json.value(QLatin1String("folder")).toString(folder);
         if (!json.value(QLatin1String("format")).toString().isEmpty())
             format = json.value(QLatin1String("format")).toString();

@@ -3,12 +3,16 @@
 #include "ConfigFile.h"
 
 #include <QCryptographicHash>
+#include <QDebug>
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
 #include <QStandardPaths>
 #include <QTextStream>
 
+#include <cerrno>
+
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -38,6 +42,35 @@ QStringList absoluteEntries(const char *name, const QString &fallback)
 }
 
 } // namespace
+
+QByteArray readConfigBytes(const QString &path, qint64 maxBytes)
+{
+    const int fd = ::open(QFile::encodeName(path).constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0)
+        return {};
+    QByteArray bytes;
+    struct stat info {};
+    bool ignored = ::fstat(fd, &info) < 0 || !S_ISREG(info.st_mode);
+    if (!ignored && info.st_size > maxBytes) {
+        qWarning().noquote() << "ignoring" << path << "- over" << (maxBytes >> 10) << "KiB";
+        ignored = true;
+    }
+    char buffer[1 << 16];
+    while (!ignored) {
+        const ssize_t n = ::read(fd, buffer, sizeof buffer);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        bytes.append(buffer, n);
+        if (bytes.size() > maxBytes) { // grew while it was read
+            qWarning().noquote() << "ignoring" << path << "- over" << (maxBytes >> 10) << "KiB";
+            ignored = true;
+        }
+    }
+    ::close(fd);
+    return ignored ? QByteArray() : bytes;
+}
 
 QString xdgRoot(XDGroot root)
 {

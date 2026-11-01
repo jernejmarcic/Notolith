@@ -26,10 +26,7 @@ QString newId()
 
 QJsonObject readJSONobject(const QString &path)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return {};
-    return QJsonDocument::fromJson(file.readAll()).object();
+    return QJsonDocument::fromJson(readConfigBytes(path)).object();
 }
 
 std::optional<BookmarkItem> parseItem(const QJsonObject &obj)

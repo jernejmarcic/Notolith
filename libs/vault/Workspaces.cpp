@@ -25,10 +25,7 @@ QString ownDirectory(const QString &vaultRoot, XDGroot root)
 
 QJsonObject readJSON(const QString &path)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return {};
-    return QJsonDocument::fromJson(file.readAll()).object();
+    return QJsonDocument::fromJson(readConfigBytes(path)).object();
 }
 
 /// `value` without the "file" of any tab that names something outside `vaultRoot` (absolute, or climbing out

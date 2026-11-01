@@ -771,6 +771,69 @@ TEST(VaultIgnoreFilters, ARegexOfAnUntrustedVaultIsNeitherCompiledNorRun)
     EXPECT_FALSE(vault.isIgnored(QStringLiteral("aaa")));
 }
 
+namespace {
+/// `bytes` of nothing written, as a sparse file.
+void writeSparse(const QString &path, qint64 bytes, const QByteArray &head = {})
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    ASSERT_EQ(file.write(head), head.size());
+    ASSERT_TRUE(file.resize(bytes));
+}
+} // namespace
+
+// A vault's settings are read to 1 MiB: past it the file is ignored, whole, and a gibibyte is never read.
+TEST(VaultIgnoreFilters, AnAppJsonOverTheLimitIsIgnoredWithoutBeingRead)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    const QByteArray json = R"({"userIgnoreFilters":["secret/"]})";
+    const QString app = dir.filePath(QStringLiteral(".obsidian/app.json"));
+    {
+        QFile file(app);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(json + QByteArray((1 << 20) + 1 - json.size(), ' ')); // valid JSON, one byte over
+    }
+    EXPECT_FALSE(Vault(dir.path()).isIgnored(QStringLiteral("secret/x.md"))) << "over the limit: ignored whole";
+
+    {
+        QFile file(app);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(json + QByteArray((1 << 20) - json.size(), ' ')); // exactly the limit
+    }
+    EXPECT_TRUE(Vault(dir.path()).isIgnored(QStringLiteral("secret/x.md"))) << "at the limit it still counts";
+
+    writeSparse(app, qint64(1) << 30, json);
+    QElapsedTimer timer;
+    timer.start();
+    const Vault vault(dir.path());
+    EXPECT_FALSE(vault.isIgnored(QStringLiteral("secret/x.md")));
+    EXPECT_LT(timer.elapsed(), 1000) << "a gibibyte was read";
+}
+
+// Publish reads a note with the same cap the editor has.
+TEST(VaultTest, ReadInsideStopsAtTheNoteLimit)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const Vault vault(dir.path());
+    const QString huge = dir.filePath(QStringLiteral("huge.md"));
+    writeSparse(huge, qint64(1) << 30);
+    Note note;
+    QString error;
+    EXPECT_FALSE(vault.readInside(huge, note, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("too large"))) << error.toStdString();
+
+    const QString small = dir.filePath(QStringLiteral("small.md"));
+    {
+        QFile file(small);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("hello\n");
+    }
+    EXPECT_TRUE(vault.readInside(small, note, &error)) << error.toStdString();
+}
+
 // --- file recovery -------------------------------------------------------------
 
 namespace {

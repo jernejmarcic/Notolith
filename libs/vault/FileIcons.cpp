@@ -43,10 +43,7 @@ bool FileIcons::isGlyph(const QString &text)
 void FileIcons::load()
 {
     m_icons.clear();
-    QFile file(storagePathFor(m_root));
-    if (!file.open(QIODevice::ReadOnly))
-        return;
-    const QJsonObject icons = QJsonDocument::fromJson(file.readAll()).object().value(QLatin1String("icons")).toObject();
+    const QJsonObject icons = QJsonDocument::fromJson(readConfigBytes(storagePathFor(m_root))).object().value(QLatin1String("icons")).toObject();
     const QDir root(m_root);
     for (auto it = icons.begin(); it != icons.end(); ++it) {
         const QString icon = it.value().toString();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Jernej Marčič
 #include "GraphView.h"
+#include "ConfigFile.h"
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -182,10 +183,10 @@ QPointF project(QPointF graphPos, double zoom, QPointF pan, QSize size)
 
 GraphOptions GraphOptions::readFromVault(const QString &vaultRoot)
 {
-    QFile file(vaultRoot + QLatin1String("/.obsidian/graph.json"));
-    if (!file.open(QIODevice::ReadOnly))
+    const QByteArray bytes = readConfigBytes(vaultRoot + QLatin1String("/.obsidian/graph.json"));
+    if (bytes.isEmpty())
         return GraphOptions{};
-    return fromJson(QJsonDocument::fromJson(file.readAll()).object());
+    return fromJson(QJsonDocument::fromJson(bytes).object());
 }
 
 GraphOptions GraphOptions::fromJson(const QJsonObject &root)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Jernej Marčič
 #include "DailyNotes.h"
+#include "ConfigFile.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -19,10 +20,7 @@ namespace {
 
 QJsonObject readJSONobject(const QString &path)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return {};
-    return QJsonDocument::fromJson(file.readAll()).object();
+    return QJsonDocument::fromJson(readConfigBytes(path)).object();
 }
 
 // A daily note walk further back than this is almost certainly a missing

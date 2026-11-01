@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Jernej Marčič
 #include "Vault.h"
+#include "ConfigFile.h"
 
 #include <QDir>
 #include <QFile>
@@ -1141,12 +1142,11 @@ void Vault::loadIgnoreFilters()
     m_regexEntries.clear();
     m_filtersConfigured = false;
 
-    QFile file(m_root + QLatin1String("/.obsidian/app.json"));
-    if (!file.open(QIODevice::ReadOnly))
-        return;
-
-    const QJsonArray filters =
-        QJsonDocument::fromJson(file.readAll()).object().value(QLatin1String("userIgnoreFilters")).toArray();
+    // Bounded and read from the open file: a vault does not get to say how much memory its settings take.
+    const QJsonArray filters = QJsonDocument::fromJson(readConfigBytes(m_root + QLatin1String("/.obsidian/app.json")))
+                                   .object()
+                                   .value(QLatin1String("userIgnoreFilters"))
+                                   .toArray();
     if (filters.isEmpty())
         return;
     m_filtersConfigured = true;

@@ -288,13 +288,13 @@ QList<SchemeInfo> Scheme::available(const QString &vaultRoot)
 
 QHash<QString, QString> Scheme::load(const QString &path, Theme::Mode mode, QString *error)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    // Theme files are larger than settings (an Obsidian theme runs to a few hundred kilobytes), so 8 MiB.
+    const QByteArray bytes = readConfigBytes(path, qint64(8) << 20);
+    if (bytes.isEmpty()) {
         if (error)
-            *error = file.errorString();
+            *error = QStringLiteral("%1 is missing, empty or too large").arg(path);
         return {};
     }
-    const QByteArray bytes = file.readAll();
 
     if (!path.endsWith(QLatin1String(".json"), Qt::CaseInsensitive))
         return parseObsidianCSS(QString::fromUtf8(bytes), mode);

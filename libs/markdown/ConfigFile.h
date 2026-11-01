@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Jernej Marčič
 #pragma once
 
+#include <QByteArray>
 #include <QHash>
 #include <QMap>
 #include <QString>
@@ -52,6 +53,15 @@ QString vaultDigest(const QString &root);
 
 /// `$XDG_CONFIG_HOME/notolith/<name>`.
 QString configFilePath(const QString &name);
+
+/// The most a settings file read from a vault may hold: a real `app.json` or `hotkeys.json` is a few
+/// kilobytes, and a vault is not trusted to say how much memory a file takes.
+inline constexpr qint64 kMaxConfigBytes = qint64(1) << 20;
+
+/// The bytes of a settings file, read from the file as opened (a link swapped in after any earlier look
+/// changes nothing; a named pipe cannot hold the open). Empty when the file is not there, is not a regular
+/// file, or is over `maxBytes`: that last case is logged, and the file is ignored, as an unreadable one is.
+QByteArray readConfigBytes(const QString &path, qint64 maxBytes = kMaxConfigBytes);
 
 /// Reads a `[section] key = value` file the way callouts.ini and codeblocks.ini
 /// are written: `;` and `#` comment lines, a trailing ` ; comment`, quoted

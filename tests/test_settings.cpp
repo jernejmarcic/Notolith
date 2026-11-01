@@ -20,6 +20,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 
+#include "ConfigFile.h"
 #include "Settings.h"
 
 using namespace noteAppC;
@@ -65,6 +66,30 @@ private:
     ::testing::AddGlobalTestEnvironment(new PrivateConfigHome);
 
 } // namespace
+
+// Every settings file a vault holds is read through this: bounded, from the open file, never blocking on a pipe.
+TEST(ConfigFile, aSettingsFileIsReadToTheLimitAndNoFurther)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("a.json"));
+    const auto write = [&](qint64 size) {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(size));
+    };
+    write(noteAppC::kMaxConfigBytes);
+    EXPECT_EQ(noteAppC::readConfigBytes(path).size(), noteAppC::kMaxConfigBytes);
+    write(noteAppC::kMaxConfigBytes + 1);
+    EXPECT_TRUE(noteAppC::readConfigBytes(path).isEmpty());
+    write(qint64(1) << 30);
+    QElapsedTimer timer;
+    timer.start();
+    EXPECT_TRUE(noteAppC::readConfigBytes(path).isEmpty());
+    EXPECT_LT(timer.elapsed(), 1000);
+    EXPECT_TRUE(noteAppC::readConfigBytes(dir.filePath(QStringLiteral("missing.json"))).isEmpty());
+    EXPECT_TRUE(noteAppC::readConfigBytes(dir.path()).isEmpty()) << "a directory is not a settings file";
+}
 
 TEST(Settings, defaultsAreCompiledIn)
 {

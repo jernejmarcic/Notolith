@@ -410,10 +410,7 @@ bool writeINI(const QString &path, const QVariantMap &values, const QSet<QString
 
 QJsonObject readJSONobject(const QString &path)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return {};
-    return QJsonDocument::fromJson(file.readAll()).object();
+    return QJsonDocument::fromJson(readConfigBytes(path)).object();
 }
 
 void take(QVariantMap &out, const QJsonObject &object, const char *obsidianKey,
@@ -608,8 +605,7 @@ QVariantMap Settings::fromObsidianConfig(const QString &vaultRoot)
     // Newer Obsidian writes {"graph": true, ...}; older wrote the array of
     // the plugins that were on, so any id missing from it was off.
     const QJsonDocument plugins = [&config] {
-        QFile file(config.filePath(QStringLiteral("core-plugins.json")));
-        return file.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(file.readAll()) : QJsonDocument();
+        return QJsonDocument::fromJson(readConfigBytes(config.filePath(QStringLiteral("core-plugins.json"))));
     }();
     const QJsonArray enabled = plugins.array();
     for (const Feature &feature : features()) {
