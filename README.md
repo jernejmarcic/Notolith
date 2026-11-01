@@ -166,6 +166,8 @@ cmake --build build-asan
 # EnterJitterTest's millisecond budget is for an uninstrumented build, so it is left out here
 QT_QPA_PLATFORM=offscreen GTEST_FILTER='-EnterJitterTest.*' ASAN_OPTIONS=verify_asan_link_order=0:detect_odr_violation=0 \
   LSAN_OPTIONS=suppressions=$PWD/tests/lsan.supp ctest --test-dir build-asan --output-on-failure
+# Blind spot: lsan.supp has to suppress `<unknown module>` (a library dlclosed before exit leaves a few hundred bytes
+# with no frame to name, in the module and window tests), so a leak inside such a module is not seen.
 
 # libFuzzer targets for what a vault's files feed the parsers (clang; never installed)
 cmake -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang \

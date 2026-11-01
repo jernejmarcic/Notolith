@@ -7,8 +7,6 @@ leak:QFontPrivate
 leak:QFontCache
 leak:QFontconfigDatabase
 leak:QFreetypeFace
-leak:QTextEngine
-leak:QTextLayout
 leak:QPlatformFontDatabase
 leak:QThreadPoolPrivate::startThread
 leak:QCoreApplicationPrivate::init
@@ -40,4 +38,6 @@ leak:libglib
 leak:libgobject
 leak:microtex
 leak:libcrypto
+# Blind spot: an allocation whose whole stack is in a library dlclosed before exit (the graphics driver, or an
+# optional module a test loads) has no frame to name, so this hides a leak from such a module too (README).
 leak:<unknown module>
