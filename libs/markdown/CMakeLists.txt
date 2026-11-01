@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # The XDG directories, the INI reader and the log file: Core only, so every library down to the
 # vault and the plugins can use them without the Markdown parser.
 # noteAppC_xdg_headers: for a loadable module, which resolves these functions from the executable.

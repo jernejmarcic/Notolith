@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #pragma once
 
 // Runs notolith-imagedecode under bubblewrap (libs/sandbox: no network, no home, the syscall filter, rlimits)

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Pen input test: logs every tablet event (device, pointer type, capabilities,
 // pressure, tilt, buttons, timestamp, rate) and scribbles raw polylines.
 // Run by hand on a FydeTab Duo (GNOME) and a Radeon 780M 2-in-1 laptop (Hyprland);

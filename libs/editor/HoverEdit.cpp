@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// The `</>` button over a rendered block, which is how Obsidian gets from a
 /// callout, formula, embed or table to its source with the mouse: the pointer
 /// over the block rings it and shows the button, a click on the button

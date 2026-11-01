@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // The loadable-module tier (docs/INK-DESIGN.md
 // section 4): discovery by metadata does not load the library; a module loads
 // on first use; a wrong ABI tag, a duplicate suffix claim, a manifest without

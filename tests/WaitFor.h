@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #pragma once
 
 // QTRY_VERIFY and friends report through QTest's own logger, which a gtest

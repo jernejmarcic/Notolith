@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Image annotation module: ImageAnnotations' sidecar note (build, parse,
 // merge, load, save) and ImageView/ImageCanvas (the tools, undo, the image
 // file left untouched, marks reloaded from the sidecar).

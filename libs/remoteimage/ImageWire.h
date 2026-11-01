@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #pragma once
 
 // What passes between the app and notolith-imagedecode, the helper that decodes

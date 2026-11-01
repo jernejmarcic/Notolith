@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 """Generates a synthetic vault for timing the indexer.
 
     python3 tools/gen_bench_vault.py /tmp/bench-vault 20000

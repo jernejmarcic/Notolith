@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// A remote image in a note: `![alt](https://host/x.png)` or `<img src="https://...">`. Only in a build with
 /// NOTEAPPC_WITH_NETWORK; the default build shows such an image as the text it is.
 ///

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// What Obsidian puts around a rendered table, painted rather than built from
 /// widgets: a grip at the left of the hovered row and over the hovered column
 /// (drag to reorder, click to select it), a "+" bar at the bottom and right

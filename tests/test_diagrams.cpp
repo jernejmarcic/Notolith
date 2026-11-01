@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // PlantUML, TikZ and Graphviz fences: MermaidBlock.cpp's diagramRenderer run with the real tools
 // (plantuml and java, latex and dvisvgm, dot), each inside bubblewrap's sandbox. A test whose tool is
 // absent is skipped, and fails instead when NOTEAPPC_REQUIRE_TOOLS=1. The Mermaid machinery they share

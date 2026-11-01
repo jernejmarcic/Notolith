@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # Self-contained: the parent build wires this in with one line,
 #     add_subdirectory(bench)
 # added to tools/CMakeLists.txt, next to the noteAppC_shot and

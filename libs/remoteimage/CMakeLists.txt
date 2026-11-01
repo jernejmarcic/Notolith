@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # Remote images in notes (docs/OFFLINE.md). Built only with NOTEAPPC_WITH_NETWORK: the default build links
 # none of this.
 #

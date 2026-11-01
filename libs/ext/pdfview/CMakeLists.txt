@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # PDF viewing and annotation, the third Tier 1 module (docs/PLUGINS.md), and the
 # poppler half of PDF embeds: opens a vault's PDFs in a tab, reading and marking
 # them up like the rest of the app rather than handing them to the system viewer.

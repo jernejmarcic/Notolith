@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #pragma once
 
 // Ported from Rnote (crates/rnote-engine/src/document/background.rs, the gen_*_pattern functions),

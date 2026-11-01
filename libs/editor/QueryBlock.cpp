@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// The ```` ```query ```` block (docs: obsidian.md/help/plugins/search,
 /// "Embed search results in a note"): a fenced code block whose language is
 /// `query` shows the results of its own text as a search - the note list

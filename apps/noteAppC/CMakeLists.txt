@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 qt_add_executable(noteAppC main.cpp)
 
 target_compile_definitions(noteAppC PRIVATE NOTEAPPC_VERSION="${NOTEAPPC_VERSION_STRING}")

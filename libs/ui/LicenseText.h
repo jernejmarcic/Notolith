@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #pragma once
 
 // The notices GPLv3 section 5(d) asks an interactive program to show. --version prints them

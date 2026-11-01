@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // PopupStyle's check mark: a checked menu item shows Obsidian's check at the
 // menu's right edge, drawn by the style because QSS cannot place an indicator
 // there. Offscreen, with the real theme's QSS on.

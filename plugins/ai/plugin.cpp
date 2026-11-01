@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /* plugins/ai/plugin.cpp - the noteAppC AI plugin (docs/PLUGINS.md, Tier 2).
  * Talks to a local Ollama server, or an OpenAI-compatible/Anthropic HTTP
  * API - AiProvider.cpp does the actual HTTP call and response parsing, kept

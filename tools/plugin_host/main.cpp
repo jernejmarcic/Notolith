@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // notolith-plugin-host --plugin <dir>
 //
 // One process per enabled plugin (docs/PLUGINS.md, Tier 2), spawned by

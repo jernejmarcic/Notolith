@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // The autosave timers commit a note's file on a thread of its own: what is
 // on disk, what the tab says is modified, what file recovery keeps, and what
 // every operation that needs the file sees. A hook on the save thread holds a

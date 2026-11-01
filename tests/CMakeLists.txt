@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 find_package(GTest REQUIRED)
 
 add_executable(test_vault test_vault.cpp)

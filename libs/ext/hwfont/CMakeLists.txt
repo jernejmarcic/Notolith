@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # The handwriting-font glyph studio: the data layer (GlyphSet, GlyphStore), the studio view
 # (GlyphStudio) as a static library, and the notolith-hwfont module that registers it.
 # Links notolith-inkcore only, never noteAppC_ink: notolith-hwfont depends on

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// Obsidian's `slash-command`: "/" at the start of a line or after
 /// whitespace opens a popup of commands, fuzzy filtered by what is typed
 /// after it. Up/Down select, Enter or Tab run the highlighted one, Escape

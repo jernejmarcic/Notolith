@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #pragma once
 
 // Downloads one remote image's bytes, under the rules of a note's image: https only, no user:pass, no

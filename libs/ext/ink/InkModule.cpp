@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // The handwritten-note module (spec section 4): what Notolith dlopens when a
 // .ink file is opened or the "New handwritten note" command runs. Only this
 // file knows it is a plugin; InkView and the core are plain Qt.

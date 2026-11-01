@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Widget smoke test: drives the real MainWindow on the offscreen platform, so
 // the basics (open vault, file tree, open note, save) are
 // checked by something other than a human looking at the screen.

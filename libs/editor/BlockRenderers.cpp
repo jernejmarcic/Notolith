@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// Block renderers: the three things the parser produces that are not text in
 /// a line - Obsidian's frontmatter properties table, the chrome a fenced code
 /// block's `#|` options ask for, and the folding a callout, a `:::` container

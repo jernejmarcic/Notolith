@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #pragma once
 
 // A Jupyter notebook (.ipynb, nbformat 4) as a note: markdown cells are text,

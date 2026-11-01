@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # plugins/ai: the first-party AI plugin (docs/PLUGINS.md, Tier 2) - Ollama,
 # or an OpenAI-compatible/Anthropic HTTP API. C++ against plugin.hpp's
 # wrapper (word-stats is plain C against the bare plugin.h; this plugin

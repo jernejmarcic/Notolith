@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #include "MediaPlayback.h"
 
 #ifdef NOTEAPPC_HAVE_MEDIA

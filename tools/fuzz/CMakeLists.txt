@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # libFuzzer targets for the parsers that read a vault's files. Opt-in
 # (NOTEAPPC_FUZZ), clang only, never installed. README.md, Development, has how to run them.
 add_library(noteAppC_fuzz_flags INTERFACE)

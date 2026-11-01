@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // ```markmap fences in the editor: MarkmapBlock.cpp's renderer (a pool thread, the raster, the hotspots on the
 // circles and the folding a click makes), the editor drawing and folding it in live preview and reading view,
 // PDF export reading the SVG it kept, and the window's `markmap` core plugin and "Show as mind map" command.

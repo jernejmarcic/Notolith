@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // The static counterpart of FakeModule.cpp (docs/PLATFORMS.md, "Mobile"): linked into test_modules as a Qt
 // static plugin when NOTEAPPC_STATIC_MODULES is on, found through QPluginLoader::staticPlugins() instead of a
 // directory. Its class name differs from FakeModule's: moc output, vtables and staticMetaObject of two classes

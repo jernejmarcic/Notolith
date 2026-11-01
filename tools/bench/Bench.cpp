@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Headless performance harness for noteAppC. The requirement is that this app
 // measurably beats Obsidian while staying CPU-only, and that nothing can be
 // tuned before it is measured - this tool only measures, on the

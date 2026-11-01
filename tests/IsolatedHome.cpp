@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Linked into every test binary (tests/CMakeLists.txt). Points the XDG homes at
 // the build's isolated-home before main() runs, so a test binary started by
 // hand, not through ctest, still never touches the real ~/.config, ~/.cache,

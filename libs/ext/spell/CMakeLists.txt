@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # Spellcheck, the first Tier 1 module (docs/PLUGINS.md): built only with
 # NOTEAPPC_WITH_SPELLCHECK on and hunspell found, and the editor never links
 # it - the window hands the editor three callbacks instead.

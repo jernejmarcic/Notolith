@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // The CSV/TSV parser behind `![[data.csv]]` (libs/editor/CSVparser.h).
 
 #include <gtest/gtest.h>

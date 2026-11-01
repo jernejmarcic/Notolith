@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // PDF viewer and annotation module: PdfDocument's model (annotation
 // round-trip through a real PDF, atomic save, recovery), PdfPagesArea's
 // widget (layout before any render, the Lifeline guard, selection, undo/

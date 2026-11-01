@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // The handwriting-font glyph studio's data layer (libs/ext/hwfont): the glyph
 // set, the on-disk names and the Handwriting/<font>/<hex>/<n>.ink store.
 #include <gtest/gtest.h>

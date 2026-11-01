@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // libFuzzer target: the Markdown parse path the editor, the indexer and the
 // publisher share, with every option bit the input picks, plus the helpers
 // that read a note's own text (table rows, heading sections, the user

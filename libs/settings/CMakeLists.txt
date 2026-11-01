@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 add_library(noteAppC_settings STATIC
     Hotkeys.cpp
     Hotkeys.h

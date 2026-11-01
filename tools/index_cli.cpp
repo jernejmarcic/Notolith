@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Indexes a vault and prints what the cache holds: the quickest way to run
 // the indexer over a real vault.
 //

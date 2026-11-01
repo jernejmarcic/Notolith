@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # Sync, a Tier 1 module (docs/PLUGINS.md, docs/SYNC.md): local-first sync to an optional, end-to-end encrypted
 # server. Built only with NOTEAPPC_WITH_SYNC on and both libsodium and
 # Qt6Keychain found - see the root CMakeLists.txt.

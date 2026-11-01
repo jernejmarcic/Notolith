@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // noteAppC-sync-server: the reference server for docs/SYNC.md. Stores and
 // relays ciphertext only - see ServerStore and SyncServer for what that
 // means concretely, and docs/SYNC.md "What the server stores and learns"

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # usage: check_symbols.sh <executable> <module.so>...
 # Fails when a module defines a strong (non-inline, non-template) noteAppC symbol that the executable defines too: a
 # host static library linked into the module, so the process holds two copies of its tables (a second Settings, CrdtDoc,

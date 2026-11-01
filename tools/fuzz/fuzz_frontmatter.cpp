@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // libFuzzer target: a note's YAML front matter (properties), read and
 // rewritten the ways the properties editor does.
 

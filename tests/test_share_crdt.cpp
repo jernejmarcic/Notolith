@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // CrdtDoc (libs/ext/share): one suite, run over every backend. A backend the
 // build lacks skips; see docs/SHARE.md.
 

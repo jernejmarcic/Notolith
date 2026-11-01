@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Renders the window to a PNG on the offscreen platform. Used to review the
 // look without a display.
 //

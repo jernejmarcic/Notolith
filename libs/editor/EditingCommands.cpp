@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// The editing behaviours: auto-pairs, list continuation,
 /// checkbox toggling, line moves, the formatting commands and find/replace.
 ///

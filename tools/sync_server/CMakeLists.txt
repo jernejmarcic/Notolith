@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # The reference server for docs/SYNC.md. Built only alongside
 # noteAppC_sync (libs/ext/sync) with Qt6HttpServer found - see the
 # NOTEAPPC_WITH_SYNC block in the root CMakeLists.txt and the guard in

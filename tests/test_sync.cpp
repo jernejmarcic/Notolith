@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Sync (libs/ext/sync, tools/sync_server): crypto round trips and tamper
 // detection, the three-way merge, and full two-device sync scenarios
 // against a real in-process server. See docs/SYNC.md for what every

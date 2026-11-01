@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // libFuzzer target: a .base file (YAML) and the expressions it holds,
 // parsed and evaluated against one row of every value type.
 

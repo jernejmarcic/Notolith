@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # The window lives in a library so the widget smoke test can drive it.
 add_library(noteAppC_ui STATIC
     ExportPdfDialog.cpp

@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # usage: check_offline.sh <needed-pattern> <symbol-pattern> <elf-or-directory>...
 # Fails when an ELF file (a directory stands for the *.so in it) lists a NEEDED library matching <needed-pattern>, or
 # names a dynamic symbol matching <symbol-pattern> (both grep -E; an empty pattern skips that check). The default

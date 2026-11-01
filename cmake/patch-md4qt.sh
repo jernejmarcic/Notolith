@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # md4qt v5.1.4 builds a QString from a QStringView and from a QChar-from-UCS-4
 # implicitly, which Qt 6.8 allows and Qt 6.7 does not. The Android Qt kit is
 # 6.7.3, so without this the parser - and everything above it - cannot be built

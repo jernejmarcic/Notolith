@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // The size of a block view and who owns its rarely used fields (BlockExtras).
 // A 1 MB note is 57 000 views; at 1.8 kB each that was 105 MB of a note nobody had scrolled.
 #include <gtest/gtest.h>

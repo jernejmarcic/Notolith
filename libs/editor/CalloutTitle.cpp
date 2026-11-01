@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// A top-level callout's title, edited where it is drawn: a click on it opens
 /// a line edit over exactly that text (the property editor's pattern,
 /// BlockRenderers.cpp), and one `applyEdit` on the title's source range

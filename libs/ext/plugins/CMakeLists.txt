@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # Tier 2 (docs/PLUGINS.md): runtime plugins, loaded only inside a separate
 # `notolith-plugin-host` process, never in the app. Split into two targets so
 # the host tool can link "only Qt6::Core and a small protocol library"

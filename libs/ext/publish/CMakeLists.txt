@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Jernej
 # Publish, a Tier 1 module (docs/PLUGINS.md): exports a vault - or the
 # `publish: true` part of it - as a static, JavaScript-optional website,
 # Obsidian Publish style. Built only with NOTEAPPC_WITH_PUBLISH on.

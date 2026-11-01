@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #include "CodeHighlighter.h"
 
 #ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// Everything `![[...]]` can point at that is not an image, a PDF, a
 /// `.tex`, or audio/video: another note (whole, `#Heading` or `#^block`), a
 /// file the window has registered a renderer for (`.canvas`, `.base` -

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 // Canvas: the JSON Canvas 1.0 model (round trip, colour presets), every
 // interactive edit and its undo, hit testing, and a performance guard for
 // panning a canvas of 1 000 nodes.

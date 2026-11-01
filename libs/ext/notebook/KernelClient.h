@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 #pragma once
 
 // The ZeroMQ side of the Jupyter messaging protocol: five sockets (shell,

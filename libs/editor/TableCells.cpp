@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Jernej
 /// A table in live preview is edited where it is drawn, as in Obsidian: a
 /// click lands in the cell under the pointer, the caret is drawn there, and
 /// the table stays a table. The cell holding the caret shows its source, the
