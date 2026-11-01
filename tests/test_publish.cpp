@@ -1214,8 +1214,17 @@ TEST(PublishSafetyTest, OnlyAFileThisExporterWroteIsRemovedAsStale)
     EXPECT_TRUE(QDir(site.outDir.filePath(QStringLiteral("dirkey/inside"))).exists());
     EXPECT_EQ(readFile(site.outDir.filePath(QStringLiteral("edited.html"))), QByteArray("my own edit"));
     const QByteArray after = readFile(record);
-    for (const char *key : {"private.md", "dirkey", "edited.html", "goes.html"})
+    for (const char *key : {"dirkey", "goes.html"})
         EXPECT_FALSE(after.contains(key)) << key << " is not kept in the manifest";
+    for (const char *key : {"edited.html", "private.md"})
+        EXPECT_TRUE(after.contains(key)) << key << ": a changed file stays recorded, or the next run calls it foreign";
+
+    // The next publish is not refused, leaves both alone again and says so again.
+    Counts again;
+    ASSERT_TRUE(publishInto(site, site.outDir.path(), &error, &again)) << error.toStdString();
+    EXPECT_EQ(again.leftInPlace, (QStringList{QStringLiteral("edited.html"), QStringLiteral("private.md")}));
+    EXPECT_EQ(readFile(site.outDir.filePath(QStringLiteral("private.md"))), QByteArray("mine"));
+    EXPECT_EQ(readFile(site.outDir.filePath(QStringLiteral("edited.html"))), QByteArray("my own edit"));
 }
 
 TEST(PublishSafetyTest, AStaleFileThatCannotBeRemovedFailsThePublishAndStaysTracked)
@@ -1582,12 +1591,13 @@ TEST(PublishSafetyTest, ASVGIsRebuiltFromAnAllowlist)
                "<animate attributeName=\"href\" to=\"javascript:alert(1)\"/><set attributeName=\"href\"/>"
                "<rect width=\"4\" height=\"4\" fill=\"url(https://x.example/p#a)\" h:onclick=\"x()\"/>"
                "<rect width=\"5\" height=\"5\" style=\"fill:url(#g);stroke:u\\72l(https://x.example)\"/>"
+               "<rect width=\"7\" height=\"7\" style=\"mask-image:image-set('https://x.example/m.png' 1x)\"/>"
                "<rect id=\"ok\" width=\"6\" height=\"6\" fill=\"url(#g)\" filter=\"url( '#f' )\"/>"
                "</svg>",
                &svg, &counts);
     ASSERT_FALSE(svg.isEmpty());
     for (const char *bad : {"form", "java", "meta", "refresh", "x.example", "<animate", "<set", "h:", "onclick",
-                            "alert", "xhtml"})
+                            "alert", "xhtml", "style=", "image-set"})
         EXPECT_FALSE(svg.contains(QString::fromLatin1(bad), Qt::CaseInsensitive)) << bad << "\n" << svg.toStdString();
     EXPECT_TRUE(svg.contains(QStringLiteral("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")));
     EXPECT_TRUE(svg.contains(QStringLiteral("href=\"#local\"")));
