@@ -67,7 +67,7 @@ one.
 - **Where modules live.** `<libdir>/noteAppC/modules/`, that is `/usr/lib/noteAppC/modules/` on Arch. It holds
   `libnotolith-inkcore.so`, `notolith-ink.so` and `notolith-hwfont.so`; the two modules find the core library next to
   themselves (RPATH `$ORIGIN`).
-- **`NOTEAPPC_MODULE_DIRS`.** When this environment variable is set (colon-separated directories), it replaces that
+- **`NOTEAPPC_MODULE_DIRS`.** Only in a build configured with `-DNOTEAPPC_DEV_ENV_OVERRIDES=ON` (the default for test builds, off in release): when set (colon-separated directories), it replaces that
   directory. The tests and the benchmark use it; it is also the way to try a build tree: point it at `<build>/modules`.
   A vault switch does not rescan: each window scans once, after its first paint (a module library is loaded once
   per process, by whichever window uses it first).

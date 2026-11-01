@@ -224,20 +224,9 @@ cat /etc/machine-id 2>&1 | head -1
 ```
 
 Without `bwrap` installed no block runs at all ("code runs only inside
-bubblewrap's sandbox"); it is never run unsandboxed on the quiet.
-
-### Running as you
-
-`#| sandbox: host` asks to run with your own files and network. It only counts
-when Settings > Core plugins "Let notes run code outside the sandbox" is on
-(it is off by default, so a shared note cannot take your files); off, the
-block runs sandboxed as if it had not asked. With the setting off this prints
-a temporary directory; with it on, your real home:
-
-```bash
-#| sandbox: host
-echo "HOME is $HOME"
-```
+bubblewrap's sandbox"); it is never run unsandboxed on the quiet. A block
+over `notebooks.maxRunnableBytes` (64 KiB by default) is not run either, and
+in a vault you have not trusted every block asks before it runs.
 
 ## Jupyter kernels
 
