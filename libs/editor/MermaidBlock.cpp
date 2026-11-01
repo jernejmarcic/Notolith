@@ -25,6 +25,7 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QSvgRenderer>
+#include "SafeSvg.h"
 #include <QTemporaryDir>
 #include <QThreadPool>
 #include <QtConcurrent>
@@ -363,7 +364,7 @@ Result sourceWithHint(const QString &source, QString hint)
 
 QImage rasteriseSVG(const QByteArray &svg, int width, qreal ratio, qreal *logicalScale)
 {
-    QSvgRenderer renderer(svg);
+    QSvgRenderer renderer(safeSvg(svg));
     QSizeF natural = renderer.isValid() ? QSizeF(renderer.defaultSize()) : QSizeF();
     if (natural.isEmpty() && renderer.isValid())
         natural = renderer.viewBoxF().size();

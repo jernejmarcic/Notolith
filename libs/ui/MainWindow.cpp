@@ -26,6 +26,7 @@
 #include <QWindow>
 #include <QHBoxLayout>
 #include <QImageReader>
+#include "ImageLoad.h"
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -4897,10 +4898,7 @@ void MainWindow::showPagePreview()
     // Images and PDFs preview as a picture, as in Obsidian. The reader looks
     // at the header first, so a note is never decoded as an image.
     if (QImageReader reader(path); reader.canRead()) {
-        QSize size = reader.size();
-        if (size.width() > 1040)
-            reader.setScaledSize(size.scaled(1040, size.height(), Qt::KeepAspectRatio));
-        const QImage image = reader.read();
+        const QImage image = readImage(path, 1040);
         if (!image.isNull())
             pagePreview()->showImage(image, m_previewPos);
         return;

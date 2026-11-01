@@ -291,6 +291,29 @@ TEST(ImageViewTest, AFileThatIsNotAnImageIsRefused)
     EXPECT_FALSE(error.isEmpty());
 }
 
+// Fails on the old code: an SVG in the vault drew a picture from any file it named.
+TEST(ImageViewTest, AnSVGThatNamesAFileDrawsNothingOfIt)
+{
+    QTemporaryDir dir;
+    QImage red(40, 40, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    const QString picture = dir.path() + QStringLiteral("/picture.png");
+    ASSERT_TRUE(red.save(picture));
+    const QString path = dir.path() + QStringLiteral("/x.svg");
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='40' height='40'>"
+                              "<image xlink:href='%1' width='40' height='40'/></svg>").arg(picture).toUtf8());
+    file.close();
+    ImageView view;
+    view.load(path); // loads (an empty drawing) or refuses; either way nothing of the picture
+    const QImage image = view.canvas()->image();
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x)
+            ASSERT_NE(image.pixelColor(x, y), QColor(Qt::red)) << x << "," << y;
+    }
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

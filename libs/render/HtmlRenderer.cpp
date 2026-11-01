@@ -17,6 +17,8 @@
 #include <litehtml.h>
 #include <litehtml/num_cvt.h>
 
+#include "ImageLoad.h"
+
 namespace noteAppC {
 
 namespace {
@@ -213,7 +215,7 @@ public:
         // get_image_size and draw_image both already treat as "draw
         // nothing", so a broken local path degrades the same way a remote
         // one does.
-        m_images.insert(path, QImage(path));
+        m_images.insert(path, readImage(path));
     }
 
     void get_image_size(const char *src, const char *baseurl, litehtml::size &sz) override

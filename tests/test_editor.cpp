@@ -10147,6 +10147,50 @@ TEST(HTMLBlockTest, AnImageThatLeavesTheVaultIsNotDrawn)
         << "control: a css url() inside the vault is drawn";
 }
 
+// Fails on the old code: Qt's SVG plugin loads an <image href> from any file, so an SVG of the vault, which the
+// resolver is happy with, drew a picture that was never in the vault - absolute, or "../" from its own folder.
+TEST(HTMLBlockTest, AnSVGThatNamesAFileOutsideTheVaultDrawsNothingOfIt)
+{
+    QTemporaryDir outer;
+    ASSERT_TRUE(outer.isValid());
+    const QString vault = outer.filePath(QStringLiteral("vault"));
+    ASSERT_TRUE(QDir().mkpath(vault + QStringLiteral("/sub")));
+    QImage red(80, 80, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    const QString outside = outer.filePath(QStringLiteral("outside.png"));
+    ASSERT_TRUE(red.save(outside));
+    const auto svgNaming = [](const QString &href) {
+        return QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' "
+                              "width='80' height='80'><image xlink:href='%1' width='80' height='80'/></svg>").arg(href).toUtf8();
+    };
+    const auto write = [&](const QString &name, const QByteArray &bytes) {
+        QFile file(vault + QLatin1Char('/') + name);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+    };
+    write(QStringLiteral("evil.svg"), svgNaming(outside));
+    write(QStringLiteral("sub/evil-relative.svg"), svgNaming(QStringLiteral("../../outside.png")));
+    write(QStringLiteral("ok.svg"), "<svg xmlns='http://www.w3.org/2000/svg' width='80' height='80'><rect width='80' height='80' fill='red'/></svg>");
+    const auto resolver = [vault](const QString &target) -> QString {
+        const QString path = QDir::cleanPath(QDir(vault).absoluteFilePath(target));
+        return path.startsWith(vault + QLatin1Char('/')) && QFileInfo::exists(path) ? path : QString();
+    };
+    const auto drawn = [&](const QString &note) {
+        auto editor = editorWith(note);
+        editor->setLinkResolver(resolver);
+        return redPixels(*editor);
+    };
+    EXPECT_GT(drawn(QStringLiteral("Intro\n\n![[ok.svg]]\n\nAfter\n")), 500) << "control: an SVG of the vault is drawn";
+    EXPECT_EQ(drawn(QStringLiteral("Intro\n\n![[evil.svg]]\n\nAfter\n")), 0) << "absolute href";
+    EXPECT_EQ(drawn(QStringLiteral("Intro\n\n![[sub/evil-relative.svg]]\n\nAfter\n")), 0) << "relative href";
+    if (HtmlRenderer::isAvailable()) {
+        EXPECT_GT(drawn(QStringLiteral("Intro\n\n<div style=\"padding:4px\"><img src=\"ok.svg\" width=\"80\" height=\"80\"></div>\n\nAfter\n")), 500)
+            << "control: an <img> of an SVG of the vault";
+        EXPECT_EQ(drawn(QStringLiteral("Intro\n\n<div style=\"padding:4px\"><img src=\"evil.svg\" width=\"80\" height=\"80\"></div>\n\nAfter\n")), 0)
+            << "<img> of an SVG that names a file";
+    }
+}
+
 TEST(HTMLBlockTest, CaretInsideRevealsSourceInsteadOfTheImage)
 {
     if (!HtmlRenderer::isAvailable())

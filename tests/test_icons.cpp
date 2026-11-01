@@ -105,6 +105,23 @@ TEST_F(IconsTest, LocalSVGFileLoadsAndIsRecoloured)
     EXPECT_TRUE(containsOpaquePixel(icon.pixmap(32, 32).toImage(), QColor(0, 200, 0)));
 }
 
+// Fails on the old code: Qt's SVG plugin loads an <image href> from any file, so an icon file drew a picture it names.
+TEST_F(IconsTest, ALocalSVGIconThatNamesAFileDrawsNothingOfIt)
+{
+    QTemporaryDir dir;
+    QImage red(24, 24, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    const QString picture = dir.filePath(QStringLiteral("picture.png"));
+    ASSERT_TRUE(red.save(picture));
+    const QString path = writeFile(dir.filePath(QStringLiteral("evil.svg")),
+                                   QStringLiteral("<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' "
+                                                  "width='24' height='24'><image xlink:href='%1' width='24' height='24'/></svg>")
+                                       .arg(picture).toUtf8());
+    const QIcon icon = Icons::icon(path, QColor(0, 0, 255), 24);
+    if (!icon.isNull())
+        EXPECT_FALSE(containsOpaquePixel(icon.pixmap(24, 24).toImage(), QColor(255, 0, 0)));
+}
+
 TEST_F(IconsTest, LocalRasterFileScalesWithoutDistortionAndIsNeverTinted)
 {
     QTemporaryDir dir;

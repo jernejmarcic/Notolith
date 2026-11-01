@@ -10,7 +10,7 @@
 # editor's EPUB embed card links just this, the reader links it too.
 add_library(noteAppC_epubcover STATIC EpubArchive.cpp EpubArchive.h EpubCover.cpp EpubCover.h)
 target_include_directories(noteAppC_epubcover PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_epubcover PUBLIC Qt6::Gui PRIVATE PkgConfig::LIBARCHIVE)
+target_link_libraries(noteAppC_epubcover PUBLIC Qt6::Gui PRIVATE noteAppC_theme PkgConfig::LIBARCHIVE)
 
 add_library(noteAppC_epub STATIC
     EpubDocument.cpp

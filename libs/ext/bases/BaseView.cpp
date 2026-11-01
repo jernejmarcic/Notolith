@@ -5,6 +5,7 @@
 #include "BaseTableModel.h"
 #include "Index.h"
 #include "Vault.h"
+#include "ImageLoad.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -514,8 +515,8 @@ void BaseView::loadCardImage(QLabel *target, const QString &absolutePath, const 
         m_imageCache.insert(cacheKey, new QPixmap(pixmap));
     });
     watcher->setFuture(QtConcurrent::run([absolutePath, size] {
-        QImage image;
-        if (!image.load(absolutePath))
+        const QImage image = readImage(absolutePath);
+        if (image.isNull())
             return QImage();
         return image.scaled(size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
     }));

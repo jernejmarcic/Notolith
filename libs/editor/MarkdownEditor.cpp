@@ -40,6 +40,7 @@
 #endif
 #include <QFileInfo>
 #include <QImageReader>
+#include "ImageLoad.h"
 #include <QLineEdit>
 #include <QLocale>
 #include <QMenu>
@@ -342,11 +343,10 @@ QString MarkdownEditor::attachmentPathOf(const EmbedSpan &embed) const
 
 QPixmap MarkdownEditor::loadEmbedPixmap(const QString &path) const
 {
+    // Through readImage / decodeImage: an SVG may not pull in files of its own.
     if (!path.startsWith(QLatin1String("attachment:")))
-        return QPixmap(path);
-    QPixmap pixmap;
-    pixmap.loadFromData(d->m_inlineImages.value(path.mid(11)));
-    return pixmap;
+        return QPixmap::fromImage(readImage(path));
+    return QPixmap::fromImage(decodeImage(d->m_inlineImages.value(path.mid(11))));
 }
 
 void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> resolver)

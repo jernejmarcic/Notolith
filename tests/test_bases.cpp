@@ -1205,7 +1205,7 @@ TEST_F(BasesIndexTest, ACardCoverOutsideTheVaultIsNotLoaded)
     ASSERT_TRUE(red.save(outsidePicture));
     ASSERT_TRUE(red.save(dir.filePath(QStringLiteral("in.png"))));
 
-    const auto coverLoaded = [&](const QString &cover, bool withResolver) {
+    const auto coverImage = [&](const QString &cover, bool withResolver) {
         write(QStringLiteral("Card.md"), ("---\ncover: \"" + cover + "\"\n---\n").toUtf8());
         Index index;
         EXPECT_TRUE(index.open(dir.path()));
@@ -1221,16 +1221,44 @@ TEST_F(BasesIndexTest, ACardCoverOutsideTheVaultIsNotLoaded)
                               QStringLiteral("filters:\n  and:\n    - file.name == \"Card\"\nviews:\n  - type: cards\n"
                                              "    image: cover\n    order: [file.name]\n")));
         EXPECT_TRUE(opened.wait(5000));
-        const auto hasPixmap = [&] {
+        QImage found;
+        QTest::qWaitFor([&] {
             for (QLabel *label : view.findChildren<QLabel *>()) {
                 if (label->size() == QSize(150, 90) && !label->pixmap().isNull())
-                    return true;
+                    found = label->pixmap().toImage();
             }
-            return false;
-        };
-        return QTest::qWaitFor(hasPixmap, 1500);
+            return !found.isNull();
+        }, 1500);
+        return found;
+    };
+    const auto coverLoaded = [&](const QString &cover, bool withResolver) {
+        return !coverImage(cover, withResolver).isNull();
+    };
+    const auto redIn = [](const QImage &image) {
+        qsizetype count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor c = image.pixelColor(x, y);
+                count += c.alpha() > 200 && c.red() > 200 && c.green() < 60 && c.blue() < 60;
+            }
+        }
+        return count;
     };
     EXPECT_TRUE(coverLoaded(QStringLiteral("in.png"), false)) << "control: a picture of the vault loads";
+    // An SVG of the vault is fine to show, but not for the file it names (Qt loads that from any path).
+    {
+        QFile ok(dir.filePath(QStringLiteral("ok.svg")));
+        ASSERT_TRUE(ok.open(QIODevice::WriteOnly));
+        ok.write("<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='red'/></svg>");
+        ok.close();
+        QFile evil(dir.filePath(QStringLiteral("evil.svg")));
+        ASSERT_TRUE(evil.open(QIODevice::WriteOnly));
+        evil.write(("<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='40' height='40'>"
+                    "<image xlink:href='" + outsidePicture + "' width='40' height='40'/></svg>").toUtf8());
+        evil.close();
+        EXPECT_GT(redIn(coverImage(QStringLiteral("ok.svg"), false)), 500) << "control: an SVG of the vault loads";
+        EXPECT_EQ(redIn(coverImage(QStringLiteral("evil.svg"), false)), 0);
+    }
     for (const bool withResolver : {true, false}) {
         EXPECT_FALSE(coverLoaded(outsidePicture, withResolver)) << "absolute, resolver " << withResolver;
         EXPECT_FALSE(coverLoaded(QDir(dir.path()).relativeFilePath(outsidePicture), withResolver))

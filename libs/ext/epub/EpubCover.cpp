@@ -1,4 +1,5 @@
 #include "EpubCover.h"
+#include "ImageLoad.h"
 
 #include "EpubArchive.h"
 
@@ -62,7 +63,7 @@ QImage epubCover(const QString &path, int maxSide)
     const QString entry = coverEntryOf(archive.read(opfPath), opfPath);
     if (entry.isEmpty() || !archive.contains(entry))
         return {};
-    QImage cover = QImage::fromData(archive.read(entry));
+    QImage cover = decodeImage(archive.read(entry)); // a book's SVG cover may not pull in files either
     if (cover.isNull() || (cover.width() <= maxSide && cover.height() <= maxSide))
         return cover;
     return cover.scaled(maxSide, maxSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);

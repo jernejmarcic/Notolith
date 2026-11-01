@@ -24,6 +24,8 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QSvgRenderer>
+#include "SafeSvg.h"
+#include "ImageLoad.h"
 #include <QUrl>
 
 namespace noteAppC {
@@ -126,7 +128,7 @@ QIcon iconFromSVG(QByteArray svg, const QColor &color, int size)
     // "is this the bundled Lucide path", the replace just never matches.
     svg.replace("currentColor", color.name().toLatin1());
 
-    QSvgRenderer renderer(svg);
+    QSvgRenderer renderer(safeSvg(svg)); // a user's own icon may not pull in files either
     if (!renderer.isValid())
         return {};
     const QRectF target = centeredTarget(renderer.viewBoxF().size(), size);
@@ -148,8 +150,8 @@ QIcon iconFromSVG(QByteArray svg, const QColor &color, int size)
 
 QIcon iconFromRaster(const QByteArray &bytes, int size)
 {
-    QImage image;
-    if (!image.loadFromData(bytes) || image.isNull())
+    const QImage image = decodeImage(bytes);
+    if (image.isNull())
         return {};
     const QRectF target = centeredTarget(image.size(), size);
 

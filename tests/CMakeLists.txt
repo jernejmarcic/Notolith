@@ -744,3 +744,8 @@ if(NOT NOTEAPPC_WITH_NETWORK)
         set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "LD_PRELOAD=$<TARGET_FILE:nettrap>")
     endforeach()
 endif()
+
+add_executable(test_safesvg test_safesvg.cpp)
+target_link_libraries(test_safesvg PRIVATE noteAppC_theme noteAppC_markdown Qt6::Svg GTest::gtest)
+add_test(NAME safesvg COMMAND test_safesvg)
+set_tests_properties(safesvg PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
