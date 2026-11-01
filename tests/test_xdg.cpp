@@ -3,16 +3,21 @@
 
 #include <gtest/gtest.h>
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QLockFile>
 #include <QSettings>
 #include <QTemporaryDir>
 
 #include "ConfigFile.h"
 #include "MessageLog.h"
 #include "Settings.h"
+#include "SingleInstance.h"
 #include "StorageMigration.h"
 
 #include <QCryptographicHash>
@@ -585,4 +590,92 @@ TEST(StorageMigration, NothingOlderHereMeansNothingToDo)
     OldLayout machine;
     machine.populate();
     EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Fresh);
+}
+
+TEST(XDGroot, AnEmptyPathIsNotADirectoryToMake)
+{
+    EXPECT_FALSE(ensurePrivateDir(QString()));
+    QTemporaryDir dir;
+    const QString own = dir.filePath(QStringLiteral("own"));
+    ASSERT_TRUE(ensurePrivateDir(own));
+    EXPECT_TRUE(isOwnPrivateDir(own));
+    const QString open = dir.filePath(QStringLiteral("open"));
+    ASSERT_TRUE(QDir().mkdir(open));
+    ASSERT_TRUE(QFile::setPermissions(open, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                                | QFileDevice::ReadOther | QFileDevice::ExeOther));
+    EXPECT_FALSE(isOwnPrivateDir(open));
+    const QString link = dir.filePath(QStringLiteral("link"));
+    ASSERT_TRUE(QFile::link(own, link));
+    EXPECT_FALSE(isOwnPrivateDir(link)) << "a link is not the directory itself";
+    EXPECT_FALSE(isOwnPrivateDir(QString()));
+    EXPECT_FALSE(isOwnPrivateDir(dir.filePath(QStringLiteral("missing"))));
+}
+
+TEST(SingleInstance, TheSocketDirectoryIsTheUsersOwnAndClosedToOthersOrItIsTheStateDirectory)
+{
+    Environment environment;
+    QTemporaryDir home;
+    qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    qputenv("HOME", home.path().toUtf8());
+    qputenv("XDG_STATE_HOME", home.filePath(QStringLiteral("state")).toUtf8());
+    const QString run = home.filePath(QStringLiteral("run"));
+    ASSERT_TRUE(QDir().mkpath(run));
+    qputenv("XDG_RUNTIME_DIR", run.toUtf8());
+    const QString state = home.filePath(QStringLiteral("state/notolith/instance"));
+
+    EXPECT_EQ(SingleInstance::baseName(), run + QStringLiteral("/notolith/instance"));
+    EXPECT_TRUE(isOwnPrivateDir(run + QStringLiteral("/notolith")));
+
+    // Someone else's arrangement of the name: a link to a directory, a directory open to all.
+    ASSERT_TRUE(QDir(run + QStringLiteral("/notolith")).removeRecursively());
+    const QString elsewhere = home.filePath(QStringLiteral("elsewhere"));
+    ASSERT_TRUE(ensurePrivateDir(elsewhere));
+    ASSERT_TRUE(QFile::link(elsewhere, run + QStringLiteral("/notolith")));
+    EXPECT_EQ(SingleInstance::baseName(), state);
+    ASSERT_TRUE(QFile::remove(run + QStringLiteral("/notolith")));
+    ASSERT_TRUE(QDir().mkdir(run + QStringLiteral("/notolith")));
+    ASSERT_TRUE(QFile::setPermissions(run + QStringLiteral("/notolith"), QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                                                              | QFileDevice::ExeOwner | QFileDevice::WriteOther
+                                                                              | QFileDevice::ReadOther | QFileDevice::ExeOther));
+    EXPECT_EQ(SingleInstance::baseName(), state);
+    EXPECT_TRUE(isOwnPrivateDir(home.filePath(QStringLiteral("state/notolith")))) << "the fallback is made private too";
+}
+
+TEST(SingleInstance, AnOpenWindowOfTheBuildBeforeIsFoundAndGivenTheLaunch)
+{
+    int argc = 1;
+    char name[] = "test_xdg";
+    char *argv[] = {name, nullptr};
+    QCoreApplication app(argc, argv);
+    Environment environment;
+    QTemporaryDir run;
+    QTemporaryDir vaultA, vaultB;
+    ASSERT_TRUE(QDir(vaultA.path()).mkpath(QStringLiteral(".obsidian")));
+    ASSERT_TRUE(QDir(vaultB.path()).mkpath(QStringLiteral(".obsidian")));
+    qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    qputenv("XDG_RUNTIME_DIR", run.path().toUtf8());
+    const QString id = SingleInstance::nameForVault(vaultA.path()).section(QLatin1String("instance-"), 1);
+    const QString oldName = run.path() + QStringLiteral("/notolith-") + id; // where the build before listened
+    EXPECT_TRUE(SingleInstance::previousBuildSockets().isEmpty());
+
+    QLockFile held(oldName + QStringLiteral(".lock")); // what that build held while its window ran
+    held.setStaleLockTime(0);
+    ASSERT_TRUE(held.tryLock());
+    QLocalServer window;
+    ASSERT_TRUE(window.listen(oldName));
+    EXPECT_EQ(SingleInstance::previousBuildSockets(), QStringList{oldName});
+
+    // Another vault has no such window: nothing is delivered, and the caller refuses the launch.
+    EXPECT_FALSE(SingleInstance::handOverToPreviousBuild(SingleInstance::launchFor(vaultB.path()), vaultB.path()));
+    EXPECT_TRUE(SingleInstance::handOverToPreviousBuild(SingleInstance::launchFor(vaultA.path()), vaultA.path(), "tok"));
+    ASSERT_TRUE(window.waitForNewConnection(1000));
+    QLocalSocket *got = window.nextPendingConnection();
+    ASSERT_TRUE(got->waitForReadyRead(1000));
+    EXPECT_EQ(got->readLine(), QByteArray("tok\t" + vaultA.path().toUtf8() + "\n"));
+    // A launch that names no vault goes to a window that is open: the settings that say which are not moved yet.
+    EXPECT_TRUE(SingleInstance::handOverToPreviousBuild(SingleInstance::launchFor(QString()), QString(), "t2"));
+
+    held.unlock();
+    window.close();
+    EXPECT_TRUE(SingleInstance::previousBuildSockets().isEmpty()) << "no owner, no window";
 }

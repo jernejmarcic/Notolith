@@ -35,8 +35,14 @@ QStringList xdgSearchDirs(XDGroot root);
 
 /// Creates `path` and every missing parent with mode 0700, the spec's mode for
 /// a directory it has to create. A directory that is already there is left as
-/// it is. False when it cannot be made.
+/// it is. False when it cannot be made, and for an empty path.
 bool ensurePrivateDir(const QString &path);
+
+/// True when `path` itself (not what a symbolic link there points at) is a directory
+/// this user owns that nobody else can enter: what a socket or lock directory has to
+/// be before anything is put in it. A path in a shared directory such as /tmp never is
+/// one unless this process made it.
+bool isOwnPrivateDir(const QString &path);
 
 /// The key of a vault in every per-vault path: 16 hex of the SHA-256 of its
 /// absolute path.

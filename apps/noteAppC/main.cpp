@@ -8,8 +8,11 @@
 #include <QDateTime>
 #include <QDir>
 #include <QIcon>
+#include <QMessageBox>
+#include <QStatusBar>
 #include <QTimer>
 
+#include <optional>
 #include <thread>
 #ifdef __GLIBC__
 #include <malloc.h>
@@ -67,6 +70,8 @@ struct FirstPaintLog : QObject {
 
 // What migrateStorage() did, told once the log file is open.
 QStringList migrationLines;
+// What it could not move; also shown in the window.
+QStringList migrationWarnings;
 
 void setApplicationNames()
 {
@@ -116,6 +121,17 @@ void installMessageLog()
     previousHandler = qInstallMessageHandler(logMessage);
     for (const QString &line : std::as_const(migrationLines))
         qInfo().noquote() << line;
+    for (const QString &line : std::as_const(migrationWarnings))
+        qWarning().noquote() << line;
+}
+
+// A start that ends without a log (a hand-over) says on the terminal what the migration did.
+void reportMigrationToTerminal()
+{
+    for (const QString &line : std::as_const(migrationLines))
+        std::fprintf(stderr, "%s\n", qPrintable(line));
+    for (const QString &line : std::as_const(migrationWarnings))
+        std::fprintf(stderr, "%s\n", qPrintable(line));
 }
 
 struct Options {
@@ -140,32 +156,76 @@ QString handOverArgument(const QStringList &args)
     return args.isEmpty() ? QString() : QFileInfo(args.first()).absoluteFilePath();
 }
 
+constexpr int kOlderWindowOpen = 3;
+
+// Moves the files of a build from before the XDG layout to where they belong, once, when a start follows.
+// Before anything reads the settings. Not for --help and --version, and not for a launch that only hands
+// its path to a window that is running. An older build's window that is still open keeps writing in its
+// own directories, so nothing moves while one is: the launch goes to that window, or is refused.
+// Returns the exit code when the process is done, nothing when it carries on.
+std::optional<int> settleStorage(const QString &argument)
+{
+    const noteAppC::MigrationNeed need = noteAppC::storageMigrationNeed();
+    if (need == noteAppC::MigrationNeed::None)
+        return std::nullopt;
+    const auto launch = [&] { return noteAppC::SingleInstance::launchFor(argument); };
+    // An earlier start left files behind: a window of this build may be up, and a launch for it moves nothing.
+    if (need == noteAppC::MigrationNeed::Retry && noteAppC::SingleInstance(launch()).handOver(argument))
+        return 0;
+    if (!noteAppC::SingleInstance::previousBuildSockets().isEmpty()) {
+        if (noteAppC::SingleInstance::handOverToPreviousBuild(launch(), argument))
+            return 0;
+        return kOlderWindowOpen;
+    }
+    noteAppC::migrateStorage(&migrationLines, &migrationWarnings);
+    return std::nullopt;
+}
+
+// Said when settleStorage() refused: on the terminal, and in a box when there is a display to show it on.
+void refuseWhileOlderWindowOpen(int argc, char *argv[])
+{
+    const QString text = QCoreApplication::translate(
+        "Notolith", "An older version of Notolith is still open. Close it, then start Notolith again: its files "
+                    "are moved to their new places when it starts.");
+    std::fprintf(stderr, "Notolith: %s\n", qPrintable(text));
+    if (qApp) {
+        QMessageBox::warning(nullptr, QStringLiteral("Notolith"), text);
+        return;
+    }
+    if (qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY") && qEnvironmentVariableIsEmpty("DISPLAY"))
+        return;
+    QApplication app(argc, argv);
+    QMessageBox::warning(nullptr, QStringLiteral("Notolith"), text);
+}
+
 // Help, version and the hand-over to a running Notolith need no window
 // system, so they are answered by a plain QCoreApplication: no platform
 // plugin, no platform theme, no style, no icon theme (85 ms of CPU for
 // `--help` before, most of it QApplication's constructor). Anything this
 // cannot settle - a Qt option such as -platform, a mistake in the
 // arguments - falls through to the full start, which reports it as before.
-bool answeredWithoutGUI(int argc, char *argv[])
+std::optional<int> answeredWithoutGUI(int argc, char *argv[])
 {
     QCoreApplication core(argc, argv);
     setApplicationNames();
-    // Before anything reads the settings: a build from before the XDG layout kept its files elsewhere.
-    noteAppC::migrateStorage(&migrationLines);
     Options options;
     if (!options.parser.parse(core.arguments()))
-        return false;
+        return std::nullopt;
     if (options.parser.isSet(options.help) && !core.arguments().contains(QStringLiteral("--help-all")))
         options.parser.showHelp(0);
     if (options.parser.isSet(options.version)) {
         std::printf("Notolith %s\n", NOTEAPPC_VERSION);
-        return true;
+        return 0;
     }
     // One Notolith per vault: a launch while one has that vault open (a note
     // opened from the file manager) gives it the path and ends here.
     const QString argument = handOverArgument(options.parser.positionalArguments());
+    if (const std::optional<int> done = settleStorage(argument))
+        return done;
     noteAppC::SingleInstance instance(noteAppC::SingleInstance::launchFor(argument));
-    return instance.handOver(argument);
+    if (instance.handOver(argument))
+        return 0;
+    return std::nullopt;
 }
 
 } // namespace
@@ -187,8 +247,14 @@ int main(int argc, char *argv[])
         // argc by value: QGuiApplication below strips the Qt options from
         // the real one, and this pass must not see that half done.
         int coreArgc = argc;
-        if (answeredWithoutGUI(coreArgc, argv))
-            return 0;
+        if (const std::optional<int> done = answeredWithoutGUI(coreArgc, argv)) {
+            reportMigrationToTerminal();
+            if (*done == kOlderWindowOpen) {
+                refuseWhileOlderWindowOpen(argc, argv);
+                return 1;
+            }
+            return *done;
+        }
     }
     // Fusion, so the window looks the same whatever desktop theme is set;
     // everything visible on top of it comes from Theme's tokens. Set before
@@ -215,6 +281,15 @@ int main(int argc, char *argv[])
     options.parser.process(app);
     const QStringList args = options.parser.positionalArguments();
     const QString argument = handOverArgument(args);
+    // The first pass settled this when it could parse the arguments; a Qt option it could not is settled here.
+    if (const std::optional<int> done = settleStorage(argument)) {
+        reportMigrationToTerminal();
+        if (*done == kOlderWindowOpen) {
+            refuseWhileOlderWindowOpen(argc, argv);
+            return 1;
+        }
+        return *done;
+    }
     noteAppC::SingleInstance instance(noteAppC::SingleInstance::launchFor(argument));
     if (instance.handOver(argument))
         return 0;
@@ -237,6 +312,10 @@ int main(int argc, char *argv[])
         window.installEventFilter(&paintLog);
     window.show();
     startLog("shown");
+    if (!migrationWarnings.isEmpty())
+        window.statusBar()->showMessage(
+            QCoreApplication::translate("Notolith", "Some files of the previous version could not be moved; see the log."),
+            15000);
     window.openWhenShown(target);
 
 #ifdef __GLIBC__
