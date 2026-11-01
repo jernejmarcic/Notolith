@@ -879,12 +879,14 @@ QWidget *SettingsPage::buildFilesPage()
                   tr("File types left out of the file list, separated by commas or spaces: png, pdf, "
                      "tar.gz. Hidden from the file list only; search and links still find them."),
                   tr("png, pdf, tar.gz"));
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
     addToggleRow(layout, QStringLiteral("encryption.unlockAtStartup"), tr("Unlock encrypted notes on startup"),
                 tr("Ask for the password when the vault opens. Off asks the first time an "
                    "encrypted note is opened. Either way it lasts until locked or the app closes."));
     addSpinRow(layout, QStringLiteral("encryption.autoLockMinutes"), tr("Lock encrypted notes after"),
               tr("Minutes without typing or clicking before encrypted notes lock and close. 0 never."),
               0, 1440);
+#endif
     addToggleRow(layout, QStringLiteral("files.autosave"), tr("Save automatically"),
                 tr("Save a note a moment after typing stops, and before it is closed or left, "
                    "as Obsidian does. Off asks before closing a note with unsaved changes."));
