@@ -13,12 +13,15 @@ advisories, email jernej.marcic@pm.me. This is a one-person project.
 ## What the sandbox covers
 
 Code blocks, Jupyter kernels, diagram renderers (Mermaid, PlantUML, Graphviz),
-TeX, pandoc and plugins run under bubblewrap with a seccomp filter. Inside:
-read-only `/usr` and a few `/etc` entries, an empty temporary `/tmp`, no
-network, no view of your home directory or the vault, CPU, memory, file and
-time limits. If `bwrap` or libseccomp is missing, they refuse to run; there is
-no unsandboxed fallback. A vault is untrusted until you trust it, and nothing
-runs without a click. Details: `docs/NOTEBOOKS.md#sandbox`.
+TeX, pandoc and plugins run under bubblewrap with a seccomp filter. They see
+read-only `/usr` and a few `/etc` entries and an empty temporary `/tmp`, and run
+under CPU, memory, file and time limits. Inside there is no network and no home
+directory; only a private temporary folder is writable; the vault files a run
+needs are visible read-only (a runnable embed: its folder; a pandoc export: the
+note's folder, the vault and its attachment folder). A plugin gets the network
+only if you grant it. If `bwrap` or libseccomp is missing, they refuse to run;
+there is no unsandboxed fallback. A vault is untrusted until you trust it, and
+nothing runs without a click. Details: `docs/NOTEBOOKS.md#sandbox`.
 
 ## What it does not cover
 

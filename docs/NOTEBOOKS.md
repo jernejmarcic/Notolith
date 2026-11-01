@@ -183,23 +183,24 @@ a reopened note shows only output that matches the code as written.
 
 Every block, kernel and wasm module runs under bubblewrap, and there is no way
 to run one as you. Inside: `/usr` and a few `/etc` entries (the loader cache,
-fonts, the timezone, the passwd, group and nsswitch files; not the machine id
-or hostname; the passwd and group files are a one-line pair made for the
-block, not the system's) read-only, a fresh empty `/tmp` and `/dev/shm` of 64 MiB
-each, no network, its own
-pid, user, ipc, uts and cgroup namespaces (a block sees only its own
-processes, none of the app's), no capabilities, and nothing of the home
-directory or the vault - only its own temporary directory, which is its `HOME`
-too. A seccomp filter (libseccomp, required) makes namespaces and mounts,
-ptrace, the kernel keyring, BPF, modules, io_uring, perf, userfaultfd and
-`TIOCSTI` answer "operation not permitted", and sockets of the families
-vsock, alg, key, packet, rds, tipc, xdp and bluetooth answer "address
+fonts, the timezone, the passwd, group and nsswitch files; not the machine id or
+hostname; the passwd and group files are a one-line pair made for the block, not
+the system's) read-only, a fresh empty `/tmp` and `/dev/shm` of 64 MiB each, its
+own pid, user, ipc, uts and cgroup namespaces (a block sees only its own
+processes, none of the app's), and no capabilities. Its own temporary directory
+is its `HOME`. Inside there is no network and no home directory; only a private
+temporary folder is writable; the vault files a run needs are visible read-only
+(a runnable embed: its folder; a pandoc export: the note's folder, the vault and
+its attachment folder). A seccomp filter (libseccomp, required) makes namespaces
+and mounts, ptrace, the kernel keyring, BPF, modules, io_uring, perf,
+userfaultfd and `TIOCSTI` answer "operation not permitted", and sockets of the
+families vsock, alg, key, packet, rds, tipc, xdp and bluetooth answer "address
 family not supported" (and so does netlink except its route protocol, which
-getifaddrs and so every Jupyter kernel needs). The limits: CPU time, data memory, file size, open
-files and processes (`prlimit` inside), a wall-clock timeout, and 1 MiB of
-output. Without `bwrap` or libseccomp no block runs; there is no unsandboxed
-fallback, and a kernel, a diagram, a TeX or a pandoc run is refused the same
-way, with a message.
+getifaddrs and so every Jupyter kernel needs). The limits: CPU time, data
+memory, file size, open files and processes (`prlimit` inside), a wall-clock
+timeout, and 1 MiB of output. Without `bwrap` or libseccomp no block runs; there
+is no unsandboxed fallback, and a kernel, a diagram, a TeX or a pandoc run is
+refused the same way, with a message.
 
 What the per-process limits cannot add up is capped by a cgroup: when
 `systemd-run` is installed and a systemd user manager answers, every sandbox
