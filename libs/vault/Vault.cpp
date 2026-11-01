@@ -261,18 +261,6 @@ QByteArray Vault::encode(const Note &note)
     return note.bom ? kBom + text.toUtf8() : text.toUtf8();
 }
 
-bool Vault::read(const QString &path, Note &out, QString *error)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        if (error)
-            *error = file.errorString();
-        return false;
-    }
-    out = decode(file.readAll());
-    return true;
-}
-
 bool Vault::write(const QString &path, const Note &note, QString *error)
 {
     if (note.lossy) {
@@ -321,6 +309,54 @@ QString errnoText(int err)
     return QString::fromLocal8Bit(std::strerror(err));
 }
 } // namespace
+
+bool Vault::readBytes(const QString &path, QByteArray *out, QString *error, qint64 maxBytes)
+{
+    const auto fail = [error](const QString &what) {
+        if (error)
+            *error = what;
+        return false;
+    };
+    // O_NONBLOCK so that a named pipe in the place of a note cannot hold the open.
+    const Fd file(::open(QFile::encodeName(path).constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
+    if (file.fd < 0)
+        return fail(errnoText(errno));
+    struct stat info {};
+    if (::fstat(file.fd, &info) < 0)
+        return fail(errnoText(errno));
+    if (!S_ISREG(info.st_mode))
+        return fail(QStringLiteral("%1 is not a regular file").arg(path));
+    const QString tooLarge = QStringLiteral("%1 is too large to open (over %2 MiB)").arg(path).arg(maxBytes >> 20);
+    // Asked of the open file, so a swap after any earlier look changes nothing; the read below stops one
+    // byte past the limit, for a file that grows while it is read.
+    if (maxBytes >= 0 && info.st_size > maxBytes)
+        return fail(tooLarge);
+    QByteArray bytes;
+    char buffer[1 << 16];
+    for (;;) {
+        const ssize_t n = ::read(file.fd, buffer, sizeof buffer);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0)
+            return fail(errnoText(errno));
+        if (n == 0)
+            break;
+        bytes.append(buffer, n);
+        if (maxBytes >= 0 && bytes.size() > maxBytes)
+            return fail(tooLarge);
+    }
+    *out = std::move(bytes);
+    return true;
+}
+
+bool Vault::read(const QString &path, Note &out, QString *error, qint64 maxBytes)
+{
+    QByteArray bytes;
+    if (!readBytes(path, &bytes, error, maxBytes))
+        return false;
+    out = decode(bytes);
+    return true;
+}
 
 bool Vault::copyReplacing(const QString &source, const QString &target, QString *error)
 {

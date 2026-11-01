@@ -301,6 +301,34 @@ TEST(VaultIo, ReadReportsAMissingFile)
     EXPECT_FALSE(error.isEmpty());
 }
 
+TEST(VaultIo, ReadRefusesAFileOverItsLimitWithoutReadingIt)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString big = dir.filePath(QStringLiteral("huge.md"));
+    {
+        QFile file(big);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(qint64(1) << 30)); // sparse
+    }
+    Note note;
+    QString error;
+    EXPECT_FALSE(Vault::read(big, note, &error)) << "the default is the note cap";
+    EXPECT_TRUE(error.contains(QStringLiteral("too large to open"))) << error.toStdString();
+    EXPECT_TRUE(note.text.isEmpty());
+
+    const QString small = dir.filePath(QStringLiteral("small.md"));
+    {
+        QFile file(small);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("0123456789");
+    }
+    EXPECT_TRUE(Vault::read(small, note, &error, 10)) << "exactly at the limit";
+    EXPECT_FALSE(Vault::read(small, note, &error, 9)) << "one over";
+    EXPECT_TRUE(Vault::read(small, note, &error, -1)) << "no limit";
+    EXPECT_FALSE(Vault::read(dir.path(), note, &error)) << "not a file";
+}
+
 TEST(VaultPaths, NoteExtensions)
 {
     EXPECT_TRUE(Vault::isNote(QStringLiteral("/v/a.md")));

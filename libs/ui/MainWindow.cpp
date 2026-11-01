@@ -591,6 +591,12 @@ MainWindow::MainWindow(QWidget *parent)
                                            .arg(milliseconds)
                                      : tr("Index up to date"),
                                  4000);
+        const int large = int(m_indexer->tooLargeFiles().size());
+        if (large > 0) {
+            statusBar()->showMessage(tr("%n file(s) over 32 MiB were not indexed and cannot be opened (see the log)",
+                                        nullptr, large),
+                                     10'000);
+        }
         // No onIndexChanged() here: Index::changed has already fired, from
         // open() for a vault that was up to date and from the batch for one
         // that was not. Both ran it, 210 ms apiece on 20 000 notes.
@@ -7564,14 +7570,10 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error, bool s
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
     // A Jupyter notebook: its cells as text (docs/NOTEBOOKS.md), outputs seeded into the cache.
     if (isNotebookFile(path)) {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) {
-            if (error)
-                *error = file.errorString();
+        QByteArray bytes;
+        if (!Vault::readBytes(path, &bytes, error))
             return false;
-        }
         out = Note();
-        const QByteArray bytes = file.readAll();
         if (seedOutputs) {
             // The file is the truth from here: what ran before it was read (and was discarded) is not its to save.
             m_notebookDirty.remove(path);
@@ -7600,13 +7602,10 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error, bool s
             *error = tr("Encrypted notes are switched off in Core plugins");
         return false;
     }
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        if (error)
-            *error = file.errorString();
+    QByteArray sealed;
+    if (!Vault::readBytes(path, &sealed, error))
         return false;
-    }
-    std::optional<QByteArray> plain = m_encryption->open(file.readAll(), error);
+    std::optional<QByteArray> plain = m_encryption->open(sealed, error);
     if (!plain)
         return false;
     out = Vault::decode(*plain);

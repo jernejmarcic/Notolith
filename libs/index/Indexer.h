@@ -71,14 +71,14 @@ public:
     /// per lower-case suffix, set for each of `suffixes`; an empty one clears
     /// them. `setNotebookReader` is this for "ipynb". Rescans
     /// when a suffix gains or loses its reader and the vault is valid. A file
-    /// over `maxBytes` is never read (0: no limit, the notebook default), so a
-    /// hostile multi-GB file costs nothing.
+    /// over `maxBytes` is never read (0: no limit; the default is Vault::kMaxNoteBytes, the
+    /// same cap a Markdown note has), so a hostile multi-GB file costs nothing.
     using ForeignReader = NotebookReader;
     struct ForeignSource {
         ForeignReader read;
-        qint64 maxBytes = 0;
+        qint64 maxBytes = Vault::kMaxNoteBytes;
     };
-    void setForeignReader(const QStringList &suffixes, ForeignReader reader, qint64 maxBytes = 0);
+    void setForeignReader(const QStringList &suffixes, ForeignReader reader, qint64 maxBytes = Vault::kMaxNoteBytes);
 
     /// Meta notes are indexed (for `meta:` search) only while
     /// `options.metaNotes` is on, by its `open`/`close`; the rest of `options`
@@ -94,6 +94,15 @@ public:
     /// permission): changes made outside the app are then found by a rescan
     /// every 30 s instead of at once.
     bool pollsForChanges() const { return m_poll.isActive(); }
+
+    /// Vault-relative paths the scans skipped for being over their size limit (32 MiB for a note or a
+    /// notebook), sorted; each was logged once. Not indexed, so not searchable; opening one says why not.
+    QStringList tooLargeFiles() const
+    {
+        QStringList files(m_tooLarge.cbegin(), m_tooLarge.cend());
+        files.sort();
+        return files;
+    }
 
     /// How many scans have walked the whole vault, for the tests: a save or an
     /// outside change reads only the folders the watcher named.
@@ -114,6 +123,7 @@ private:
         Metadata metadata;
         QString body;
         bool ok = false;
+        bool tooLarge = false; ///< not ok because the file is over its size limit
     };
     static Parsed parseFile(const QString &path, const QHash<QString, ForeignSource> &foreign, const ParseOptions &options);
     bool isForeign(const QString &path) const; ///< a suffix with a reader set
@@ -123,6 +133,7 @@ private:
     struct Batch {
         quint64 scan = 0; ///< stale once stop() has moved m_scanNumber on
         QList<QPair<QString, QStringList>> names; ///< vault-relative path, its names now (none: gone)
+        QStringList tooLarge; ///< vault-relative, skipped for size in this chunk
         int done = 0;
         int total = 0;
         bool last = false;
@@ -169,6 +180,7 @@ private:
     QStringList m_scanPaths; ///< what the running scan was asked for; empty for the whole vault
     bool m_scanWhole = false; ///< the running scan walks the whole vault
     QHash<QString, ForeignSource> m_foreignReaders; ///< by lower-case suffix
+    QSet<QString> m_tooLarge; ///< see tooLargeFiles()
     DirWatcher m_files;
     QTimer m_debounce;
     QTimer m_poll; ///< runs only while some folder has no watch

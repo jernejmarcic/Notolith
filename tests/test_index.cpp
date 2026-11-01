@@ -387,7 +387,8 @@ TEST_F(IndexTest, AForeignReaderMakesASuffixANoteAndNotebooksStillWork)
     EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Sketch.draft")));
 }
 
-// A reader's maxBytes keeps a huge file from being read whole; 0 (the notebook default) is no limit.
+// A reader's maxBytes keeps a huge file from being read whole; an explicit 0 is no limit. The notebook default is
+// Vault::kMaxNoteBytes (see ANoteOrNotebookOverTheNoteCapIsSkippedAndTheRestIndexes).
 TEST_F(IndexTest, AForeignReaderMaxBytesSkipsBigFilesAndZeroIsUnlimited)
 {
     for (const char *name : {"Big.draft", "Small.draft", "Big.ipynb"}) {
@@ -405,7 +406,49 @@ TEST_F(IndexTest, AForeignReaderMaxBytesSkipsBigFilesAndZeroIsUnlimited)
     ASSERT_TRUE(done.wait(20000));
     EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Big.draft"))) << "over its reader's cap: never read";
     EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Small.draft")));
-    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Big.ipynb"))) << "a notebook has no cap";
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Big.ipynb"))) << "2 MiB is under the notebook cap";
+}
+
+// A stranger's vault can hold a sparse multi-GB note or notebook: the scan skips it, says so, and goes on.
+TEST_F(IndexTest, ANoteOrNotebookOverTheNoteCapIsSkippedAndTheRestIndexes)
+{
+    write(QStringLiteral("Fine.md"), "# Fine\n\nzeppelin\n");
+    for (const char *name : {"huge.md", "huge.ipynb"}) {
+        QFile file(vault.absolute(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(qint64(1) << 30)); // sparse: 1 GiB of zeros
+    }
+    Index index;
+    Indexer indexer(&index);
+    indexer.setNotebookReader([](const QByteArray &) -> std::optional<QString> { return QStringLiteral("text\n"); });
+    QSignalSpy done(&indexer, &Indexer::finished);
+    QElapsedTimer timer;
+    timer.start();
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_LT(timer.elapsed(), 5000) << "never read, so quick";
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Fine.md")));
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("huge.md")));
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("huge.ipynb")));
+    EXPECT_EQ(indexer.tooLargeFiles(), (QStringList{QStringLiteral("huge.ipynb"), QStringLiteral("huge.md")}));
+
+    // A second scan names nothing new: the list is the same two files, not four.
+    QSignalSpy again(&indexer, &Indexer::finished);
+    indexer.rebuild();
+    ASSERT_TRUE(again.wait(20000));
+    EXPECT_EQ(indexer.tooLargeFiles().size(), 2);
+
+    // Cut down under the cap, the note indexes and leaves the list.
+    QFile shrink(vault.absolute(QStringLiteral("huge.md")));
+    ASSERT_TRUE(shrink.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(shrink.resize(0));
+    shrink.write("# Shrunk\n");
+    shrink.close();
+    QSignalSpy third(&indexer, &Indexer::finished);
+    indexer.rebuild();
+    ASSERT_TRUE(third.wait(20000));
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("huge.md")));
+    EXPECT_EQ(indexer.tooLargeFiles(), QStringList{QStringLiteral("huge.ipynb")});
 }
 
 // A file that grows past its reader's cap leaves the index: its old row would otherwise show text the file no longer has.

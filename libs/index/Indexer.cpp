@@ -49,10 +49,9 @@ Parser &threadParser()
 /// the index keeps still match what the editor shows.
 void readInvalidBytesAsLatin1(const QString &path, Note &note)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
+    QByteArray bytes;
+    if (!Vault::readBytes(path, &bytes))
         return;
-    const QByteArray bytes = file.readAll();
     QString units; // one character per U+FFFD the decode of `bytes` produced
     for (qsizetype i = note.bom ? 3 : 0; i < bytes.size();) {
         const uchar lead = uchar(bytes.at(i));
@@ -175,16 +174,17 @@ void Indexer::setVault(const Vault &vault)
 namespace {
 
 /// A foreign file's text through its reader: nullopt when there is none for the suffix, the file cannot be read,
-/// it is over the reader's cap (never read whole: not a multi-GB file) or the reader refuses it.
+/// it is over the reader's cap (never read whole: not a multi-GB file, nor one that grows while it is read) or
+/// the reader refuses it.
 std::optional<QString> readForeign(const QString &path, const QHash<QString, Indexer::ForeignSource> &foreign)
 {
     const auto reader = foreign.constFind(QFileInfo(path).suffix().toLower());
     if (reader == foreign.cend())
         return std::nullopt;
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly) || (reader->maxBytes > 0 && file.size() > reader->maxBytes))
+    QByteArray bytes;
+    if (!Vault::readBytes(path, &bytes, nullptr, reader->maxBytes > 0 ? reader->maxBytes : -1))
         return std::nullopt;
-    return reader->read(file.readAll());
+    return reader->read(bytes);
 }
 
 } // namespace
@@ -436,11 +436,13 @@ void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QS
         for (const Parsed &parsed : current.results()) {
             if (!parsed.ok) {
                 // A foreign file its reader refuses now (it grew past the cap, was cut mid-write) is not indexed: its
-                // row from an earlier scan would show text the file no longer has.
-                if (foreign.contains(QFileInfo(parsed.metadata.path).suffix().toLower())) {
+                // row from an earlier scan would show text the file no longer has. A note over the cap likewise.
+                if (parsed.tooLarge || foreign.contains(QFileInfo(parsed.metadata.path).suffix().toLower())) {
                     writer.remove(parsed.metadata.path);
                     batch.names.append({vault.relative(parsed.metadata.path), {}});
                 }
+                if (parsed.tooLarge)
+                    batch.tooLarge << vault.relative(parsed.metadata.path);
                 continue;
             }
             batch.names.append({vault.relative(parsed.metadata.path), writer.put(parsed.metadata, parsed.body)});
@@ -467,8 +469,18 @@ void Indexer::apply(const Batch &batch)
         watch(batch.directories, batch.partial);
         return;
     }
-    for (const auto &[relative, names] : batch.names)
+    const QSet<QString> large(batch.tooLarge.cbegin(), batch.tooLarge.cend());
+    for (const auto &[relative, names] : batch.names) {
         m_index->setNames(relative, names);
+        if (!large.contains(relative))
+            m_tooLarge.remove(relative); // gone, or read again under the cap
+    }
+    for (const QString &relative : large) {
+        if (!m_tooLarge.contains(relative)) { // one line each, not one per scan
+            m_tooLarge.insert(relative);
+            qWarning().noquote() << "not indexed, over its size limit:" << relative;
+        }
+    }
     m_wrote = m_wrote || !batch.names.isEmpty();
     m_indexed = batch.done;
     if (!batch.last) {
@@ -499,12 +511,19 @@ Indexer::Parsed Indexer::parseFile(const QString &path, const QHash<QString, For
     Parsed parsed;
     parsed.metadata.path = path; // also when it fails: the scan drops a foreign file's old row
     Note note;
-    if (foreign.contains(QFileInfo(path).suffix().toLower())) {
+    const auto reader = foreign.constFind(QFileInfo(path).suffix().toLower());
+    // Asked again after a refusal: a file over its cap (or grown past it while it was read) is named, not just dropped.
+    const qint64 cap = reader == foreign.cend() ? Vault::kMaxNoteBytes : reader->maxBytes;
+    const auto overCap = [&] { return cap > 0 && QFileInfo(path).size() > cap; };
+    if (reader != foreign.cend()) {
         const std::optional<QString> text = readForeign(path, foreign);
-        if (!text)
+        if (!text) {
+            parsed.tooLarge = overCap();
             return parsed; // not a file its reader can read (a notebook nbformat 4 cannot, a damaged or too big file): not indexed
+        }
         note.text = *text;
-    } else if (!Vault::read(path, note)) {
+    } else if (!Vault::read(path, note, nullptr, cap)) {
+        parsed.tooLarge = overCap();
         return parsed;
     } else if (note.lossy) {
         readInvalidBytesAsLatin1(path, note);

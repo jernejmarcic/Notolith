@@ -91,3 +91,11 @@ from the vault root and creates that folder path first. A name that is empty
 or holds `# ^ [ ] | : \`, or a `..` folder, is refused in the status bar; an
 existing name gets a numeric suffix, like New note. The command palette and the merge picker
 share the widget but never create (`QuickSwitcher::setCreateAllowed`).
+
+## Size limit
+
+A note or `.ipynb` over 32 MiB (`Vault::kMaxNoteBytes`) is not read by the
+index scan, so it is not searchable, and it does not open in the editor ("too
+large to open"). The size is checked on the opened file and the read stops one
+byte past the limit, so a file that grows while it is read is skipped too. Each
+skipped file is logged once and the status bar counts them when a scan ends.

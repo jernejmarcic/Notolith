@@ -90,8 +90,13 @@ public:
 
     /// Reads UTF-8, normalising CRLF to LF and stripping a BOM; invalid bytes
     /// become U+FFFD and set `Note::lossy`. On failure returns false and
-    /// fills `error`.
-    static bool read(const QString &path, Note &out, QString *error = nullptr);
+    /// fills `error`. A file over `maxBytes` (negative: no limit) is not read: the size is asked of the open
+    /// file and the read stops at the limit, so a hostile multi-GB file cannot fill the memory.
+    static constexpr qint64 kMaxNoteBytes = qint64(32) << 20;
+    static bool read(const QString &path, Note &out, QString *error = nullptr, qint64 maxBytes = kMaxNoteBytes);
+    /// The bytes read() decodes, same limit and same refusals (not a regular file, too large).
+    static bool readBytes(const QString &path, QByteArray *out, QString *error = nullptr,
+                          qint64 maxBytes = kMaxNoteBytes);
 
     /// read() for a file that may be a link, checked on what was opened: the file is opened (links followed), the
     /// descriptor is asked where it really is, that place must be inside the vault, and the bytes come from that
