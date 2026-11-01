@@ -217,7 +217,7 @@ a few `/etc` entries (`sandbox::etcBinds`, never all of `/etc`: no `machine-id`,
 `hostname` or user list; a plugin granted `network` also gets `resolv.conf`,
 `hosts`, `ssl`, `ca-certificates`, `nsswitch.conf`, `localtime`, `gai.conf`),
 the plugin's own directory, the host binary's own directory and
-`$XDG_CONFIG_HOME/notolith/plugins/<id>` (all read-only), a private `/tmp`, no home, every
+`$XDG_CONFIG_HOME/notolith/plugins/<id>` (all read-only), a private `/tmp` and a 64 MiB `/dev/shm`, no home, every
 namespace unshared except network, which is shared only when the plugin's
 `network` permission was granted. The config-directory bind is `--ro-bind-try`
 (most plugins have none) and exists so a plugin can read its own config file

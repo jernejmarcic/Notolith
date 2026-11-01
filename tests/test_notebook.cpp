@@ -19,6 +19,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QScopeGuard>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
@@ -37,6 +38,8 @@
 #include "WaitFor.h"
 
 #include <algorithm>
+#include <sched.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <memory>
 
@@ -328,8 +331,54 @@ TEST(NotebookSandboxTest, TheCommandLineHasTheNamespacesTheFilterAndNoCapabiliti
     for (const QString &argument : std::as_const(args))
         EXPECT_NE(argument, QDir::homePath());
     EXPECT_TRUE(args.contains(QStringLiteral("--nproc=256")));
-    // The filter is part of the options, before the "--" that ends them.
-    EXPECT_LT(args.indexOf(QStringLiteral("--seccomp")), args.indexOf(QStringLiteral("--")));
+    // The filter is part of the options, before the "--" that ends them (bwrap's: a scope's own, in front, is
+    // another).
+    const qsizetype bwrapAt = args.indexOf(QStringLiteral("--unshare-user"));
+    EXPECT_LT(args.indexOf(QStringLiteral("--seccomp")), args.indexOf(QStringLiteral("--"), bwrapAt));
+    // /dev/shm is sized like /tmp, after the --dev that made it.
+    const qsizetype dev = args.indexOf(QStringLiteral("--dev"));
+    ASSERT_GE(dev, 0);
+    const QStringList shm = {QStringLiteral("--size"), QStringLiteral("67108864"), QStringLiteral("--tmpfs"), QStringLiteral("/dev/shm")};
+    EXPECT_EQ(args.mid(dev + 2, 4), shm);
+}
+
+TEST(NotebookSandboxTest, TheSandboxIsPutInACgroupWhenAUserManagerCanTakeIt)
+{
+    if (!detectSandboxAvailability().bubblewrap)
+        GTEST_SKIP() << "bubblewrap not installed";
+    QTemporaryDir runtimeDir;
+    ASSERT_TRUE(runtimeDir.isValid());
+    const auto build = [&](qint64 memory, QString *program, QStringList *args) {
+        SandboxRequest request;
+        request.runtimeDir = runtimeDir.path();
+        request.memoryBytes = memory;
+        SandboxTier used;
+        int filterFD = -1;
+        wrapCommand(SandboxTier::Bubblewrap, QStringLiteral("/usr/bin/true"), {}, request, program, args, &used, &filterFD);
+        if (filterFD >= 0)
+            close(filterFD);
+    };
+    QString program;
+    QStringList args;
+    build(3LL << 30, &program, &args);
+    if (program.isEmpty())
+        GTEST_SKIP() << "built without libseccomp";
+    if (!noteAppC::sandbox::cgroupLimitsAvailable())
+        GTEST_SKIP() << "no systemd user manager here";
+    EXPECT_TRUE(args.contains(QStringLiteral("--scope")));
+    EXPECT_TRUE(args.contains(QStringLiteral("MemoryMax=%1").arg(3LL << 30)));
+    EXPECT_TRUE(args.contains(QStringLiteral("MemorySwapMax=0")));
+    EXPECT_TRUE(args.contains(QStringLiteral("TasksMax=256")));
+    // bwrap is still what is run, after the scope's own "--".
+    EXPECT_EQ(args.at(args.indexOf(QStringLiteral("--")) + 1), QStandardPaths::findExecutable(QStringLiteral("bwrap")));
+
+    // Without a user manager the same line is bwrap's own and the rlimits are all there is.
+    noteAppC::sandbox::overrideCgroupLimits(false);
+    build(3LL << 30, &program, &args);
+    noteAppC::sandbox::forgetCgroupProbe();
+    EXPECT_EQ(program, QStandardPaths::findExecutable(QStringLiteral("bwrap")));
+    EXPECT_FALSE(args.contains(QStringLiteral("--scope")));
+    EXPECT_TRUE(args.contains(QStringLiteral("--seccomp")));
 }
 
 TEST(NotebookSandboxTest, Tier1FiltersTheSyscallsThatLeaveANamespace)
@@ -2504,6 +2553,130 @@ TEST(DirectRunnerTest, TheSyscallFilterAnswersPermissionDeniedToTheCallsThatLeav
 #endif
 }
 
+TEST(DirectRunnerTest, ACellCannotMakeASocketOfAFamilyItHasNoUseFor)
+{
+    if (!DirectRunner::canRun(QStringLiteral("python")) || !sandboxUsable())
+        GTEST_SKIP() << "python or a usable bubblewrap is not available";
+    // AF_VSOCK 40, AF_ALG 38, AF_KEY 15, AF_PACKET 17, AF_RDS 21, AF_TIPC 30, AF_XDP 44, AF_BLUETOOTH 31, and
+    // AF_NETLINK 16 with a protocol other than NETLINK_ROUTE (0), which getifaddrs() and so libzmq need.
+    const auto result = runDirect(QStringLiteral("python"), QStringLiteral(
+        "import socket\n"
+        "for name, family, protocol in [('vsock', 40, 0), ('alg', 38, 0), ('key', 15, 0), ('packet', 17, 0),\n"
+        "                               ('rds', 21, 0), ('tipc', 30, 0), ('xdp', 44, 0), ('bluetooth', 31, 0),\n"
+        "                               ('netfilter', 16, 12), ('audit', 16, 9), ('crypto', 16, 21)]:\n"
+        "    try:\n"
+        "        socket.socket(family, socket.SOCK_RAW if family in (17, 16) else socket.SOCK_STREAM, protocol)\n"
+        "        print(name, 'created')\n"
+        "    except OSError as error:\n"
+        "        print(name, error.errno)\n"
+        "socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        "socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+        "socket.socket(16, socket.SOCK_RAW, 0)\n"
+        "print('unix-inet-and-netlink-route-ok', len(socket.if_nameindex()) > 0)\n"));
+    ASSERT_TRUE(result.has_value());
+    const QString text = textOf(*result);
+    for (const char *name : {"vsock", "alg", "key", "packet", "rds", "tipc", "xdp", "bluetooth", "netfilter", "audit", "crypto"})
+        EXPECT_TRUE(text.contains(QStringLiteral("%1 97\n").arg(QLatin1String(name)))) << name << "\n" << text.toStdString(); // EAFNOSUPPORT
+    EXPECT_TRUE(text.contains(QStringLiteral("unix-inet-and-netlink-route-ok True"))) << text.toStdString();
+}
+
+TEST(DirectRunnerTest, ACellKeepsTheSyscallFilterAndSeesOnlyItsOwnAccountFiles)
+{
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || !sandboxUsable())
+        GTEST_SKIP() << "bash or a usable bubblewrap is not available";
+    // Through the scope too (when there is one): the filter's descriptor must reach bwrap by way of systemd-run.
+    const auto result = runDirect(QStringLiteral("bash"), QStringLiteral(
+        "grep '^Seccomp:' /proc/self/status\n"
+        "echo passwd-lines=$(wc -l < /etc/passwd) group-lines=$(wc -l < /etc/group)\n"
+        "echo me=$(id -un) uid=$(id -u)\n"
+        "grep -c . /etc/passwd /etc/group\n"));
+    ASSERT_TRUE(result.has_value());
+    const QString text = textOf(*result);
+    EXPECT_TRUE(text.contains(QRegularExpression(QStringLiteral("Seccomp:\\s+2")))) << text.toStdString();
+    // One line each, the cell's own: not the host's list of accounts (root, daemon, other users...).
+    EXPECT_TRUE(text.contains(QStringLiteral("passwd-lines=1 group-lines=1"))) << text.toStdString();
+    EXPECT_TRUE(text.contains(QStringLiteral("me=user uid=%1").arg(getuid()))) << text.toStdString();
+    EXPECT_FALSE(text.contains(QStringLiteral("root"))) << text.toStdString();
+}
+
+TEST(DirectRunnerTest, ACellCannotFillTheMachinesMemoryThroughDevShmOrItsOwnDirectory)
+{
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || !DirectRunner::canRun(QStringLiteral("python")) || !sandboxUsable())
+        GTEST_SKIP() << "bash, python or a usable bubblewrap is not available";
+    // /dev/shm is a tmpfs of 64 MiB, like /tmp: the hundred-megabyte write stops short.
+    const auto shm = runDirect(QStringLiteral("bash"), QStringLiteral(
+        "echo full=$(dd if=/dev/zero of=/dev/shm/big bs=1M count=100 2>&1 | grep -c 'No space left')\n"
+        "echo size=$(stat -c %s /dev/shm/big)\n"));
+    ASSERT_TRUE(shm.has_value());
+    const QString shmText = textOf(*shm);
+    EXPECT_TRUE(shmText.contains(QStringLiteral("full=1"))) << shmText.toStdString();
+    static const QRegularExpression size(QStringLiteral("\\bsize=(\\d+)"));
+    const QRegularExpressionMatch match = size.match(shmText);
+    ASSERT_TRUE(match.hasMatch()) << shmText.toStdString();
+    EXPECT_LE(match.captured(1).toLongLong(), 64LL << 20);
+    EXPECT_GT(match.captured(1).toLongLong(), 0);
+
+    // Memory itself, past the cgroup's 1 GiB, ends the cell (the per-process limit is 4 GiB: it is not that).
+    if (!noteAppC::sandbox::cgroupLimitsAvailable())
+        GTEST_SKIP() << "no systemd user manager: only the rlimits cap this";
+    const auto memory = runDirect(QStringLiteral("python"), QStringLiteral(
+        "block = b'x' * (1800 << 20)\nprint('survived', len(block))\n"));
+    ASSERT_TRUE(memory.has_value());
+    EXPECT_FALSE(memory->ok) << textOf(*memory).toStdString();
+    EXPECT_FALSE(textOf(*memory).contains(QStringLiteral("survived")));
+    // And files in the cell's own directory count (a tmpfs there is memory): six of 200 MiB.
+    if (QStorageInfo(QDir::tempPath()).fileSystemType() != "tmpfs")
+        GTEST_SKIP() << "the temporary directory is not a tmpfs here";
+    const auto files = runDirect(QStringLiteral("bash"), QStringLiteral(
+        "for i in 1 2 3 4 5 6 7 8; do dd if=/dev/zero of=big$i bs=1M count=200 2>/dev/null; done\n"
+        "echo total=$(cat big* | wc -c)\n"));
+    ASSERT_TRUE(files.has_value());
+    // The shell may be the one that was killed (no total at all); if it printed one, it is under the 1 GiB cap
+    // (8 x 200 MiB were asked for).
+    static const QRegularExpression total(QStringLiteral("total=(\\d+)"));
+    const QRegularExpressionMatch filesMatch = total.match(textOf(*files));
+    if (filesMatch.hasMatch())
+        EXPECT_LE(filesMatch.captured(1).toLongLong(), (1LL << 30) + (64LL << 20)) << textOf(*files).toStdString();
+}
+
+TEST(DirectRunnerTest, ACellRunsWithoutACgroupWhenThereIsNoUserManager)
+{
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || !sandboxUsable())
+        GTEST_SKIP() << "bash or a usable bubblewrap is not available";
+    noteAppC::sandbox::overrideCgroupLimits(false);
+    const auto result = runDirect(QStringLiteral("bash"), QStringLiteral("echo still-runs\n"));
+    noteAppC::sandbox::forgetCgroupProbe();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok);
+    EXPECT_EQ(textOf(*result).trimmed(), QStringLiteral("still-runs"));
+}
+
+// A test run on a machine that can run the sandbox must run it: the tests above skip when a trivial cell does
+// not run, which on a CI box without user namespaces would leave all of them green and the sandbox untested.
+TEST(NotebookSandboxTest, WhereBubblewrapAndUserNamespacesAreThereACellRuns)
+{
+    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "bubblewrap not installed";
+    if (!DirectRunner::canRun(QStringLiteral("bash")))
+        GTEST_SKIP() << "bash not installed";
+    // Whether this process may make a user namespace, asked of a child so that this one is untouched.
+    const pid_t child = fork();
+    ASSERT_GE(child, 0);
+    if (child == 0)
+        _exit(unshare(CLONE_NEWUSER) == 0 ? 0 : 1);
+    int status = 0;
+    ASSERT_EQ(waitpid(child, &status, 0), child);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        GTEST_SKIP() << "user namespaces are not allowed here";
+    QStringList probe = {QStringLiteral("--"), QStringLiteral("x")};
+    const int filter = noteAppC::sandbox::addSyscallFilter(probe);
+    if (filter < 0)
+        GTEST_SKIP() << "built without libseccomp";
+    close(filter);
+    EXPECT_TRUE(sandboxUsable()) << "bubblewrap is installed and user namespaces work, yet a trivial cell did not run: "
+                                    "every sandbox test is skipped on this machine, so none of them says anything";
+}
+
 TEST(DirectRunnerTest, ACellIsHeldToItsMemoryAndProcessLimits)
 {
     if (!DirectRunner::canRun(QStringLiteral("python")) || !sandboxUsable())
@@ -2609,3 +2782,4 @@ TEST(KernelProcessTest, InterruptReachesTheProcessInsideThePidNamespace)
     EXPECT_EQ(exitCode, 7) << "SIGINT arrived in the cell, not at the wrapper";
     qunsetenv("JUPYTER_RUNTIME_DIR");
 }
+

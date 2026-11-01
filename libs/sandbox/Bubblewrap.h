@@ -31,9 +31,29 @@ QStringList etcBinds(const QStringList &extra = {});
 /// /tmp and /proc and /dev, no network, no inherited environment (PATH and
 /// HOME, then `environment` as NAME=value entries). `program` is run by the
 /// path given. `readOnlyBinds` are further paths (a tool installed outside
-/// /usr) bound read-only at the same place. At most 256 tasks run inside.
+/// /usr) bound read-only at the same place. At most 256 tasks run inside, and
+/// /dev/shm and /tmp are 64 MiB each. `memoryBytes` is the cgroup's cap, see limitInCgroup.
+/// `command.program` is then `env` (it ends up running bwrap, in the same process).
 Command bubblewrapCommand(const QString &dir, const QString &program, const QStringList &arguments,
-                          const QStringList &environment = {}, const QStringList &readOnlyBinds = {});
+                          const QStringList &environment = {}, const QStringList &readOnlyBinds = {},
+                          qint64 memoryBytes = 1LL << 30);
+
+/// Runs `program arguments` (a complete bwrap line, filter and all) in a cgroup of its own, by
+/// `systemd-run --user --scope` in front of it: at most `memoryBytes` of RAM (swap off) and `tasks` tasks for
+/// everything inside. This is the only cap on memory that is not per process: the tmpfs pages a sandbox
+/// writes (/dev/shm, a work directory on a tmpfs, /tmp, memfds) are charged to the writer's cgroup, so
+/// the cap also stops a cell from filling the machine's RAM through them. A scope execs in place: the process
+/// is still the one started, with its descriptors (the syscall filter's) and its pid, for the interrupt walk
+/// in KernelProcess. `program` becomes `env`. Without systemd-run or a user manager that answers, nothing
+/// changes and the rlimits are all there is (said once, in the log).
+void limitInCgroup(QString &program, QStringList &arguments, qint64 memoryBytes, int tasks = 256);
+
+/// Whether limitInCgroup has a user manager to ask (probed once, the first time).
+bool cgroupLimitsAvailable();
+/// For tests: answers "no user manager" (`false`) or "there is one" without asking. forgetCgroupProbe() asks again.
+void overrideCgroupLimits(bool available);
+/// Forgets that answer, for a test that changes the environment it was found in.
+void forgetCgroupProbe();
 
 /// Puts `prlimit --nproc=N --` in front of `program` in a bwrap argument list
 /// (the part after the "--" that ends bwrap's options): the process limit,

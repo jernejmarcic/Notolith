@@ -1517,8 +1517,9 @@ is the wrong place for it).
   (`sandbox::bubblewrapCommand`, `libs/sandbox/Bubblewrap.h`, which TeX's
   compile step uses too): `/usr`, `/var/lib/texmf` and, from `/etc`, only `texmf`, `fonts`,
   `ld.so.cache`, `alternatives` and the JVM's `java*` directory (each if it exists) read-only, no home,
-  no other disk, no network, no inherited environment, and one temporary
-  directory writable. Without bwrap there is no diagram, only the hint: never an
+  no other disk, no network, no inherited environment, a 64 MiB `/tmp` and `/dev/shm`, and one temporary
+  directory writable; the whole sandbox is also in a cgroup of 1 GiB of RAM and 256 tasks when a systemd user manager
+  is there (`sandbox::limitInCgroup`, docs/NOTEBOOKS.md, Sandbox). Without bwrap there is no diagram, only the hint: never an
   unsandboxed run (Mermaid alone is the exception, above). A tool set by path outside `/usr` is resolved (a symlink
   to the file it points to) and bound in read-only; whatever it needs besides
   itself (a wrapper script's jar, a home's libraries) is not, so install those

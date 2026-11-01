@@ -11,6 +11,10 @@
 #include <seccomp.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#ifndef AF_XDP
+#define AF_XDP 44
+#endif
 #endif
 
 namespace noteAppC::sandbox {
@@ -70,6 +74,21 @@ static int compileSyscallFilter()
     // allowed. (libseccomp takes one comparison per argument, so the query value 0xffffffff is denied too.)
     if (const int personality = seccomp_syscall_resolve_name("personality"); personality != __NR_SCMP_ERROR)
         ok = ok && seccomp_rule_add(filter, SCMP_ACT_ERRNO(EPERM), personality, 1, SCMP_A0(SCMP_CMP_NE, 0)) == 0;
+    // Socket families a cell has no use for. The network namespace isolates inet and unix, but AF_VSOCK
+    // reaches the host's VMs, AF_ALG, AF_KEY, AF_PACKET, AF_RDS, AF_TIPC and AF_XDP are kernel code with a long
+    // record of bugs, and AF_BLUETOOTH is the host's radio. Docker and Flatpak deny the same set.
+    // EAFNOSUPPORT, "this kernel has no such family": what a program that probes for one expects.
+    for (const int family : {AF_VSOCK, AF_ALG, AF_KEY, AF_PACKET, AF_RDS, AF_TIPC, AF_XDP, AF_BLUETOOTH})
+        ok = ok && seccomp_rule_add(filter, SCMP_ACT_ERRNO(EAFNOSUPPORT), SCMP_SYS(socket), 1, SCMP_A0(SCMP_CMP_EQ, family)) == 0;
+    // Netlink is the exception that proves a use: getifaddrs(3) asks the kernel for the interface list by
+    // NETLINK_ROUTE (protocol 0), and libzmq, which every Jupyter kernel runs on, aborts when that socket cannot
+    // be made. So protocol 0 stays (read-only in effect: the capability to change anything is dropped, and the
+    // namespace is the cell's own, with a loopback), and every other netlink protocol (netfilter, audit,
+    // crypto, generic, ...: kernel subsystems a cell never configures) is refused.
+    ok = ok
+         && seccomp_rule_add(filter, SCMP_ACT_ERRNO(EAFNOSUPPORT), SCMP_SYS(socket), 2, SCMP_A0(SCMP_CMP_EQ, AF_NETLINK),
+                             SCMP_A2(SCMP_CMP_NE, 0))
+                == 0;
     // clone(2) with CLONE_NEWUSER is unshare by another name. clone3 passes
     // its flags in a struct seccomp cannot read, so it answers ENOSYS and
     // glibc falls back to clone, which is checked. The flags are clone's
