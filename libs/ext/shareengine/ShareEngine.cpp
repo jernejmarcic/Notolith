@@ -7,6 +7,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -277,9 +278,14 @@ bool ShareEngine::start()
     m_me = ShareIdentity::load(m_config.identityKey);
     if (!m_me)
         return fail(tr("The keyring would not keep this device's sharing keys."));
-    hearth::setDebugLogPath(
-        (QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share/link.log"))
-            .toStdString());
+    // A log belongs in the state directory (XDG), beside notolith.log; GenericStateLocation is Qt 6.7+.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+    const QString state = QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation);
+#else
+    const QString state = qEnvironmentVariable("XDG_STATE_HOME", QDir::homePath() + QStringLiteral("/.local/state"));
+#endif
+    hearth::setDebugLogPath((state + QStringLiteral("/noteAppC/link.log")).toStdString());
+    QFile::remove(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/noteAppC/share/link.log")); // the old place
 
     // Callbacks run on the link's threads and hand their arguments over by value
     // (the span is only valid inside the callback).
@@ -327,7 +333,7 @@ bool ShareEngine::start()
             hearth::debugLog("share", std::format("skipped a stored share: {}", why.toStdString()));
         // Back to the owner where it was last invited from: mDNS finds it on the
         // LAN, this on the tailnet and other subnets.
-        // ponytail: the invite's addresses only; a moved owner is found by mDNS or a new invite.
+        // Limit: the invite's addresses only; a moved owner is found by mDNS or a new invite.
         if (!record.owned && m_shares.contains(record.shareID))
             for (const QString &text : record.hosts)
                 if (const auto host = privateHost(text))

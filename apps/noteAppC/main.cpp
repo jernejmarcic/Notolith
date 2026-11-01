@@ -1,10 +1,17 @@
 #include <QApplication>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <QCommandLineParser>
 #include <QEvent>
 #include <QFileInfo>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QIcon>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QStandardPaths>
 #include <QTimer>
 
 #include <thread>
@@ -68,6 +75,76 @@ void setApplicationNames()
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC"));
     QCoreApplication::setApplicationVersion(QStringLiteral(NOTEAPPC_VERSION));
+}
+
+// Every Qt message is also appended to <state dir>/noteAppC/notolith.log, one
+// line each, so a bug report can carry what the terminal showed. The previous
+// run's file is kept as notolith.log.old (one generation); past 5 MB the
+// running file moves to .old the same way, so the newest lines always survive.
+// The earlier handler (Qt's own, when none was set) still runs, so terminal and journal output is unchanged.
+struct MessageLog {
+    QMutex mutex; // messages arrive from any thread
+    QFile file;
+    QtMessageHandler previous = nullptr;
+};
+MessageLog *messageLog = nullptr; // never freed: a message may come during static destruction
+constexpr qint64 kMaxLogBytes = 5 << 20;
+
+void openMessageLog(MessageLog &log)
+{
+    if (log.file.open(QIODevice::WriteOnly | QIODevice::Append))
+        log.file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+}
+
+void logMessage(QtMsgType type, const QMessageLogContext &context, const QString &message)
+{
+    static const char *const levels[] = {"debug", "warning", "critical", "fatal", "info"};
+    const QString line = QDateTime::currentDateTime().toString(Qt::ISODateWithMs) + QLatin1Char(' ')
+        + QLatin1String(levels[type]) + QLatin1Char(' ') + QString(message).replace(QLatin1Char('\n'), QLatin1Char(' '))
+        + QLatin1Char('\n');
+    {
+        const QMutexLocker lock(&messageLog->mutex);
+        if (messageLog->file.isOpen()) {
+            if (messageLog->file.size() > kMaxLogBytes) {
+                const QString old = messageLog->file.fileName() + QStringLiteral(".old");
+                messageLog->file.close();
+                QFile::remove(old);
+                messageLog->file.rename(old);
+                openMessageLog(*messageLog);
+            }
+            messageLog->file.write(line.toUtf8());
+            messageLog->file.flush(); // a crash is what the log is for
+        }
+    }
+    if (messageLog->previous) {
+        messageLog->previous(type, context, message);
+        return;
+    }
+    // Qt's own handler is private API: its stderr line, and its abort for qFatal, are redone here.
+    std::fprintf(stderr, "%s\n", qPrintable(qFormatLogMessage(type, context, message)));
+    std::fflush(stderr);
+    if (type == QtFatalMsg)
+        std::abort();
+}
+
+void installMessageLog()
+{
+    // GenericStateLocation is Qt 6.7+; the project minimum is 6.5.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+    const QString state = QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation);
+#else
+    const QString state = qEnvironmentVariable("XDG_STATE_HOME", QDir::homePath() + QStringLiteral("/.local/state"));
+#endif
+    const QString directory = state + QStringLiteral("/noteAppC");
+    if (!QDir().mkpath(directory))
+        return;
+    const QString path = directory + QStringLiteral("/notolith.log");
+    QFile::remove(path + QStringLiteral(".old"));
+    QFile::rename(path, path + QStringLiteral(".old"));
+    messageLog = new MessageLog;
+    messageLog->file.setFileName(path);
+    openMessageLog(*messageLog);
+    messageLog->previous = qInstallMessageHandler(logMessage);
 }
 
 struct Options {
@@ -168,6 +245,9 @@ int main(int argc, char *argv[])
     noteAppC::SingleInstance instance(noteAppC::SingleInstance::launchFor(argument));
     if (instance.handOver(argument))
         return 0;
+    // After the hand-over: a launch that only passes a path on must not
+    // rotate the log of the Notolith that is running.
+    installMessageLog();
 
     noteAppC::MainWindow window;
     startLog("window");
