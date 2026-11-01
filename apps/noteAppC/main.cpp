@@ -23,6 +23,7 @@
 #endif
 
 #include "ConfigFile.h"
+#include "LicenseText.h"
 #include "MainWindow.h"
 #include "MessageLog.h"
 #include "PopupStyle.h"
@@ -214,7 +215,7 @@ std::optional<int> answeredWithoutGUI(int argc, char *argv[])
     if (options.parser.isSet(options.help) && !core.arguments().contains(QStringLiteral("--help-all")))
         options.parser.showHelp(0);
     if (options.parser.isSet(options.version)) {
-        std::printf("Notolith %s\n", NOTEAPPC_VERSION);
+        std::printf("Notolith %s\n%s\n%s\n", NOTEAPPC_VERSION, NOTEAPPC_COPYRIGHT_LINE, NOTEAPPC_LICENCE_NOTICE);
         return 0;
     }
     // One Notolith per vault: a launch while one has that vault open (a note

@@ -3340,6 +3340,38 @@ TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)
     EXPECT_TRUE(QDir(path(QStringLiteral("New folder"))).exists());
 }
 
+TEST_F(WindowTest, AboutPageShowsTheGPLNoticeAndTheFullLicence)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openSettings();
+
+    auto *notice = settingsWidget<QLabel>(window, QStringLiteral("settingsAboutNotice"));
+    ASSERT_NE(notice, nullptr);
+    EXPECT_TRUE(notice->text().contains(QStringLiteral("ABSOLUTELY NO WARRANTY")));
+    auto *copyright = settingsWidget<QLabel>(window, QStringLiteral("settingsAboutCopyright"));
+    ASSERT_NE(copyright, nullptr);
+    EXPECT_EQ(copyright->text(), QStringLiteral("Copyright (C) 2026 Jernej"));
+
+    auto *button = settingsWidget<QPushButton>(window, QStringLiteral("settingsAboutLicenceButton"));
+    ASSERT_NE(button, nullptr);
+    // The dialog is modal: read it from a timer, then close it so click() returns.
+    QString shown;
+    QTimer::singleShot(200, [&shown] {
+        auto *dialog = qApp->activeModalWidget();
+        if (!dialog)
+            return;
+        if (auto *view = dialog->findChild<QPlainTextEdit *>())
+            shown = view->toPlainText();
+        dialog->close();
+    });
+    button->click();
+    EXPECT_TRUE(shown.contains(QStringLiteral("GNU GENERAL PUBLIC LICENSE")));
+    EXPECT_TRUE(shown.contains(QStringLiteral("Version 3, 29 June 2007")));
+}
+
 TEST_F(WindowTest, SettingsPageOpensAndClosesRestoringThePreviousNote)
 {
     MainWindow window;

@@ -54,6 +54,8 @@ add_library(noteAppC_ui STATIC
     ToggleSwitch.h)
 
 set_target_properties(noteAppC_ui PROPERTIES AUTOMOC ON)
+# The GPL text the About page's "View licence" button shows (:/LICENSE).
+qt_add_resources(noteAppC_ui "license" PREFIX "/" BASE ${CMAKE_SOURCE_DIR} FILES ${CMAKE_SOURCE_DIR}/LICENSE)
 target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Qt6::Concurrent used to arrive only with the optional spell module; SearchPane
 # needs it unconditionally to run Index::search() off the UI thread.

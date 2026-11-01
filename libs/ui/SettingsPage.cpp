@@ -8,8 +8,10 @@
 
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDialog>
 #include <QDoubleSpinBox>
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -18,6 +20,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSet>
@@ -35,6 +38,7 @@
 #include <vector>
 
 #include "HtmlRenderer.h"
+#include "LicenseText.h"
 #ifdef NOTEAPPC_HAVE_PLUGINS
 #include "PluginRegistry.h"
 #endif
@@ -1386,14 +1390,47 @@ QWidget *SettingsPage::buildAboutPage()
     configPath->setObjectName(QStringLiteral("settingsAboutConfigPath"));
     configPath->setWordWrap(true);
 
+    auto *copyright = new QLabel(QStringLiteral(NOTEAPPC_COPYRIGHT_LINE), page);
+    copyright->setObjectName(QStringLiteral("settingsAboutCopyright"));
+    auto *notice = new QLabel(QStringLiteral(NOTEAPPC_LICENCE_NOTICE), page);
+    notice->setObjectName(QStringLiteral("settingsAboutNotice"));
+    notice->setWordWrap(true);
+    auto *licence = new QPushButton(tr("View licence"), page);
+    licence->setObjectName(QStringLiteral("settingsAboutLicenceButton"));
+    connect(licence, &QPushButton::clicked, this, [this] { showLicence(); });
+
     layout->addWidget(name);
     layout->addWidget(version);
     layout->addSpacing(12);
     layout->addWidget(description);
     layout->addSpacing(12);
+    layout->addWidget(copyright);
+    layout->addWidget(notice);
+    layout->addSpacing(6);
+    layout->addWidget(licence, 0, Qt::AlignLeft);
+    layout->addSpacing(12);
     layout->addWidget(configPath);
     layout->addStretch(1);
     return scrollWrap(page);
+}
+
+void SettingsPage::showLicence()
+{
+    QFile file(QStringLiteral(":/LICENSE"));
+    const QString text = file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("settingsLicenceDialog"));
+    dialog.setWindowTitle(tr("GNU General Public License"));
+    dialog.resize(640, 520);
+    auto *box = new QVBoxLayout(&dialog);
+    auto *view = new QPlainTextEdit(&dialog);
+    view->setReadOnly(true);
+    view->setPlainText(text);
+    auto *close = new QPushButton(tr("Close"), &dialog);
+    connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+    box->addWidget(view, 1);
+    box->addWidget(close, 0, Qt::AlignRight);
+    dialog.exec();
 }
 
 void SettingsPage::refreshRowDecorations()
@@ -1452,7 +1489,8 @@ QLabel#settingsVaultTag {
 }
 QToolButton#settingsResetButton { color: %8; font-size: 12px; border: none; }
 QToolButton#settingsResetButton:hover { text-decoration: underline; }
-QLabel#settingsAboutDescription, QLabel#settingsAboutConfigPath { color: %4; font-size: 12px; }
+QLabel#settingsAboutDescription, QLabel#settingsAboutConfigPath, QLabel#settingsAboutCopyright,
+QLabel#settingsAboutNotice { color: %4; font-size: 12px; }
 QLabel#settingsRowError { color: %9; font-size: 12px; }
 )")
             .arg(theme.value(QStringLiteral("--background-primary")),
