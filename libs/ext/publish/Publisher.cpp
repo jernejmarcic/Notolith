@@ -4,7 +4,6 @@
 
 #include <QCryptographicHash>
 #include <QDir>
-#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -20,10 +19,12 @@
 #include <functional>
 
 #include "CodeHighlighter.h"
+#include "ConfigFile.h"
 #include "FormatColours.h"
 #include "Index.h"
 #include "MathRenderer.h"
 #include "PageBody.h"
+#include "SafeAttachment.h"
 #include "Parser.h"
 #include "Slugs.h"
 #include "Theme.h"
@@ -219,21 +220,6 @@ QString folderOf(const QString &outputPath)
 {
     const qsizetype slash = outputPath.lastIndexOf(QLatin1Char('/'));
     return slash < 0 ? QString() : outputPath.left(slash);
-}
-
-/// `.tmp-` and 32 hex digits: the name Vault::writeBytesNoFollowUnder gives a file while it writes it. One left
-/// by a publish that was killed is removed at the start of the next, and only a regular file of that exact name.
-void sweepStaleTemps(const QString &outDir)
-{
-    static const QRegularExpression pattern(QStringLiteral("^\\.tmp-[0-9a-f]{32}$"));
-    QDirIterator it(outDir, {QStringLiteral(".tmp-*")}, QDir::Files | QDir::Hidden | QDir::NoSymLinks,
-                    QDirIterator::Subdirectories); // links to folders are not entered
-    const QDir root(outDir);
-    while (it.hasNext()) {
-        const QString path = it.next();
-        if (pattern.match(it.fileName()).hasMatch())
-            noteAppC::Vault::removeNoFollowUnder(outDir, root.relativeFilePath(path));
-    }
 }
 
 /// A second wall behind the cleaning of a note's HTML and links: no inline script and no javascript: URL runs on
@@ -489,6 +475,22 @@ Publisher::Publisher(const noteAppC::Vault &vault, const noteAppC::Index &index)
 {
 }
 
+namespace {
+QString manifestFileFor(const QString &realOutputDir)
+{
+    const QString folder = noteAppC::appDir(noteAppC::XDGroot::State, QStringLiteral("publish"));
+    if (realOutputDir.isEmpty() || folder.isEmpty())
+        return {};
+    const QByteArray name = QCryptographicHash::hash(realOutputDir.toUtf8(), QCryptographicHash::Sha256).toHex();
+    return folder + QLatin1Char('/') + QString::fromLatin1(name) + QStringLiteral(".json");
+}
+} // namespace
+
+QString Publisher::manifestPath(const QString &outputDir)
+{
+    return manifestFileFor(QFileInfo(outputDir).canonicalFilePath());
+}
+
 bool Publisher::publish(const Options &options, const ProgressCallback &progress, QString *error)
 {
     m_counts = {};
@@ -520,9 +522,17 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         if (error) *error = QStringLiteral("could not create %1").arg(outDir);
         return false;
     }
+    // Held open from here to the end: every read, write, rename and remove below goes through this descriptor, so
+    // a name replaced by a link after the checks cannot lead the publish anywhere else.
+    QString openError;
+    const noteAppC::Vault::HeldFolder out = noteAppC::Vault::HeldFolder::open(outDir, &openError);
+    if (!out.isOpen()) {
+        if (error) *error = openError;
+        return false;
+    }
+    const QString realOut = out.realPath();
     {
-        // Compared as they really are: not the vault itself, and not a folder that holds it.
-        const QString realOut = QFileInfo(outDir).canonicalFilePath();
+        // Compared as the held folder really is: not the vault itself, and not a folder that holds it.
         const QString realVault = QFileInfo(vaultRoot).canonicalFilePath();
         if (realOut.isEmpty() || (!realVault.isEmpty()
                                   && (realOut == realVault || realVault.startsWith(realOut + QLatin1Char('/'))))) {
@@ -530,8 +540,12 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
             return false;
         }
     }
+    const QString manifestFile = manifestFileFor(realOut);
+    if (manifestFile.isEmpty()) {
+        if (error) *error = QStringLiteral("no state folder for the publish record");
+        return false;
+    }
     QStringList failures; // every write that did not happen, and every note that could not be read; any entry fails the publish
-    sweepStaleTemps(outDir);
 
     // --- phase 0: who gets published (cheap - already-indexed properties,
     // no file re-read) ------------------------------------------------------
@@ -565,6 +579,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         Metadata metadata;
         Decorations decorations;
         bool ok = false;
+        bool outside = false; ///< resolves outside the vault: not read, not published
     };
     const auto parseOne = [this, &options](const QString &relativePath) -> Parsed {
         static thread_local noteAppC::Parser parser; // Parser: "cheap but not thread safe"
@@ -572,6 +587,12 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         out.relativePath = relativePath;
         Note note;
         QString readError;
+        // A note that is a link to a file outside the vault is not the vault's to publish (links that stay
+        // inside it are fine).
+        if (!m_vault.resolvesInside(m_vault.absolute(relativePath))) {
+            out.outside = true;
+            return out;
+        }
         if (!noteAppC::Vault::read(m_vault.absolute(relativePath), note, &readError))
             return out;
         out.text = note.text;
@@ -589,6 +610,10 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     QStringList outputPaths;
     outputPaths.reserve(parsed.size());
     for (const Parsed &p : parsed) {
+        if (p.outside) {
+            m_counts.skippedNotes << p.relativePath;
+            continue;
+        }
         if (!p.ok) {
             // A note that was to go out and cannot be read is an error, not a skipped note: its old page must
             // stay until the next publish can read it.
@@ -602,6 +627,10 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         }
         if (path.isEmpty())
             path = Slugs::defaultPagePath(p.relativePath);
+        // A note called index, or kept in a folder called attachments or tags, moves aside: those names are
+        // the exporter's own.
+        if (Slugs::isReservedOutput(path))
+            path = QStringLiteral("pages/") + path;
         outputPaths << path;
     }
     Slugs::deduplicate(outputPaths);
@@ -674,6 +703,37 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     for (auto it = tagToPaths.constBegin(); it != tagToPaths.constEnd(); ++it)
         tagOutputPaths.insert(it.key(), Slugs::tagPagePath(it.key()));
 
+    // --- no two outputs may share a path: checked before anything is written, naming both sources. Notes are
+    // already unique among themselves and kept out of the exporter's own names; this catches two tags that read
+    // alike ("a b" and "a-b") and anything else that could land on the same file. Attachments sit under
+    // attachments/, which no other output uses, and are keyed by their own distinct vault path. -----------------
+    {
+        QHash<QString, QString> sourceOf;
+        const auto claim = [&](const QString &path, const QString &source) {
+            const auto it = sourceOf.constFind(path);
+            if (it != sourceOf.constEnd()) {
+                failures << QStringLiteral("%1 and %2 would both be published as %3").arg(it.value(), source, path);
+                return;
+            }
+            sourceOf.insert(path, source);
+        };
+        for (const QString &fixed : {QStringLiteral("index.html"), QStringLiteral("site.css"),
+                                     QStringLiteral("search.js"), QStringLiteral("search-index.json")})
+            claim(fixed, QStringLiteral("the site's own %1").arg(fixed));
+        for (const ParsedNote &note : std::as_const(notes))
+            claim(note.outputPath, note.relativePath);
+        for (auto it = tagOutputPaths.constBegin(); it != tagOutputPaths.constEnd(); ++it)
+            claim(it.value(), QStringLiteral("the page for tag #%1").arg(it.key()));
+        if (!failures.isEmpty()) {
+            if (error) {
+                *error = failures.first();
+                if (failures.size() > 1)
+                    *error += QStringLiteral(" (and %1 more)").arg(failures.size() - 1);
+            }
+            return false;
+        }
+    }
+
     // --- nav: one render per distinct (depth, active folder) combination
     // actually used by some page, every one of them right now rather than
     // lazily - a page rendered on a worker thread below only ever *reads*
@@ -699,25 +759,19 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         }
     }
 
-    // --- manifest: loaded before writing starts, so writeIfChanged() can
-    // compare every write (pages, attachments, tag pages, assets) against
-    // what the previous run left, in one pass rather than a second walk
-    // over the output directory afterwards. -------------------------------
-    // The manifest and every key in it come from the output folder, which a vault can ship: only a clean relative
-    // path is taken, and nothing below writes or deletes by any other.
-    const QString manifestName = QStringLiteral("notolith-publish-manifest.json");
-    const QString legacyManifestName = QStringLiteral("noteappc-publish-manifest.json");
+    // --- manifest: what an earlier publish into this folder wrote, loaded before writing starts. It is kept in
+    // the state folder, never in the output folder: a vault can ship that folder's contents, so nothing found
+    // there (a manifest of either earlier name included) says what this exporter may delete. --------------------
+    const QString stateFolder = QFileInfo(manifestFile).path();
+    const QString manifestName = QFileInfo(manifestFile).fileName();
     QHash<QString, QByteArray> oldManifest;
     {
         QByteArray manifestBytes;
         constexpr qint64 manifestLimit = qint64(256) << 20;
-        if (noteAppC::Vault::readFileNoFollowUnder(outDir, manifestName, &manifestBytes, manifestLimit)
-            || noteAppC::Vault::readFileNoFollowUnder(outDir, legacyManifestName, &manifestBytes, manifestLimit)) {
-            // the old name is read once, then replaced
+        if (noteAppC::Vault::readFileNoFollowUnder(stateFolder, manifestName, &manifestBytes, manifestLimit)) {
             const QJsonObject obj = QJsonDocument::fromJson(manifestBytes).object();
             for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
-                if (noteAppC::Vault::isCleanRelativePath(it.key()) && it.key() != manifestName
-                    && it.key() != legacyManifestName)
+                if (noteAppC::Vault::isCleanRelativePath(it.key()))
                     oldManifest.insert(it.key(), it.value().toString().toUtf8());
             }
         }
@@ -735,7 +789,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         // Unchanged only when the file on disk, opened without following a link, is these bytes: what the
         // manifest says is not evidence of what is there.
         QByteArray onDisk;
-        if (noteAppC::Vault::readFileNoFollowUnder(outDir, relPath, &onDisk, bytes.size()) && onDisk == bytes) {
+        if (noteAppC::Vault::readFileNoFollowUnder(out, relPath, &onDisk, bytes.size()) && onDisk == bytes) {
             newManifest.insert(relPath, hash);
             ++m_counts.unchanged;
             return;
@@ -745,7 +799,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         QString why;
         if (!noteAppC::Vault::isCleanRelativePath(relPath))
             failures << QStringLiteral("%1 is not a path inside the site").arg(relPath);
-        else if (!noteAppC::Vault::writeBytesNoFollowUnder(outDir, relPath, bytes, &why, false))
+        else if (!noteAppC::Vault::writeBytesNoFollowUnder(out, relPath, bytes, &why, false))
             failures << why;
         else
             newManifest.insert(relPath, hash);
@@ -870,7 +924,8 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         // Read through the descriptor of the file that was opened, no link followed on the way or at the
         // end: a link swapped in after the check above is refused here.
         QByteArray bytes;
-        if (!noteAppC::Vault::readFileNoFollowUnder(m_vault.root(), relativePath, &bytes)) {
+        if (!noteAppC::Vault::readFileNoFollowUnder(m_vault.root(), relativePath, &bytes)
+            || !SafeAttachment::prepare(relativePath, bytes)) { // images, audio, video, PDF; an SVG comes back cleaned
             m_counts.skippedAttachments << relativePath;
             continue;
         }
@@ -940,19 +995,23 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     // is incomplete, and what it did not rewrite stays on the old manifest. ---
     if (failures.isEmpty()) {
         // A key is removed only when the file there is a regular file (no link) with the very bytes the manifest
-        // recorded: anything else was not written by this exporter, or was changed since, and stays. It is also
-        // left out of the new manifest. A removal that fails for any other reason than "already gone" fails the
+        // recorded: anything else was not written by this exporter, or was changed since, and stays (a changed one
+        // is listed in Counts::leftInPlace). It is also left out of the new manifest. A removal that fails for any other reason than "already gone" fails the
         // publish and keeps the key.
         for (auto it = oldManifest.constBegin(); it != oldManifest.constEnd(); ++it) {
             if (newManifest.contains(it.key()))
                 continue;
             QByteArray onDisk;
             constexpr qint64 ownedLimit = qint64(512) << 20;
-            if (!noteAppC::Vault::readFileNoFollowUnder(outDir, it.key(), &onDisk, ownedLimit)
-                || sha1Hex(onDisk) != it.value())
+            if (!noteAppC::Vault::readFileNoFollowUnder(out, it.key(), &onDisk, ownedLimit))
+                continue; // gone, a folder, a link: nothing of ours to remove
+            if (sha1Hex(onDisk) != it.value()) {
+                // Edited since it was written: not removed, and said so, as the page may still be on the site.
+                m_counts.leftInPlace << it.key();
                 continue;
+            }
             QString why;
-            if (noteAppC::Vault::removeNoFollowUnder(outDir, it.key(), &why)) {
+            if (noteAppC::Vault::removeNoFollowUnder(out, it.key(), &why)) {
                 ++m_counts.removed;
             } else if (!why.isEmpty()) {
                 failures << why;
@@ -966,16 +1025,19 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         }
     }
 
+    m_counts.leftInPlace.sort();
+    m_counts.skippedNotes.sort();
     QJsonObject manifestObject;
     for (auto it = newManifest.constBegin(); it != newManifest.constEnd(); ++it)
         manifestObject[it.key()] = QString::fromUtf8(it.value());
     QString manifestError;
-    if (noteAppC::Vault::writeBytesNoFollowUnder(outDir, manifestName,
-                                                 QJsonDocument(manifestObject).toJson(QJsonDocument::Compact),
-                                                 &manifestError))
-        noteAppC::Vault::removeNoFollowUnder(outDir, legacyManifestName);
-    else
-        failures << manifestError;
+    if (!noteAppC::ensurePrivateDir(stateFolder)
+        || !noteAppC::Vault::writeBytesNoFollowUnder(stateFolder, manifestName,
+                                                     QJsonDocument(manifestObject).toJson(QJsonDocument::Compact),
+                                                     &manifestError)) {
+        failures << (manifestError.isEmpty() ? QStringLiteral("could not write the publish record in %1").arg(stateFolder)
+                                             : manifestError);
+    }
 
     if (!failures.isEmpty()) {
         if (error) {

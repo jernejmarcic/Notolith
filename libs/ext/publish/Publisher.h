@@ -61,6 +61,11 @@ struct Counts {
     int removed = 0;     ///< outputs this run deleted because they are no longer published
     /// Vault paths of embedded files left out of the site: a link out of the vault, or not a regular file.
     QStringList skippedAttachments;
+    /// Vault paths of notes left out because they resolve outside the vault (a link to a note elsewhere).
+    QStringList skippedNotes;
+    /// Output paths of earlier pages that are no longer published but were changed since the last publish:
+    /// left in place, not removed.
+    QStringList leftInPlace;
 };
 
 using ProgressCallback = std::function<void(int done, int total)>;
@@ -85,6 +90,11 @@ public:
     bool publish(const Options &options, const ProgressCallback &progress, QString *error);
 
     Counts counts() const { return m_counts; }
+
+    /// Where the record of what a publish into `outputDir` wrote is kept: a file of the application's state
+    /// folder named by the SHA-256 of the output folder's real path. Outside the site, so nothing in a vault
+    /// can name what a later publish deletes. Empty when there is no state folder.
+    static QString manifestPath(const QString &outputDir);
 
 private:
     const noteAppC::Vault &m_vault;
