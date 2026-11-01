@@ -4,9 +4,7 @@
     android:installLocation="auto"
     android:versionCode="-- %%INSERT_VERSION_CODE%% --"
     android:versionName="-- %%INSERT_VERSION_NAME%% --">
-    <!-- Remote callout/code-block icons (Icons::notifier()) are the
-         only network use; nothing else in noteAppC talks to the network. -->
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- No uses-permission INTERNET: the default build has no networking (docs/OFFLINE.md). -->
 
     <supports-screens
         android:anyDensity="true"

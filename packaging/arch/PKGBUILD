@@ -8,35 +8,32 @@
 # makepkg builds in src/ and pkg/ beside this file. --nocheck skips the test
 # suites; drop it to run them (QT_QPA_PLATFORM=offscreen is set for you).
 #
-# One build, five packages (docs/INK.md): notolith (the application),
+# One build, four packages (docs/INK.md): notolith (the application),
 # notolith-ink (the handwriting core library and module), notolith-hwfont
-# (the glyph studio module), notolith-pdfview (the PDF viewer module and the
-# poppler half of PDF embeds) and notolith-share (the note sharing engine).
-# Install every one of a run together: a module is only loaded by the build
-# that made it (the ABI tag).
+# (the glyph studio module) and notolith-pdfview (the PDF viewer module and the
+# poppler half of PDF embeds). Install every one of a run together: a module is
+# only loaded by the build that made it (the ABI tag).
+#
+# This is the default build: no networking and no encryption (docs/OFFLINE.md).
+# Sync, note sharing, encrypted notes, the AI plugin and remote content are
+# CMake options that default to OFF and are not turned on here.
 #
 # The first build fetches md4qt, MicroTeX and tinyxml2 (pinned in the root
-# CMakeLists.txt), ink-stroke-modeler (pinned in
-# libs/ext/ink/core/CMakeLists.txt) and the Rust crates of the share backend
-# (pinned by libs/ext/share/yrs-ffi/Cargo.lock), so it needs the network.
+# CMakeLists.txt) and ink-stroke-modeler (pinned in
+# libs/ext/ink/core/CMakeLists.txt), so it needs the network.
 # source=() cannot pin the modeler without a tarball; a later change can
 # vendor it.
 
 pkgbase=notolith
-pkgname=('notolith' 'notolith-ink' 'notolith-hwfont' 'notolith-pdfview' 'notolith-share')
+pkgname=('notolith' 'notolith-ink' 'notolith-hwfont' 'notolith-pdfview')
 pkgver=0.1.0
 pkgrel=1
 arch=('x86_64' 'aarch64')
 license=('GPL-3.0-or-later')
 # abseil-cpp is the system Abseil that the ink core requires (docs/INK.md): without it the ink
 # packages would silently not be built.
-# poppler-qt6 is the PDF module's, not the application's: the executable links none of it. Likewise
-# protobuf, libdatachannel and avahi are the share module's: without them (and nlohmann-json, which the
-# link layer includes) the share module is silently not built, so the package would fail at install.
-# rust (cargo) builds yrs-ffi, the CRDT backend of the share module (yrs, needs Rust 1.95 or newer);
-# without cargo the share module is still built, with that backend off.
-makedepends=('cmake' 'ninja' 'git' 'gtest' 'abseil-cpp' 'poppler-qt6'
-             'protobuf' 'libdatachannel' 'avahi' 'nlohmann-json' 'rust')
+# poppler-qt6 is the PDF module's, not the application's: the executable links none of it.
+makedepends=('cmake' 'ninja' 'git' 'gtest' 'abseil-cpp' 'poppler-qt6')
 
 build() {
     # A distribution's makepkg.conf may target the build machine's own CPU
@@ -65,8 +62,8 @@ package_notolith() {
     # bubblewrap is a hard dependency: without it code blocks, TeX and plugins
     # would fall back to running unsandboxed.
     depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell'
-             'syntax-highlighting' 'litehtml' 'libgit2' 'libarchive' 'curl' 'libsodium'
-             'qtkeychain-qt6' 'zeromq' 'libseccomp' 'bubblewrap')
+             'syntax-highlighting' 'litehtml' 'libgit2' 'libarchive' 'zeromq' 'libseccomp'
+             'bubblewrap')
     optdepends=('hunspell-en_gb: British English spelling'
                 'hunspell-en_us: American English spelling')
     DESTDIR="$pkgdir" cmake --install build
@@ -102,12 +99,4 @@ package_notolith-pdfview() {
     depends=("notolith=$pkgver-$pkgrel" 'poppler-qt6')
     install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
         build/modules/libnotolith-pdfpage.so build/modules/notolith-pdfview.so
-}
-
-package_notolith-share() {
-    pkgdesc='Notolith note sharing: edit a note together with other devices on your network'
-    # The engine and the link layer: protobuf (which brings Abseil), libdatachannel and avahi are mapped only
-    # when a vault holds a share or you share a note. libsodium is in the base package already (sync needs it).
-    depends=("notolith=$pkgver-$pkgrel" 'libdatachannel' 'avahi' 'protobuf' 'libsodium')
-    install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" build/modules/notolith-share.so
 }

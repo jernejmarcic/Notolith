@@ -11,7 +11,9 @@
 # PATCH_COMMAND, so the two patch scripts run as their own step.
 #
 # PDF embeds are off: poppler is not in the KDE runtime and is a large module
-# to build. Everything else is on.
+# to build. Everything else in the default build is on. The default build has no
+# networking and no encryption (docs/OFFLINE.md), so finish-args has no
+# --share=network.
 app-id: io.github.jernejmarcic.Notolith
 runtime: org.kde.Platform
 runtime-version: '6.9'

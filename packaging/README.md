@@ -19,7 +19,7 @@ Every recipe here builds the source tree it sits in. None of them passes
 
 | recipe | state |
 |---|---|
-| `arch/PKGBUILD` | Builds with `makepkg -si --nocheck` in `arch/`; strips the `-march=native` that CachyOS puts in `makepkg.conf`. One build, five packages: `notolith` (the application), `notolith-ink` (handwriting core library and module, needs `abseil-cpp`), `notolith-hwfont` (glyph studio module, needs `notolith-ink`), `notolith-pdfview` (PDF viewer module, needs `poppler-qt6`) and `notolith-share` (note sharing). The module packages pin the exact `notolith` version, and all five of one run are installed together (`docs/INK.md`). |
+| `arch/PKGBUILD` | Builds with `makepkg -si --nocheck` in `arch/`; strips the `-march=native` that CachyOS puts in `makepkg.conf`. One build, four packages: `notolith` (the application), `notolith-ink` (handwriting core library and module, needs `abseil-cpp`), `notolith-hwfont` (glyph studio module, needs `notolith-ink`) and `notolith-pdfview` (PDF viewer module, needs `poppler-qt6`). The module packages pin the exact `notolith` version, and all four of one run are installed together (`docs/INK.md`). No package has a networking or encryption dependency (`docs/OFFLINE.md`). |
 | `flatpak/io.github.jernejmarcic.Notolith.yml` | Untested: needs flatpak-builder; the command is at the top of the file. PDF embeds are off because poppler is not in the KDE runtime. |
 | `appimage/build-appimage.sh` | Untested: downloads linuxdeploy and its Qt plugin. |
 
