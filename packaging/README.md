@@ -5,8 +5,8 @@ Notolith installs under the app id `io.github.jernejmarcic.Notolith`.
 `io.github.jernejmarcic.Notolith.desktop` is what makes single-file mode
 reachable: a file manager can open any `.md` with Notolith, and
 `resolveLaunchTarget()` decides whether that means one file or the vault it
-sits in. `inode/directory` is listed too, so "Open folder with" offers it for a
-vault. `io.github.jernejmarcic.Notolith.metainfo.xml` describes the app to
+sits in. A vault is opened from inside the app or as `notolith <folder>`; the
+desktop file does not register for every folder. `io.github.jernejmarcic.Notolith.metainfo.xml` describes the app to
 software centres.
 
 `cmake --install <build> --prefix /usr` puts the binary (`notolith`) in `bin/`,
@@ -28,6 +28,9 @@ tests. One build, two packages: `notolith` (the application) and
 package pins the exact `notolith` version, and both of one run are
 installed together. No package has a networking or encryption
 dependency (`docs/OFFLINE.md`).
+
+To publish to the AUR: the `v0.1.0-beta.1` tag must exist in the public repository,
+and `.SRCINFO` is regenerated with `makepkg --printsrcinfo > .SRCINFO` in `arch/`.
 
 The icon is `libs/theme/icons/noteAppC.svg`, installed to
 `share/icons/hicolor/scalable/apps/` under the app id, and built into the
