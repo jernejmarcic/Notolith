@@ -17,6 +17,10 @@ target_include_directories(noteAppC_plugin_protocol PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(noteAppC_plugin_protocol PUBLIC Qt6::Core)
+# A plugin may be granted the network namespace only in a build with NOTEAPPC_WITH_NETWORK (PluginHost.cpp).
+if(NOTEAPPC_WITH_NETWORK)
+    target_compile_definitions(noteAppC_plugin_protocol PUBLIC NOTEAPPC_HAVE_NETWORK)
+endif()
 
 # The app-side orchestration: one PluginHost (a sandboxed QProcess) per
 # enabled plugin, owned by a PluginRegistry. Only the app links this - the

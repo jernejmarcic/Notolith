@@ -5913,6 +5913,46 @@ QAction *actionStartingWith(const QMenu &menu, const QString &name)
 
 } // namespace
 
+#ifndef NOTEAPPC_HAVE_ENCRYPTION
+TEST_F(WindowTest, AnEncryptedNoteIsNotOpenedInThisBuildAndIsLeftAlone)
+{
+    const QByteArray sealed = "not a note this build can read";
+    write(QStringLiteral("Secret.mdlock"), sealed);
+    MainWindow window;
+    window.openVault(dir.path());
+    QString said;
+    QTimer dismiss; // whatever the failure says, in a box
+    QObject::connect(&dismiss, &QTimer::timeout, [&said] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            said = box->text() + box->informativeText();
+            box->reject();
+        }
+    });
+    dismiss.start(20);
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("Secret.mdlock"))));
+    dismiss.stop();
+    EXPECT_TRUE(said.contains(QStringLiteral("cannot open encrypted notes"))) << said.toStdString();
+    QFile file(path(QStringLiteral("Secret.mdlock")));
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), sealed);
+}
+#endif
+
+#ifndef NOTEAPPC_HAVE_NETWORK
+TEST_F(WindowTest, TheContextMenuHasNoLookUpInThisBuild)
+{
+    write(QStringLiteral("Words.md"), "good words here\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Words.md")));
+    const auto menu = window.editor()->contextMenuAt(window.editor()->noteText().indexOf(QLatin1String("words")) + 1);
+    EXPECT_FALSE(actionStartingWith(*menu, QStringLiteral("Look up"))) << "a DICT server is a network client";
+    EXPECT_TRUE(actionStartingWith(*menu, QStringLiteral("Search for")));
+    EXPECT_TRUE(actionStartingWith(*menu, QStringLiteral("Search the web for"))) << "opens the browser, the app sends nothing";
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_NETWORK
 TEST_F(WindowTest, LookUpShowsAPopoverAndEscapeClosesIt)
 {
     write(QStringLiteral("Words.md"), "good words here\n");
@@ -5982,6 +6022,8 @@ TEST_F(WindowTest, LookUpIsAbsentWhenTheFeatureIsOff)
     lookup->click();
     EXPECT_TRUE(actionStartingWith(*window.editor()->contextMenuAt(1), QStringLiteral("Look up")));
 }
+
+#endif // NOTEAPPC_HAVE_NETWORK
 
 #ifdef NOTEAPPC_HAVE_SPELLCHECK
 TEST_F(WindowTest, AWordAddedInOneTabStopsBeingUnderlinedInTheOther)

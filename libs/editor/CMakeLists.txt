@@ -49,14 +49,19 @@ add_library(noteAppC_editor STATIC
 set_target_properties(noteAppC_editor PROPERTIES AUTOMOC ON)
 
 target_include_directories(noteAppC_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-# Qt6::Network is ReferenceBlock.cpp's own: a ```reference block's URL is fetched with QNetworkAccessManager.
+# Qt6::Network is ReferenceBlock.cpp's own, and only with NOTEAPPC_WITH_NETWORK: a ```reference block's URL is
+# fetched with QNetworkAccessManager. The default build links no network class into the editor.
 # Qt6::Svg is NotebookBlock.cpp's and MermaidBlock.cpp's own: an image/svg+xml kernel output
 # (matplotlib's default figure format, among others) is rasterised with
 # QSvgRenderer rather than shown as raw markup or skipped.
 # noteAppC_index for Fuzzy::score alone (SlashCommands.cpp): it depends on
 # neither noteAppC_editor nor noteAppC_ui, so linking it here is not a cycle,
 # and it is the command palette's own matcher rather than a second one.
-target_link_libraries(noteAppC_editor PUBLIC Qt6::Widgets noteAppC_markdown noteAppC_theme noteAppC_render noteAppC_vault noteAppC_index PRIVATE Qt6::Concurrent Qt6::Svg Qt6::Network noteAppC_sandbox)
+target_link_libraries(noteAppC_editor PUBLIC Qt6::Widgets noteAppC_markdown noteAppC_theme noteAppC_render noteAppC_vault noteAppC_index PRIVATE Qt6::Concurrent Qt6::Svg noteAppC_sandbox)
+if(NOTEAPPC_WITH_NETWORK)
+    target_link_libraries(noteAppC_editor PRIVATE Qt6::Network)
+    target_compile_definitions(noteAppC_editor PUBLIC NOTEAPPC_HAVE_NETWORK)
+endif()
 
 # HTML blocks edited in place (HtmlEdit.cpp) take their structure from gumbo,
 # the parser litehtml already pulls in; without it they render as before.

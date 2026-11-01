@@ -75,6 +75,10 @@ PluginHost::~PluginHost()
 
 bool PluginHost::permissionGranted(PluginPermission permission) const
 {
+#ifndef NOTEAPPC_HAVE_NETWORK
+    if (permission == PluginPermission::Network)
+        return false; // the default build gives no plugin a network namespace (docs/OFFLINE.md)
+#endif
     return m_granted.contains(permission);
 }
 

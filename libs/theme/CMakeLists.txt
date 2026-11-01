@@ -79,9 +79,13 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/x.svg
     icons/zap.svg)
 
-# Network is for Icons::icon(), which fetches a remote icon URL itself; the
-# root find_package asks for it, so nothing is requested twice here.
+# Network is for Icons::icon(), which fetches a remote icon URL itself, and only with NOTEAPPC_WITH_NETWORK:
+# the default build links no network class into the theme.
 
 target_include_directories(noteAppC_theme PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # noteAppC_markdown for ConfigFile (Core only, shared with TaskStates).
-target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::Network noteAppC_markdown)
+target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Widgets Qt6::Svg noteAppC_markdown)
+if(NOTEAPPC_WITH_NETWORK)
+    target_link_libraries(noteAppC_theme PUBLIC Qt6::Network)
+    target_compile_definitions(noteAppC_theme PUBLIC NOTEAPPC_HAVE_NETWORK)
+endif()

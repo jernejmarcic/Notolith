@@ -23,10 +23,12 @@
 #include "ModuleHost.h"
 #include "ModuleRegistry.h"
 #include "PdfPage.h"
-#include "SecretStore.h"
 #include "Settings.h"
 #include "Workspaces.h"
+#ifdef NOTEAPPC_HAVE_SHARE
+#include "SecretStore.h"
 #include "ShareEngineBase.h"
+#endif
 #include "WaitFor.h"
 
 using namespace noteAppC;
@@ -34,9 +36,11 @@ using namespace noteAppC;
 namespace {
 
 const QStringList kPoppler = {QStringLiteral("libpoppler")};
+#ifdef NOTEAPPC_HAVE_SHARE
 /// What the share engine brings: none of it may be mapped until sharing is wanted.
 const QStringList kShareStack = {QStringLiteral("libprotobuf"), QStringLiteral("libdatachannel"),
                                  QStringLiteral("libavahi"), QStringLiteral("libabsl")};
+#endif
 
 /// A vault with one note that embeds nothing and a two-page PDF next to it.
 class LazyVault {
@@ -198,6 +202,7 @@ TEST(LazyModules, PdfWithoutTheModuleIsNotAViewFile)
     EXPECT_FALSE(anyMapped(kPoppler));
 }
 
+#ifdef NOTEAPPC_HAVE_SHARE
 void setShareFeature(bool on)
 {
     Settings settings = Settings::load();
@@ -326,6 +331,7 @@ TEST(LazyModules, ShareWithoutTheModuleSaysWhatIsMissing)
     EXPECT_EQ(window.shareEngine(), nullptr);
     EXPECT_FALSE(anyMapped(kShareStack));
 }
+#endif // NOTEAPPC_HAVE_SHARE
 
 // 13. The last session ended with a PDF open: the restored tab opens it although no module scan has run yet,
 // and the saved workspace keeps it.
@@ -408,6 +414,7 @@ int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
+#ifdef NOTEAPPC_HAVE_SHARE
     // Never the real keyring (a silent secret-service costs 15 s a call).
     static QHash<QString, QByteArray> memory;
     noteAppC::secrets::setStore({[](const QString &key, QByteArray *value) {
@@ -418,6 +425,7 @@ int main(int argc, char **argv)
                                  },
                                  [](const QString &key, const QByteArray &value) { return memory.insert(key, value) != memory.end(); },
                                  [](const QString &key) { return memory.remove(key) > 0; }});
+#endif
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

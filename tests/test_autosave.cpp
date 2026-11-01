@@ -78,6 +78,7 @@ struct Gate {
     void release() { sem.release(); }
 };
 
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
 void clickNextBox(const QString &text)
 {
     QTimer::singleShot(0, [text] {
@@ -89,6 +90,7 @@ void clickNextBox(const QString &text)
         }
     });
 }
+#endif
 
 void flush(MainWindow &window)
 {
@@ -333,6 +335,7 @@ TEST_F(AutosaveTest, DeleteWithACommitInFlightDoesNotBringTheFileBack)
     EXPECT_FALSE(QFileInfo::exists(note()));
 }
 
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
 TEST_F(AutosaveTest, EncryptWithACommitInFlightDoesNotBringThePlainFileBack)
 {
     Gate gate;
@@ -351,12 +354,14 @@ TEST_F(AutosaveTest, EncryptWithACommitInFlightDoesNotBringThePlainFileBack)
     EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Note.mdlock"))));
     EXPECT_FALSE(QFileInfo::exists(note())) << "the plain file is back";
 }
+#endif
 
 // Encrypted, notebook and lossy notes keep the synchronous path: no commit
 // reaches the save thread, and the file is already written when the call
 // returns.
 TEST_F(AutosaveTest, EncryptedNotebookAndLossyNotesStaySynchronous)
 {
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
     {
         Gate gate;
         gate.hold = false;
@@ -376,6 +381,7 @@ TEST_F(AutosaveTest, EncryptedNotebookAndLossyNotesStaySynchronous)
         EXPECT_NE(readAll(locked), before) << "an encrypted note is sealed before the call returns";
         EXPECT_FALSE(window.editor()->isModified());
     }
+#endif
     {
         const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
         writeAll(path(QStringLiteral("Analysis.ipynb")), original);
@@ -526,6 +532,7 @@ void onNextBox(std::function<void()> step, const QString &button)
 // plain note comes up while the box is open (here the timer's, held on the save
 // thread). It must be finished before the plain file and its recovery copies
 // go, or it brings the plain text back.
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
 TEST_F(AutosaveTest, ACommitQueuedWhileTheEncryptBoxIsOpenLeavesNoPlainTextBehind)
 {
     Gate gate;
@@ -552,7 +559,9 @@ TEST_F(AutosaveTest, ACommitQueuedWhileTheEncryptBoxIsOpenLeavesNoPlainTextBehin
     EXPECT_TRUE(Snapshots::versions(note()).isEmpty()) << "a recovery copy of the plain text is back";
     EXPECT_FALSE(readAll(path(QStringLiteral("Note.mdlock"))).contains("SECRETWORD"));
 }
+#endif
 
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
 // Losing focus to a box does not queue a commit behind it: the focus-loss
 // autosave waits for the box to be answered.
 TEST_F(AutosaveTest, NoFocusLossCommitIsQueuedWhileABoxIsOpen)
@@ -575,6 +584,7 @@ TEST_F(AutosaveTest, NoFocusLossCommitIsQueuedWhileABoxIsOpen)
     flush(window);
     EXPECT_EQ(gate.commits.load(), 0);
 }
+#endif
 
 // Discard in the could-not-save box means no write afterwards, even though the
 // box deactivated the window and the folder has since become writable.

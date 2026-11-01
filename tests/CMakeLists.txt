@@ -17,7 +17,10 @@ target_link_libraries(test_search PRIVATE noteAppC_index GTest::gtest GTest::gte
 add_test(NAME search COMMAND test_search)
 
 add_executable(test_editor test_editor.cpp)
-target_link_libraries(test_editor PRIVATE noteAppC_editor noteAppC_render Qt6::Concurrent Qt6::Network Qt6::Test GTest::gtest)
+target_link_libraries(test_editor PRIVATE noteAppC_editor noteAppC_render Qt6::Concurrent Qt6::Test GTest::gtest)
+if(NOTEAPPC_WITH_NETWORK)
+    target_link_libraries(test_editor PRIVATE Qt6::Network)
+endif()
 # PdfPage resolves libnotolith-pdfpage.so from the module directories (libs/render/PdfPage.cpp): this test
 # points at the build's, and needs it built. No host symbols in that library, so a bare test binary loads it.
 if(TARGET notolith-pdfpage)
@@ -241,6 +244,34 @@ if(noteappc_exe_forbidden)
         ${noteappc_exe_forbidden})
 endif()
 
+# The default build is offline (docs/OFFLINE.md): neither the executable nor a module names a networking or crypto
+# library or a Qt network client class. What each option adds is allowed once that option is on. The self-test hands
+# the script a pattern the executable certainly matches, and must fail: a check that cannot fail proves nothing.
+set(noteappc_offline_needed "")
+set(noteappc_offline_symbols "")
+if(NOT NOTEAPPC_WITH_SHARE)
+    list(APPEND noteappc_offline_needed "libdatachannel" "libavahi" "libprotobuf" "libjuice" "libusrsctp")
+endif()
+if(NOT NOTEAPPC_WITH_SYNC AND NOT NOTEAPPC_WITH_ENCRYPTION AND NOT NOTEAPPC_WITH_SHARE)
+    list(APPEND noteappc_offline_needed "libsodium")
+endif()
+if(NOT NOTEAPPC_WITH_NETWORK)
+    list(APPEND noteappc_offline_needed "libcurl" "libssl" "libcrypto" "libgnutls")
+    list(APPEND noteappc_offline_symbols "QNetworkAccessManager" "QNetworkRequest" "QNetworkReply" "QAbstractSocket"
+        "QTcpSocket" "QTcpServer" "QUdpSocket" "QSslSocket" "QSsl" "QHostInfo" "QHostAddress" "QDnsLookup" "QWebSocket")
+endif()
+list(JOIN noteappc_offline_needed "|" noteappc_offline_needed_pattern)
+list(JOIN noteappc_offline_symbols "|" noteappc_offline_symbols_pattern)
+if(noteappc_offline_needed_pattern OR noteappc_offline_symbols_pattern)
+    add_test(NAME offline_exe COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_offline.sh
+        "${noteappc_offline_needed_pattern}" "${noteappc_offline_symbols_pattern}" $<TARGET_FILE:noteAppC>)
+    add_test(NAME offline_modules COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_offline.sh
+        "${noteappc_offline_needed_pattern}" "${noteappc_offline_symbols_pattern}" ${CMAKE_BINARY_DIR}/modules)
+    add_test(NAME offline_selftest COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_offline.sh
+        "libQt6Core" "QApplication" $<TARGET_FILE:noteAppC>)
+    set_tests_properties(offline_selftest PROPERTIES WILL_FAIL TRUE)
+endif()
+
 # The glyph studio (libs/ext/hwfont): until noteAppC_hwfont exists this block does nothing.
 # test_hwfont drives the studio view and the module through the registry, so it
 # links the host (noteAppC_ui) and the static hwfont library only: the module
@@ -332,9 +363,11 @@ endif()
 set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The DICT client talks to a QTcpServer on loopback, never to a real server.
-add_executable(test_lookup test_lookup.cpp)
-target_link_libraries(test_lookup PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
-add_test(NAME lookup COMMAND test_lookup)
+if(NOTEAPPC_WITH_NETWORK)
+    add_executable(test_lookup test_lookup.cpp)
+    target_link_libraries(test_lookup PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+    add_test(NAME lookup COMMAND test_lookup)
+endif()
 
 add_executable(test_theme test_theme.cpp)
 target_link_libraries(test_theme PRIVATE noteAppC_theme Qt6::Test GTest::gtest GTest::gtest_main)

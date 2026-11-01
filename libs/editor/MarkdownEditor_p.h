@@ -31,6 +31,9 @@
 #include <span>
 #include <optional>
 #include <vector>
+#ifdef NOTEAPPC_HAVE_NETWORK
+class QNetworkAccessManager;
+#endif
 #include "BulletGlyphs.h"
 #include "CodeHighlighter.h"
 #include "Lifeline.h"
@@ -1034,8 +1037,10 @@ struct MarkdownEditor::Private {
     QElapsedTimer m_referencePendingSince;
     QSet<QString> m_referenceGone; ///< cached files that were deleted: refreshReferences looks for them coming back
     QString m_referenceDelivering; ///< the key whose read has just landed: its failure is shown, not retried, by the relayout
+#ifdef NOTEAPPC_HAVE_NETWORK
     QNetworkAccessManager *m_referenceNet = nullptr; ///< made with the first fetch
     bool m_remoteReferences = false;
+#endif
     std::function<QString()> m_vaultRoot;
     QSet<QString> m_referenceWatched; ///< the paths already handed to the watcher
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()

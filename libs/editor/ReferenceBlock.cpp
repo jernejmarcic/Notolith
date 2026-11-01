@@ -5,17 +5,18 @@
 /// the cache, the watcher and the delivery are the same contract.
 ///
 /// Nothing is read or fetched in layout. A vault file is read on a worker
-/// thread (QtConcurrent) and a URL by QNetworkAccessManager, which is
-/// asynchronous itself; the block says "Loading..." until deliverReference
+/// thread (QtConcurrent); the block says "Loading..." until deliverReference
 /// lands. A QFileSystemWatcher (made with the first file, debounced 200 ms)
 /// relays out the blocks whose file changed, so an edit in another program shows
 /// with nothing else happening.
 ///
-/// A URL is fetched only while setRemoteReferences is on (the window's
-/// setting, off by default), at most once per five minutes per URL across every
-/// editor, and a copy older than that is shown while the next one comes. Only
-/// http and https are ever asked for, a redirect never leaves https for http,
-/// and a body is cut at kReferenceMaxBytes.
+/// A URL is shown only in a build with NOTEAPPC_WITH_NETWORK (docs/OFFLINE.md);
+/// the default build shows a panel saying so and has no network code here. With
+/// it, a URL is fetched by QNetworkAccessManager only while setRemoteReferences
+/// is on (the window's setting, off by default), at most once per five minutes
+/// per URL across every editor, and a copy older than that is shown while the
+/// next one comes. Only http and https are ever asked for, a redirect never
+/// leaves https for http, and a body is cut at kReferenceMaxBytes.
 
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
@@ -27,11 +28,13 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#ifdef NOTEAPPC_HAVE_NETWORK
 #include <QHostAddress>
 #include <QHostInfo>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#endif
 #include <QRegularExpression>
 #include <QThread>
 #include <QTimer>
@@ -46,18 +49,27 @@ constexpr qint64 kReferenceMaxBytes = 2 * 1024 * 1024;
 // Limit: the listing is a QTextLayout built on the UI thread on every
 // relayout, so what is shown is cut here; a viewport-only layout is the upgrade.
 constexpr int kReferenceMaxLines = 500;
-constexpr qint64 kRemoteFreshMs = 5 * 60 * 1000;
-constexpr int kRemoteTimeoutMs = 15'000;
 
 // setReferenceReadHookForTests': read by worker threads, so atomic.
 std::atomic<void (*)(const QString &)> gReferenceReadHook{nullptr};
 
 std::atomic<int> gReferenceScans{0};
+constexpr int kReferenceMaxLineChars = 1000;
+constexpr int kReferenceMaxScanLines = 50000; ///< lines a start:/end: pattern is tried on
+
+bool isRemote(const QString &target)
+{
+    return target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+           || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive);
+}
+
+#ifdef NOTEAPPC_HAVE_NETWORK
+constexpr qint64 kRemoteFreshMs = 5 * 60 * 1000;
+constexpr int kRemoteTimeoutMs = 15'000;
+
 QString gAllowedAddress; // the tests' server; UI thread only
 constexpr int kMaxRemoteCopies = 32;
 constexpr int kMaxRedirects = 5;
-constexpr int kReferenceMaxLineChars = 1000;
-constexpr int kReferenceMaxScanLines = 50000; ///< lines a start:/end: pattern is tried on
 
 struct RemoteCopy {
     QString text;
@@ -135,12 +147,6 @@ bool isInternalAddress(const QHostAddress &address)
            || address.isSiteLocal() || address.isUniqueLocalUnicast() || address.isMulticast();
 }
 
-bool isRemote(const QString &target)
-{
-    return target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
-           || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive);
-}
-
 /// The address a hosting site's page for a file is a view of: GitHub's
 /// `/blob/` and GitLab's `/-/blob/` pages are HTML, the raw file is elsewhere.
 QString rawURL(const QString &link)
@@ -159,6 +165,7 @@ QString rawURL(const QString &link)
     }
     return link;
 }
+#endif // NOTEAPPC_HAVE_NETWORK
 
 /// Bytes to text the way a note is read: UTF-8, LF line ends; empty with
 /// `error` set for a file that is not text.
@@ -296,6 +303,7 @@ void MarkdownEditor::setVaultRootProvider(std::function<QString()> provider)
     d->m_vaultRoot = std::move(provider);
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 void MarkdownEditor::dropRemoteReferences()
 {
     // what a reply in flight would deliver is no longer wanted: cut it loose first
@@ -311,10 +319,13 @@ void MarkdownEditor::dropRemoteReferences()
         it = isRemote(it.key()) ? d->m_referenceCache.erase(it) : std::next(it);
     remoteCopies().clear();
 }
+#endif
 
 void MarkdownEditor::dropReferenceCache()
 {
+#ifdef NOTEAPPC_HAVE_NETWORK
     dropRemoteReferences();
+#endif
     d->m_referenceCache.clear();
     d->m_referenceGone.clear();
     d->m_referenceWatched.clear();
@@ -326,6 +337,7 @@ void MarkdownEditor::dropReferenceCache()
     d->m_referenceRefresh = nullptr;
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 void MarkdownEditor::setRemoteReferences(bool on)
 {
     if (d->m_remoteReferences == on)
@@ -343,6 +355,7 @@ void MarkdownEditor::setRemoteReferences(bool on)
     updateLayout();
     viewport()->update();
 }
+#endif
 
 bool MarkdownEditor::referencesPending() const
 {
@@ -383,10 +396,12 @@ int MarkdownEditor::panelFormatCountAt(qsizetype offset) const
     return int(d->m_blocks[size_t(index)].layout->formats().size());
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 QString MarkdownEditor::rawReferenceURL(const QString &link)
 {
     return rawURL(link);
 }
+#endif
 
 int MarkdownEditor::referenceWatchedForTests() const
 {
@@ -394,20 +409,24 @@ int MarkdownEditor::referenceWatchedForTests() const
                                  : 0;
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 int MarkdownEditor::remoteReferenceCopiesForTests()
 {
     return int(remoteCopies().size());
 }
+#endif
 
 int MarkdownEditor::referenceScansForTests()
 {
     return gReferenceScans.load();
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 void MarkdownEditor::allowReferenceAddressForTests(const QString &address)
 {
     gAllowedAddress = address;
 }
+#endif
 
 void MarkdownEditor::setReferenceReadHookForTests(void (*hook)(const QString &))
 {
@@ -436,6 +455,7 @@ bool MarkdownEditor::layoutReference(BlockView &view)
     QString key;    // what the read is cached under
     QString name;
     bool outside = false;
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (remote) {
         target = reference->target;
         key = rawURL(target);
@@ -443,7 +463,14 @@ bool MarkdownEditor::layoutReference(BlockView &view)
         name = QUrl(key).host();
         if (!QUrl(key).fileName().isEmpty())
             name = QUrl(key).fileName() + QStringLiteral(" (") + name + QLatin1Char(')');
-    } else {
+    } else
+#else
+    if (remote) {
+        target = reference->target;
+        name = QUrl(target).host();
+    } else
+#endif
+    {
         QString written = reference->target.trimmed();
         if (written.startsWith(QLatin1String("[[")) && written.endsWith(QLatin1String("]]"))) {
             written = written.mid(2, written.size() - 4);
@@ -479,14 +506,22 @@ bool MarkdownEditor::layoutReference(BlockView &view)
         return true;
     };
 
+#ifndef NOTEAPPC_HAVE_NETWORK
+    if (remote)
+        return panel(name, tr("Remote files are not supported in this build."), false);
+#endif
     if (outside)
         return panel(name, tr("Outside the vault: %1").arg(reference->target), false);
     if (key.isEmpty() || (!remote && !QFileInfo(key).isFile()))
         return panel(name, tr("Could not find %1").arg(reference->target), false);
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (remote && !d->m_remoteReferences)
         return panel(name, tr("Fetching remote files is off. Turn on \"Fetch remote references\" in Settings to show this file."), false);
+#endif
 
+#ifdef NOTEAPPC_HAVE_NETWORK
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+#endif
     auto it = d->m_referenceCache.find(key);
     const auto start = [&](ReferenceCacheEntry &entry) {
         entry.pending = true;
@@ -495,6 +530,7 @@ bool MarkdownEditor::layoutReference(BlockView &view)
             entry.latest = std::make_shared<std::atomic<quint64>>();
         entry.latest->store(entry.generation);
     };
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (remote) {
         if (it == d->m_referenceCache.end()) {
             it = d->m_referenceCache.insert(key, ReferenceCacheEntry());
@@ -514,7 +550,9 @@ bool MarkdownEditor::layoutReference(BlockView &view)
             it->fetchedAt = now;
             fetchReference(key, key, it->generation, 0);
         }
-    } else {
+    } else
+#endif
+    {
         const QFileInfo info(key);
         watchReference(key);
         const qint64 mtime = info.lastModified().toMSecsSinceEpoch();
@@ -617,6 +655,7 @@ bool MarkdownEditor::layoutReference(BlockView &view)
     return true;
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 void MarkdownEditor::fetchReference(const QString &key, const QString &url, quint64 generation, int hops)
 {
     // An answer that is a refusal: delivered from the event loop, never from
@@ -720,6 +759,7 @@ void MarkdownEditor::fetchReference(const QString &key, const QString &url, quin
         get();
     });
 }
+#endif
 
 void MarkdownEditor::deliverReference(const QString &key, quint64 generation, ReferenceCacheEntry result)
 {
@@ -727,15 +767,19 @@ void MarkdownEditor::deliverReference(const QString &key, quint64 generation, Re
     if (it == d->m_referenceCache.end() || it->generation != generation)
         return; // it changed again, and a newer read is on its way
     const auto latest = it->latest;
+#ifdef NOTEAPPC_HAVE_NETWORK
     // a failed fetch keeps the text an older one got
     if (result.text.isEmpty() && !result.error.isEmpty() && !it->text.isEmpty() && isRemote(key)) {
         result.text = it->text;
         result.error.clear();
     }
+#endif
     *it = std::move(result);
     it->latest = latest;
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (isRemote(key))
         rememberRemote(key, {it->text, it->error, it->fetchedAt});
+#endif
     d->m_referenceDelivering = key;
     relayReferenceBlocks(key);
     d->m_referenceDelivering.clear();

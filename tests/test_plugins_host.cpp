@@ -544,7 +544,11 @@ TEST_F(PluginHostTest, OnlyAPluginWithTheNetworkSeesWhatNameResolutionReadsInEtc
         if (!QFileInfo::exists(name))
             continue;
         EXPECT_EQ(readAs(offline, name), QStringLiteral("cannot-read")) << name.toStdString();
+#ifdef NOTEAPPC_HAVE_NETWORK
         EXPECT_NE(readAs(online, name), QStringLiteral("cannot-read")) << name.toStdString();
+#else
+        EXPECT_EQ(readAs(online, name), QStringLiteral("cannot-read")) << name.toStdString() << ": no network in this build";
+#endif
     }
 }
 

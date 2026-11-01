@@ -104,7 +104,9 @@
 #include "Pandoc.h"
 #include "PandocRunner.h"
 #endif
+#ifdef NOTEAPPC_HAVE_NETWORK
 #include "DictClient.h"
+#endif
 #include "PagePreview.h"
 #include "PdfPage.h"
 #include "RecoveryDialog.h"
@@ -1183,7 +1185,9 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 m_previewDelay.start();
             });
     connect(editor, &MarkdownEditor::searchRequested, this, &MainWindow::openSearch);
+#ifdef NOTEAPPC_HAVE_NETWORK
     connect(editor, &MarkdownEditor::lookupRequested, this, &MainWindow::lookUp);
+#endif
     connect(editor, &MarkdownEditor::linkHoverEnded, this, [this] {
         m_previewDelay.stop();
         if (m_preview)
@@ -1638,7 +1642,10 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setTableHandles(m_settings.boolean(QStringLiteral("editor.tableHandles")));
     editor->setComplexCodeBlocks(m_settings.boolean(QStringLiteral("editor.complexCodeBlocks")));
     editor->setCodeHighlights(m_settings.text(QStringLiteral("editor.codeHighlights")));
+#ifdef NOTEAPPC_HAVE_NETWORK
     editor->setRemoteReferences(m_settings.boolean(QStringLiteral("editor.remoteReferences")));
+    Icons::setRemoteAllowed(m_settings.boolean(QStringLiteral("editor.remoteReferences")));
+#endif
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setParseOptions(parseOptions());
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
@@ -3312,10 +3319,12 @@ void MainWindow::applyFeatures()
 #endif
     if (!featureOn("page-preview"))
         delete m_preview;
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (!featureOn("word-lookup")) { // nothing built, nothing listening
         delete m_lookupPopover;
         delete std::exchange(m_dictClient, nullptr);
     }
+#endif
     for (const auto &leaf : m_leaves)
         leaf->editor->setContextActions(contextActions());
     if (m_active)
@@ -3814,6 +3823,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         }
     }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
     // The definition popover goes with a click outside it or Escape; it has
     // no link to leave, so PagePreview's own timer never starts for it.
     if (m_lookupPopover && m_lookupPopover->isVisible()) {
@@ -3825,6 +3835,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             m_lookupPopover->hide();
         }
     }
+#endif
 
     if (watched == m_tree && event->type() == QEvent::KeyPress) {
         auto *keyEvent = static_cast<QKeyEvent *>(event);
@@ -4779,7 +4790,9 @@ void MainWindow::exportPdf()
     pdf.mindMaps = featureOn("markmap");
     pdf.codeStyler = featureOn("advanced-code-blocks");
     pdf.codeHighlights = m_settings.text(QStringLiteral("editor.codeHighlights"));
+#ifdef NOTEAPPC_HAVE_NETWORK
     pdf.remoteReferences = m_settings.boolean(QStringLiteral("editor.remoteReferences"));
+#endif
     pdf.vaultRoot = m_vault.isValid() ? m_vault.root() : QString();
     pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
     applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
@@ -4874,6 +4887,7 @@ PagePreview *MainWindow::pagePreview()
     return m_preview;
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 PagePreview *MainWindow::lookupPopover()
 {
     if (!m_lookupPopover) {
@@ -4883,13 +4897,19 @@ PagePreview *MainWindow::lookupPopover()
     }
     return m_lookupPopover;
 }
+#endif
 
 MarkdownEditor::ContextActions MainWindow::contextActions() const
 {
-    return {featureOn("global-search"), featureOn("word-lookup"),
-            m_settings.text(QStringLiteral("lookup.webSearchURL"))};
+#ifdef NOTEAPPC_HAVE_NETWORK
+    const bool lookup = featureOn("word-lookup");
+#else
+    const bool lookup = false;
+#endif
+    return {featureOn("global-search"), lookup, m_settings.text(QStringLiteral("lookup.webSearchURL"))};
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 void MainWindow::lookUp(const QString &word, const QPoint &globalPos)
 {
     if (!featureOn("word-lookup"))
@@ -4913,6 +4933,7 @@ void MainWindow::lookUp(const QString &word, const QPoint &globalPos)
                                               : QList<DictClient::Server>{DictClient::parseServerSpec(server)});
     m_dictClient->define(word, [show](DictClient::Result result) { show(DictClient::toMarkdown(result)); });
 }
+#endif
 
 void MainWindow::updateSpelling()
 {
@@ -5271,6 +5292,7 @@ void MainWindow::applyTheme()
     // reload is optional, and nothing optional runs before the window is up.
     if (m_themeWatcher)
         watchThemeFiles();
+    Icons::setRemoteAllowed(m_settings.boolean(QStringLiteral("editor.remoteReferences")));
     Icons::clearCache();
 
     if (auto *app = qobject_cast<QApplication *>(QCoreApplication::instance())) {
@@ -5331,8 +5353,10 @@ void MainWindow::applyTheme()
 #endif
     if (m_preview)
         m_preview->applyTheme(m_theme);
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (m_lookupPopover)
         m_lookupPopover->applyTheme(m_theme);
+#endif
     if (m_outgoingLinks)
         m_outgoingLinks->setTheme(m_theme);
     if (m_metaPane)
@@ -6532,18 +6556,16 @@ bool MainWindow::allowSharedRun(const MarkdownEditor *editor, const QString &lan
 }
 #endif
 
+#ifdef NOTEAPPC_HAVE_SHARE
 QList<ShareRecord> MainWindow::storedShares() const
 {
-#ifdef NOTEAPPC_HAVE_SHARE
     if (!m_vault.isValid())
         return {};
     return ShareStore(m_shareConfig.storeDirectory.isEmpty() ? ShareStore::directoryFor(m_vault.root())
                                                              : m_shareConfig.storeDirectory)
         .all();
-#else
-    return {};
-#endif
 }
+#endif
 
 void MainWindow::updateShare()
 {
@@ -6618,9 +6640,9 @@ void MainWindow::updateShare()
 #endif
 }
 
+#ifdef NOTEAPPC_HAVE_SHARE
 bool MainWindow::ensureShare(QString *error)
 {
-#ifdef NOTEAPPC_HAVE_SHARE
     if (m_share)
         return true;
     const auto fail = [error](const QString &message) {
@@ -6636,13 +6658,8 @@ bool MainWindow::ensureShare(QString *error)
     updateShare();
     m_shareDemanded = false;
     return m_share ? true : fail(m_shareProblem);
-#else
-    Q_UNUSED(error);
-    return false;
-#endif
 }
 
-#ifdef NOTEAPPC_HAVE_SHARE
 bool MainWindow::startShare()
 {
     if (!m_share)

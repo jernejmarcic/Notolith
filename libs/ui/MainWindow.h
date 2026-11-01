@@ -48,7 +48,9 @@ namespace noteAppC {
 
 class SpellChecker;
 class SingleInstance;
+#ifdef NOTEAPPC_HAVE_NETWORK
 class DictClient;
+#endif
 class NoteHistory;
 class PluginRegistry;
 class SyncEngine;
@@ -106,12 +108,14 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+#ifdef NOTEAPPC_HAVE_NETWORK
     /// Where "Look up" gets its definition: `done` is called with markdown,
     /// now or later. The default asks a DICT server (DictClient); a test
     /// sets its own, so none ever reaches a network.
     using LookupFunction =
         std::function<void(const QString &word, std::function<void(const QString &markdown)> done)>;
     void setLookupFunction(LookupFunction lookup) { m_lookupFunction = std::move(lookup); }
+#endif
 
     void openVault(const QString &path);
     /// Drops the open vault: back to the empty-window state, chrome intact.
@@ -529,13 +533,17 @@ private:
     void showNoteInPanes(const QString &path);
     /// The hover preview, built the first time it is wanted.
     PagePreview *pagePreview();
+#ifdef NOTEAPPC_HAVE_NETWORK
     /// The popover "Look up" fills, built the first time it is used.
     PagePreview *lookupPopover();
+#endif
     /// What the editors' context menus offer that the window answers.
     MarkdownEditor::ContextActions contextActions() const;
+#ifdef NOTEAPPC_HAVE_NETWORK
     /// "Look up": the popover at `globalPos` says so at once and is filled
     /// when the definition arrives; nothing is sent before this is called.
     void lookUp(const QString &word, const QPoint &globalPos);
+#endif
     /// Git history of every save (the history module): opened for the vault
     /// when the feature is on, closed when it is not.
     void updateNoteHistory();
@@ -894,11 +902,13 @@ void saveSettings();
     /// be picked from; owned because MainWindow is what applies the theme.
     QFileSystemWatcher *m_themeWatcher = nullptr;
     QPointer<PagePreview> m_preview; ///< null until a link is first hovered
+#ifdef NOTEAPPC_HAVE_NETWORK
     QPointer<PagePreview> m_lookupPopover; ///< null until a word is first looked up
     DictClient *m_dictClient = nullptr;    ///< likewise
     QPoint m_lookupPos;
     quint64 m_lookupToken = 0; ///< a newer lookup's answer replaces an older one
     LookupFunction m_lookupFunction;
+#endif
     /// Resolves a link as the open note sees it; the editor, the preview and
     /// PDF export all use it.
     std::function<QString(const QString &)> m_resolveLink; ///< as seen from the active note

@@ -1,11 +1,14 @@
 #!/bin/sh
 # Everything a CI would run, run locally:
 #
-#   1. the release build and every suite - the performance guards and the
-#      round-trip fuzz are tests, so they run with them;
-#   2. a build with every optional module off and its suites, which is what
+#   1. the default build (no networking, no encryption: docs/OFFLINE.md) and
+#      every suite - the performance guards and the round-trip fuzz are tests,
+#      so they run with them;
+#   2. the same with every networked and encrypting option on, which is what
+#      keeps those modules compiling and tested;
+#   3. a build with every optional module off and its suites, which is what
 #      proves each module's #ifdef still holds;
-#   3. with --bench, the benchmark on a generated 20 000-note vault.
+#   4. with --bench, the benchmark on a generated 20 000-note vault.
 #
 #   sh tools/check.sh [--bench]
 #
@@ -51,6 +54,9 @@ check() {
 }
 
 check /tmp/noteAppC-build
+check /tmp/noteAppC-networked \
+    -DNOTEAPPC_WITH_NETWORK=ON -DNOTEAPPC_WITH_SYNC=ON -DNOTEAPPC_WITH_ENCRYPTION=ON \
+    -DNOTEAPPC_WITH_SHARE=ON -DNOTEAPPC_WITH_SHARE_YRS=ON -DNOTEAPPC_WITH_AI_PLUGIN=ON
 check /tmp/noteAppC-minimal \
     -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_MEDIA=OFF \
     -DNOTEAPPC_WITH_SPELLCHECK=OFF -DNOTEAPPC_WITH_GRAPH=OFF -DNOTEAPPC_WITH_CANVAS=OFF \

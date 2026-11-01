@@ -12768,8 +12768,10 @@ TEST(HunkTest, TheRegionThatDiffersNeverSplitsASurrogatePair)
 
 // --- Code Styler: ```reference blocks ----------------------------------------------
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 #include <QTcpServer>
 #include <QTcpSocket>
+#endif
 
 namespace {
 
@@ -13019,6 +13021,17 @@ TEST(ReferenceBlockTest, ClickingTheHeaderAsksForTheFileToBeOpened)
     EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("file: hello.py")));
 }
 
+#ifndef NOTEAPPC_HAVE_NETWORK
+TEST(ReferenceBlockTest, ARemoteFileIsNotSupportedInThisBuild)
+{
+    auto editor = referenceEditorWith(QStringLiteral("link: https://example.com/dir/file.txt\n"), QString());
+    QTest::qWait(100);
+    EXPECT_EQ(editor->referenceCacheSize(), 0) << "nothing is read or fetched";
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("not supported")));
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_NETWORK
 TEST(ReferenceBlockTest, AHostingSitesPageLinkIsFetchedAsTheRawFile)
 {
     EXPECT_EQ(MarkdownEditor::rawReferenceURL(QStringLiteral("https://github.com/u/r/blob/main/src/a.py")),
@@ -13123,6 +13136,8 @@ TEST(ReferenceBlockTest, ARemoteFailureIsShownAndNotRetriedPerLayout)
     EXPECT_EQ(server.requests, 1);
 }
 
+#endif // NOTEAPPC_HAVE_NETWORK
+
 // --- reference blocks stay inside the vault ------------------------------------------
 
 TEST(ReferenceBlockTest, AFileInsideTheVaultIsShownWhicheverWayItIsWritten)
@@ -13208,6 +13223,7 @@ TEST(ReferenceBlockTest, AScanOverABigFileNeverStallsTheUIthread)
     EXPECT_LT(longest, 300) << "ms the UI thread was held: the scan belongs on the worker";
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 // --- remote references: hosts that are not the internet ---------------------------------
 
 TEST(ReferenceBlockTest, LiteralLocalAndPrivateHostsAreRefused)
@@ -13355,6 +13371,8 @@ TEST(ReferenceBlockTest, TurningRemoteFetchingOffForgetsWhatWasFetched)
     EXPECT_EQ(MarkdownEditor::remoteReferenceCopiesForTests(), 0);
     EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("off")));
 }
+
+#endif // NOTEAPPC_HAVE_NETWORK
 
 TEST(ReferenceBlockTest, ARelayoutDoesNotCutTheFileAgain)
 {

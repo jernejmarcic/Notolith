@@ -17,7 +17,6 @@
 class QAbstractItemModel;
 class QCompleter;
 class QFileSystemWatcher;
-class QNetworkAccessManager;
 class QMimeData;
 class QModelIndex;
 class QStringListModel;
@@ -302,7 +301,9 @@ public:
         bool codeStyler = false; ///< ParseOptions::codeStyler: Code Styler's syntax, drawn as on screen
         QString codeHighlights;  ///< the `editor.codeHighlights` setting: the names `info:2` may use
         QString vaultRoot; ///< what a ```reference block may read from: empty shows no local file
+#ifdef NOTEAPPC_HAVE_NETWORK
         bool remoteReferences = false; ///< the `editor.remoteReferences` setting: a ```reference may fetch a URL
+#endif
         /// Paper is white, so the light theme unless a caller passes its own
         /// (the person's formatting colours on top of it).
         std::optional<Theme> theme;
@@ -844,9 +845,11 @@ public:
     /// reference may show and open only files inside it (symlinks resolved).
     /// Without one, no local file is shown.
     void setVaultRootProvider(std::function<QString()> provider);
+#ifdef NOTEAPPC_HAVE_NETWORK
     /// Whether a ```reference block may fetch an `http(s)` URL. Off by
     /// default: nothing touches the network unasked (ReferenceBlock.cpp).
     void setRemoteReferences(bool on);
+#endif
     /// Whether a file or URL a reference block shows is still being read, or its excerpt cut.
     bool referencesPending() const;
     /// Blocks until every reference block shows its excerpt (a file read, then the cut), or `timeoutMs` ran out:
@@ -856,7 +859,9 @@ public:
     int referenceCacheSize() const;
     /// The address a hosting site's page for a file (GitHub `/blob/`, GitLab
     /// `/-/blob/`) is fetched as: the raw file's; any other link as it is.
+#ifdef NOTEAPPC_HAVE_NETWORK
     static QString rawReferenceURL(const QString &link);
+#endif
     /// For the tests: the number of colour runs the panel at `offset` drew.
     int panelFormatCountAt(qsizetype offset) const;
     /// For the tests: what a reference block's watcher holds, how many URLs'
@@ -864,9 +869,11 @@ public:
     /// block's lines, and an address the remote-host check lets through (the
     /// local servers the tests run); empty clears it.
     int referenceWatchedForTests() const;
-    static int remoteReferenceCopiesForTests();
     static int referenceScansForTests();
+#ifdef NOTEAPPC_HAVE_NETWORK
+    static int remoteReferenceCopiesForTests();
     static void allowReferenceAddressForTests(const QString &address);
+#endif
     /// For the tests: called on the worker thread at the top of every local
     /// reference read, with the path. Null clears it.
     static void setReferenceReadHookForTests(void (*hook)(const QString &));
@@ -2015,8 +2022,12 @@ private:
     /// A read or fetch finished (on this thread); ignored if `generation` is
     /// no longer the one on record for `key`.
     void deliverReference(const QString &key, quint64 generation, ReferenceCacheEntry result);
+#ifdef NOTEAPPC_HAVE_NETWORK
     /// Asks for `url` through the network manager, never blocking.
     void fetchReference(const QString &key, const QString &url, quint64 generation, int hops);
+    /// Forgets every URL's text and the network manager: remote fetching went off.
+    void dropRemoteReferences();
+#endif
     /// Relays out the blocks showing `key`.
     void relayReferenceBlocks(const QString &key);
     void deliverExcerpt(const QString &key, quint64 generation, const QString &memoKey, const QString &language,
@@ -2024,8 +2035,6 @@ private:
     void watchReference(const QString &path);
     void referenceFileEvent();
     void refreshReferences();
-    /// Forgets every URL's text and the network manager: remote fetching went off.
-    void dropRemoteReferences();
     /// Forgets everything a reference block kept - reads, watches, fetches: the plugin went off.
     void dropReferenceCache();
     /// The view's name (if any) above the grid, then paintTable for the

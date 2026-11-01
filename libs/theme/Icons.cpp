@@ -2,7 +2,9 @@
 #include "ConfigFile.h"
 
 #include <QByteArray>
+#ifdef NOTEAPPC_HAVE_NETWORK
 #include <QCryptographicHash>
+#endif
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -10,9 +12,11 @@
 #include <QFontMetricsF>
 #include <QHash>
 #include <QImage>
+#ifdef NOTEAPPC_HAVE_NETWORK
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#endif
 #include <QPainter>
 #include <QPixmap>
 #include <QRawFont>
@@ -32,6 +36,7 @@ QHash<QString, QIcon> &cache()
     return icons;
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 IconsNotifier &notifierInstance()
 {
     static IconsNotifier instance;
@@ -64,6 +69,7 @@ bool isRemoteURL(const QString &name)
     return name.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
         || name.startsWith(QLatin1String("https://"), Qt::CaseInsensitive);
 }
+#endif
 
 bool isFileURL(const QString &name)
 {
@@ -75,6 +81,7 @@ QString localPathOf(const QString &name)
     return isFileURL(name) ? QUrl(name).toLocalFile() : name;
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 // Remote icons are re-fetched at will, so they are cache.
 QString cacheDirectory()
 {
@@ -95,6 +102,8 @@ QString cacheFilePath(const QString &url)
         suffix = QStringLiteral("img");
     return QDir(cacheDirectory()).filePath(QString::fromLatin1(hash) + QLatin1Char('.') + suffix);
 }
+
+#endif // NOTEAPPC_HAVE_NETWORK
 
 // The source's own size scaled to fit inside `size` and centred, so a wide
 // photo and a square glyph both land in the same box instead of one
@@ -183,6 +192,7 @@ QIcon iconFromResource(const QString &name, const QColor &color, int size)
     return iconFromSVG(file.readAll(), color, size);
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 // Runs at most once per URL until clearCache(). A caller sees a null icon
 // while this is in flight or after it fails; either way Icons::icon() itself
 // never waits on it.
@@ -218,14 +228,19 @@ void startFetch(const QString &url)
     });
 }
 
+bool remoteAllowed = false;
+
 QIcon iconFromRemote(const QString &url, const QColor &color, int size)
 {
+    if (!remoteAllowed)
+        return {};
     const QString path = cacheFilePath(url);
     if (QFile::exists(path))
         return iconFromFile(path, color, size);
     startFetch(url);
     return {};
 }
+#endif
 
 // `U+E73C`, case-insensitive, 4-6 hex digits - the form a Nerd Font
 // cheatsheet gives when the glyph itself is not convenient to paste.
@@ -334,9 +349,12 @@ QIcon Icons::icon(const QString &name, const QColor &color, int size)
 
     QIcon result;
     char32_t codepoint = 0;
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (isRemoteURL(name))
         result = iconFromRemote(name, color, size);
-    else if (isFileURL(name) || QDir::isAbsolutePath(name))
+    else
+#endif
+    if (isFileURL(name) || QDir::isAbsolutePath(name))
         result = iconFromFile(localPathOf(name), color, size);
     else if (isNerdFontForm(name, &codepoint))
         result = iconFromNerdFontGlyph(codepoint, color, size);
@@ -352,15 +370,31 @@ QIcon Icons::icon(const QString &name, const QColor &color, int size)
     return result;
 }
 
+void Icons::setRemoteAllowed(bool on)
+{
+#ifdef NOTEAPPC_HAVE_NETWORK
+    if (remoteAllowed == on)
+        return;
+    remoteAllowed = on;
+    cache().clear();
+#else
+    Q_UNUSED(on)
+#endif
+}
+
 void Icons::clearCache()
 {
     cache().clear();
+#ifdef NOTEAPPC_HAVE_NETWORK
     failedURLs().clear();
+#endif
 }
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 QObject *Icons::notifier()
 {
     return &notifierInstance();
 }
+#endif
 
 } // namespace noteAppC

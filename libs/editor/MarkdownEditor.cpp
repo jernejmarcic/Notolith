@@ -248,8 +248,10 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     horizontalScrollBar()->setRange(0, 0);
     // An icon given as an https URL arrives after the first paint. Without
     // this it stayed blank until something unrelated happened to repaint.
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (auto *icons = qobject_cast<IconsNotifier *>(Icons::notifier()))
         connect(icons, &IconsNotifier::iconReady, this, [this] { viewport()->update(); });
+#endif
     watchStyleFiles();
     setKeyBindings({}); // the built-in keys, until the window hands over its own
 

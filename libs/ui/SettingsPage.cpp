@@ -760,10 +760,12 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Underline words the dictionary does not recognise. Uses the hunspell "
                    "dictionaries installed for your system's languages."));
 #endif
+#ifdef NOTEAPPC_HAVE_NETWORK
     addLineEditRow(layout, QStringLiteral("lookup.server"), tr("Dictionary server"),
                   tr("host or host:port of a DICT server for \"Look up\"; empty uses "
                      "/etc/dict/dict.conf (localhost, then dict.org)."),
                   QStringLiteral("localhost"));
+#endif
     addLineEditRow(layout, QStringLiteral("lookup.webSearchURL"), tr("Web search"),
                   tr("Opened in the browser by \"Search the web\"; %1 is the text. Empty removes the item."));
     addToggleRow(layout, QStringLiteral("editor.showIndentGuides"), tr("Indent guides"),
@@ -784,10 +786,12 @@ QWidget *SettingsPage::buildEditorPage()
                       "each with a theme colour (blue, red, orange, yellow, green, cyan, purple, pink) or a "
                       "hex code, comma separated. Part of Advanced code blocks."),
                    QStringLiteral("info=blue, warn=orange, error=red"));
-    addToggleRow(layout, QStringLiteral("editor.remoteReferences"), tr("Fetch remote references"),
+#ifdef NOTEAPPC_HAVE_NETWORK
+    addToggleRow(layout, QStringLiteral("editor.remoteReferences"), tr("Fetch remote content"),
                 tr("Let a reference block (```reference with a link: of http or https) download the file "
-                   "it shows. Off, such a block shows a notice and a link, and nothing is sent. Part of "
-                   "Advanced code blocks."));
+                   "it shows, and let an icon given as a link load it. Off, a reference "
+                   "block shows a notice and a link, an icon is blank, and nothing is sent."));
+#endif
     addComboRow(layout, QStringLiteral("editor.listNumberStyle"), tr("Numbered lists"),
                 tr("Draw nested ordered items as written (1. 2.) or hierarchically (1.1. 1.2. "
                    "1.2.1.), counted from the items they sit in. The note's text is unchanged."),
@@ -966,6 +970,15 @@ QWidget *SettingsPage::buildCorePluginsPage()
 #ifndef NOTEAPPC_HAVE_SYNC
         "sync",
 #endif
+#ifndef NOTEAPPC_HAVE_ENCRYPTION
+        "encrypted-notes",
+#endif
+#ifndef NOTEAPPC_HAVE_SHARE
+        "share",
+#endif
+#ifndef NOTEAPPC_HAVE_NETWORK
+        "word-lookup",
+#endif
     };
     // Features whose code is a loadable module that is not installed: the row stays, switched off and saying
     // what to install, rather than vanishing. Asking PdfPage::isAvailable() instead would map poppler just to draw this page.
@@ -975,8 +988,10 @@ QWidget *SettingsPage::buildCorePluginsPage()
         needsPackage.insert("pdf-viewer", reason);
         needsPackage.insert("pdf-embeds", reason);
     }
+#ifdef NOTEAPPC_HAVE_SHARE
     if (!m_moduleFeatures.contains(QLatin1String("share")))
         needsPackage.insert("share", tr("Not available: needs the notolith-share package."));
+#endif
     if (!MediaPlayback::isAvailable())
         missing << "media-embeds";
     if (!HtmlRenderer::isAvailable())

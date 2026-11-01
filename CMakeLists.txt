@@ -13,6 +13,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Network is here for QLocalSocket alone (the single-instance socket in libs/ui/SingleInstance, a Unix socket).
+# Only libs/ui/CMakeLists.txt links it; every other target reaches the network classes only under
+# NOTEAPPC_WITH_NETWORK below.
 find_package(Qt6 6.7 REQUIRED COMPONENTS Widgets Svg Sql Concurrent Network)
 # Optional: the editor can paint its viewport through OpenGL instead of raster.
 find_package(Qt6 6.7 QUIET COMPONENTS OpenGLWidgets)
@@ -41,6 +44,11 @@ if(ANDROID)
 else()
     set(noteappc_static_default OFF)
 endif()
+# The default build has no networking and no encryption at all: nothing that opens an internet socket or links a
+# crypto library is compiled, and a test (tests/CMakeLists.txt, "offline_*") fails when one gets in. Each switch
+# below that reaches the network or encrypts (NETWORK, AI_PLUGIN, SYNC, ENCRYPTION, SHARE_YRS, SHARE) is OFF; a
+# developer turns one on knowing what it adds. Docs: docs/OFFLINE.md.
+option(NOTEAPPC_WITH_NETWORK "Fetch remote content: reference blocks and icons from a URL, DICT word lookup (Qt6::Network clients)" OFF)
 option(NOTEAPPC_STATIC_MODULES "Build the loadable modules as Qt static plugins linked into the executable" ${noteappc_static_default})
 
 # Neither dependency is in the Android Qt kit, so both can be turned off for a
@@ -133,8 +141,10 @@ option(NOTEAPPC_WITH_PLUGINS "Build the out-of-process plugin host and its app-s
 # without libcurl, and the tree contains no plugins/ai code at all - the
 # same "off means it was never even considered" every other optional module
 # in this file promises.
-option(NOTEAPPC_WITH_AI_PLUGIN "Build the first-party AI plugin (plugins/ai)" ON)
+option(NOTEAPPC_WITH_AI_PLUGIN "Build the first-party AI plugin (plugins/ai); talks to an AI server over HTTP" OFF)
 if(NOTEAPPC_WITH_AI_PLUGIN)
+    # The plugin runs with the network namespace, which only a NOTEAPPC_WITH_NETWORK build grants a plugin.
+    set(NOTEAPPC_WITH_NETWORK ON)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(CURL QUIET IMPORTED_TARGET libcurl)
@@ -144,7 +154,7 @@ endif()
 # encrypted (docs/SYNC.md). Needs libsodium for the crypto and Qt6Keychain
 # for the device identity key it keeps in the OS keyring; without either the
 # option is silently off, same as spellcheck without hunspell.
-option(NOTEAPPC_WITH_SYNC "Build sync to an optional end-to-end encrypted server (libs/ext/sync)" ON)
+option(NOTEAPPC_WITH_SYNC "Build sync to an optional end-to-end encrypted server (libs/ext/sync)" OFF)
 if(NOTEAPPC_WITH_SYNC)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
@@ -157,7 +167,7 @@ if(NOTEAPPC_WITH_SYNC)
 endif()
 # Encrypted notes (docs/ENCRYPTION.md): `.mdlock` files decrypted in memory
 # only. Needs libsodium, the same as sync; without it the option is off.
-option(NOTEAPPC_WITH_ENCRYPTION "Build encrypted notes (libs/ext/crypt)" ON)
+option(NOTEAPPC_WITH_ENCRYPTION "Build encrypted notes (libs/ext/crypt)" OFF)
 if(NOTEAPPC_WITH_ENCRYPTION AND NOT TARGET PkgConfig::SODIUM)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
@@ -181,7 +191,7 @@ endif()
 # interface, with a Native C++ backend (always built) and the Rust yrs library
 # behind a small C surface (libs/ext/share/yrs-ffi). Only the yrs one needs
 # cargo; without it the option is silently off, like spellcheck without hunspell.
-option(NOTEAPPC_WITH_SHARE_YRS "Build the yrs text CRDT backend for note sharing (libs/ext/share)" ON)
+option(NOTEAPPC_WITH_SHARE_YRS "Build the yrs text CRDT backend for note sharing (libs/ext/share)" OFF)
 if(NOTEAPPC_WITH_SHARE_YRS AND NOT ANDROID)
     find_program(NOTEAPPC_CARGO cargo)
 endif()
@@ -190,7 +200,7 @@ endif()
 # peer-to-peer Node over libdatachannel with mDNS discovery). Needs libdatachannel,
 # avahi-client, protobuf, nlohmann_json and libsodium; if any is missing the
 # option is silently off, like spellcheck without hunspell.
-option(NOTEAPPC_WITH_SHARE "Build the peer-to-peer link layer for note sharing (libs/ext/link)" ON)
+option(NOTEAPPC_WITH_SHARE "Build note sharing: the window side, the CRDT and the peer-to-peer link layer (libs/ext/share, link, shareengine)" OFF)
 if(NOTEAPPC_WITH_SHARE AND NOT ANDROID)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
@@ -381,7 +391,7 @@ endif()
 if(NOTEAPPC_WITH_PLUGINS)
     add_subdirectory(libs/ext/plugins)
 endif()
-if(TARGET PkgConfig::SODIUM AND TARGET Qt6Keychain::Qt6Keychain)
+if(NOTEAPPC_WITH_SYNC AND TARGET PkgConfig::SODIUM AND TARGET Qt6Keychain::Qt6Keychain)
     add_subdirectory(libs/ext/sync)
 endif()
 if(NOTEAPPC_WITH_ENCRYPTION AND TARGET PkgConfig::SODIUM)
@@ -390,14 +400,16 @@ endif()
 if(NOTEAPPC_WITH_NOTEBOOK AND TARGET PkgConfig::ZMQ)
     add_subdirectory(libs/ext/notebook)
 endif()
-# The Native CRDT backend needs only Qt, so this is built everywhere (Android
-# too); the yrs one is added inside when NOTEAPPC_CARGO is set.
-add_subdirectory(libs/ext/share)
-if(NOTEAPPC_HAVE_LINK)
-    add_subdirectory(libs/ext/link)
-endif()
-if(TARGET noteAppC_share_crdt AND TARGET noteAppC_link AND TARGET noteAppC_sync)
-    add_subdirectory(libs/ext/shareengine) # the notolith-share module: not linked into the executable
+# Note sharing, all of it, only when asked for: the Native CRDT backend needs only Qt; the yrs one is added
+# inside when NOTEAPPC_CARGO is set.
+if(NOTEAPPC_WITH_SHARE)
+    add_subdirectory(libs/ext/share)
+    if(NOTEAPPC_HAVE_LINK)
+        add_subdirectory(libs/ext/link)
+    endif()
+    if(TARGET noteAppC_share_crdt AND TARGET noteAppC_link AND TARGET noteAppC_sync)
+        add_subdirectory(libs/ext/shareengine) # the notolith-share module: not linked into the executable
+    endif()
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

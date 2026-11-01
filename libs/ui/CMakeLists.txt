@@ -1,7 +1,5 @@
 # The window lives in a library so the widget smoke test can drive it.
 add_library(noteAppC_ui STATIC
-    DictClient.cpp
-    DictClient.h
     ExportPdfDialog.cpp
     FileTree.cpp
     FileTree.h
@@ -61,6 +59,7 @@ target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # needs it unconditionally to run Index::search() off the UI thread.
 target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::Network noteAppC_vault noteAppC_theme
     noteAppC_index noteAppC_editor noteAppC_settings noteAppC_modules)
+# Network is for SingleInstance's QLocalSocket (a Unix socket) and, only with NOTEAPPC_WITH_NETWORK, the DICT lookup.
 # InkTextBoxes inflates a gzip .ink file for the index (the host reads it without loading the ink module).
 find_package(ZLIB REQUIRED)
 target_link_libraries(noteAppC_ui PRIVATE ZLIB::ZLIB)
@@ -86,6 +85,11 @@ if(TARGET noteAppC_bases)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_BASES)
 endif()
 
+if(NOTEAPPC_WITH_NETWORK)
+    target_sources(noteAppC_ui PRIVATE DictClient.cpp DictClient.h)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_NETWORK)
+endif()
+
 if(TARGET noteAppC_crypt)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_crypt)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_ENCRYPTION)
@@ -101,12 +105,14 @@ if(TARGET noteAppC_sync)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SYNC)
 endif()
 
-# Sharing a note (docs/SHARE.md): the window sees the engine as ShareEngineBase (its header is in MainWindow.h,
-# hence PUBLIC); the engine is the notolith-share module, which the window loads when it is wanted. Always
-# compiled in: with no module installed, sharing reports that it needs the package.
-target_sources(noteAppC_ui PRIVATE ShareSession.cpp ShareSession.h ShareDialog.cpp ShareDialog.h)
-target_link_libraries(noteAppC_ui PUBLIC noteAppC_sharebase)
-target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SHARE)
+# Sharing a note (docs/SHARE.md), only in a build with NOTEAPPC_WITH_SHARE: the window sees the engine as
+# ShareEngineBase (its header is in MainWindow.h, hence PUBLIC); the engine is the notolith-share module, which
+# the window loads when it is wanted. With no module installed, sharing reports that it needs the package.
+if(TARGET noteAppC_sharebase)
+    target_sources(noteAppC_ui PRIVATE ShareSession.cpp ShareSession.h ShareDialog.cpp ShareDialog.h)
+    target_link_libraries(noteAppC_ui PUBLIC noteAppC_sharebase)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SHARE)
+endif()
 
 if(TARGET noteAppC_plugins)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_plugins)

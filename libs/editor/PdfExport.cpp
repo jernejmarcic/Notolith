@@ -68,7 +68,9 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
         editor.setCodeHighlights(options.codeHighlights);
     }
     editor.setParseOptions(parse);
+#ifdef NOTEAPPC_HAVE_NETWORK
     editor.setRemoteReferences(options.remoteReferences);
+#endif
     // A diagram fence (mermaid, plantuml, tikz, dot, markmap) is the diagram the editor already made (never the
     // tool: an export waits for nothing); one it never made stays its listing.
     for (const DiagramKind kind : {DiagramKind::Mermaid, DiagramKind::PlantUML, DiagramKind::TikZ, DiagramKind::Graphviz})

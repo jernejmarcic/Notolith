@@ -7,6 +7,7 @@
 
 namespace noteAppC {
 
+#ifdef NOTEAPPC_HAVE_NETWORK
 /// Fires once a remote icon has finished downloading. One instance for the
 /// whole process, reached through Icons::notifier(), so a widget can connect
 /// once and repaint whenever any icon it asked for arrives, rather than every
@@ -22,6 +23,7 @@ signals:
     /// failure. Call Icons::icon() again afterwards to pick up the result.
     void iconReady(const QString &name);
 };
+#endif
 
 /// Lucide icons (ISC), the set Obsidian itself draws with, recoloured to a
 /// theme token at load - and, in the same slot, a callout's own icon: a local
@@ -33,7 +35,8 @@ public:
     /// 1. A Lucide id ("folder-open"), resolved from the bundled `:/icons`
     ///    resource.
     /// 2. An absolute path or a `file://` URL to a local .svg/.png/.jpg/.webp.
-    /// 3. An `http://`/`https://` URL to the same.
+    /// 3. An `http://`/`https://` URL to the same, in a build with NOTEAPPC_WITH_NETWORK only: the default
+    ///    build never fetches, and a URL gives a null icon.
     /// 4. A Nerd Font glyph, written either as a hex codepoint (`U+E73C`,
     ///    case-insensitive, 4-6 hex digits) or as the literal glyph character
     ///    itself - a string that is exactly one Unicode code point outside
@@ -65,12 +68,20 @@ public:
     /// fails is remembered so it is not retried on every paint.
     static QIcon icon(const QString &name, const QColor &color, int size = 18);
 
+    /// Whether a remote URL may be fetched or read from the cache at all.
+    /// Off by default; the editor.remoteReferences setting drives it. Off,
+    /// a remote name is a null icon and nothing is sent. Without network
+    /// support in the build this does nothing.
+    static void setRemoteAllowed(bool on);
+
     /// Drops every cached pixmap, and forgets which remote URLs already
     /// failed so they get one more try; call after a theme change.
     static void clearCache();
 
+#ifdef NOTEAPPC_HAVE_NETWORK
     /// The signal source for a remote fetch completing; see IconsNotifier.
     static QObject *notifier();
+#endif
 };
 
 } // namespace noteAppC

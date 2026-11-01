@@ -77,7 +77,7 @@ QVariantMap &defaults()
         {QStringLiteral("editor.alignTables"), true},
         {QStringLiteral("editor.hoverEditButton"), true},
         {QStringLiteral("editor.tableHandles"), true}, // row/column grips, add bars, cell selection on a drawn table
-        {QStringLiteral("editor.remoteReferences"), false}, // a ```reference block may fetch an http(s) URL: off, nothing touches the network unasked
+        {QStringLiteral("editor.remoteReferences"), false}, // a ```reference block or an icon may fetch an http(s) URL: off, nothing touches the network unasked
         {QStringLiteral("editor.codeHighlights"), QStringLiteral("info=blue, warn=orange, error=red, add=green, del=red")},
         {QStringLiteral("editor.complexCodeBlocks"), true}, // bg/fg/border/syntax.* on code blocks; nothing configured draws as before
         {QStringLiteral("editor.metaNotes"), false}, // [like this] in --meta-note-color; off: the parse never looks

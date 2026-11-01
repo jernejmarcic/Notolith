@@ -12,7 +12,9 @@
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QImage>
+#ifdef NOTEAPPC_HAVE_NETWORK
 #include <QSignalSpy>
+#endif
 #include <QTemporaryDir>
 
 #include "Icons.h"
@@ -74,7 +76,11 @@ bool hasNerdFontInstalled()
 
 class IconsTest : public ::testing::Test {
 protected:
-    void TearDown() override { Icons::clearCache(); }
+    void TearDown() override
+    {
+        Icons::setRemoteAllowed(false);
+        Icons::clearCache();
+    }
 };
 
 TEST_F(IconsTest, LucideIDStillResolvesAndIsRecoloured)
@@ -125,8 +131,40 @@ TEST_F(IconsTest, LocalRasterFileScalesWithoutDistortionAndIsNeverTinted)
     EXPECT_EQ(qBlue(centre), 200);
 }
 
+#ifndef NOTEAPPC_HAVE_NETWORK
+TEST_F(IconsTest, ARemoteURLIsANullIconEvenWithAFileInTheOldCache)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    const QString url = QStringLiteral("https://example.invalid/deadline.svg");
+    const QByteArray hash = QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha256).toHex();
+    writeFile(QDir(cacheHome.path()).filePath(QStringLiteral("notolith/icons/%1.svg").arg(QString::fromLatin1(hash))),
+              glyphSVG());
+    EXPECT_TRUE(Icons::icon(url, QColor(0, 0, 255), 32).isNull()) << "the default build has no remote icons";
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_NETWORK
+TEST_F(IconsTest, ARemoteURLIsNullAndNeverFetchedWhileRemoteContentIsOff)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    const QString url = QStringLiteral("https://example.invalid/deadline.svg");
+    const QByteArray hash = QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha256).toHex();
+    writeFile(QDir(cacheHome.path()).filePath(QStringLiteral("notolith/icons/%1.svg").arg(QString::fromLatin1(hash))),
+              glyphSVG());
+    QSignalSpy ready(Icons::notifier(), SIGNAL(iconReady(QString)));
+    EXPECT_TRUE(Icons::icon(url, QColor(0, 0, 255), 32).isNull());
+    EXPECT_TRUE(Icons::icon(QStringLiteral("https://example.invalid/other.svg"), QColor(0, 0, 255), 32).isNull());
+    EXPECT_EQ(ready.count(), 0);
+
+    Icons::setRemoteAllowed(true);
+    EXPECT_FALSE(Icons::icon(url, QColor(0, 0, 255), 32).isNull()) << "on: the cached file is read";
+}
+
 TEST_F(IconsTest, UncachedRemoteURLreturnsImmediatelyWithoutBlocking)
 {
+    Icons::setRemoteAllowed(true);
     QSignalSpy ready(Icons::notifier(), SIGNAL(iconReady(QString)));
 
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
@@ -149,6 +187,7 @@ TEST_F(IconsTest, UncachedRemoteURLreturnsImmediatelyWithoutBlocking)
 
 TEST_F(IconsTest, RemoteCacheKeyIsStableSoAPrecachedFileIsPickedUp)
 {
+    Icons::setRemoteAllowed(true);
     QTemporaryDir cacheHome;
     qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
 
@@ -172,6 +211,8 @@ TEST_F(IconsTest, RemoteCacheKeyIsStableSoAPrecachedFileIsPickedUp)
     const QIcon second = Icons::icon(url, QColor(0, 0, 255), 32);
     EXPECT_FALSE(second.isNull());
 }
+
+#endif // NOTEAPPC_HAVE_NETWORK
 
 // --- Nerd Font glyphs ------------------------------------------------------
 

@@ -94,8 +94,10 @@ PluginManifest PluginManifest::load(const QString &directory)
         manifest.m_permissions.insert(PluginPermission::ReadNotes);
     if (wants("write-notes"))
         manifest.m_permissions.insert(PluginPermission::WriteNotes);
+#ifdef NOTEAPPC_HAVE_NETWORK
     if (wants("network"))
         manifest.m_permissions.insert(PluginPermission::Network);
+#endif
     if (wants("clipboard"))
         manifest.m_permissions.insert(PluginPermission::Clipboard);
 
