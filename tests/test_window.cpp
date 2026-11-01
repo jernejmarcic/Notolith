@@ -4715,6 +4715,17 @@ TEST_F(WindowTest, ClickingALinkToNoNoteCreatesIt)
     emit window.editor()->linkActivated(outside.filePath(QStringLiteral("Escape")));
     EXPECT_TRUE(QDir(outside.path()).isEmpty());
 
+    // A scheme that runs or reads a file is refused, "//" or not, and never made into a note.
+    for (const char *link : {"javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,x", "file:/etc/passwd",
+                             "file:///etc/passwd", "vbscript:x"}) {
+        window.statusBar()->clearMessage();
+        const int notes = QDir(dir.path()).entryList({QStringLiteral("*.md")}).size();
+        emit window.editor()->linkActivated(QString::fromLatin1(link));
+        EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("are not opened"))) << link;
+        EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("*.md")}).size(), notes) << link;
+        EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Linking.md")));
+    }
+
     // On disk but not indexed yet: opened, not copied as "Late 1".
     write(QStringLiteral("Late.md"), "late\n");
     emit window.editor()->linkActivated(QStringLiteral("Late"));
