@@ -42,7 +42,7 @@ Runner::~Runner()
 }
 
 void Runner::start(const QString &program, const QStringList &arguments, const QByteArray &input,
-                   const QString &workingDirectory, int timeoutMilliseconds)
+                   const QString &workingDirectory, int timeoutMilliseconds, int filterFD, const sandbox::Limits &limits)
 {
     Q_ASSERT(!m_process);
     m_cancelled = m_timedOut = false;
@@ -53,7 +53,10 @@ void Runner::start(const QString &program, const QStringList &arguments, const Q
         m_process->setWorkingDirectory(workingDirectory);
     m_process->setStandardOutputFile(QProcess::nullDevice()); // the result goes to a file, by -o
 #ifdef Q_OS_UNIX
-    m_process->setChildProcessModifier([] { ::setpgid(0, 0); }); // a group of its own, to kill as one
+    m_process->setChildProcessModifier([filterFD, limits] {
+        ::setpgid(0, 0); // a group of its own, to kill as one
+        sandbox::prepareChild(limits, filterFD);
+    });
 #endif
     m_process->setProcessChannelMode(QProcess::SeparateChannels);
 
@@ -84,6 +87,8 @@ void Runner::start(const QString &program, const QStringList &arguments, const Q
     m_timeout->start(timeoutMilliseconds);
 
     m_process->start();
+    if (filterFD >= 0)
+        ::close(filterFD); // the fork has happened; bwrap holds its own copy
     if (!m_process) // it failed to start, and finish() has said so
         return;
     if (!input.isEmpty())

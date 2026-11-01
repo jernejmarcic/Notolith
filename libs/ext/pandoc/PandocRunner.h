@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Bubblewrap.h"
+
 #include <QObject>
 #include <QStringList>
 
@@ -20,9 +22,12 @@ public:
     ~Runner() override;
 
     /// `input` goes to the program's standard input, which is then closed.
-    /// `finished` follows once, however the run ends.
+    /// `finished` follows once, however the run ends. A bubblewrap command
+    /// (sandbox::bubblewrapCommand's) passes its `filterFD` and `limits`: they are
+    /// handed to the child, and the descriptor is closed once the process has started.
     void start(const QString &program, const QStringList &arguments, const QByteArray &input,
-               const QString &workingDirectory, int timeoutMilliseconds = 120000);
+               const QString &workingDirectory, int timeoutMilliseconds = 120000, int filterFD = -1,
+               const sandbox::Limits &limits = {});
     void cancel();
     bool running() const { return m_process != nullptr; }
     /// The last run ended because cancel() was called.

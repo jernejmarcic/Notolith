@@ -110,8 +110,23 @@ void MainWindow::showPandocMissing()
 }
 
 void MainWindow::runPandoc(const QString &program, const QStringList &arguments, const QByteArray &input,
-                           const QString &workingDirectory, const QString &title, std::function<void()> done)
+                           const QString &workingDirectory, const QString &title, std::function<void()> done,
+                           const QStringList &readOnlyBinds)
 {
+    // pandoc runs only in the sandbox: the note and the file it imports are anyone's, and a document can
+    // name any file to be read into the result, or any URL to be fetched. It sees /usr, the paths it was
+    // given to read, and `workingDirectory` to write (a scratch folder of ours: the result is copied from
+    // there); no network, no home, no other drive. Without bubblewrap it does not run.
+    const sandbox::Command sandboxed = sandbox::bubblewrapCommand(workingDirectory, program, arguments, {}, readOnlyBinds);
+    if (sandboxed.program.isEmpty()) {
+        QMessageBox::warning(this, title, tr("pandoc runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap."));
+        return;
+    }
+    sandbox::Limits limits; // not RLIMIT_AS: pandoc's runtime reserves far more address space than it uses
+    limits.cpuSeconds = 150;
+    limits.data = 4ULL * 1024 * 1024 * 1024;
+    limits.fileSize = 512ULL * 1024 * 1024;
+    limits.openFiles = 1024;
     if (!m_pandocRunner)
         m_pandocRunner = new pandoc::Runner(this);
     auto *progress = new QProgressDialog(tr("Running pandoc..."), tr("Cancel"), 0, 0, this);
@@ -153,7 +168,7 @@ void MainWindow::runPandoc(const QString &program, const QStringList &arguments,
             });
         }
     });
-    m_pandocRunner->start(program, arguments, input, workingDirectory);
+    m_pandocRunner->start(sandboxed.program, sandboxed.arguments, input, workingDirectory, 120000, sandboxed.filterFD, limits);
 }
 
 namespace {
@@ -322,18 +337,35 @@ void MainWindow::exportWithPandoc(const QString &notePath, const QString &format
     };
     const pandoc::PrepareResult prepared = pandoc::prepareMarkdown(text, notePath, context);
 
+    // pandoc writes into a scratch folder it alone can write to, and the result is copied to `target` here.
+    auto scratch = std::make_shared<QTemporaryDir>();
+    if (!scratch->isValid()) {
+        statusBar()->showMessage(tr("Could not make a scratch folder for pandoc"), 5000);
+        return;
+    }
+    const QString produced = scratch->filePath(QStringLiteral("export.") + extension);
     pandoc::ExportRequest request;
     request.writer = writer;
     request.formatArguments = formatArguments;
-    request.outputPath = target;
+    request.outputPath = produced;
     request.resourcePaths = {note.absolutePath()};
     if (m_vault.isValid()) {
         request.resourcePaths << m_vault.root()
                               << m_vault.attachmentFolderFor(m_settings.text(QStringLiteral("files.attachmentFolder")), notePath);
     }
+    // What it may read: those folders, inside the vault and never the whole home directory or the disk.
+    QStringList readable;
+    for (const QString &folder : std::as_const(request.resourcePaths)) {
+        const QString real = QFileInfo(folder).canonicalFilePath();
+        if (real.isEmpty() || real == QLatin1String("/") || real == QDir::home().canonicalPath() || readable.contains(real))
+            continue;
+        readable << real;
+    }
     const QString reference = m_settings.text(QStringLiteral("pandoc.referenceDoc")).trimmed();
-    if (takesReferenceDoc && !reference.isEmpty() && QFileInfo(reference).isFile())
-        request.referenceDoc = reference;
+    if (takesReferenceDoc && !reference.isEmpty() && QFileInfo(reference).isFile()) {
+        request.referenceDoc = QFileInfo(reference).canonicalFilePath();
+        readable << request.referenceDoc;
+    }
     // A note with no title of its own is titled by its name (EPUB and LaTeX want one).
     const Range frontmatter = Frontmatter::find(prepared.markdown);
     static const QRegularExpression hasTitle(QStringLiteral("^title\\s*:"), QRegularExpression::MultilineOption);
@@ -342,13 +374,19 @@ void MainWindow::exportWithPandoc(const QString &notePath, const QString &format
     request.extraArguments = pandoc::splitArguments(m_settings.text(QStringLiteral("pandoc.extraArguments")));
 
     const int unresolved = prepared.unresolved;
-    runPandoc(program, pandoc::exportArguments(request), prepared.markdown.toUtf8(), note.absolutePath(),
-              tr("Export with pandoc"), [this, target, unresolved, images] {
+    runPandoc(program, pandoc::exportArguments(request), prepared.markdown.toUtf8(), scratch->path(),
+              tr("Export with pandoc"), [this, target, produced, scratch, unresolved, images] {
+                  QFile::remove(target); // the save dialog has asked about replacing it
+                  if (!QFile::copy(produced, target)) {
+                      QMessageBox::warning(this, tr("Export with pandoc"), tr("Could not write %1").arg(target));
+                      return;
+                  }
                   QString message = tr("Exported %1").arg(QFileInfo(target).fileName());
                   if (unresolved > 0)
                       message += tr(" (%n link(s) or embed(s) named nothing in the vault)", nullptr, unresolved);
                   statusBar()->showMessage(message, 6000);
-              });
+              },
+              readable);
 }
 
 void MainWindow::importWithPandocChosen()
@@ -456,7 +494,8 @@ void MainWindow::importWithPandoc(const QString &file, const QString &folderRela
                       showNotice(this, QStringLiteral("pandocMediaDialog"), tr("Import with pandoc"),
                                  tr("The note was made, but a picture could not be copied into the vault: %1").arg(mediaError));
                   }
-              });
+              },
+              {input.canonicalFilePath()}); // the one file it may read
 }
 
 } // namespace noteAppC
