@@ -515,6 +515,10 @@ target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest
 add_test(NAME settings COMMAND test_settings --gtest_filter=-SettingsModuleTest.*)
 add_test(NAME settings_modules COMMAND test_settings --gtest_filter=SettingsModuleTest.*)
 
+add_executable(test_xdg test_xdg.cpp)
+target_link_libraries(test_xdg PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
+add_test(NAME xdg COMMAND test_xdg)
+
 add_executable(test_plugins test_plugins.cpp)
 target_link_libraries(test_plugins PRIVATE noteAppC_vault noteAppC_ui Qt6::Test GTest::gtest)
 add_test(NAME plugins COMMAND test_plugins)
