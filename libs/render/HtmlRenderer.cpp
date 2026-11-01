@@ -70,8 +70,8 @@ struct FontHandle {
 /// produces is a cached QImage, not a live litehtml view.
 class PainterContainer : public litehtml::document_container {
 public:
-    PainterContainer(HtmlRenderer::Theme theme, QString baseDir)
-        : m_theme(std::move(theme)), m_baseDir(std::move(baseDir))
+    PainterContainer(HtmlRenderer::Theme theme, QString baseDir, std::function<QString(const QString &)> localPath)
+        : m_theme(std::move(theme)), m_baseDir(std::move(baseDir)), m_localPath(std::move(localPath))
     {
     }
 
@@ -593,16 +593,21 @@ private:
         if (src.isEmpty() || src.contains(QStringLiteral("://")) || src.startsWith(QLatin1String("data:")))
             return {};
         QString resolved = src;
-        if (QDir::isRelativePath(resolved)) {
+        if (m_localPath)
+            resolved = m_localPath(src);
+        else if (QDir::isRelativePath(resolved)) {
             const QString dir = !baseUrl.isEmpty() ? baseUrl : m_baseDir;
             resolved = QDir(dir).filePath(resolved);
         }
+        if (resolved.isEmpty())
+            return {};
         const QFileInfo info(resolved);
         return info.exists() && info.isFile() ? info.absoluteFilePath() : QString();
     }
 
     HtmlRenderer::Theme m_theme;
     QString m_baseDir;
+    std::function<QString(const QString &)> m_localPath;
     QString m_baseUrl;
     mutable QByteArray m_defaultFontName;
     QHash<QString, QImage> m_images;
@@ -650,13 +655,14 @@ qint64 HtmlRenderer::renderCount()
 
 QImage HtmlRenderer::render(const QString &html, const Theme &theme, int widthPixels,
                             const QString &baseDir, qreal devicePixelRatio,
-                            const QString &extraCss, QList<TextRun> *textRuns)
+                            const QString &extraCss, QList<TextRun> *textRuns,
+                            const std::function<QString(const QString &)> &localPath)
 {
     if (widthPixels <= 0 || html.trimmed().isEmpty())
         return {};
     g_renderCount.fetch_add(1);
 
-    PainterContainer container(theme, baseDir);
+    PainterContainer container(theme, baseDir, localPath);
     container.width = widthPixels;
     container.textRunsOut = textRuns;
 
@@ -739,7 +745,7 @@ QString HtmlRenderer::sanitizeHtml(const QString &html)
 }
 
 QImage HtmlRenderer::render(const QString &, const Theme &, int, const QString &, qreal, const QString &,
-                            QList<TextRun> *)
+                            QList<TextRun> *, const std::function<QString(const QString &)> &)
 {
     return {};
 }

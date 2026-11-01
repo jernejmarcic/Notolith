@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QImage>
 #include <QLabel>
+#include <QTest>
 #include <QLineEdit>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -1190,6 +1191,51 @@ TEST_F(BasesIndexTest, BaseViewOpensAndSwitchesViews)
     EXPECT_EQ(switcher->itemText(1), QStringLiteral("Cards"));
     switcher->setCurrentIndex(1);
     ASSERT_TRUE(opened.wait(5000));
+}
+
+// Fails on the old code: a cover the resolver could not place was taken as a path from the vault root, so an
+// absolute path or a ".." one loaded a picture from outside the vault.
+TEST_F(BasesIndexTest, ACardCoverOutsideTheVaultIsNotLoaded)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    QImage red(40, 40, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    const QString outsidePicture = outside.filePath(QStringLiteral("out.png"));
+    ASSERT_TRUE(red.save(outsidePicture));
+    ASSERT_TRUE(red.save(dir.filePath(QStringLiteral("in.png"))));
+
+    const auto coverLoaded = [&](const QString &cover, bool withResolver) {
+        write(QStringLiteral("Card.md"), ("---\ncover: \"" + cover + "\"\n---\n").toUtf8());
+        Index index;
+        EXPECT_TRUE(index.open(dir.path()));
+        build(index);
+        BaseView view;
+        view.setIndex(&index);
+        view.setVault(&vault);
+        if (withResolver) // the window's: a file of the vault, or nothing
+            view.setLinkResolver([](const QString &) { return QString(); });
+        view.show();
+        QSignalSpy opened(&view, &BaseView::viewOpened);
+        EXPECT_TRUE(view.open(dir.filePath(QStringLiteral("x.base")),
+                              QStringLiteral("filters:\n  and:\n    - file.name == \"Card\"\nviews:\n  - type: cards\n"
+                                             "    image: cover\n    order: [file.name]\n")));
+        EXPECT_TRUE(opened.wait(5000));
+        const auto hasPixmap = [&] {
+            for (QLabel *label : view.findChildren<QLabel *>()) {
+                if (label->size() == QSize(150, 90) && !label->pixmap().isNull())
+                    return true;
+            }
+            return false;
+        };
+        return QTest::qWaitFor(hasPixmap, 1500);
+    };
+    EXPECT_TRUE(coverLoaded(QStringLiteral("in.png"), false)) << "control: a picture of the vault loads";
+    for (const bool withResolver : {true, false}) {
+        EXPECT_FALSE(coverLoaded(outsidePicture, withResolver)) << "absolute, resolver " << withResolver;
+        EXPECT_FALSE(coverLoaded(QDir(dir.path()).relativeFilePath(outsidePicture), withResolver))
+            << "climbing, resolver " << withResolver;
+    }
 }
 
 TEST_F(BasesIndexTest, TheTableKeepsTheBasesOwnSortOrder)

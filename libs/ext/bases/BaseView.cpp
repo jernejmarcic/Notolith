@@ -344,7 +344,7 @@ QWidget *BaseView::makeCard(int position)
             const qsizetype hash = target.indexOf(QLatin1Char('#'));
             if (hash >= 0) target.truncate(hash);
             QString absolutePath = m_linkResolver ? m_linkResolver(target) : QString();
-            if (absolutePath.isEmpty() && m_vault)
+            if (!m_linkResolver && m_vault && m_vault->resolvesInside(QDir::cleanPath(m_vault->absolute(target))))
                 absolutePath = m_vault->absolute(target); // no resolver: assume an already vault-relative path
             if (!absolutePath.isEmpty())
                 loadCardImage(cover, absolutePath, cover->size());

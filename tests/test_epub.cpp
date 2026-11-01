@@ -15,8 +15,8 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
-#include <QBuffer>
 #include <QFontDatabase>
+#include <QBuffer>
 #include <QImage>
 #include <QTemporaryDir>
 #include <QTest>
@@ -600,6 +600,67 @@ TEST(EpubViewTest, ARenderAlreadyInFlightIsNotDuplicated)
     EXPECT_EQ(view.pendingRenderCountForTest(), pendingAfterFirst);
 
     WAIT_TRUE(view.chapterCachedForTest(0), 2000);
+}
+
+// Fails on the old code: a reference the book could not resolve was left as written, and an absolute path
+// (or a CSS url()) was then loaded from the disk by the renderer.
+TEST(EpubViewTest, AnImageOfTheDiskOutsideTheBookIsNotDrawn)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    QTemporaryDir dir;
+    QImage red(80, 80, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    const QString outside = dir.filePath(QStringLiteral("outside.png"));
+    ASSERT_TRUE(red.save(outside));
+    QByteArray redBytes;
+    {
+        QBuffer buffer(&redBytes);
+        ASSERT_TRUE(buffer.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(red.save(&buffer, "PNG"));
+    }
+    const auto book = [&](const QString &name, const QString &body) {
+        const QByteArray opf = QByteArrayLiteral(R"(<?xml version='1.0'?>
+<package xmlns='http://www.idpf.org/2007/opf' version='3.0' unique-identifier='id'>
+  <metadata xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title>T</dc:title><dc:language>en</dc:language></metadata>
+  <manifest>
+    <item id='c1' href='ch1.xhtml' media-type='application/xhtml+xml'/>
+    <item id='img' href='red.png' media-type='image/png'/>
+  </manifest>
+  <spine><itemref idref='c1'/></spine>
+</package>)");
+        const QString path = dir.filePath(name);
+        writeZip(path, {{QStringLiteral("mimetype"), QByteArrayLiteral("application/epub+zip")},
+                        {QStringLiteral("META-INF/container.xml"), QByteArray(kContainerXML)},
+                        {QStringLiteral("OEBPS/content.opf"), opf},
+                        {QStringLiteral("OEBPS/ch1.xhtml"),
+                         (QStringLiteral("<?xml version='1.0'?><html xmlns='http://www.w3.org/1999/xhtml'><body>") + body
+                          + QStringLiteral("</body></html>")).toUtf8()},
+                        {QStringLiteral("OEBPS/red.png"), redBytes}});
+        return path;
+    };
+    const auto redIn = [&](const QString &name, const QString &body) {
+        EpubView view;
+        view.resize(500, 400);
+        EXPECT_TRUE(view.load(book(name, body)));
+        view.requestChapterForTest(0);
+        EXPECT_TRUE(QTest::qWaitFor([&] { return view.chapterCachedForTest(0); }, 5000));
+        const QImage image = view.chapterImageForTest(0);
+        qsizetype count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor c = image.pixelColor(x, y);
+                count += c.red() > 200 && c.green() < 60 && c.blue() < 60;
+            }
+        }
+        return count;
+    };
+    EXPECT_GT(redIn(QStringLiteral("a.epub"), QStringLiteral("<img src='red.png' width='80' height='80'/>")), 500)
+        << "control: a picture of the book is drawn";
+    EXPECT_EQ(redIn(QStringLiteral("b.epub"), QStringLiteral("<img src='%1' width='80' height='80'/>").arg(outside)), 0);
+    EXPECT_EQ(redIn(QStringLiteral("c.epub"),
+                    QStringLiteral("<div style='width:80px;height:80px;background:url(%1)'></div>").arg(outside)),
+              0);
 }
 
 TEST(EpubViewTest, AStaleRenderFromBeforeAResizeIsDiscardedNotCached)

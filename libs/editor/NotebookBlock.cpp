@@ -223,7 +223,9 @@ QPixmap MarkdownEditor::renderNotebookImage(const NotebookOutput &output, int wi
         theme.textFont = d->m_theme.textFont();
         theme.codeFont = d->m_theme.monospaceFont();
         const qreal ratio = devicePixelRatioF();
-        const QImage image = HtmlRenderer::render(output.text, theme, width, QString(), ratio);
+        // A kernel's HTML output names no file of the vault's: no local image at all.
+        const QImage image = HtmlRenderer::render(output.text, theme, width, QString(), ratio, QString(), nullptr,
+                                                  [](const QString &) { return QString(); });
         return image.isNull() ? QPixmap() : QPixmap::fromImage(image);
     }
     case NotebookOutput::Kind::Text:

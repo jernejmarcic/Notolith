@@ -6,6 +6,7 @@
 #include <QList>
 #include <QRectF>
 #include <QString>
+#include <functional>
 
 namespace noteAppC {
 
@@ -82,12 +83,18 @@ public:
     /// win where it declares them, and the theme still supplies everything
     /// it does not - "the app's theme unless the book insists".
     ///
+    /// `localPath`, when set, decides every local image - a `src` and a CSS `url()` alike: it gets the
+    /// value as written and returns the file to load, or empty for none. A caller whose markup is a
+    /// vault's text or a book's gives it, so an absolute or "../" path cannot reach outside; without it
+    /// a path is taken as it is, relative ones against `baseDir`.
+    ///
     /// `textRuns`, when not null, is filled with every run drawn - see
     /// TextRun above. Left null (the default, and what every HTML-block call
     /// still passes) this costs nothing beyond a null check per run.
     static QImage render(const QString &html, const Theme &theme, int widthPixels,
                          const QString &baseDir, qreal devicePixelRatio = 1.0,
-                         const QString &extraCss = QString(), QList<TextRun> *textRuns = nullptr);
+                         const QString &extraCss = QString(), QList<TextRun> *textRuns = nullptr,
+                         const std::function<QString(const QString &)> &localPath = {});
 
     /// False in a build configured without litehtml (NOTEAPPC_WITH_HTML off,
     /// or the package was not found).

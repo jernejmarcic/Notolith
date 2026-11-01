@@ -10091,6 +10091,62 @@ TEST(HTMLBlockTest, RendersAsANonEmptyCachedImage)
     }
 }
 
+namespace {
+/// Red pixels in what the editor paints: a solid red picture that was drawn leaves plenty.
+qsizetype redPixels(MarkdownEditor &editor)
+{
+    const QImage image = editor.grab().toImage();
+    qsizetype count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor c = image.pixelColor(x, y);
+            count += c.red() > 200 && c.green() < 60 && c.blue() < 60;
+        }
+    }
+    return count;
+}
+} // namespace
+
+// Fails on the old code: the written path was kept when the resolver found nothing, and a CSS url() or an
+// unquoted src was never looked at, so the renderer loaded whatever file the path named.
+TEST(HTMLBlockTest, AnImageThatLeavesTheVaultIsNotDrawn)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    QTemporaryDir outer;
+    ASSERT_TRUE(outer.isValid());
+    const QString vault = outer.filePath(QStringLiteral("vault"));
+    ASSERT_TRUE(QDir().mkpath(vault));
+    QImage red(80, 80, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    const QString outside = outer.filePath(QStringLiteral("outside.png"));
+    ASSERT_TRUE(red.save(outside));
+    ASSERT_TRUE(red.save(vault + QStringLiteral("/in.png")));
+    // What the window's resolver does: a file of the vault, or nothing.
+    const auto resolver = [vault](const QString &target) -> QString {
+        const QString path = QDir::cleanPath(QDir(vault).absoluteFilePath(target));
+        return path.startsWith(vault + QLatin1Char('/')) && QFileInfo::exists(path) ? path : QString();
+    };
+    const QString climbing = QDir::current().relativeFilePath(outside); // "../../..", resolved from the cwd
+    const auto drawn = [&](const QString &html) {
+        auto editor = editorWith(QStringLiteral("Intro\n\n") + html + QStringLiteral("\n\nAfter\n"));
+        editor->setLinkResolver(resolver);
+        return redPixels(*editor);
+    };
+    EXPECT_GT(drawn(QStringLiteral("<div style=\"padding:4px\"><img src=\"in.png\" width=\"80\" height=\"80\"></div>")), 500)
+        << "control: a picture of the vault is drawn";
+    for (const QString &bad : {outside, climbing}) {
+        EXPECT_EQ(drawn(QStringLiteral("<div style=\"padding:4px\"><img src=\"%1\" width=\"80\" height=\"80\"></div>").arg(bad)), 0)
+            << "quoted src: " << bad.toStdString();
+        EXPECT_EQ(drawn(QStringLiteral("<div style=\"padding:4px\"><img src=%1 width=80 height=80></div>").arg(bad)), 0)
+            << "unquoted src: " << bad.toStdString();
+        EXPECT_EQ(drawn(QStringLiteral("<div style=\"width:80px;height:80px;background:url(%1)\"></div>").arg(bad)), 0)
+            << "css url(): " << bad.toStdString();
+    }
+    EXPECT_GT(drawn(QStringLiteral("<div style=\"width:80px;height:80px;background:url(in.png)\"></div>")), 500)
+        << "control: a css url() inside the vault is drawn";
+}
+
 TEST(HTMLBlockTest, CaretInsideRevealsSourceInsteadOfTheImage)
 {
     if (!HtmlRenderer::isAvailable())
