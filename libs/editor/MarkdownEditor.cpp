@@ -3350,11 +3350,19 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     // A .base is the ```base block's own table, fed the file: its rows open
     // their notes, as they do in Obsidian's embedded base.
     if (d->m_features.baseBlocks && suffix == QLatin1String("base")) {
-        const qint64 mtime = QFileInfo(path).lastModified().toMSecsSinceEpoch();
+        const QFileInfo info(path);
+        const qint64 mtime = info.lastModified().toMSecsSinceEpoch();
         auto cached = d->m_baseFiles.find(path);
         if (cached == d->m_baseFiles.end() || cached->first != mtime) {
-            QFile file(path);
-            const QString text = file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+            QByteArray bytes;
+            QString text;
+            if (Vault::readBytes(path, &bytes))
+                text = QString::fromUtf8(bytes);
+            else if (info.size() > Vault::kMaxNoteBytes)
+                return layoutTextPanel(view, info.fileName(),
+                                       tr("%1 is %2 - too large to show inline.")
+                                           .arg(info.fileName(), QLocale().formattedDataSize(info.size())),
+                                       true);
             cached = d->m_baseFiles.insert(path, {mtime, text});
         }
         hideWholeBlockText(view);
@@ -3428,10 +3436,10 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
         body = tr("%1 is %2 - too large to show inline.")
                    .arg(info.fileName(), QLocale().formattedDataSize(info.size()));
     } else {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly))
+        QByteArray bytes;
+        if (!Vault::readBytes(path, &bytes, nullptr, kMaxBytes))
             return false;
-        body = QString::fromUtf8(file.readAll());
+        body = QString::fromUtf8(bytes);
         body.replace(QLatin1String("\r\n"), QLatin1String("\n"));
 
         // `#L10-L20`, or `#L10` for one line, as in Obsidian's line links.

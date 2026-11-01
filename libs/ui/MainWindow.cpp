@@ -7358,15 +7358,15 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
 #endif
 #ifdef NOTEAPPC_HAVE_BASES
     if (path.endsWith(QLatin1String(".base"), Qt::CaseInsensitive)) {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) {
-            error = file.errorString();
+        QByteArray baseBytes;
+        if (!Vault::readBytes(path, &baseBytes, &error)) {
+            // error names the file and the limit
         } else {
             auto *base = new bases::BaseView(m_active->area);
             base->setIndex(&m_index);
             base->setVault(&m_vault);
             base->setBeforeWrite([this](const QString &note) { return saveTyping(note); });
-            if (!base->open(path, QString::fromUtf8(file.readAll()))) {
+            if (!base->open(path, QString::fromUtf8(baseBytes))) {
                 error = base->lastError();
                 delete base;
             } else {

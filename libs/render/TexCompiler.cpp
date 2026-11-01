@@ -59,12 +59,12 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
 {
     Result result;
 
-    QFile source(texPath);
-    if (!source.open(QIODevice::ReadOnly)) {
+    // The same cap a note has; a file over it, a missing one and a non-file all read as nothing.
+    const QByteArray bytes = readConfigBytes(texPath, qint64(32) << 20);
+    if (bytes.isEmpty()) {
         result.error = QStringLiteral("cannot read %1").arg(texPath);
         return result;
     }
-    const QByteArray bytes = source.readAll();
 
     const QString hash =
         QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex());

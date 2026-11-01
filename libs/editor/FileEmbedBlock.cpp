@@ -147,10 +147,16 @@ bool MarkdownEditor::noteEmbedContent(const QString &path, const QString &subpat
     QFileInfo info(path);
     if (!info.isFile())
         return false;
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return false;
-    QString text = QString::fromUtf8(file.readAll());
+    // Through the vault's capped reader: a note that embeds a huge one is not a way round the open limit.
+    QByteArray bytes;
+    QString readError;
+    if (!Vault::readBytes(path, &bytes, &readError)) {
+        label = info.completeBaseName();
+        slice = tr("%1 is %2 - too large to show inline.")
+                    .arg(info.fileName(), QLocale().formattedDataSize(info.size()));
+        return info.size() > Vault::kMaxNoteBytes; // an unreadable file keeps its plain link text
+    }
+    QString text = QString::fromUtf8(bytes);
     text.replace(QLatin1String("\r\n"), QLatin1String("\n"));
 
     bool ok = true;

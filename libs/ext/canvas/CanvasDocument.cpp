@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 Jernej Marčič
 #include "CanvasDocument.h"
+#include "Vault.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -255,13 +256,10 @@ bool CanvasDocument::parse(const QByteArray &json, QString *error)
 
 bool CanvasDocument::load(const QString &path, QString *error)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        if (error)
-            *error = file.errorString();
+    QByteArray bytes;
+    if (!Vault::readBytes(path, &bytes, error))
         return false;
-    }
-    if (!parse(file.readAll(), error))
+    if (!parse(bytes, error))
         return false;
     m_path = path;
     return true;

@@ -133,6 +133,26 @@ TEST(CanvasDocumentTest, LoadAndSaveRoundTripToDiskByteForByte)
     EXPECT_EQ(check.readAll(), kSpecExample);
 }
 
+// A canvas is read to the note limit: a vault's gibibyte one is refused, not loaded.
+TEST(CanvasDocumentTest, AHugeCanvasIsRefusedWithoutBeingRead)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("huge.canvas"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(qint64(1) << 30));
+    }
+    CanvasDocument doc;
+    QString error;
+    QElapsedTimer timer;
+    timer.start();
+    EXPECT_FALSE(doc.load(path, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("too large"))) << error.toStdString();
+    EXPECT_LT(timer.elapsed(), 1000);
+}
+
 // A vault can ship the canvas as a link; saving must not write the link's target.
 TEST(CanvasDocumentTest, SavingALinkedCanvasWritesNothingThroughIt)
 {

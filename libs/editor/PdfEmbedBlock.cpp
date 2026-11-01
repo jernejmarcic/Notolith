@@ -84,10 +84,16 @@ bool MarkdownEditor::layoutTexEmbed(BlockView &view, const EmbedSpan &embed, con
     if (!info.isFile())
         return false;
 
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return false;
-    const QString source = QString::fromUtf8(file.readAll());
+    QByteArray bytes;
+    if (!Vault::readBytes(path, &bytes)) {
+        if (info.size() <= Vault::kMaxNoteBytes)
+            return false;
+        return layoutTextPanel(view, info.fileName(),
+                               tr("%1 is %2 - too large to show inline.")
+                                   .arg(info.fileName(), QLocale().formattedDataSize(info.size())),
+                               false);
+    }
+    const QString source = QString::fromUtf8(bytes);
 
     if (!TexCompiler::isFullDocument(source)) {
         // Maths alone: MicroTeX draws it directly, exactly as a `$$...$$`

@@ -6,6 +6,7 @@
 // (side anchors, edge routing) that hit-testing in CanvasEditing.cpp reuses.
 
 #include "CanvasView.h"
+#include "Vault.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -476,10 +477,8 @@ bool isImageFile(const QString &absolute)
 
 QString markdownFileSection(const QString &absolute, const QString &subpath)
 {
-    QFile file(absolute);
-    QString text;
-    if (file.open(QIODevice::ReadOnly))
-        text = QString::fromUtf8(file.readAll());
+    QByteArray bytes;
+    const QString text = Vault::readBytes(absolute, &bytes) ? QString::fromUtf8(bytes) : QString();
     return canvasSectionOf(text, subpath);
 }
 }
