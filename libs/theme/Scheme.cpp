@@ -238,6 +238,8 @@ QStringList Scheme::searchPaths(const QString &vaultRoot)
 {
     QStringList paths;
     if (!vaultRoot.isEmpty()) {
+        paths << QDir(vaultRoot).filePath(QStringLiteral(".obsidian/notolith-themes"));
+        // The folder's name before the app was called Notolith; still read, no longer documented.
         paths << QDir(vaultRoot).filePath(QStringLiteral(".obsidian/noteAppC-themes"));
         paths << QDir(vaultRoot).filePath(QStringLiteral(".obsidian/themes"));
     }

@@ -9,7 +9,7 @@ small file, and none of it is written into a note.
 
 ## A theme that travels with this vault
 
-`.obsidian/noteAppC-themes/Demo.json` is a colour scheme: a `dark` and a `light`
+`.obsidian/notolith-themes/Demo.json` is a colour scheme: a `dark` and a `light`
 object that override three tokens (the background, the accent, the accent
 text) and nothing else. Open Settings > Appearance, pick "Demo" in the colour
 scheme list, and the window turns warm at once. Pick the old one back to undo.
