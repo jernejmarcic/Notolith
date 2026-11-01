@@ -19,6 +19,7 @@
 #include <QUrl>
 
 #include <deque>
+#include <utility>
 
 namespace noteAppC::remoteimage {
 
@@ -45,15 +46,16 @@ public:
     ImageFetcher &fetcher() { return m_fetcher; }
 
     /// Starts loading `url` unless it is already on its way. Answers with loaded() or failed(), always
-    /// from the event loop.
-    void load(const QUrl &url);
+    /// from the event loop. `sameOriginOnly` is for a load nobody clicked (an allowed origin): see
+    /// ImageFetcher::fetch. A cached copy is shown either way.
+    void load(const QUrl &url, bool sameOriginOnly = false);
 
 signals:
     void loaded(const QUrl &url, const QImage &image);
     void failed(const QUrl &url, const QString &message);
 
 private:
-    void startFetch(const QUrl &url);
+    void startFetch(const QUrl &url, bool sameOriginOnly);
     void decode(const QUrl &url, const QByteArray &bytes);
     void answer(const QUrl &url, const QImage &image, const QString &error);
     void pump();
@@ -63,7 +65,7 @@ private:
     ImageFetcher m_fetcher;
     QThreadPool m_decoders;
     QSet<QUrl> m_pending; ///< every url on its way
-    std::deque<QUrl> m_waiting;  ///< not yet fetching
+    std::deque<std::pair<QUrl, bool>> m_waiting; ///< not yet fetching, and whether it may only stay on its origin
     int m_fetching = 0;
 };
 

@@ -1,10 +1,6 @@
 #include "Icons.h"
-#include "ConfigFile.h"
 
 #include <QByteArray>
-#ifdef NOTEAPPC_HAVE_NETWORK
-#include <QCryptographicHash>
-#endif
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -13,15 +9,13 @@
 #include <QHash>
 #include <QImage>
 #ifdef NOTEAPPC_HAVE_NETWORK
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
+#include "RemoteImages.h"
 #endif
 #include <QPainter>
 #include <QPixmap>
+#include <QPointer>
 #include <QRawFont>
 #include <QRegularExpression>
-#include <QSaveFile>
 #include <QSet>
 #include <QSvgRenderer>
 #include <QUrl>
@@ -43,10 +37,15 @@ IconsNotifier &notifierInstance()
     return instance;
 }
 
-QNetworkAccessManager &networkManager()
+// What a remote icon's picture is once libs/remoteimage has fetched and decoded it (the same path a remote
+// image in a note takes), cut down to what an icon needs: a few hundred pixels, not a 16 megapixel photo.
+constexpr int kRemoteIconPixels = 256;
+constexpr int kMaxRemoteIcons = 256; ///< a flush, not an LRU; an icon asks again
+
+QHash<QString, QImage> &remoteIcons()
 {
-    static QNetworkAccessManager manager;
-    return manager;
+    static QHash<QString, QImage> images;
+    return images;
 }
 
 // A URL remembered here is not retried on every paint. clearCache() forgets
@@ -81,29 +80,6 @@ QString localPathOf(const QString &name)
     return isFileURL(name) ? QUrl(name).toLocalFile() : name;
 }
 
-#ifdef NOTEAPPC_HAVE_NETWORK
-// Remote icons are re-fetched at will, so they are cache.
-QString cacheDirectory()
-{
-    return appDir(XDGroot::Cache, QStringLiteral("icons"));
-}
-
-// Keyed by a hash of the URL, not the URL itself, since a URL can be longer
-// than a filesystem allows in one path component. The suffix rides along so
-// the loader below knows whether to reach for QSvgRenderer or QImage without
-// re-fetching anything; a cache hit with an unexpected suffix still decodes,
-// because every image plugin sniffs its own header regardless of file name.
-QString cacheFilePath(const QString &url)
-{
-    const QByteArray hash =
-        QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha256).toHex();
-    QString suffix = QFileInfo(QUrl(url).path()).suffix().toLower();
-    if (suffix.isEmpty())
-        suffix = QStringLiteral("img");
-    return QDir(cacheDirectory()).filePath(QString::fromLatin1(hash) + QLatin1Char('.') + suffix);
-}
-
-#endif // NOTEAPPC_HAVE_NETWORK
 
 // The source's own size scaled to fit inside `size` and centred, so a wide
 // photo and a square glyph both land in the same box instead of one
@@ -146,10 +122,9 @@ QIcon iconFromSVG(QByteArray svg, const QColor &color, int size)
     return icon;
 }
 
-QIcon iconFromRaster(const QByteArray &bytes, int size)
+QIcon iconFromImage(const QImage &image, int size)
 {
-    QImage image;
-    if (!image.loadFromData(bytes) || image.isNull())
+    if (image.isNull())
         return {};
     const QRectF target = centeredTarget(image.size(), size);
 
@@ -165,6 +140,14 @@ QIcon iconFromRaster(const QByteArray &bytes, int size)
         icon.addPixmap(pixmap);
     }
     return icon;
+}
+
+QIcon iconFromRaster(const QByteArray &bytes, int size)
+{
+    QImage image;
+    if (!image.loadFromData(bytes))
+        return {};
+    return iconFromImage(image, size);
 }
 
 QIcon iconFromBytes(const QByteArray &bytes, const QString &suffix, const QColor &color, int size)
@@ -193,50 +176,57 @@ QIcon iconFromResource(const QString &name, const QColor &color, int size)
 }
 
 #ifdef NOTEAPPC_HAVE_NETWORK
-// Runs at most once per URL until clearCache(). A caller sees a null icon
-// while this is in flight or after it fails; either way Icons::icon() itself
-// never waits on it.
+// Runs at most once per URL until clearCache(). A caller sees a null icon while this is in flight or after it
+// fails; either way Icons::icon() itself never waits on it. The fetch is libs/remoteimage's: https only, no
+// internal address, redirects checked, no cookies, a body cap and a timeout, and the picture decoded in the
+// sandboxed helper, never here. A PNG, JPEG, GIF or WebP only: a remote SVG is refused, the helper does not
+// read one.
+void onRemoteIcon(const QUrl &url, const QImage &image, const QString &error)
+{
+    const QStringList names = pendingURLs().values(); // an icon is asked for by more than one spelling
+    for (const QString &name : names) {
+        if (QUrl(name, QUrl::TolerantMode) != url)
+            continue;
+        pendingURLs().remove(name);
+        if (image.isNull() || !error.isEmpty()) {
+            failedURLs().insert(name);
+            continue;
+        }
+        if (remoteIcons().size() >= kMaxRemoteIcons)
+            remoteIcons().clear();
+        remoteIcons().insert(name, image.width() > kRemoteIconPixels || image.height() > kRemoteIconPixels
+                                       ? image.scaled(kRemoteIconPixels, kRemoteIconPixels, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+                                       : image);
+        emit notifierInstance().iconReady(name);
+    }
+}
+
 void startFetch(const QString &url)
 {
     if (pendingURLs().contains(url) || failedURLs().contains(url))
         return;
+    static QPointer<remoteimage::RemoteImages> connected; // the process's one; a test swaps it
+    remoteimage::RemoteImages &images = remoteimage::RemoteImages::instance();
+    if (connected != &images) {
+        connected = &images;
+        QObject::connect(&images, &remoteimage::RemoteImages::loaded, &notifierInstance(),
+                         [](const QUrl &loaded, const QImage &image) { onRemoteIcon(loaded, image, {}); });
+        QObject::connect(&images, &remoteimage::RemoteImages::failed, &notifierInstance(),
+                         [](const QUrl &failed, const QString &why) { onRemoteIcon(failed, {}, why); });
+    }
     pendingURLs().insert(url);
-
-    QNetworkReply *reply = networkManager().get(QNetworkRequest(QUrl(url)));
-    QObject::connect(reply, &QNetworkReply::finished, &notifierInstance(), [url, reply] {
-        pendingURLs().remove(url);
-        reply->deleteLater();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            failedURLs().insert(url);
-            return;
-        }
-
-        const QByteArray bytes = reply->readAll();
-        const QString path = cacheFilePath(url);
-        ensurePrivateDir(QFileInfo(path).absolutePath());
-        // Through a temporary file and rename(2), like every other write in
-        // this codebase (Vault, Scheme::save) - a reader must never see a
-        // half-written cache file.
-        QSaveFile file(path);
-        if (bytes.isEmpty() || !file.open(QIODevice::WriteOnly) || file.write(bytes) < 0
-            || !file.commit()) {
-            failedURLs().insert(url);
-            return;
-        }
-        emit notifierInstance().iconReady(url);
-    });
+    images.load(QUrl(url, QUrl::TolerantMode));
 }
 
 bool remoteAllowed = false;
 
-QIcon iconFromRemote(const QString &url, const QColor &color, int size)
+QIcon iconFromRemote(const QString &url, int size)
 {
     if (!remoteAllowed)
         return {};
-    const QString path = cacheFilePath(url);
-    if (QFile::exists(path))
-        return iconFromFile(path, color, size);
+    const auto it = remoteIcons().constFind(url);
+    if (it != remoteIcons().constEnd())
+        return iconFromImage(*it, size);
     startFetch(url);
     return {};
 }
@@ -351,7 +341,7 @@ QIcon Icons::icon(const QString &name, const QColor &color, int size)
     char32_t codepoint = 0;
 #ifdef NOTEAPPC_HAVE_NETWORK
     if (isRemoteURL(name))
-        result = iconFromRemote(name, color, size);
+        result = iconFromRemote(name, size);
     else
 #endif
     if (isFileURL(name) || QDir::isAbsolutePath(name))

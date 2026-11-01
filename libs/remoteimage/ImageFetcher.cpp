@@ -34,6 +34,7 @@ struct ImageFetcher::Job {
     QByteArray buffer;
     QPointer<QNetworkReply> reply;
     QPointer<QTimer> deadline;
+    QString onlyOrigin; ///< empty: any origin may be redirected to
     bool finished = false;
 };
 
@@ -48,10 +49,12 @@ ImageFetcher::ImageFetcher(QNetworkAccessManager *manager, QObject *parent)
     };
 }
 
-void ImageFetcher::fetch(const QUrl &url, std::function<void(Result)> done)
+void ImageFetcher::fetch(const QUrl &url, std::function<void(Result)> done, bool sameOriginOnly)
 {
     auto job = std::make_shared<Job>();
     job->done = std::move(done);
+    if (sameOriginOnly)
+        job->onlyOrigin = originOf(url);
     job->deadline = new QTimer(this);
     job->deadline->setSingleShot(true);
     connect(job->deadline, &QTimer::timeout, this, [this, job] { finish(job, {{}, tr("Not loaded: the server took over 30 seconds.")}); });
@@ -83,7 +86,11 @@ void ImageFetcher::step(const std::shared_ptr<Job> &job, const QUrl &url, int ho
         finish(job, {{}, why});
         return;
     }
-    QString host = url.host();
+    if (hops > 0 && !job->onlyOrigin.isEmpty() && originOf(url) != job->onlyOrigin) {
+        finish(job, {{}, tr("Not loaded: it redirects to %1, which was not asked for. Click to load it anyway.").arg(asciiHost(url))});
+        return;
+    }
+    const QString host = asciiHost(url);
     const QHostAddress literal(host);
     if (!literal.isNull()) { // refusal() has already judged a literal
         request(job, url, hops);

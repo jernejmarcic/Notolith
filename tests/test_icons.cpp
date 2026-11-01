@@ -145,6 +145,8 @@ TEST_F(IconsTest, ARemoteURLIsANullIconEvenWithAFileInTheOldCache)
 #endif
 
 #ifdef NOTEAPPC_HAVE_NETWORK
+// A remote icon that is on, fetched and decoded is tests/test_remote_images.cpp's (it has the network that answers
+// from memory); what is checked here needs no request at all.
 TEST_F(IconsTest, ARemoteURLIsNullAndNeverFetchedWhileRemoteContentIsOff)
 {
     QTemporaryDir cacheHome;
@@ -157,59 +159,6 @@ TEST_F(IconsTest, ARemoteURLIsNullAndNeverFetchedWhileRemoteContentIsOff)
     EXPECT_TRUE(Icons::icon(url, QColor(0, 0, 255), 32).isNull());
     EXPECT_TRUE(Icons::icon(QStringLiteral("https://example.invalid/other.svg"), QColor(0, 0, 255), 32).isNull());
     EXPECT_EQ(ready.count(), 0);
-
-    Icons::setRemoteAllowed(true);
-    EXPECT_FALSE(Icons::icon(url, QColor(0, 0, 255), 32).isNull()) << "on: the cached file is read";
-}
-
-TEST_F(IconsTest, UncachedRemoteURLreturnsImmediatelyWithoutBlocking)
-{
-    Icons::setRemoteAllowed(true);
-    QSignalSpy ready(Icons::notifier(), SIGNAL(iconReady(QString)));
-
-    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
-    QIcon icon;
-    // Generous on purpose: the point is "did not wait on a socket", not a
-    // tight budget - a live network reply never completes synchronously here
-    // because nothing ever pumps this test's event loop. Best of three: load
-    // only ever adds time.
-    const qint64 took = perf::bestOf([&] {
-        QElapsedTimer timer;
-        timer.start();
-        icon = Icons::icon(QStringLiteral("https://example.invalid/never-cached.svg"),
-                           QColor(Qt::white), 24);
-        return timer.elapsed();
-    }, 3, 200);
-    EXPECT_LT(took, 200);
-    EXPECT_TRUE(icon.isNull());
-    EXPECT_EQ(ready.count(), 0);
-}
-
-TEST_F(IconsTest, RemoteCacheKeyIsStableSoAPrecachedFileIsPickedUp)
-{
-    Icons::setRemoteAllowed(true);
-    QTemporaryDir cacheHome;
-    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
-
-    const QString url = QStringLiteral("https://example.invalid/deadline.svg");
-    // Reproduces Icons' own cache key - sha256 of the URL, named for the
-    // URL's own suffix - without exposing it as API. If that scheme ever
-    // drifts, this stops finding the file the test planted and fails, which
-    // is the point of pinning it here rather than just asserting "some path".
-    const QByteArray hash =
-        QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha256).toHex();
-    const QString cachePath =
-        QDir(cacheHome.path())
-            .filePath(QStringLiteral("notolith/icons/%1.svg").arg(QString::fromLatin1(hash)));
-    writeFile(cachePath, glyphSVG());
-
-    const QIcon first = Icons::icon(url, QColor(0, 0, 255), 32);
-    ASSERT_FALSE(first.isNull());
-    EXPECT_TRUE(containsOpaquePixel(first.pixmap(32, 32).toImage(), QColor(0, 0, 255)));
-
-    // Asking again must derive the same key, not a fresh in-flight fetch.
-    const QIcon second = Icons::icon(url, QColor(0, 0, 255), 32);
-    EXPECT_FALSE(second.isNull());
 }
 
 #endif // NOTEAPPC_HAVE_NETWORK

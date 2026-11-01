@@ -3412,7 +3412,11 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
             return false;
         d->m_images.insert(path, pixmap);
     }
+    return layoutPixmap(view, embed, pixmap, path);
+}
 
+bool MarkdownEditor::layoutPixmap(BlockView &view, const EmbedSpan &embed, const QPixmap &pixmap, const QString &path)
+{
     // Obsidian caps an image at the readable column and honours |WxH.
     const QSizeF size = embedImageSize(embed, pixmap.size(), contentWidth());
     const int width = qMax(1, qRound(size.width()));

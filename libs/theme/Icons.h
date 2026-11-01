@@ -19,7 +19,7 @@ public:
 
 signals:
     /// `name` is the exact string passed to Icons::icon() - only a remote
-    /// http(s) URL ever fires this, and only once it is cached, never on
+    /// https URL ever fires this, and only once it is loaded, never on
     /// failure. Call Icons::icon() again afterwards to pick up the result.
     void iconReady(const QString &name);
 };
@@ -35,8 +35,9 @@ public:
     /// 1. A Lucide id ("folder-open"), resolved from the bundled `:/icons`
     ///    resource.
     /// 2. An absolute path or a `file://` URL to a local .svg/.png/.jpg/.webp.
-    /// 3. An `http://`/`https://` URL to the same, in a build with NOTEAPPC_WITH_NETWORK only: the default
-    ///    build never fetches, and a URL gives a null icon.
+    /// 3. An `https://` URL to a PNG, JPEG, GIF or WebP, in a build with NOTEAPPC_WITH_NETWORK only: the default
+    ///    build never fetches, and a URL gives a null icon. It is fetched and decoded like a remote image in a
+    ///    note (libs/remoteimage, docs/OFFLINE.md): http, local addresses and SVG are refused.
     /// 4. A Nerd Font glyph, written either as a hex codepoint (`U+E73C`,
     ///    case-insensitive, 4-6 hex digits) or as the literal glyph character
     ///    itself - a string that is exactly one Unicode code point outside
@@ -62,10 +63,10 @@ public:
     /// Returns a null icon when the resource is missing, which shows up as a
     /// blank button rather than a crash. This is also what a remote URL
     /// returns before it is cached: this call never blocks on the network.
-    /// The fetch starts in the background, lands in the XDG cache directory,
-    /// and notifier()'s iconReady(name) fires once it is there, so the
-    /// caller can repaint and call icon() again to pick it up. A fetch that
-    /// fails is remembered so it is not retried on every paint.
+    /// The fetch starts in the background, and notifier()'s iconReady(name)
+    /// fires once the picture is there, so the caller can repaint and call
+    /// icon() again to pick it up. A fetch that fails is remembered so it is
+    /// not retried on every paint.
     static QIcon icon(const QString &name, const QColor &color, int size = 18);
 
     /// Whether a remote URL may be fetched or read from the cache at all.

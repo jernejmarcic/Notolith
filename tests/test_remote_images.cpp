@@ -11,6 +11,7 @@
 #include "ImageDecoder.h"
 #include "ImageFetcher.h"
 #include "ImageStore.h"
+#include "Icons.h"
 #include "ImageWire.h"
 #include "MarkdownEditor.h"
 #include "RemoteImagePolicy.h"
@@ -238,6 +239,47 @@ TEST(RemoteImagePolicy, InternalAddressesAndLocalhostAreRefused)
         EXPECT_TRUE(refusal(QUrl(QStringLiteral("https://") + QString::fromLatin1(host) + QStringLiteral("/a.png"))).isEmpty()) << host;
 }
 
+TEST(RemoteImagePolicy, TunnelledIPv4InTheLocalNAT64PrefixAndTeredoIsInternal)
+{
+    for (const char *host : {"[64:ff9b:1::7f00:1]", "[64:ff9b:1::a00:1]", "[64:ff9b:1:ffff:ffff:ffff:ffff:ffff]", "[64:ff9b:1::]",
+                             "[2001::1]", "[2001:0:4136:e378:8000:63bf:3fff:fdd2]", "[2001:0:ffff:ffff:ffff:ffff:ffff:ffff]"}) {
+        EXPECT_FALSE(refusal(QUrl(QStringLiteral("https://") + QString::fromLatin1(host) + QStringLiteral("/a.png"))).isEmpty()) << host;
+    }
+    EXPECT_TRUE(isInternalAddress(QHostAddress(QStringLiteral("64:ff9b:1::7f00:1"))));
+    EXPECT_TRUE(isInternalAddress(QHostAddress(QStringLiteral("2001:0:1:2:3:4:5:6"))));
+    // Neighbouring prefixes are the internet.
+    for (const char *host : {"[2001:4860:4860::8888]", "[2606:2800:220:1::1]"})
+        EXPECT_TRUE(refusal(QUrl(QStringLiteral("https://") + QString::fromLatin1(host) + QStringLiteral("/a.png"))).isEmpty()) << host;
+}
+
+TEST(RemoteImagePolicy, BadPortsAndOddIPv4LookingHostsAreRefusedHere)
+{
+    for (const char *url : {"https://example.com:99999/a.png", "https://example.com:0/a.png", "https://example.com:-1/a.png",
+                            "https://example.com:http/a.png", "https://1.2.3.4.5/a.png", "https://256.1.1.1/a.png",
+                            "https://0.0.0.0.0/a.png", "https://1.2.3.4:0/a.png", "https://999.999.999.999/a.png", "https://a.b.12/a.png",
+                            "https://a.0x1f/a.png", "https://exa mple.com/a.png"}) {
+        EXPECT_FALSE(refusal(QUrl(QString::fromLatin1(url), QUrl::TolerantMode)).isEmpty()) << url;
+    }
+    for (const char *url : {"https://example.com:8443/a.png", "https://example.com:443/a.png", "https://1.2.3.4:8443/a.png",
+                            "https://3com.com/a.png", "https://example.co2/a.png", "https://my-host.example.com/a.png"}) {
+        EXPECT_TRUE(refusal(QUrl(QString::fromLatin1(url), QUrl::TolerantMode)).isEmpty()) << url;
+    }
+}
+
+TEST(RemoteImagePolicy, AnInternationalHostIsShownAndRememberedInASCII)
+{
+    const QUrl real(QStringLiteral("https://apple.com/a.png"));
+    const QUrl lookalike(QStringLiteral("https://\u0430pple.com/a.png")); // Cyrillic a
+    EXPECT_EQ(asciiHost(real), QStringLiteral("apple.com"));
+    EXPECT_EQ(asciiHost(lookalike), QStringLiteral("xn--pple-43d.com"));
+    EXPECT_EQ(originOf(lookalike), QStringLiteral("https://xn--pple-43d.com"));
+    EXPECT_NE(originOf(lookalike), originOf(real));
+    EXPECT_EQ(asciiHost(QUrl(QStringLiteral("https://B\u00fccher.example/"))), QStringLiteral("xn--bcher-kva.example"));
+    EXPECT_EQ(asciiHost(QUrl(QStringLiteral("https://[2606:2800:220:1::1]/"))), QStringLiteral("2606:2800:220:1::1"));
+    EXPECT_EQ(originOf(QUrl(QStringLiteral("https://[2606:2800:220:1::1]:8443/"))), QStringLiteral("https://[2606:2800:220:1::1]:8443"));
+    EXPECT_TRUE(refusal(lookalike).isEmpty()) << "a look-alike is a name like any other, it is only shown honestly";
+}
+
 TEST(RemoteImagePolicy, AnOriginIsSchemeHostAndPort)
 {
     EXPECT_EQ(originOf(QUrl(QStringLiteral("https://Example.COM/a/b.png?x=1#f"))), QStringLiteral("https://example.com"));
@@ -352,6 +394,48 @@ TEST(ImageFetcherTest, RedirectsAreCheckedAtEveryHop)
     EXPECT_EQ(ok.error, QString());
     EXPECT_EQ(ok.bytes, QByteArray("arrived"));
     EXPECT_EQ(net.requests.size(), 4);
+}
+
+TEST(ImageFetcherTest, AnUnclickedLoadDoesNotFollowARedirectToAnotherOrigin)
+{
+    FakeNetwork net;
+    ImageFetcher fetcher(&net);
+    fetcher.setResolver(resolverFor());
+    net.handler = [](const QNetworkRequest &request) {
+        Answer answer;
+        if (request.url().host() == QLatin1String("example.com") && request.url().path() == QLatin1String("/a.png")) {
+            answer.status = 302;
+            answer.location = QStringLiteral("https://other.example/b.png");
+        } else if (request.url().host() == QLatin1String("example.com") && request.url().path() == QLatin1String("/same")) {
+            answer.status = 302;
+            answer.location = QStringLiteral("/b.png");
+        } else {
+            answer.body = "arrived";
+        }
+        return answer;
+    };
+    ImageFetcher::Result result;
+    bool done = false;
+    fetcher.fetch(QUrl(QStringLiteral("https://example.com/a.png")), [&](ImageFetcher::Result r) {
+        result = std::move(r);
+        done = true;
+    }, true);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return done; }, 10000));
+    EXPECT_NE(result.error.indexOf(QStringLiteral("other.example")), -1) << qPrintable(result.error);
+    EXPECT_EQ(net.requests.size(), 1) << "nothing was sent to the other origin";
+
+    // Inside its own origin a redirect is followed, and a click (no restriction) follows it anywhere.
+    EXPECT_EQ(fetchBlocking(fetcher, QStringLiteral("https://example.com/a.png")).bytes, QByteArray("arrived"));
+    net.requests.clear();
+    done = false;
+    fetcher.fetch(QUrl(QStringLiteral("https://example.com/same")), [&](ImageFetcher::Result r) {
+        result = std::move(r);
+        done = true;
+    }, true);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return done; }, 10000));
+    EXPECT_EQ(result.error, QString());
+    EXPECT_EQ(result.bytes, QByteArray("arrived"));
+    EXPECT_EQ(net.requests.size(), 2);
 }
 
 TEST(ImageFetcherTest, ABodyOverTwentyMiBIsAbortedByLengthOrWhileReading)
@@ -486,6 +570,33 @@ TEST(ImageDecoderTest, ASmallPNGRoundTripsThroughTheSandbox)
     ASSERT_EQ(decoded.error, QString());
     EXPECT_EQ(decoded.image.size(), QSize(20, 10));
     EXPECT_EQ(decoded.image.pixelColor(5, 5), QColor(10, 200, 30));
+}
+
+TEST(ImageDecoderTest, TheHelperRunsUnderTheSharedSandboxCaps)
+{
+    sandbox::overrideCgroupLimits(true);
+    sandbox::Command command = decoderCommand();
+    sandbox::forgetCgroupProbe();
+    if (command.program.isEmpty())
+        GTEST_SKIP() << "no bubblewrap or no syscall filter here";
+    if (command.filterFD >= 0)
+        ::close(command.filterFD);
+    const QStringList &args = command.arguments;
+    EXPECT_TRUE(args.contains(QStringLiteral("MemoryMax=1073741824"))) << "a cgroup memory cap";
+    EXPECT_TRUE(args.contains(QStringLiteral("TasksMax=256")));
+    EXPECT_TRUE(args.contains(QStringLiteral("--unshare-all")));
+    EXPECT_TRUE(args.contains(QStringLiteral("--cap-drop")));
+    EXPECT_TRUE(args.contains(QStringLiteral("--seccomp")));
+    const qsizetype shm = args.indexOf(QStringLiteral("/dev/shm"));
+    ASSERT_GT(shm, 3);
+    EXPECT_EQ(args.at(shm - 1), QStringLiteral("--tmpfs"));
+    EXPECT_EQ(args.at(shm - 3), QStringLiteral("--size")) << "/dev/shm is sized, not half the RAM";
+    EXPECT_EQ(args.at(shm - 2), QStringLiteral("67108864"));
+}
+
+TEST(ImageDecoderTest, TheAnswerToCanItRunIsTheSameEveryTime)
+{
+    EXPECT_EQ(decoderUnavailable(), decoderUnavailable());
 }
 
 TEST(ImageDecoderTest, JPEGAndGIFDecodeToo)
@@ -773,6 +884,135 @@ TEST(RemoteImageEditorTest, ALoadHoldsForTheNoteItWasClickedIn)
     WAIT_TRUE(!editor->isFileCardAt(0), 15000);
     editor->setNoteText(QStringLiteral("another note\n\n") + text); // the same image in the next note
     EXPECT_TRUE(editor->isFileCardAt(editor->noteText().indexOf(QStringLiteral("!["))));
+}
+
+TEST(RemoteImageEditorTest, AnAllowedOriginDoesNotRedirectOffToAnotherOneUntilClicked)
+{
+    if (!skipUnlessSandbox().isEmpty())
+        GTEST_SKIP() << qPrintable(skipUnlessSandbox());
+    Rig rig;
+    rig.net.handler = [&rig](const QNetworkRequest &request) {
+        Answer answer;
+        if (request.url().host() == QLatin1String("example.com")) {
+            answer.status = 302;
+            answer.location = QStringLiteral("https://other.example/b.png");
+        } else {
+            answer.body = rig.image;
+        }
+        return answer;
+    };
+    const QString url = QStringLiteral("https://example.com/a.png");
+    rig.images->allowOrigin(QUrl(url));
+    auto editor = editorWith(QStringLiteral("![](") + url + QStringLiteral(")\n"));
+    WAIT_TRUE(rig.net.requests.size() == 1, 5000);
+    QTest::qWait(300);
+    EXPECT_EQ(rig.net.requests.size(), 1) << "other.example was never asked";
+    EXPECT_TRUE(editor->isFileCardAt(0)) << "a placeholder, for a click";
+
+    editor->loadRemoteImage(url, false);
+    WAIT_TRUE(!editor->isFileCardAt(0), 15000);
+    ASSERT_EQ(rig.net.requests.size(), 3);
+    EXPECT_EQ(rig.net.requests.last().url().host(), QStringLiteral("other.example"));
+}
+
+TEST(RemoteImageEditorTest, AnHTMLBlockImageIsNeverFetchedByAnything)
+{
+    Rig rig;
+    auto editor = editorWith(QStringLiteral("<div><img src=\"https://example.com/a.png\"> <img src='https://example.com/b.png'></div>\n\n<figure><img src=\"//example.com/c.png\"></figure>\n"));
+    editor->documentHeight();
+    QTest::qWait(300);
+    EXPECT_TRUE(rig.net.requests.isEmpty());
+}
+
+// --- remote icons: the same path as an image -----------------------------------------------------------------------
+
+namespace {
+
+const QColor kIconColour(0, 0, 255);
+
+struct IconRig : Rig {
+    IconRig()
+    {
+        Icons::setRemoteAllowed(false);
+        Icons::clearCache();
+    }
+    ~IconRig() { Icons::setRemoteAllowed(false); }
+};
+
+} // namespace
+
+TEST(RemoteIconTest, WhileRemoteContentIsOffNothingIsSent)
+{
+    IconRig rig;
+    EXPECT_TRUE(Icons::icon(QStringLiteral("https://example.com/off.png"), kIconColour, 32).isNull());
+    QTest::qWait(200);
+    EXPECT_TRUE(rig.net.requests.isEmpty());
+}
+
+TEST(RemoteIconTest, AnIconIsFetchedUnderTheImageRulesAndDecodedInTheHelper)
+{
+    if (!skipUnlessSandbox().isEmpty())
+        GTEST_SKIP() << qPrintable(skipUnlessSandbox());
+    IconRig rig;
+    Icons::setRemoteAllowed(true);
+    const QString url = QStringLiteral("https://example.com/icon-ok.png");
+    QSignalSpy ready(Icons::notifier(), SIGNAL(iconReady(QString)));
+    QElapsedTimer clock;
+    clock.start();
+    EXPECT_TRUE(Icons::icon(url, kIconColour, 32).isNull()) << "never waits for the network";
+    EXPECT_LT(clock.elapsed(), 1000);
+    WAIT_TRUE(ready.count() == 1, 15000);
+    EXPECT_EQ(ready.first().first().toString(), url);
+    EXPECT_FALSE(Icons::icon(url, kIconColour, 32).isNull());
+    ASSERT_EQ(rig.net.requests.size(), 1);
+    const QNetworkRequest &request = rig.net.requests.first();
+    EXPECT_EQ(request.header(QNetworkRequest::UserAgentHeader).toString(), QStringLiteral("Notolith"));
+    EXPECT_EQ(request.attribute(QNetworkRequest::RedirectPolicyAttribute).toInt(), int(QNetworkRequest::ManualRedirectPolicy));
+    EXPECT_EQ(request.attribute(QNetworkRequest::CookieLoadControlAttribute).toInt(), int(QNetworkRequest::Manual));
+    EXPECT_EQ(request.rawHeader("Accept-Encoding"), QByteArray("identity"));
+    EXPECT_FALSE(rig.images->cache().read(QUrl(url)).isEmpty()) << "the bytes are in the images' cache, not an icons directory";
+}
+
+TEST(RemoteIconTest, ARemoteSVGIsRefusedAndAnOldIconsCacheIsNeverRead)
+{
+    if (!skipUnlessSandbox().isEmpty())
+        GTEST_SKIP() << qPrintable(skipUnlessSandbox());
+    IconRig rig;
+    Icons::setRemoteAllowed(true);
+    const QByteArray svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' fill='currentColor'/></svg>";
+    rig.image = svg;
+    const QString url = QStringLiteral("https://example.com/icon-svg.svg");
+    // What an older build left in the icons cache: decoded in this process, so it is never read now.
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    const QByteArray hash = QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha256).toHex();
+    const QString old = QDir(cacheHome.path()).filePath(QStringLiteral("notolith/icons/%1.svg").arg(QString::fromLatin1(hash)));
+    QDir().mkpath(QFileInfo(old).absolutePath());
+    QFile file(old);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(svg);
+    file.close();
+
+    QSignalSpy ready(Icons::notifier(), SIGNAL(iconReady(QString)));
+    EXPECT_TRUE(Icons::icon(url, kIconColour, 32).isNull());
+    WAIT_TRUE(rig.net.requests.size() == 1, 5000);
+    QTest::qWait(400);
+    EXPECT_EQ(ready.count(), 0);
+    EXPECT_TRUE(Icons::icon(url, kIconColour, 32).isNull());
+    EXPECT_EQ(rig.net.requests.size(), 1) << "a refusal is remembered, not retried on every paint";
+    EXPECT_TRUE(rig.images->cache().read(QUrl(url)).isEmpty()) << "an SVG is not kept either";
+}
+
+TEST(RemoteIconTest, HttpLocalAndLoopbackIconsAreNeverRequested)
+{
+    IconRig rig;
+    Icons::setRemoteAllowed(true);
+    for (const char *url : {"http://example.com/i.png", "https://127.0.0.1/i.png", "https://169.254.169.254/i.png", "https://localhost/i.png",
+                            "https://user:pw@example.com/i.png", "https://[64:ff9b:1::7f00:1]/i.png"}) {
+        EXPECT_TRUE(Icons::icon(QString::fromLatin1(url), kIconColour, 32).isNull()) << url;
+    }
+    QTest::qWait(400);
+    EXPECT_TRUE(rig.net.requests.isEmpty());
 }
 
 // --- timing, not a check ---------------------------------------------------------------------------------------------------

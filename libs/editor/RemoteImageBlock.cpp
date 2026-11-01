@@ -28,7 +28,7 @@ namespace {
 using remoteimage::RemoteImages;
 
 constexpr qreal kPlaceholderHeight = 56;
-constexpr int kMaxRemotePixmaps = 48; ///< a flush, not an LRU; an image asks again
+constexpr qint64 kMaxRemoteBytes = 256 * 1024 * 1024; ///< decoded pixels held at once; a flush, not an LRU, an image asks again
 
 QUrl parsed(const QString &url)
 {
@@ -77,7 +77,8 @@ MarkdownEditor::RemoteShow MarkdownEditor::remoteImageShow(const QString &url)
         return show;
     }
     RemoteImages &images = RemoteImages::instance();
-    if (!images.isAllowed(address) && !d->m_remoteSession.contains(url)) {
+    const bool clicked = d->m_remoteSession.contains(url);
+    if (!images.isAllowed(address) && !clicked) {
         show.canLoad = true; // nothing has been asked of the network
         return show;
     }
@@ -97,7 +98,8 @@ MarkdownEditor::RemoteShow MarkdownEditor::remoteImageShow(const QString &url)
         connect(&images, &remoteimage::RemoteImages::failed, this,
                 [this](const QUrl &failed, const QString &why) { deliverRemoteImage(failed, {}, why); });
     }
-    images.load(address); // a no-op for an image already on its way
+    // An allowed origin was agreed to, not wherever it sends the request: only a click follows a redirect elsewhere.
+    images.load(address, !clicked); // a no-op for an image already on its way
     show.notice = tr("Loading...");
     return show;
 }
@@ -116,10 +118,8 @@ bool MarkdownEditor::layoutRemoteImage(BlockView &view, const EmbedSpan &embed, 
 {
     const RemoteShow show = remoteImageShow(url);
     if (!show.pixmap.isNull()) {
-        // The image path takes it from here, sized as a local picture is.
-        const QString key = QStringLiteral("remote:") + url;
-        d->m_images.insert(key, show.pixmap);
-        return layoutImage(view, embed, key);
+        // Sized as a local picture is; the pixels stay in m_remoteImages only.
+        return layoutPixmap(view, embed, show.pixmap, QStringLiteral("remote:") + url);
     }
     BlockExtras &extras = view.extrasMut();
     extras.isFileCard = true;
@@ -127,7 +127,7 @@ bool MarkdownEditor::layoutRemoteImage(BlockView &view, const EmbedSpan &embed, 
     extras.remoteNotice = show.notice;
     extras.remoteCanLoad = show.canLoad;
     extras.fileCardPath.clear();
-    extras.fileCardLabel = parsed(url).host();
+    extras.fileCardLabel = remoteimage::asciiHost(parsed(url));
     extras.fileCardSize.clear();
     extras.fileCardCover = QPixmap();
     extras.image = QPixmap();
@@ -153,7 +153,7 @@ MarkdownEditor::EmbedCell MarkdownEditor::remoteImageCell(const EmbedSpan &embed
         return cell;
     }
     cell.isFileCard = true;
-    cell.label = parsed(url).host();
+    cell.label = remoteimage::asciiHost(parsed(url));
     cell.remoteURL = url;
     cell.remoteNotice = show.notice;
     cell.remoteCanLoad = show.canLoad;
@@ -200,7 +200,7 @@ bool MarkdownEditor::handleRemoteImageClick(const QString &url, bool canLoad, co
     if (!rect.contains(point))
         return false;
     if (canLoad) {
-        const Buttons buttons = buttonsFor(rect, d->m_theme.uiFont(), parsed(url).host());
+        const Buttons buttons = buttonsFor(rect, d->m_theme.uiFont(), remoteimage::asciiHost(parsed(url)));
         if (buttons.load.contains(point))
             loadRemoteImage(url, false);
         else if (!buttons.always.isNull() && buttons.always.contains(point))
@@ -217,7 +217,10 @@ void MarkdownEditor::deliverRemoteImage(const QUrl &url, const QImage &image, co
     if (image.isNull()) {
         d->m_remoteErrors.insert(key, error);
     } else {
-        if (d->m_remoteImages.size() >= kMaxRemotePixmaps)
+        qint64 held = qint64(image.width()) * image.height() * 4;
+        for (const QPixmap &pixmap : std::as_const(d->m_remoteImages))
+            held += qint64(pixmap.width()) * pixmap.height() * 4;
+        if (held > kMaxRemoteBytes)
             d->m_remoteImages.clear();
         d->m_remoteImages.insert(key, QPixmap::fromImage(image));
         d->m_remoteErrors.remove(key);

@@ -17,11 +17,17 @@ bool isInternalAddress(const QHostAddress &address);
 /// True for text that starts with http:// or https://. What decides that an image is a remote one.
 bool isRemoteImageTarget(const QString &target);
 
-/// Why `url` may not be fetched, or an empty string when it may: https only, no user:pass, a host,
-/// not `localhost` or `*.localhost`, and not an IP literal in an internal range.
+/// Why `url` may not be fetched, or an empty string when it may: a valid address, https only, no user:pass,
+/// a host, a port that is a port, not `localhost` or `*.localhost`, not an IP literal in an internal range,
+/// and no host that looks like an IPv4 address without being a plain dotted one.
 QString refusal(const QUrl &url);
 
-/// `scheme://host[:port]`, lower case, the unit "Always load from" remembers. Empty for a URL with no host.
+/// The host as ASCII (punycode for an international name), lower case; an IPv6 literal without brackets.
+/// What the placeholder shows and the allowlist is keyed on, so a look-alike name never reads as the real
+/// one. Empty for no host, or a name that cannot be written in ASCII.
+QString asciiHost(const QUrl &url);
+
+/// `scheme://asciiHost[:port]`, lower case, the unit "Always load from" remembers. Empty for a URL with no host.
 QString originOf(const QUrl &url);
 
 } // namespace noteAppC::remoteimage

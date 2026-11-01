@@ -47,7 +47,7 @@ void RemoteImages::answer(const QUrl &url, const QImage &image, const QString &e
         emit failed(url, error);
 }
 
-void RemoteImages::load(const QUrl &url)
+void RemoteImages::load(const QUrl &url, bool sameOriginOnly)
 {
     if (m_pending.contains(url))
         return;
@@ -69,20 +69,20 @@ void RemoteImages::load(const QUrl &url)
         decode(url, cached); // the original goes through the helper like any other
         return;
     }
-    m_waiting.push_back(url);
+    m_waiting.emplace_back(url, sameOriginOnly);
     pump();
 }
 
 void RemoteImages::pump()
 {
     while (m_fetching < kFetchesAtOnce && !m_waiting.empty()) {
-        const QUrl url = m_waiting.front();
+        const auto [url, sameOriginOnly] = m_waiting.front();
         m_waiting.pop_front();
-        startFetch(url);
+        startFetch(url, sameOriginOnly);
     }
 }
 
-void RemoteImages::startFetch(const QUrl &url)
+void RemoteImages::startFetch(const QUrl &url, bool sameOriginOnly)
 {
     ++m_fetching;
     m_fetcher.fetch(url, [this, url](ImageFetcher::Result result) {
@@ -98,7 +98,7 @@ void RemoteImages::startFetch(const QUrl &url)
         }
         m_cache.write(url, result.bytes);
         decode(url, result.bytes);
-    });
+    }, sameOriginOnly);
 }
 
 void RemoteImages::decode(const QUrl &url, const QByteArray &bytes)

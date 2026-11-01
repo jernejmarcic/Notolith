@@ -1,6 +1,7 @@
 #include "RemoteImagePolicy.h"
 
 #include <QCoreApplication>
+#include <QRegularExpression>
 
 #include <algorithm>
 
@@ -40,6 +41,10 @@ bool isInternalAddress(const QHostAddress &address)
         if (isInternalV4(low()))
             return true;
     }
+    // 64:ff9b:1::/48 (local-use NAT64, RFC 8215) and Teredo 2001::/32 tunnel IPv4 too: not the internet, any of it
+    static const uchar localNAT64[6] = {0x00, 0x64, 0xff, 0x9b, 0x00, 0x01};
+    if (std::equal(localNAT64, localNAT64 + 6, six.c) || (six[0] == 0x20 && six[1] == 0x01 && six[2] == 0 && six[3] == 0))
+        return true;
     if (six[0] == 0x20 && six[1] == 0x02) {
         const quint32 embedded = (quint32(six[2]) << 24) | (quint32(six[3]) << 16) | (quint32(six[4]) << 8) | quint32(six[5]);
         if (isInternalV4(embedded))
@@ -55,8 +60,18 @@ bool isRemoteImageTarget(const QString &target)
            || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive);
 }
 
+QString asciiHost(const QUrl &url)
+{
+    const QString host = url.host().toLower();
+    if (host.isEmpty() || host.contains(QLatin1Char(':')))
+        return host; // none, or an IPv6 literal
+    return QString::fromLatin1(QUrl::toAce(host));
+}
+
 QString refusal(const QUrl &url)
 {
+    if (!url.isValid() || url.port(-1) == 0)
+        return QCoreApplication::translate("RemoteImage", "Not loaded: not a valid web address.");
     const QString scheme = url.scheme().toLower();
     if (scheme == QLatin1String("http"))
         return QCoreApplication::translate("RemoteImage", "Not loaded: http is refused, only https.");
@@ -64,11 +79,22 @@ QString refusal(const QUrl &url)
         return QCoreApplication::translate("RemoteImage", "Not loaded: not a web address.");
     if (!url.userInfo().isEmpty())
         return QCoreApplication::translate("RemoteImage", "Not loaded: the address has a user name or password.");
-    QString host = url.host().toLower();
+    QString host = asciiHost(url);
     while (host.endsWith(QLatin1Char('.')))
         host.chop(1);
-    if (host.isEmpty())
+    if (host.isEmpty() && url.host().isEmpty())
         return QCoreApplication::translate("RemoteImage", "Not loaded: the address has no host.");
+    if (host.isEmpty())
+        return QCoreApplication::translate("RemoteImage", "Not loaded: the host name is not valid.");
+    // A last label of digits (or 0x...) is an IPv4 address to every resolver, whatever else it looks like:
+    // only the plain dotted form is taken, so 1.2.3.4.5 or 256.1.1.1 never reach a name lookup.
+    const QString last = host.mid(host.lastIndexOf(QLatin1Char('.')) + 1);
+    static const QRegularExpression numeric(QStringLiteral("^(0[xX][0-9a-fA-F]*|[0-9]+)$"));
+    if (numeric.match(last).hasMatch()) {
+        const QHostAddress address(host);
+        if (address.protocol() != QAbstractSocket::IPv4Protocol || address.toString() != host)
+            return QCoreApplication::translate("RemoteImage", "Not loaded: %1 is not a valid address.").arg(host);
+    }
     const QString local = QCoreApplication::translate("RemoteImage", "Not loaded: %1 is a local address.").arg(host);
     if (host == QLatin1String("localhost") || host.endsWith(QLatin1String(".localhost")))
         return local;
@@ -80,7 +106,7 @@ QString refusal(const QUrl &url)
 
 QString originOf(const QUrl &url)
 {
-    const QString host = url.host().toLower();
+    const QString host = asciiHost(url);
     if (host.isEmpty())
         return {};
     QString origin = url.scheme().toLower() + QStringLiteral("://") + (host.contains(QLatin1Char(':')) ? QLatin1Char('[') + host + QLatin1Char(']') : host);

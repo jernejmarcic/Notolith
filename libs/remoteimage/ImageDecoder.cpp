@@ -55,7 +55,7 @@ QString helperPath()
     return {};
 }
 
-QString decoderUnavailable()
+static QString decoderProbe()
 {
     const QString helper = helperPath();
     if (helper.isEmpty())
@@ -68,9 +68,21 @@ QString decoderUnavailable()
     return {};
 }
 
+QString decoderUnavailable()
+{
+    // Asked on every load: the answer (a seccomp filter built and thrown away) is the same for the whole process
+    static const QString answer = decoderProbe();
+    return answer;
+}
+
+sandbox::Command decoderCommand()
+{
+    return helperCommand(helperPath());
+}
+
 DecodedImage decodeInSandbox(const QByteArray &bytes, ImageFormat format)
 {
-    const sandbox::Command command = helperCommand(helperPath());
+    const sandbox::Command command = decoderCommand();
     sandbox::Limits limits;
     limits.cpuSeconds = 20;
     limits.fileSize = 1024 * 1024;

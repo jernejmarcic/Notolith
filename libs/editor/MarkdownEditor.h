@@ -1627,6 +1627,9 @@ private:
     /// code block or a small card.
     bool layoutEmbed(BlockView &view);
     bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// The sizing and placing half of layoutImage, for a picture that is already in hand and is cached elsewhere
+    /// (a remote image keeps its own bounded cache); `path` is only the name the block remembers.
+    bool layoutPixmap(BlockView &view, const EmbedSpan &embed, const QPixmap &pixmap, const QString &path);
     /// `attachment:<scope><name>` when setInlineImages holds that picture for
     /// the embed (the "path" such an embed has), else empty.
     QString attachmentPathOf(const EmbedSpan &embed) const;

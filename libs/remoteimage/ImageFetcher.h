@@ -41,8 +41,10 @@ public:
     void setResolver(Resolver resolver) { m_resolver = std::move(resolver); }
     void setTimeoutForTests(int ms) { m_timeoutMs = ms; }
 
-    /// Calls `done` once, from the event loop. Never when the fetcher is gone first.
-    void fetch(const QUrl &url, std::function<void(Result)> done);
+    /// Calls `done` once, from the event loop. Never when the fetcher is gone first. With `sameOriginOnly` (a
+    /// load nobody clicked: an origin the person allowed earlier) a redirect to another origin is not followed:
+    /// the answer is an error naming the host it went to, and nothing is sent there.
+    void fetch(const QUrl &url, std::function<void(Result)> done, bool sameOriginOnly = false);
 
 private:
     struct Job;

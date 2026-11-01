@@ -26,5 +26,5 @@ add_library(noteAppC_remoteimage STATIC
 set_target_properties(noteAppC_remoteimage PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_remoteimage PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(noteAppC_remoteimage PRIVATE NOTEAPPC_LIBEXECDIR="${CMAKE_INSTALL_FULL_LIBEXECDIR}/notolith")
-target_link_libraries(noteAppC_remoteimage PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent noteAppC_imagewire
-    PRIVATE noteAppC_sandbox noteAppC_xdg)
+target_link_libraries(noteAppC_remoteimage PUBLIC Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent noteAppC_imagewire noteAppC_sandbox
+    PRIVATE noteAppC_xdg)
