@@ -386,8 +386,9 @@ void MainWindow::exportWithPandoc(const QString &notePath, const QString &format
                                  tr("pandoc did not write a file, so nothing was exported."));
                       return;
                   }
-                  QFile::remove(target); // the save dialog has asked about replacing it
-                  if (!QFile::copy(produced, target)) {
+                  // The save dialog has asked about replacing it; the old file stays until the new one is whole.
+                  QString copyError;
+                  if (!Vault::copyReplacing(produced, target, &copyError)) {
                       QMessageBox::warning(this, tr("Export with pandoc"), tr("Could not write %1").arg(target));
                       return;
                   }

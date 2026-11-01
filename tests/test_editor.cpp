@@ -8,6 +8,8 @@
 #include <thread>
 
 #include <fcntl.h>
+#include <csignal>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -10449,6 +10451,37 @@ TEST(PdfExportTest, ALongNoteBecomesSeveralPages)
     EXPECT_TRUE(pdf.startsWith("%PDF"));
     static const QRegularExpression pageObject(QStringLiteral("/Type\\s*/Page[^s]"));
     EXPECT_GE(QString::fromLatin1(pdf).count(pageObject), 3) << "120 paragraphs on A4";
+}
+
+TEST(PdfExportTest, AFailedExportLeavesTheEarlierFileAlone)
+{
+    // Writes past a 1 KiB file size limit fail (EFBIG), as a full disk does; the PDF of a long note is far larger.
+    QString note;
+    for (int i = 0; i < 60; ++i)
+        note += QStringLiteral("Paragraph %1 with **bold** text that runs on for a while.\n\n").arg(i);
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("out.pdf"));
+    {
+        QFile old(path);
+        ASSERT_TRUE(old.open(QIODevice::WriteOnly));
+        old.write("EARLIER");
+    }
+    struct rlimit saved {};
+    ASSERT_EQ(::getrlimit(RLIMIT_FSIZE, &saved), 0);
+    ::signal(SIGXFSZ, SIG_IGN);
+    struct rlimit tight = saved;
+    tight.rlim_cur = 1024;
+    ASSERT_EQ(::setrlimit(RLIMIT_FSIZE, &tight), 0);
+    QString error;
+    const bool ok = MarkdownEditor::exportPdf(path, note, QStringLiteral("T"), {}, MarkdownEditor::PdfOptions{}, &error);
+    ::setrlimit(RLIMIT_FSIZE, &saved);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(error.isEmpty());
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), QByteArray("EARLIER"));
+    EXPECT_EQ(QDir(dir.path()).entryList(QDir::Files | QDir::Hidden).size(), 1) << "no temporary file left behind";
 }
 
 // --- audio and video ------------------------------------------------------------
