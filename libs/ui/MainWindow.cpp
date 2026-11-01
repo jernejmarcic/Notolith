@@ -5261,7 +5261,16 @@ void MainWindow::publishSite()
             QMessageBox::warning(this, tr("Publish"), tr("Could not publish the vault:\n%1").arg(result.error));
             return;
         }
-        statusBar()->showMessage(tr("Published %n page(s)", nullptr, result.counts.pages), 5000);
+        QString message = tr("Published %n page(s)", nullptr, result.counts.pages);
+        const QStringList &left = result.counts.skippedAttachments;
+        if (!left.isEmpty()) {
+            message += tr(", %n attachment(s) left out", nullptr, int(left.size()));
+            // Named: a file that links out of the vault, or is not a plain file, is not copied into a site.
+            QMessageBox::information(this, tr("Publish"),
+                                     tr("These attachments were left out of the site, because each is a link out of "
+                                        "the vault or not a regular file:\n\n%1").arg(left.join(QLatin1Char('\n'))));
+        }
+        statusBar()->showMessage(message, 5000);
     });
     // Publisher queries the index on the thread that calls it, and an Index
     // is one connection for one thread: this run opens its own on the same

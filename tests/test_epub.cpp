@@ -375,6 +375,55 @@ TEST(EpubArchiveTest, TheEntriesOfOneBookAddUpToALimit)
     EXPECT_EQ(archive.read(QStringLiteral("c")), QByteArrayLiteral("s")) << "a small entry still fits";
 }
 
+TEST(EpubArchiveTest, AZipOfTooManyEntriesIsRefusedBeforeItFillsTheIndex)
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("many.epub"));
+    QList<std::pair<QString, QByteArray>> entries;
+    entries.reserve(100001);
+    for (qint64 i = 0; i <= 100000; ++i) // one past the 100 000 an open() accepts
+        entries.append({QString::number(i), QByteArray()});
+    writeZip(path, entries);
+    EpubArchive archive;
+    QString error;
+    EXPECT_FALSE(archive.open(path, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("entries"))) << error.toStdString();
+    EXPECT_FALSE(archive.isValid());
+}
+
+TEST(EpubArchiveTest, AZipWithTooManyBytesOfNamesIsRefused)
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("names.epub"));
+    QList<std::pair<QString, QByteArray>> entries;
+    const qint64 each = 60000;
+    for (qint64 i = 0; i * each <= (qint64(16) << 20); ++i) // past the 16 MiB an open() accepts
+        entries.append({QString::number(i).rightJustified(8, QLatin1Char('0')) + QString(each - 8, QLatin1Char('n')),
+                        QByteArray()});
+    writeZip(path, entries);
+    EpubArchive archive;
+    QString error;
+    EXPECT_FALSE(archive.open(path, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("MiB of names"))) << error.toStdString();
+}
+
+TEST(EpubArchiveTest, OpeningAnotherBookStartsWithAFreshBudget)
+{
+    QTemporaryDir dir;
+    const QByteArray mebibyte(1 << 20, 'x');
+    const QString first = dir.filePath(QStringLiteral("first.epub"));
+    const QString second = dir.filePath(QStringLiteral("second.epub"));
+    writeZip(first, {{QStringLiteral("a"), mebibyte}});
+    writeZip(second, {{QStringLiteral("b"), mebibyte}});
+    EpubArchive archive;
+    QString error;
+    ASSERT_TRUE(archive.open(first, &error)) << error.toStdString();
+    archive.setLimits(1 << 20, (1 << 20) + (1 << 19));
+    EXPECT_EQ(archive.read(QStringLiteral("a")).size(), 1 << 20);
+    ASSERT_TRUE(archive.open(second, &error)) << error.toStdString();
+    EXPECT_EQ(archive.read(QStringLiteral("b"), &error).size(), 1 << 20) << error.toStdString();
+}
+
 TEST(EpubArchiveTest, RefusesANonZipFile)
 {
     QTemporaryDir dir;
