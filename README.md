@@ -154,6 +154,27 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 `sh tools/check.sh` builds and tests the default configuration, one with every
 networked and encrypting option on, and one with every optional module off.
 
+Checks beyond the tests:
+
+```sh
+# AddressSanitizer + UBSan (the tests preload nettrap, so skip ASan's link-order check)
+cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" \
+  -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined" \
+  -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=address,undefined"
+cmake --build build-asan
+QT_QPA_PLATFORM=offscreen ASAN_OPTIONS=verify_asan_link_order=0:detect_odr_violation=0 \
+  LSAN_OPTIONS=suppressions=$PWD/tests/lsan.supp ctest --test-dir build-asan --output-on-failure
+
+# libFuzzer targets for what a vault's files feed the parsers (clang; never installed)
+cmake -B build-fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++ -DNOTEAPPC_FUZZ=ON -DBUILD_TESTING=OFF
+cmake --build build-fuzz --target fuzz_markdown fuzz_obsidian   # also fuzz_frontmatter fuzz_csv fuzz_canvas fuzz_ipynb fuzz_bases
+build-fuzz/tools/fuzz/fuzz_markdown -max_total_time=600 -timeout=10 -rss_limit_mb=2048 corpus/ demo/
+```
+
+A crashing input found this way becomes a test case in `tests/` (see `ctest -R fuzz`).
+
 Documentation, in `docs/`:
 
 - `EDITOR.md` - the editor, HTML editing, vim mode, diagram rendering
