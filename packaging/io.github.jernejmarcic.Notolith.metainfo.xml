@@ -1,29 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- The app id follows basket's (io.github.jernejmarcic.basket); it is what
-     Flatpak installs under. There is no homepage yet (appstreamcli warns about
-     that one). -->
+<!-- The app id follows basket's (io.github.jernejmarcic.basket). -->
 <component type="desktop-application">
   <id>io.github.jernejmarcic.Notolith</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>Notolith</name>
-  <summary>Markdown notes and Obsidian vaults, native and fast</summary>
+  <summary>A Markdown note app for developers</summary>
   <description>
     <p>
-      Notolith reads and edits Markdown notes and Obsidian vaults in a native
-      Qt application: live preview, wikilinks and backlinks, search, tags,
-      callouts, tables, maths, the graph view, canvases and bases, in tabs and
-      splits.
+      Notolith is a Markdown note app for developers, written in C++ and Qt:
+      live preview, wikilinks and backlinks, search, tags, callouts, tables,
+      maths, code blocks, the graph view, canvases and bases, in tabs and
+      splits. It is a public beta: expect bugs and keep a backup of your vault.
     </p>
     <p>
-      A vault stays Obsidian's: settings, hotkeys, bookmarks and layouts are
-      read from its .obsidian folder and never written back, and a note is
-      only ever changed where it was edited.
+      It opens and works with Obsidian vaults: settings, hotkeys, bookmarks and
+      layouts are read from the vault's .obsidian folder and never written
+      back, and a note is only ever changed where it was edited.
     </p>
   </description>
   <developer id="io.github.jernejmarcic">
     <name>Jernej</name>
   </developer>
+  <url type="homepage">https://github.com/jernejmarcic/Notolith</url>
+  <url type="bugtracker">https://github.com/jernejmarcic/Notolith/issues</url>
+  <url type="vcs-browser">https://github.com/jernejmarcic/Notolith</url>
   <launchable type="desktop-id">io.github.jernejmarcic.Notolith.desktop</launchable>
   <provides>
     <binary>notolith</binary>
@@ -35,15 +36,23 @@
     <keyword>markdown</keyword>
     <keyword>notes</keyword>
     <keyword>wiki</keyword>
-    <keyword>obsidian</keyword>
   </keywords>
+  <screenshots>
+    <screenshot type="default">
+      <caption>A note with its properties, and the backlinks in the right sidebar</caption>
+      <image type="source">https://raw.githubusercontent.com/jernejmarcic/Notolith/master/docs/images/main-window.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Live preview: callouts, code blocks, tables and maths</caption>
+      <image type="source">https://raw.githubusercontent.com/jernejmarcic/Notolith/master/docs/images/editor.png</image>
+    </screenshot>
+  </screenshots>
   <supports>
     <control>pointing</control>
     <control>keyboard</control>
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="0.1.0" date="2026-10-19"/>
-    <release version="0.0.1" date="2026-09-23"/>
+    <release version="0.1.0~beta1" date="2026-11-01" type="development"/>
   </releases>
 </component>

@@ -63,7 +63,7 @@ target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::Netwo
 # InkTextBoxes inflates a gzip .ink file for the index (the host reads it without loading the ink module).
 find_package(ZLIB REQUIRED)
 target_link_libraries(noteAppC_ui PRIVATE ZLIB::ZLIB)
-target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${NOTEAPPC_VERSION_STRING}")
 
 if(TARGET noteAppC_spell)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_spell)

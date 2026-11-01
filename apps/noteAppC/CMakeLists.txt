@@ -1,6 +1,6 @@
 qt_add_executable(noteAppC main.cpp)
 
-target_compile_definitions(noteAppC PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(noteAppC PRIVATE NOTEAPPC_VERSION="${NOTEAPPC_VERSION_STRING}")
 target_link_libraries(noteAppC PRIVATE noteAppC_ui)
 # Static modules (NOTEAPPC_STATIC_MODULES): linked in, and imported in main.cpp - one define per module.
 if(NOTEAPPC_STATIC_MODULES)
@@ -50,7 +50,7 @@ endif()
 if(ANDROID)
     set_property(TARGET noteAppC PROPERTY
         QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_SOURCE_DIR}/android)
-    set_property(TARGET noteAppC PROPERTY QT_ANDROID_VERSION_NAME ${PROJECT_VERSION})
+    set_property(TARGET noteAppC PROPERTY QT_ANDROID_VERSION_NAME ${NOTEAPPC_VERSION_STRING})
     set_property(TARGET noteAppC PROPERTY QT_ANDROID_VERSION_CODE 1)
     set_property(TARGET noteAppC PROPERTY QT_ANDROID_MIN_SDK_VERSION 26)
     set_property(TARGET noteAppC PROPERTY QT_ANDROID_TARGET_SDK_VERSION 34)

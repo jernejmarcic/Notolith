@@ -2,8 +2,13 @@ cmake_minimum_required(VERSION 3.28)
 
 project(noteAppC
     VERSION 0.1.0
-    DESCRIPTION "A Linux-native Obsidian alternative in C++"
+    DESCRIPTION "A Markdown note app for developers"
     LANGUAGES CXX)
+
+# The release's pre-release tag. project(VERSION) takes digits only, so --version and the About dialog print
+# NOTEAPPC_VERSION_STRING. Empty it for a final release.
+set(NOTEAPPC_VERSION_SUFFIX "-beta.1")
+set(NOTEAPPC_VERSION_STRING "${PROJECT_VERSION}${NOTEAPPC_VERSION_SUFFIX}")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,17 +65,15 @@ if(NOTEAPPC_DEV_ENV_OVERRIDES)
 endif()
 option(NOTEAPPC_STATIC_MODULES "Build the loadable modules as Qt static plugins linked into the executable" ${noteappc_static_default})
 
-# Neither dependency is in the Android Qt kit, so both can be turned off for a
-# mobile/cross build; NOTEAPPC_WITH_PDFVIEW (below) covers dropping poppler-qt6
-# when it is installed but built against a Qt too new to link with that kit.
+# Neither of these two is in the Android Qt kit, so each can be turned off for a
+# mobile or cross build.
 option(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING "Colour fenced code blocks with KF6 SyntaxHighlighting" ON)
 option(NOTEAPPC_WITH_MEDIA "Play audio and video embeds with Qt Multimedia" ON)
 # Raw HTML blocks (<div>, <table>, <details>...), rendered with litehtml.
 # Optional the same way: without it, or without the package, a note's HTML
-# blocks stay as source - see libs/render/HtmlRenderer and its CMake next to
-# the poppler block in libs/render/CMakeLists.txt.
+# blocks stay as source - see libs/render/HtmlRenderer and libs/render/CMakeLists.txt.
 option(NOTEAPPC_WITH_HTML "Render raw HTML blocks with litehtml" ON)
-# The first Tier 1 module (docs/PLUGINS.md). Off, or without hunspell, the app
+# Spellcheck, a Tier 1 module (docs/PLUGINS.md). Off, or without hunspell, the app
 # has no spellcheck code at all and its settings row does not appear.
 option(NOTEAPPC_WITH_SPELLCHECK "Underline misspelt words with hunspell" ON)
 # Note history in git (libs/ext/history), with libgit2 in process.
@@ -87,19 +90,19 @@ if(NOTEAPPC_WITH_SPELLCHECK)
         pkg_check_modules(HUNSPELL QUIET IMPORTED_TARGET hunspell)
     endif()
 endif()
-# The second Tier 1 module: a force-directed graph view, no external
+# Graph view, a Tier 1 module: a force-directed graph view, no external
 # dependencies, so unlike spellcheck there is nothing to detect - the option
 # alone decides whether libs/ext/graph is built at all.
 option(NOTEAPPC_WITH_GRAPH "Build the graph view (libs/ext/graph)" ON)
-# Another Tier 1 module: Obsidian's infinite canvas over the open JSON
+# Canvas, a Tier 1 module: Obsidian's infinite canvas over the open JSON
 # Canvas format. No external dependency - only Qt and the editor library, to
 # reuse MarkdownEditor for a node's Markdown.
 option(NOTEAPPC_WITH_CANVAS "Open and edit .canvas files (JSON Canvas)" ON)
-# Another Tier 1 module: database-like table/card views over a vault from a
+# Bases, a Tier 1 module: database-like table/card views over a vault from a
 # `.base` file (libs/ext/bases/). yaml-cpp is already a dependency of
 # libs/markdown, so this carries no new external dependency.
 option(NOTEAPPC_WITH_BASES "Database-like table and card views from .base files" ON)
-# Another Tier 1 module: an EPUB reader (libs/ext/epub/) - libarchive reads
+# EPUB, a Tier 1 module: an EPUB reader (libs/ext/epub/) - libarchive reads
 # the book's zip container, litehtml (through HtmlRenderer, libs/render)
 # lays out and paints each chapter. Actually built only when both are found
 # (see the add_subdirectory below, after libs/render has looked for
@@ -111,19 +114,19 @@ if(NOTEAPPC_WITH_EPUB)
         pkg_check_modules(LIBARCHIVE QUIET IMPORTED_TARGET libarchive)
     endif()
 endif()
-# Another Tier 1 module: exports a vault (or its `publish: true` part) as a
+# Publish, a Tier 1 module: exports a vault (or its `publish: true` part) as a
 # static, JavaScript-optional website - Obsidian Publish style
 # (libs/ext/publish/). No new external dependency: it only draws on
 # libraries this project already links (markdown, index, render, theme).
 option(NOTEAPPC_WITH_PUBLISH "Export a vault as a static website (libs/ext/publish)" ON)
-# Another Tier 1 module: opens a vault's PDFs in a tab instead of handing
+# PDF view, a Tier 1 module: opens a vault's PDFs in a tab instead of handing
 # them to the system viewer - continuous scroll, zoom, find, outline, links,
 # and annotation (highlight/underline/strike-out/ink/note/box) saved into the
 # PDF itself - and the poppler half of PDF embeds in a note (libnotolith-pdfpage.so).
 # Both are loadable (libs/ext/pdfview): the executable links no poppler, and a
 # session that never meets a PDF never maps it. Needs poppler-qt6 (GPL); this
 # option is the one switch for the viewer and the embeds, e.g. for a kit that
-# has a poppler built against another Qt.
+# has a poppler built against another Qt, or one that is installed but too new to link with it.
 option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 # Image annotation (libs/ext/imageview): an image opens in a tab to highlight,
 # draw on and note, the marks kept in a sidecar note beside it. Qt Widgets
@@ -159,7 +162,7 @@ if(NOTEAPPC_WITH_AI_PLUGIN)
         pkg_check_modules(CURL QUIET IMPORTED_TARGET libcurl)
     endif()
 endif()
-# Another Tier 1 module: local-first sync to an optional server, end-to-end
+# Sync, a Tier 1 module: local-first sync to an optional server, end-to-end
 # encrypted (docs/SYNC.md). Needs libsodium for the crypto and Qt6Keychain
 # for the device identity key it keeps in the OS keyring; without either the
 # option is silently off, same as spellcheck without hunspell.
@@ -183,7 +186,7 @@ if(NOTEAPPC_WITH_ENCRYPTION AND NOT TARGET PkgConfig::SODIUM)
         pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
     endif()
 endif()
-# The last Tier 1 module: Jupyter-style code execution in notes
+# Notebook, a Tier 1 module: Jupyter-style code execution in notes
 # (libs/ext/notebook) - a client of the Jupyter messaging protocol over
 # ZeroMQ, so any installed kernel (ipykernel, a Julia or R kernel...) is a
 # language, never Python running inside this app. Needs libzmq; without it
@@ -203,6 +206,19 @@ endif()
 option(NOTEAPPC_WITH_SHARE_YRS "Build the yrs text CRDT backend for note sharing (libs/ext/share)" OFF)
 if(NOTEAPPC_WITH_SHARE_YRS AND NOT ANDROID)
     find_program(NOTEAPPC_CARGO cargo)
+    # libs/ext/share/yrs-ffi/Cargo.toml asks for rust-version 1.95; an older cargo configures fine and
+    # then fails in the middle of the build, so it counts as not found.
+    if(NOTEAPPC_CARGO)
+        execute_process(COMMAND ${NOTEAPPC_CARGO} --version OUTPUT_VARIABLE noteappc_cargo_version
+                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(noteappc_cargo_version MATCHES "^cargo ([0-9]+\\.[0-9]+)")
+            set(noteappc_cargo_number ${CMAKE_MATCH_1})
+        endif()
+        if(NOT noteappc_cargo_number OR noteappc_cargo_number VERSION_LESS 1.95)
+            message(STATUS "noteAppC: ${noteappc_cargo_version} is older than 1.95, the yrs backend is not built")
+            set(NOTEAPPC_CARGO NOTFOUND) # a normal variable over the cached path, for this directory tree only
+        endif()
+    endif()
 endif()
 
 # Note sharing, the link layer (libs/ext/link, vendored from Hearth: identity,
@@ -249,7 +265,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_link_options(-Wl,--as-needed)
 endif()
 
-# md4qt is not packaged on Arch; pin the KDE repository by commit.
+# md4qt is not packaged on Arch; it is fetched at configure time from the KDE repository, pinned by commit.
 # 5.x dropped the text-plugin hook the design assumed, so Obsidian's own syntax
 # is a post-pass over the tree instead (libs/markdown/ObsidianSyntax).
 include(FetchContent)
@@ -264,11 +280,11 @@ FetchContent_Declare(md4qt
     PATCH_COMMAND sh ${CMAKE_CURRENT_LIST_DIR}/cmake/patch-md4qt.sh
     EXCLUDE_FROM_ALL)
 # MicroTeX renders the LaTeX in $$...$$ and $...$. It is not packaged, and it
-# wants tinyxml2, which is not installed either - both are vendored and pinned.
-# tinyxml2 is two files under the MIT licence; MicroTeX is MIT too.
+# wants tinyxml2, which is not installed either - both are fetched at configure time and pinned.
+# tinyxml2 is zlib-licensed, MicroTeX is MIT (THIRD-PARTY.md).
 set(tinyxml2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 # Static whatever BUILD_SHARED_LIBS says: install() ships only the binary, so a
-# shared vendored tinyxml2 left the installed notolith unable to start.
+# shared tinyxml2 left the installed notolith unable to start.
 set(tinyxml2_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(tinyxml2
     GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
@@ -293,12 +309,11 @@ FetchContent_Declare(microtex
 FetchContent_MakeAvailable(microtex)
 
 # The metainfo checked as it is in the tree, every run (ECM's appstreamtest
-# checked only what an install had listed). No homepage yet,
-# so that one warning is information.
+# checked only what an install had listed).
 find_program(APPSTREAMCLI appstreamcli)
 if(APPSTREAMCLI)
     add_test(NAME appstreamtest
-             COMMAND ${APPSTREAMCLI} validate --no-net --override=url-homepage-missing=info
+             COMMAND ${APPSTREAMCLI} validate --no-net
                      ${CMAKE_CURRENT_SOURCE_DIR}/packaging/io.github.jernejmarcic.Notolith.metainfo.xml)
 endif()
 
@@ -396,8 +411,7 @@ if(NOTEAPPC_WITH_INK AND NOT ANDROID)
         set(NOTEAPPC_WITH_INK OFF)
     endif()
 endif()
-# Added only when the directory exists.
-if(NOTEAPPC_WITH_HWFONT AND TARGET notolith-inkcore AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libs/ext/hwfont)
+if(NOTEAPPC_WITH_HWFONT AND TARGET notolith-inkcore)
     add_subdirectory(libs/ext/hwfont)
 endif()
 if(NOTEAPPC_WITH_PLUGINS)
@@ -423,6 +437,45 @@ if(NOTEAPPC_WITH_SHARE)
         add_subdirectory(libs/ext/shareengine) # the notolith-share module: not linked into the executable
     endif()
 endif()
+# What this configure built. A library that is not installed only switches its module off, quietly,
+# so the ones that are on by default and missing are named in one warning. The modules whose option
+# is off (sync, sharing and the like, by default) are listed apart: they were never asked for.
+macro(noteappc_module name option)
+    if(NOT ${option})
+        list(APPEND noteappc_modules_off ${name})
+    elseif(${ARGN})
+        list(APPEND noteappc_modules_on ${name})
+    else()
+        list(APPEND noteappc_modules_missing ${name})
+    endif()
+endmacro()
+noteappc_module(spellcheck NOTEAPPC_WITH_SPELLCHECK TARGET noteAppC_spell)
+noteappc_module(history NOTEAPPC_WITH_HISTORY TARGET noteAppC_history)
+noteappc_module(graph NOTEAPPC_WITH_GRAPH TARGET noteAppC_graph)
+noteappc_module(canvas NOTEAPPC_WITH_CANVAS TARGET noteAppC_canvas)
+noteappc_module(bases NOTEAPPC_WITH_BASES TARGET noteAppC_bases)
+noteappc_module(epub NOTEAPPC_WITH_EPUB TARGET noteAppC_epub)
+noteappc_module(publish NOTEAPPC_WITH_PUBLISH TARGET noteAppC_publish)
+noteappc_module(pdfview NOTEAPPC_WITH_PDFVIEW TARGET notolith-pdfview)
+noteappc_module(ink NOTEAPPC_WITH_INK TARGET notolith-inkcore)
+noteappc_module(hwfont NOTEAPPC_WITH_HWFONT TARGET notolith-hwfont)
+noteappc_module(plugins NOTEAPPC_WITH_PLUGINS TARGET noteAppC_plugins)
+noteappc_module(notebook NOTEAPPC_WITH_NOTEBOOK TARGET noteAppC_notebook)
+noteappc_module(sync NOTEAPPC_WITH_SYNC TARGET noteAppC_sync)
+noteappc_module(encryption NOTEAPPC_WITH_ENCRYPTION TARGET noteAppC_crypt)
+noteappc_module(sharing NOTEAPPC_WITH_SHARE TARGET noteAppC_link)
+list(JOIN noteappc_modules_on ", " noteappc_modules_on_text)
+list(JOIN noteappc_modules_off ", " noteappc_modules_off_text)
+message(STATUS "noteAppC: modules built: ${noteappc_modules_on_text}")
+message(STATUS "noteAppC: modules off by option: ${noteappc_modules_off_text}")
+if(noteappc_modules_missing)
+    list(JOIN noteappc_modules_missing ", " noteappc_modules_missing_text)
+    if(NOT PkgConfig_FOUND)
+        set(noteappc_pkgconfig_hint " (pkg-config was not found, and most of these libraries are found through it)")
+    endif()
+    message(WARNING "noteAppC: a library is missing, so these modules are not built: ${noteappc_modules_missing_text}${noteappc_pkgconfig_hint}")
+endif()
+
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
 # The screenshot tool, the index CLI, the bench harness and the plugin host
@@ -457,9 +510,14 @@ if(NOT ANDROID)
     install(FILES libs/theme/icons/noteAppC.svg
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
         RENAME io.github.jernejmarcic.Notolith.svg)
-    # What software centres and Flatpak read to describe the app.
+    # What software centres read to describe the app.
     install(FILES packaging/io.github.jernejmarcic.Notolith.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    # The licence, the third-party notices and where the demo vault's assets came from.
+    install(FILES LICENSE THIRD-PARTY.md
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/notolith)
+    install(FILES docs/DEMO-ASSETS.md
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/notolith)
     # The AI plugin ships as part of the package, the same layout
     # ~/.local/share/notolith/plugins/ai/ uses (docs/PLUGINS.md). The registry
     # scans every $XDG_DATA_HOME/$XDG_DATA_DIRS entry (PluginRegistry::pluginsRoots()),

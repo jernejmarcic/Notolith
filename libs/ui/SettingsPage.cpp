@@ -1359,7 +1359,7 @@ QWidget *SettingsPage::buildAboutPage()
     version->setObjectName(QStringLiteral("settingsAboutVersion"));
 
     auto *description = new QLabel(
-        tr("A Linux-native alternative to Obsidian: C++ and Qt Widgets, no JavaScript, no "
+        tr("A Markdown note app for developers: C++ and Qt Widgets, no JavaScript, no "
            "browser engine."),
         page);
     description->setObjectName(QStringLiteral("settingsAboutDescription"));

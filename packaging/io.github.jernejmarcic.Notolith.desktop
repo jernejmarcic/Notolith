@@ -9,6 +9,6 @@ Icon=io.github.jernejmarcic.Notolith
 Terminal=false
 Categories=Office;
 MimeType=text/markdown;text/x-markdown;inode/directory;
-Keywords=markdown;notes;wiki;vault;obsidian;
+Keywords=markdown;notes;wiki;vault;
 StartupNotify=true
 StartupWMClass=notolith

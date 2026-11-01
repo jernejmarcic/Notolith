@@ -144,7 +144,7 @@ struct Options {
     Options()
     {
         parser.setApplicationDescription(
-            QStringLiteral("Notolith: Markdown notes and Obsidian vaults, native and fast"));
+            QStringLiteral("Notolith: a Markdown note app for developers"));
         parser.addOption(version);
         parser.addPositionalArgument(QStringLiteral("vault"),
                                      QStringLiteral("Vault directory to open."));
