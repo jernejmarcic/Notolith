@@ -5,6 +5,8 @@
 #include <QList>
 #include <QRegularExpression>
 #include <QString>
+
+#include <functional>
 #include <QStringList>
 
 namespace noteAppC {
@@ -91,6 +93,13 @@ public:
     /// fills `error`.
     static bool read(const QString &path, Note &out, QString *error = nullptr);
 
+    /// read() for a file that may be a link, checked on what was opened: the file is opened (links followed), the
+    /// descriptor is asked where it really is, that place must be inside the vault, and the bytes come from that
+    /// same descriptor, so a link swapped after any earlier look changes nothing. Where /proc cannot say, a file
+    /// that is a link is refused. Fails for anything that is not a regular file inside the vault; `*leadsOutside` is
+    /// set when the file is fine but is not inside it.
+    bool readInside(const QString &path, Note &out, QString *error = nullptr, bool *leadsOutside = nullptr) const;
+
     /// Writes through a temporary file and rename(2), restoring the line
     /// endings and BOM recorded in `note`. Fails for a `lossy` note.
     static bool write(const QString &path, const Note &note, QString *error = nullptr);
@@ -130,6 +139,12 @@ public:
         explicit HeldFolder(int fd);
         int m_fd = -1;
     };
+    /// Calls `visit(path, isRegularFile)` for every entry under `root` that is not a real folder (a regular file, a
+    /// link of any kind, a device, a pipe...), with its path relative to `root`; folders are entered, links never.
+    /// `visit` returns false to stop. False with `*error` set when a folder cannot be read.
+    static bool walkNonDirectories(const HeldFolder &root,
+                                   const std::function<bool(const QString &, bool)> &visit,
+                                   QString *error = nullptr);
     /// Whether `relativePath` is a clean relative path: no empty, "." or ".." segment (so not absolute either),
     /// no backslash, no NUL. Lexical only.
     static bool isCleanRelativePath(const QString &relativePath);
