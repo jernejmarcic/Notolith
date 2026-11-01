@@ -17,3 +17,4 @@ The first public release, a beta: expect bugs, and back up your vault.
   CMake options (`docs/OFFLINE.md`).
 - Previews: handwritten notes, plugins, sync, sharing and encrypted notes.
 - Arch Linux package (`packaging/arch/PKGBUILD`).
+- A note that is a symbolic link is not written through; saving from the editor replaces the link with a regular file.
