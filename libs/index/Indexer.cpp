@@ -332,7 +332,7 @@ void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QS
         directories.scan = scan;
         directories.partial = !whole;
         const auto consider = [&](const QFileInfo &info, const QString &path) {
-            // A notebook (or a .ink file) is a note while a reader is set: its cached row is stale in the other case too.
+            // A notebook is a note while a reader is set: its cached row is stale in the other case too.
             const bool asNote = Vault::isNote(path) || foreign.contains(info.suffix().toLower());
             if (!force && writer.isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size(), asNote))
                 return;
@@ -502,7 +502,7 @@ Indexer::Parsed Indexer::parseFile(const QString &path, const QHash<QString, For
     if (foreign.contains(QFileInfo(path).suffix().toLower())) {
         const std::optional<QString> text = readForeign(path, foreign);
         if (!text)
-            return parsed; // not a file its reader can read (a notebook nbformat 4 cannot, a damaged or too big .ink): not indexed
+            return parsed; // not a file its reader can read (a notebook nbformat 4 cannot, a damaged or too big file): not indexed
         note.text = *text;
     } else if (!Vault::read(path, note)) {
         return parsed;

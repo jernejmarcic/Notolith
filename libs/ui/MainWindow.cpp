@@ -92,7 +92,6 @@
 #include "NotebookController.h"
 #endif
 #include "Frontmatter.h"
-#include "InkTextBoxes.h"
 #include "MomentFormat.h"
 #include "OutgoingLinksPane.h"
 #include "MetaNotesPane.h"
@@ -269,7 +268,7 @@ QString rgbaString(const QColor &color, double alpha)
         .arg(alpha, 0, 'f', 3);
 }
 
-/// A tab's view that is one file it saves to: a module's view (PDF, ink, ...), a canvas, an image. The window watches
+/// A tab's view that is one file it saves to: a module's view (PDF, ...), a canvas, an image. The window watches
 /// that file, follows it when it moves outside the app and refuses to save it once it is gone.
 bool isFileView(const QWidget *view)
 {
@@ -320,7 +319,7 @@ MainWindow::~MainWindow()
     // for ```query blocks run on the pool against m_index, and the history's
     // last saves may still be on their way to disk.
     m_indexer->stop();
-    // A module view keeps something for the disk (a learned pen): its own destructor runs when the child widgets go, after
+    // A module view keeps something for the disk (a setting it changed): its own destructor runs when the child widgets go, after
     // m_settings, which it writes through. So they write now.
     for (auto *view : findChildren<ModuleView *>())
         view->flushSettings();
@@ -443,8 +442,6 @@ MainWindow::MainWindow(QWidget *parent)
         Settings::registerDefaults({{row.key, row.defaultValue}});
         m_moduleSettingRows << row; // loadModule() adopts the stored values and refreshes the page once, after attach()
     };
-    m_moduleHost.registerIndexReader = nullptr;   // seam 6
-    m_moduleHost.registerTabletHandler = nullptr; // seam 2
     m_moduleHost.showTab = [this](ModuleView *view, const QString &title) { showModuleTab(view, title); };
     m_moduleHost.showStatus = [this](const QString &text, int timeoutMs) { statusBar()->showMessage(text, timeoutMs); };
     m_moduleHost.openFile = [this](const QString &absolutePath) { return openNote(absolutePath); };
@@ -3380,9 +3377,6 @@ void MainWindow::updateNotebookIndex()
                                        })
                                      : Indexer::NotebookReader());
 #endif
-    // A .ink file is a note whose text is its text boxes, indexed whether or not the ink module is installed, on
-    // or off: the host reads the JSON itself (QJsonDocument), so indexing never loads the module.
-    m_indexer->setForeignReader({QStringLiteral("ink")}, noteAppC::inkTextBoxes, noteAppC::kInkIndexMaxBytes);
 }
 
 void MainWindow::showNoteInPanes(const QString &path)
@@ -5670,7 +5664,7 @@ void MainWindow::openSingleFile(const QString &path)
 
 void MainWindow::openTarget(const LaunchTarget &target)
 {
-    // A file that is no note (a PDF, an .ink page) is a module's to open: the scan that tells which module
+    // A file that is no note (a PDF) is a module's to open: the scan that tells which module
     // runs after the first paint, so the open that paint queued - a path on the command line, the last
     // session's note - would find no owner for it. One directory listing, and only for such a file.
     const auto scanFor = [this](const QString &path) {
@@ -5729,7 +5723,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
 }
 
 // The scan runs once per process, after the first paint. Opening another vault does not rescan:
-// modules are installed with the app, not with a vault (spec section 4, "When"), so the set found
+// modules are installed with the app, not with a vault , so the set found
 // here serves every vault this window opens.
 void MainWindow::startModuleScan()
 {
@@ -6308,7 +6302,7 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
         popout->show();
     }
 
-    // A tab whose file only a module can open (a PDF, an .ink page): the scan that finds the module runs after the
+    // A tab whose file only a module can open (a PDF): the scan that finds the module runs after the
     // first paint, later than this, so the open below would find no owner. One directory listing, and only then.
     if (!m_modulesScanned && std::ranges::any_of(m_leaves, [](const auto &leaf) {
             const QString &path = leaf->pendingPath;
@@ -7156,7 +7150,7 @@ bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **v
         else
             syncTabs(leaf->group);
         if (modified && m_settings.boolean(QStringLiteral("files.autosave")))
-            armAutosave(); // an ink note is kept like a note
+            armAutosave(); // a module's file is kept like a note
     });
     connect(moduleView, &ModuleView::noteActivated, this, &MainWindow::openRelative);
     connect(moduleView, &ModuleView::statusMessage, this,
@@ -8598,7 +8592,7 @@ void MainWindow::waitForModuleLoad(Leaf *leaf)
 bool MainWindow::maybeSave()
 {
     waitForModuleLoad(m_active); // a reload in flight is not a failed save: let it land, then see what is left to keep
-    // A file-less module tab (the glyph studio) has no path but keeps the save contract.
+    // A file-less module tab has no path but keeps the save contract.
     const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
     if ((m_active->notePath.isEmpty() && !fileLess) || !isModified(m_active))
         return true;
@@ -8651,7 +8645,7 @@ void MainWindow::onModificationChanged(bool)
 
 void MainWindow::updateTitle()
 {
-    // A file-less module tab (the glyph studio) shows the mark too: the host saves it like a note.
+    // A file-less module tab shows the mark too: the host saves it like a note.
     const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
     const bool modified = (!m_active->notePath.isEmpty() || fileLess) && isModified(m_active);
     QString title;

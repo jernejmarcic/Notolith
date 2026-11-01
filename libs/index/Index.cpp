@@ -75,9 +75,9 @@ QString targetName(const QString &target)
 /// with and without ".md", since a link may also spell those.
 QStringList noteNames(const QString &relative, const Metadata &metadata)
 {
-    // A notebook (or an ink note) is not Markdown: Obsidian names such a file by its extension,
+    // A notebook is not Markdown: Obsidian names such a file by its extension,
     // so `[[Analysis]]` still means Analysis.md and `[[Analysis.ipynb]]` the notebook.
-    if (relative.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive) || relative.endsWith(QLatin1String(".ink"), Qt::CaseInsensitive))
+    if (relative.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive))
         return {QFileInfo(relative).fileName(), relative};
     QStringList names = metadata.linkNames();
     names << relative;
@@ -1477,7 +1477,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         metadata.hash = QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha1);
         put(metadata, text);
     };
-    // A file the host reads through a reader (a notebook, an .ink note) is indexed by that text, never by the
+    // A file the host reads through a reader (a notebook) is indexed by that text, never by the
     // JSON the link rewrite spliced into; one the reader can no longer read leaves the index, as in a scan.
     const auto isForeign = [&](const QString &absolutePath) { return m_foreignHandles && m_foreignHandles(absolutePath); };
     const auto reindexFile = [&](const QString &absolutePath, const QString &markdown) {
@@ -1488,7 +1488,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         else
             remove(absolutePath);
     };
-    // Limit: every foreign file today is JSON (.ipynb, .ink); a reader for another format needs its own escape.
+    // Limit: every foreign file today is JSON (.ipynb); a reader for another format needs its own escape.
     const auto jsonEscaped = [](const QString &text) {
         const QByteArray array = QJsonDocument(QJsonArray{text}).toJson(QJsonDocument::Compact); // ["..."]
         return QString::fromUtf8(array.mid(2, array.size() - 4));

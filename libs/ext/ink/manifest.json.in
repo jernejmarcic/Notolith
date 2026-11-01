@@ -1,9 +1,0 @@
-{
-    "id": "ink",
-    "feature": "ink",
-    "name": "Handwritten notes",
-    "description": "Draw with a pen on .ink pages: pressure strokes, eraser, undo, autosave. A loadable module; off, Notolith never loads it.",
-    "suffixes": ["ink"],
-    "commands": [{"id": "ink:new", "title": "New handwritten note"}],
-    "abi": "@NOTEAPPC_ABI_TAG@"
-}

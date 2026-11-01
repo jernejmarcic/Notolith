@@ -357,7 +357,7 @@ private:
         TabGroup *group = nullptr;
         /// A canvas or a base shown in place of the editor, or null.
         QWidget *view = nullptr;
-        QString viewTitle; ///< a module view with no file (the glyph studio): what the tab shows
+        QString viewTitle; ///< a module view with no file: what the tab shows
         /// What Ctrl+E goes back to from reading view.
         MarkdownEditor::Mode editingMode = MarkdownEditor::Mode::LivePreview;
         /// A restored tab's file, loaded the first time the tab is shown, as

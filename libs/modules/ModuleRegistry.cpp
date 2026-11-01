@@ -215,8 +215,8 @@ bool ModuleRegistry::ensureLoaded(const ModuleInfo &module, ModuleHost &host, QS
             loaderError = tr("no static module with that id is linked into this build");
     } else {
         loader = new QPluginLoader(module.path, this);
-        // Every symbol now: a module missing one of the host's symbols - or libnotolith-inkcore.so
-        // itself - fails here with its name, instead of crashing the first time it is called.
+        // Every symbol now: a module missing one of the host's symbols - or a library
+        // it needs - fails here with its name, instead of crashing the first time it is called.
         loader->setLoadHints(QLibrary::ResolveAllSymbolsHint);
         instance = loader->instance();
         loaderError = loader->errorString();

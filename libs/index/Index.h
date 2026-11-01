@@ -219,7 +219,7 @@ public:
                                const Vault &vault, QString *error = nullptr,
                                const QStringList &extraCandidates = {});
 
-    /// Files the host reads as text through a reader instead of as Markdown (a notebook, an .ink file; the
+    /// Files the host reads as text through a reader instead of as Markdown (a notebook; the
     /// Indexer sets these from its foreign readers). `handles(absolutePath)` says a file is one; `text(absolutePath)`
     /// is the text it is indexed by, nullopt when it cannot be read. updateLinksAfterRename indexes such a file
     /// by that text after it rewrote the links inside (JSON files: the new name is escaped as a JSON string).

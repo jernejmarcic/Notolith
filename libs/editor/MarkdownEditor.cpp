@@ -1088,18 +1088,6 @@ void MarkdownEditor::setReadableLineLength(bool on)
     viewport()->update();
 }
 
-void MarkdownEditor::setViewportPadding(int side, int top)
-{
-    side = qMax(0, side);
-    top = qMax(0, top);
-    if (d->m_minimumSideMargin == side && d->m_topPadding == top)
-        return;
-    d->m_minimumSideMargin = side;
-    d->m_topPadding = top;
-    relayoutIfWidthChanged(); // the side margin changes the width; the layout pass places the blocks under the top one
-    viewport()->update();
-}
-
 void MarkdownEditor::setContentWidth(int pixels)
 {
     if (qMax(200, pixels) == d->m_contentWidth)

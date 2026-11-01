@@ -67,9 +67,8 @@ public:
     using NotebookReader = std::function<std::optional<QString>(const QByteArray &)>;
     void setNotebookReader(NotebookReader reader);
 
-    /// The same for any file kind the host can read as text (a `.ink` file's text
-    /// boxes): a reader per lower-case suffix, set for each of `suffixes`; an
-    /// empty one clears them. `setNotebookReader` is this for "ipynb". Rescans
+    /// The same for any file kind the host can read as text: a reader
+    /// per lower-case suffix, set for each of `suffixes`; an empty one clears them. `setNotebookReader` is this for "ipynb". Rescans
     /// when a suffix gains or loses its reader and the vault is valid. A file
     /// over `maxBytes` is never read (0: no limit, the notebook default), so a
     /// hostile multi-GB file costs nothing.

@@ -8,7 +8,7 @@ namespace noteAppC {
 
 struct ModuleHost;
 
-/// What a loadable module implements (spec section 4). One method: the
+/// What a loadable module implements (docs/PLUGINS.md, Tier 1b). One method: the
 /// module registers its views, commands and settings rows with the host.
 /// Called on the UI thread, once per registry, on first use. A process can hold
 /// several windows, each with its own registry and ModuleHost, but the library is

@@ -3,7 +3,6 @@
 #pragma once
 
 #include <functional>
-#include <optional>
 
 #include <QList>
 #include <QPair>
@@ -11,8 +10,6 @@
 #include <QStringList>
 #include <QVariant>
 #include <QWidget>
-
-class QTabletEvent;
 
 namespace noteAppC {
 
@@ -62,15 +59,12 @@ signals:
     void statusMessage(const QString &text, int timeoutMs);
 };
 
-/// The seams a module attaches to (spec section 6) plus the three
-/// registrations (views by suffix, commands, settings rows). Plain
+/// The seams a module attaches to plus the three registrations (views by
+/// suffix, commands, settings rows). Plain
 /// std::functions filled by MainWindow; every one is null when the host does
 /// not offer it, so a module checks before calling.
 struct ModuleHost {
     using ViewFactory = std::function<ModuleView *(const QString &path, QWidget *parent)>;
-    using IndexReader = std::function<std::optional<QString>(const QByteArray &bytes)>;
-    /// Seam 2: declared for the host struct's shape; not wired yet.
-    using TabletHandler = std::function<bool(QTabletEvent *event, const QString &path)>;
 
     /// A settings row: a toggle when `defaultValue` is a bool, a combo when
     /// `options` is non-empty, a spin box when `maximum > minimum` (a double
@@ -90,9 +84,7 @@ struct ModuleHost {
     std::function<void(const QStringList &suffixes, ViewFactory factory)> registerView;
     std::function<void(const QString &id, const QString &title, std::function<void()> run)> registerCommand;
     std::function<void(const SettingRow &row)> registerSetting;
-    std::function<void(const QStringList &suffixes, IndexReader reader)> registerIndexReader;
-    std::function<void(const QStringList &suffixes, TabletHandler handler)> registerTabletHandler;
-    /// Shows a view that belongs to no file (the glyph studio) in a new tab.
+    /// Shows a view that belongs to no file in a new tab.
     std::function<void(ModuleView *view, const QString &title)> showTab;
     std::function<void(const QString &text, int timeoutMs)> showStatus;
     std::function<bool(const QString &absolutePath)> openFile;
