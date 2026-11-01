@@ -475,6 +475,45 @@ bool Vault::writeBytesNoFollowUnder(const QString &root, const QString &relative
     return true;
 }
 
+bool Vault::readFileNoFollowUnder(const QString &root, const QString &relativePath, QByteArray *out, qint64 maxBytes)
+{
+    out->clear();
+    if (!isCleanRelativePath(relativePath))
+        return false;
+    const QStringList parts = relativePath.split(QLatin1Char('/'));
+    int err = 0;
+    Fd dir(openFolderNoFollow(root, parts, false, &err, nullptr));
+    if (dir.fd < 0)
+        return false;
+    // O_NONBLOCK so that a named pipe in the place of a file cannot hold the open.
+    Fd file(::openat(dir.fd, parts.last().toUtf8().constData(), O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC));
+    if (file.fd < 0)
+        return false;
+    struct stat info {};
+    if (::fstat(file.fd, &info) < 0 || !S_ISREG(info.st_mode) || (maxBytes >= 0 && info.st_size > maxBytes))
+        return false;
+    QByteArray bytes;
+    constexpr qsizetype chunk = 1 << 16;
+    for (;;) {
+        const qsizetype at = bytes.size();
+        bytes.resize(at + chunk);
+        const ssize_t n = ::read(file.fd, bytes.data() + at, size_t(chunk));
+        if (n < 0 && errno == EINTR) {
+            bytes.resize(at);
+            continue;
+        }
+        if (n < 0)
+            return false;
+        bytes.resize(at + n);
+        if (n == 0)
+            break;
+        if (maxBytes >= 0 && bytes.size() > maxBytes)
+            return false; // grew while it was read
+    }
+    *out = std::move(bytes);
+    return true;
+}
+
 bool Vault::removeNoFollowUnder(const QString &root, const QString &relativePath, QString *error)
 {
     if (error)

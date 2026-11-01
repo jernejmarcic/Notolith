@@ -115,6 +115,12 @@ public:
     /// skips the fsync, for a folder of many files that can be made again.
     static bool writeBytesNoFollowUnder(const QString &root, const QString &relativePath, const QByteArray &bytes,
                                         QString *error = nullptr, bool sync = true);
+    /// Reads the regular file `relativePath` under `root` through a held folder descriptor: a link on any
+    /// folder of the way, or as the file itself, makes it fail, and what is read is the file that was opened
+    /// (fstat), not a path looked at before. False when it is missing, not a regular file or larger than
+    /// `maxBytes` (when not negative); `*out` is then empty.
+    static bool readFileNoFollowUnder(const QString &root, const QString &relativePath, QByteArray *out,
+                                      qint64 maxBytes = -1);
     /// Removes the file `relativePath` under `root` without following a link: one on any folder of the way means
     /// nothing is removed, and a link as the file itself is removed, not what it points at. False when nothing
     /// was removed; `*error` is then set only when that is a refusal and not a file that was not there.
