@@ -271,6 +271,24 @@ TEST_F(DailyNotesTest, FolderThroughALinkOutOfTheVaultIsRefused)
     EXPECT_TRUE(QDir(outside.path()).isEmpty());
 }
 
+// A vault can ship a dangling link at today's note; creating the note must not write the link's target.
+TEST_F(DailyNotesTest, EnsureNoteThroughADanglingLinkWritesNothing)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    const QString vaultRoot = QDir(dir.path()).filePath(QStringLiteral("vault"));
+    ASSERT_TRUE(QDir().mkpath(vaultRoot));
+    DailyNotes notes(vaultRoot, DailyNotes::Config{{}, QStringLiteral("YYYY-MM-DD"), {}});
+    const QDate date(2026, 9, 23);
+    const QString target = QDir(outside.path()).filePath(QStringLiteral("x.desktop"));
+    ASSERT_TRUE(QFile::link(target, notes.pathFor(date)));
+
+    QString error;
+    EXPECT_TRUE(notes.ensureNote(date, &error).isEmpty());
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(target));
+}
+
 TEST_F(DailyNotesTest, TemplateOutsideTheVaultIsNotRead)
 {
     QTemporaryDir outside;

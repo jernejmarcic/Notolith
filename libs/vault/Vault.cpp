@@ -267,6 +267,12 @@ bool Vault::write(const QString &path, const Note &note, QString *error)
 
 bool Vault::writeBytes(const QString &path, const QByteArray &bytes, QString *error)
 {
+    // QSaveFile writes the target of a link, a dangling one too, and a vault can ship one.
+    if (QFileInfo(path).isSymLink()) {
+        if (error)
+            *error = QStringLiteral("%1 is a link, so it was not written").arg(path);
+        return false;
+    }
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         if (error)

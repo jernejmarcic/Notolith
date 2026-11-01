@@ -167,30 +167,60 @@ TEST(VaultIo, EditKeepsTheFilesLineEndings)
     EXPECT_EQ(readAll(path), QByteArray("one\r\nthree\r\n"));
 }
 
-// A save replaces the file atomically; what the file was besides its bytes
-// stays: a symlink stays a link to the same file, and the mode is kept.
-TEST(VaultIo, ASaveKeepsASymlinkAndTheFilesMode)
+// A save replaces the file atomically and keeps its mode.
+TEST(VaultIo, ASaveKeepsTheFilesMode)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    const QString target = dir.filePath(QStringLiteral("elsewhere.md"));
-    const QString link = dir.filePath(QStringLiteral("linked.md"));
+    const QString target = dir.filePath(QStringLiteral("plain.md"));
     {
         QFile file(target);
         ASSERT_TRUE(file.open(QIODevice::WriteOnly));
         file.write("old\n");
     }
     ASSERT_TRUE(QFile::setPermissions(target, QFile::ReadOwner | QFile::WriteOwner));
-    ASSERT_TRUE(QFile::link(target, link));
 
     Note note;
     note.text = QStringLiteral("new\n");
     QString error;
-    ASSERT_TRUE(Vault::write(link, note, &error)) << error.toStdString();
-    EXPECT_TRUE(QFileInfo(link).isSymLink());
+    ASSERT_TRUE(Vault::write(target, note, &error)) << error.toStdString();
     EXPECT_EQ(readAll(target), QByteArray("new\n"));
     const QFileDevice::Permissions mode = QFile::permissions(target) & 0xF0FF; // owner, group, other
     EXPECT_EQ(mode, QFile::ReadOwner | QFile::WriteOwner);
+}
+
+// A vault is untrusted: a link at the path must not carry a write to wherever it points.
+TEST(VaultIo, AWriteThroughALeafLinkIsRefused)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(outside.isValid());
+    Note note;
+    note.text = QStringLiteral("new\n");
+
+    const QString dangling = dir.filePath(QStringLiteral("dangling.md"));
+    const QString missing = outside.filePath(QStringLiteral("missing.md"));
+    ASSERT_TRUE(QFile::link(missing, dangling));
+    QString error;
+    EXPECT_FALSE(Vault::write(dangling, note, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(missing));
+    EXPECT_FALSE(Vault::writeBytes(dangling, QByteArray("x"), &error));
+    EXPECT_FALSE(QFileInfo::exists(missing));
+
+    const QString existing = outside.filePath(QStringLiteral("existing.md"));
+    {
+        QFile file(existing);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("old\n");
+    }
+    const QString link = dir.filePath(QStringLiteral("linked.md"));
+    ASSERT_TRUE(QFile::link(existing, link));
+    EXPECT_FALSE(Vault::write(link, note, &error));
+    EXPECT_FALSE(Vault::writeBytes(link, QByteArray("x"), &error));
+    EXPECT_EQ(readAll(existing), QByteArray("old\n"));
+    EXPECT_TRUE(QFileInfo(link).isSymLink());
 }
 
 TEST(VaultIo, ReadReportsAMissingFile)
