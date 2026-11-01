@@ -4915,6 +4915,7 @@ TEST_F(WindowTest, NoteComposerMergesANoteAndItsLinksFollow)
 }
 
 // A notebook is never a merge target or source: appending Markdown to its JSON, or its JSON to a note, corrupts it.
+#ifdef NOTEAPPC_HAVE_NOTEBOOK // an .ipynb opens as a notebook only with the notebook module
 TEST_F(WindowTest, NoteComposerNeverMergesIntoOrFromANotebook)
 {
     const QByteArray notebook = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
@@ -4961,6 +4962,7 @@ TEST_F(WindowTest, NoteComposerNeverMergesIntoOrFromANotebook)
     EXPECT_EQ(readAll(path(QStringLiteral("B.md"))), QByteArray("Bravo\n"));
     EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Nb.ipynb"))));
 }
+#endif
 
 TEST_F(WindowTest, NoteComposerMergeKeepsAnUnsavedLinkInAnotherTab)
 {
@@ -12213,6 +12215,7 @@ TEST_F(WindowTest, AnOpenPdfSavesToTheNewPathAfterItsFileOrFolderIsRenamed)
 
 // --- trust and the limits of what runs ------------------------------------------------------------------------
 
+#ifdef NOTEAPPC_HAVE_NOTEBOOK // running a block needs the notebook module
 namespace {
 bool bubblewrapCanRunBlocks()
 {
@@ -12313,6 +12316,7 @@ TEST_F(WindowTest, ABlockOverTheSizeLimitIsNotRunWhoeverAsks)
     ASSERT_TRUE(editor->runNotebookBlockAt(small));
     WAIT_TRUE(outputOf(editor, small).contains(QStringLiteral("small")), 15000);
 }
+#endif
 
 TEST_F(WindowTest, AFileIsOpenedByTheDesktopOnlyAfterAYesInAnUntrustedVaultAndNeverIfItIsAProgram)
 {
