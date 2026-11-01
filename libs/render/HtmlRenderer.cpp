@@ -660,7 +660,7 @@ qint64 HtmlRenderer::renderCount()
 QImage HtmlRenderer::render(const QString &html, const Theme &theme, int widthPixels,
                             const QString &baseDir, qreal devicePixelRatio,
                             const QString &extraCss, QList<TextRun> *textRuns,
-                            const std::function<QString(const QString &)> &localPath)
+                            const std::function<QString(const QString &)> &localPath, int maxHeight)
 {
     if (widthPixels <= 0 || html.trimmed().isEmpty())
         return {};
@@ -697,6 +697,21 @@ QImage HtmlRenderer::render(const QString &html, const Theme &theme, int widthPi
     const int height = int(document->height());
     if (height <= 0)
         return {};
+
+    const double pixels = double(widthPixels) * height * devicePixelRatio * devicePixelRatio;
+    if (height > maxHeight || pixels > double(kMaxPixels)) {
+        // Sized by the note, not by us: draw a line of text instead of the block.
+        QImage notice(QSize(qMin(widthPixels, 800), 28) * devicePixelRatio, QImage::Format_ARGB32_Premultiplied);
+        notice.setDevicePixelRatio(devicePixelRatio);
+        notice.fill(Qt::transparent);
+        QPainter painter(&notice);
+        painter.setPen(theme.text);
+        painter.setFont(theme.textFont);
+        painter.drawText(QRect(4, 0, qMin(widthPixels, 800) - 8, 28), Qt::AlignVCenter,
+                         QStringLiteral("HTML block too large to draw"));
+        painter.end();
+        return notice;
+    }
 
     QImage image(QSize(widthPixels, height) * devicePixelRatio, QImage::Format_ARGB32_Premultiplied);
     image.setDevicePixelRatio(devicePixelRatio);
@@ -749,7 +764,7 @@ QString HtmlRenderer::sanitizeHtml(const QString &html)
 }
 
 QImage HtmlRenderer::render(const QString &, const Theme &, int, const QString &, qreal, const QString &,
-                            QList<TextRun> *, const std::function<QString(const QString &)> &)
+                            QList<TextRun> *, const std::function<QString(const QString &)> &, int)
 {
     return {};
 }

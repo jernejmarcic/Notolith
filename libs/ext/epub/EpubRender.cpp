@@ -24,6 +24,9 @@ namespace noteAppC {
 
 namespace {
 
+// A chapter is one tall image and a long one is normal; only the pixel cap of HtmlRenderer holds it.
+constexpr int kChapterMaxHeight = 1 << 20;
+
 QFont scaledFont(QFont font, int percent)
 {
     if (font.pixelSize() > 0)
@@ -299,7 +302,8 @@ void EpubView::requestChapterRender(int spineIndex)
     const auto localPath = onlyUnder(resourceCachePath(QString()));
     (void)QtConcurrent::run([this, lifeline = m_lifeline, spineIndex, epoch, withImages, css, theme, width, ratio, localPath] {
         QList<HtmlRenderer::TextRun> textRuns;
-        QImage image = HtmlRenderer::render(withImages, theme, width, QString(), ratio, css, &textRuns, localPath);
+        QImage image = HtmlRenderer::render(withImages, theme, width, QString(), ratio, css, &textRuns, localPath,
+                                            kChapterMaxHeight);
         lifeline->post(this, [this, spineIndex, epoch, image = std::move(image), textRuns = std::move(textRuns)]() mutable {
             deliverChapterRender(spineIndex, epoch, std::move(image), std::move(textRuns));
         });
@@ -362,7 +366,7 @@ const EpubView::RenderedChapter *EpubView::renderedChapterBlocking(int spineInde
     const qreal ratio = devicePixelRatioF();
     chapter.image =
         HtmlRenderer::render(withImages, rendererTheme(), contentWidth(), QString(), ratio, css, &chapter.textRuns,
-                             onlyUnder(resourceCachePath(QString())));
+                             onlyUnder(resourceCachePath(QString())), kChapterMaxHeight);
     chapter.height = chapter.image.isNull() ? 40 : int(chapter.image.height() / chapter.image.devicePixelRatio());
     chapter.textLength =
         chapter.textRuns.isEmpty() ? 0 : chapter.textRuns.last().offset + chapter.textRuns.last().text.size();

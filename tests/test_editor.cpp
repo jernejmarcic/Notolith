@@ -9962,6 +9962,37 @@ TEST(HtmlRendererTest, ScriptNeverRendersItsText)
     EXPECT_EQ(plain, withScript) << "a <script> body must never add a pixel to the rendered block";
 }
 
+// A note picks the height: a million pixels at 800 wide would be a 3 GB image.
+TEST(HtmlRendererTest, ABlockTooBigToDrawGetsANoticeNotAnImage)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    const HtmlRenderer::Theme theme = testHtmlTheme();
+
+    const QImage tall = HtmlRenderer::render(QStringLiteral("<div style=\"height:1000000px\"></div>"), theme, 800,
+                                             QString());
+    ASSERT_FALSE(tall.isNull());
+    EXPECT_LE(tall.height(), 64) << "a notice, not the block";
+    // Too many pixels while under the height cap: 5000 x 16000 is 80 Mpx.
+    const QImage wide = HtmlRenderer::render(QStringLiteral("<div style=\"height:16000px\"></div>"), theme, 5000,
+                                             QString());
+    ASSERT_FALSE(wide.isNull());
+    EXPECT_LE(wide.height(), 64);
+    // The device ratio counts: 800 x 10000 at 3x is 72 Mpx.
+    const QImage dense = HtmlRenderer::render(QStringLiteral("<div style=\"height:10000px\"></div>"), theme, 800,
+                                              QString(), 3.0);
+    ASSERT_FALSE(dense.isNull());
+    EXPECT_LE(dense.height(), 64 * 3);
+
+    // A block under both caps is drawn whole, and a caller can lift the height cap (an EPUB chapter).
+    const QImage fine = HtmlRenderer::render(QStringLiteral("<div style=\"height:2000px\"></div>"), theme, 800,
+                                             QString());
+    EXPECT_GT(fine.height(), 2000);
+    const QImage chapter = HtmlRenderer::render(QStringLiteral("<div style=\"height:20000px\"></div>"), theme, 800,
+                                                QString(), 1.0, QString(), nullptr, {}, 1 << 20);
+    EXPECT_GT(chapter.height(), 20000);
+}
+
 TEST(HtmlRendererTest, GradientsRoundedCornersAndPerSideBorders)
 {
     if (!HtmlRenderer::isAvailable())

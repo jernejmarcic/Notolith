@@ -198,6 +198,12 @@ keystroke in a cell of a 50-row HTML table 1.33 ms (budget 8 ms), the parse
 and structure pass of that note 0.24 ms cold. Off: the `html-blocks`
 feature (`Features::HTMLblocks`) turns this and litehtml off together (source shows);
 `NOTEAPPC_WITH_HTML=OFF` builds without gumbo, and HTML shows as source.
+A block is drawn at most 16384 px tall and 64 Mpx in all (width x height x
+device ratio squared; `HtmlRenderer::kMaxHeight`, `kMaxPixels`): `<div
+style="height:1000000px">` would otherwise ask for a 3 GB image. Past either
+the block shows "HTML block too large to draw" and allocates nothing of that
+size. An EPUB chapter is one tall image and lifts the height cap, not the pixel
+cap.
 
 Headings: an `<h1>`-`<h6>` in a top-level HTML block is listed in the outline
 and indexed like a Markdown heading, so `[[Note#Heading]]` finds it and a

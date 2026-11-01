@@ -93,10 +93,17 @@ public:
     /// `textRuns`, when not null, is filled with every run drawn - see
     /// TextRun above. Left null (the default, and what every HTML-block call
     /// still passes) this costs nothing beyond a null check per run.
+    ///
+    /// Markup can ask for any height (`<div style="height:1000000px">`), so the image is capped: at most
+    /// `maxHeight` logical pixels tall and kMaxPixels device pixels in all. Past either, nothing that size
+    /// is allocated and a small image saying so is returned in its place (no text runs).
+    static constexpr int kMaxHeight = 16384;
+    static constexpr qint64 kMaxPixels = 64'000'000;
     static QImage render(const QString &html, const Theme &theme, int widthPixels,
                          const QString &baseDir, qreal devicePixelRatio = 1.0,
                          const QString &extraCss = QString(), QList<TextRun> *textRuns = nullptr,
-                         const std::function<QString(const QString &)> &localPath = {});
+                         const std::function<QString(const QString &)> &localPath = {},
+                         int maxHeight = kMaxHeight);
 
     /// False in a build configured without litehtml (NOTEAPPC_WITH_HTML off,
     /// or the package was not found).
