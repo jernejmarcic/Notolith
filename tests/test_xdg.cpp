@@ -213,6 +213,7 @@ struct OldLayout {
         qputenv("XDG_DATA_HOME", data.toUtf8());
         qputenv("XDG_STATE_HOME", state.toUtf8());
         qputenv("XDG_CACHE_HOME", cache.toUtf8());
+        qputenv("XDG_RUNTIME_DIR", root.filePath(QStringLiteral("run")).toUtf8()); // the migration lock lives here
         qunsetenv("XDG_DATA_DIRS");
     }
 
@@ -366,12 +367,80 @@ TEST(StorageMigration, ADestinationThatExistsIsNeverOverwritten)
     EXPECT_TRUE(marker.startsWith("attention")) << marker.toStdString();
     EXPECT_TRUE(marker.contains((machine.config + QStringLiteral("/noteAppC/settings.ini\t")).toUtf8()));
     EXPECT_TRUE(marker.contains((machine.data + QStringLiteral("/noteAppC/recovery/n1/path\t")).toUtf8()));
+    // Each file says where its new place is, and the summary says what to do about it.
+    const QString newSettings = machine.config + QStringLiteral("/notolith/settings.ini");
+    EXPECT_TRUE(warnings.filter(QStringLiteral("settings.ini")).first().contains(QStringLiteral("new place: ") + newSettings));
+    EXPECT_TRUE(marker.contains((QStringLiteral("(new place: ") + newSettings + QLatin1Char(')')).toUtf8()));
+    const QString marked = machine.state + QStringLiteral("/notolith/.migrated");
+    EXPECT_TRUE(warnings.last().contains(QStringLiteral("delete ") + marked)) << warnings.last().toStdString();
 
     // The next start has nothing to do and nothing to say, though the clash is still there.
     warnings.clear();
     EXPECT_EQ(migrateStorage(nullptr, &warnings), 0);
     EXPECT_TRUE(warnings.isEmpty());
     EXPECT_EQ(read(machine.config + QStringLiteral("/noteAppC/settings.ini")), QByteArray("[editor]\ntab-width = 2\n"));
+
+    // Deleting the marker makes the next start look again: a clash that is still there is said again, and the
+    // person who put the old file in its new place has it taken as moved.
+    ASSERT_TRUE(QFile::remove(marked));
+    ASSERT_TRUE(QFile::remove(newSettings));
+    EXPECT_EQ(storageMigrationNeed(), MigrationNeed::Fresh);
+    EXPECT_EQ(migrateStorage(nullptr, &warnings), 1) << "settings.ini now has its new place free";
+    EXPECT_EQ(warnings.filter(QStringLiteral("recovery/n1/path")).size(), 1) << "still in the way, said again";
+    EXPECT_EQ(read(newSettings), QByteArray("[editor]\ntab-width = 2\n"));
+    EXPECT_EQ(read(machine.data + QStringLiteral("/notolith/recovery/n1/path")), QByteArray("/mine/Note.md"));
+}
+
+TEST(StorageMigration, TwoStartsAtTheSameInstantMoveEachFileOnceAndSayNothingOfTheOther)
+{
+    OldLayout machine;
+    ASSERT_NO_FATAL_FAILURE(machine.populate());
+    constexpr int many = 1500;
+    for (int i = 0; i < many; ++i)
+        write(machine.config + QStringLiteral("/noteAppC/themes/t%1.json").arg(i), QByteArray::number(i));
+
+    // Two processes, let go together: each writes what it moved and said to a file of its own.
+    int gate[2];
+    ASSERT_EQ(::pipe(gate), 0);
+    pid_t children[2];
+    for (int n = 0; n < 2; ++n) {
+        children[n] = ::fork();
+        ASSERT_GE(children[n], 0);
+        if (children[n] == 0) {
+            ::close(gate[1]);
+            char go;
+            if (::read(gate[0], &go, 1) != 0)
+                ::_exit(2); // the parent closes the pipe without writing: end of file is the signal
+            QStringList lines, warnings;
+            const int moved = migrateStorage(&lines, &warnings);
+            QFile out(machine.root.filePath(QStringLiteral("out%1").arg(n)));
+            if (!out.open(QIODevice::WriteOnly))
+                ::_exit(3);
+            out.write(QByteArray::number(moved) + '\n' + warnings.join(QLatin1Char('\n')).toUtf8());
+            out.close(); // _exit does not run destructors
+            ::_exit(0);
+        }
+    }
+    ::close(gate[0]);
+    ::close(gate[1]);
+    for (pid_t child : children) {
+        int status = 0;
+        ASSERT_EQ(::waitpid(child, &status, 0), child);
+        ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0) << status;
+    }
+
+    const QList<QByteArray> first = read(machine.root.filePath(QStringLiteral("out0"))).split('\n');
+    const QList<QByteArray> second = read(machine.root.filePath(QStringLiteral("out1"))).split('\n');
+    const int movedFirst = first.value(0).toInt(), movedSecond = second.value(0).toInt();
+    EXPECT_TRUE((movedFirst > many) != (movedSecond > many)) << "one did everything: " << movedFirst << " and " << movedSecond;
+    EXPECT_EQ(movedFirst + movedSecond, movedFirst > movedSecond ? movedFirst : movedSecond) << "the other did nothing";
+    EXPECT_TRUE(first.value(1).isEmpty() && second.value(1).isEmpty()) << "no refusal, no phantom: " << first.value(1).toStdString()
+                                                                       << second.value(1).toStdString();
+    EXPECT_TRUE(read(machine.state + QStringLiteral("/notolith/.migrated")).startsWith("complete"));
+    EXPECT_EQ(read(machine.state + QStringLiteral("/notolith/.migrated")).count('\n'), 1) << "no path on it";
+    EXPECT_FALSE(QFileInfo::exists(machine.config + QStringLiteral("/noteAppC")));
+    for (int i = 0; i < many; ++i)
+        ASSERT_EQ(read(machine.config + QStringLiteral("/notolith/themes/t%1.json").arg(i)), QByteArray::number(i)) << i;
 }
 
 TEST(StorageMigration, AFileInTheWayIsSaidOnceWhileOneThatMayStillMoveIsTriedAgain)
@@ -866,7 +935,10 @@ TEST(StorageSettle, NothingMovesUnderAWindowOfThisBuild)
     EXPECT_EQ(settleStorage(other.path(), &lines, &warnings), StorageSettled::Carry);
     untouched();
     EXPECT_TRUE(lines.isEmpty());
-    EXPECT_TRUE(warnings.isEmpty());
+    // ...and says so, once, or a window that is always open would put it off without a word.
+    ASSERT_EQ(warnings.size(), 1);
+    EXPECT_TRUE(warnings.first().contains(QStringLiteral("waiting"))) << warnings.first().toStdString();
+    warnings.clear();
 
     // With no window open the next start does it.
     held.unlock();
@@ -874,6 +946,7 @@ TEST(StorageSettle, NothingMovesUnderAWindowOfThisBuild)
     EXPECT_EQ(settleStorage(machine.vaultPath, &lines, &warnings), StorageSettled::Carry);
     EXPECT_EQ(read(machine.config + QStringLiteral("/notolith/settings.ini")), QByteArray("[editor]\ntab-width = 2\n"));
     EXPECT_FALSE(lines.isEmpty());
+    EXPECT_TRUE(warnings.isEmpty()) << "nothing is waiting once it has moved";
     EXPECT_EQ(storageMigrationNeed(), MigrationNeed::None);
 }
 

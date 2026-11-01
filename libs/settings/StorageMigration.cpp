@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QLockFile>
 #include <QLoggingCategory>
 #include <QSaveFile>
 #include <QSettings>
@@ -16,6 +17,7 @@
 #include <climits>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -193,8 +195,11 @@ struct Mover {
 
     /// `path` stays where it is, and the person is told: nothing is moved to a place it is not read from.
     /// What is `permanent` is told once and then left alone; the rest is tried again at the next start.
-    void keep(const QString &path, const QString &why, bool permanent = false)
+    /// `to` is where it was going: it is said with the reason, and kept on the marker, so the person knows
+    /// which file to put it over.
+    void keep(const QString &path, const QString &reason, bool permanent = false, const QString &to = {})
     {
+        const QString why = to.isEmpty() ? reason : reason + QStringLiteral(" (new place: ") + to + QLatin1Char(')');
         if (!permanent) {
             ++kept;
         } else if (told.contains(path)) {
@@ -212,7 +217,7 @@ struct Mover {
         if (!lexists(from))
             return; // another start moved it first
         if (told.contains(from)) {
-            keep(from, {}, true);
+            keep(from, {}, true, to);
             return;
         }
         const Refusal refusal = moveFile(from, to);
@@ -221,7 +226,7 @@ struct Mover {
             say(QStringLiteral("storage: moved %1 to %2").arg(from, to));
         }
         if (!refusal.moved())
-            keep(from, refusal.why, refusal.permanent);
+            keep(from, refusal.why, refusal.permanent, to);
     }
 
     /// Every file under `from`, to `route(relative path)`.
@@ -268,7 +273,7 @@ void migrateWindowState(Mover &mover, const QString &oldFile, const QHash<QStrin
 {
     const QString target = appDir(XDGroot::State, QStringLiteral("window.ini"));
     if (!ensurePrivateDir(QFileInfo(target).absolutePath())) {
-        mover.keep(oldFile, QStringLiteral("the directory for window.ini cannot be made"));
+        mover.keep(oldFile, QStringLiteral("the directory for window.ini cannot be made"), false, target);
         return;
     }
     {
@@ -287,7 +292,7 @@ void migrateWindowState(Mover &mover, const QString &oldFile, const QHash<QStrin
         }
         fresh.sync();
         if (old.status() != QSettings::NoError || fresh.status() != QSettings::NoError) {
-            mover.keep(oldFile, QStringLiteral("window.ini could not be written"));
+            mover.keep(oldFile, QStringLiteral("window.ini could not be written"), false, target);
             return;
         }
     }
@@ -318,6 +323,17 @@ QHash<QString, QString> readAttention()
     return told;
 }
 
+/// Where the lock that serialises two starts' migrations lives: the runtime directory, else the state directory,
+/// whichever is this user's own and closed to others (the same rule as the instance sockets). Empty when neither.
+QString migrationLockPath()
+{
+    for (const QString &directory : {appDir(XDGroot::Runtime), appDir(XDGroot::State)}) {
+        if (ensurePrivateDir(directory) && isOwnPrivateDir(directory))
+            return directory + QStringLiteral("/migrate.lock");
+    }
+    return {};
+}
+
 } // namespace
 
 MigrationNeed storageMigrationNeed()
@@ -338,6 +354,26 @@ int migrateStorage(QStringList *lines, QStringList *warnings)
 {
     if (storageMigrationNeed() == MigrationNeed::None)
         return 0;
+    // Two starts at the same instant would each move half of the files and find the other's in the way. One
+    // goes first; the other waits, and then finds nothing left to do. Only a dead owner makes the lock stale.
+    // Without a place for it, or if it cannot be made, the run goes on unlocked, as it did before.
+    std::unique_ptr<QLockFile> lock;
+    if (const QString path = migrationLockPath(); !path.isEmpty()) {
+        lock = std::make_unique<QLockFile>(path);
+        lock->setStaleLockTime(0);
+        // ponytail: a start that waits this long gives up; the files wait for the next one.
+        if (!lock->tryLock(60000) && lock->error() == QLockFile::LockFailedError) {
+            const QString line = QStringLiteral("storage: another start is moving the files of the previous version; "
+                                                "they are left for the next start");
+            if (warnings)
+                warnings->append(line);
+            else
+                qWarning().noquote() << line;
+            return 0;
+        }
+        if (storageMigrationNeed() == MigrationNeed::None)
+            return 0;
+    }
     const QString name = QStringLiteral("noteAppC");
     const QString oldConfig = xdgRoot(XDGroot::Config) + QLatin1Char('/') + name;
     const QString oldData = xdgRoot(XDGroot::Data) + QLatin1Char('/') + name;
@@ -453,7 +489,7 @@ int migrateStorage(QStringList *lines, QStringList *warnings)
         status = "incomplete: some files stayed in the old directories, tried again at the next start";
     else if (!mover.inTheWay.isEmpty())
         status = "attention: files stay in the old directories for the person to settle; Notolith does not try them "
-                 "again";
+                 "again unless this file is deleted";
     else
         status = "complete: the older noteAppC directories were moved here by this build";
     bool written = false;
@@ -476,9 +512,9 @@ int migrateStorage(QStringList *lines, QStringList *warnings)
     }
     if (mover.newlyInTheWay) {
         mover.warn(QStringLiteral("storage: %1 file(s) of the previous version stay in the old noteAppC directories, "
-                                  "and Notolith will not touch them or try them again; the lines above say where and "
-                                  "why. Settle each by hand (keep what you want, delete the rest); the list is also "
-                                  "in %2")
+                                  "and Notolith will not touch them or try them again; the lines above say where each "
+                                  "stays, where its new place is and why. To use an old file, put it in its new "
+                                  "place yourself. To have Notolith try them again, delete %2, which also lists them")
                        .arg(mover.newlyInTheWay)
                        .arg(markerPath()));
     }

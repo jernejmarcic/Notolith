@@ -313,7 +313,7 @@ int main(int argc, char *argv[])
     startLog("shown");
     if (!migrationWarnings.isEmpty())
         window.statusBar()->showMessage(
-            QCoreApplication::translate("Notolith", "Some files of the previous version could not be moved; see the log."),
+            QCoreApplication::translate("Notolith", "Some files of the previous version have not been moved; see the log."),
             15000);
     window.openWhenShown(target);
 
