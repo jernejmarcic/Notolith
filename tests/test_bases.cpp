@@ -94,6 +94,23 @@ TEST(ExpressionTest, HugeNumbersAreClampedNotCast)
     EXPECT_EQ(evalText(QStringLiteral("\"abc\".repeat(-5)"), row).text, QString());
 }
 
+// The parser, the evaluator and the tree's destructor recurse once per level: a formula of ten thousand brackets,
+// or of a hundred thousand terms, overflowed the stack (found by tools/fuzz). It is refused instead.
+TEST(ExpressionTest, ADeeplyNestedOrVeryLongFormulaIsRefused)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    QString error;
+    EXPECT_FALSE(Expression::parse(QString(100000, QLatin1Char('(')) + QStringLiteral("1") + QString(100000, QLatin1Char(')')), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(Expression::parse(QString(100000, QLatin1Char('!')) + QStringLiteral("true"), &error));
+    QString chain = QStringLiteral("1");
+    for (int i = 0; i < 100000; ++i)
+        chain += QStringLiteral("+1");
+    EXPECT_FALSE(Expression::parse(chain, &error));
+    EXPECT_EQ(error, QStringLiteral("expression too long"));
+    EXPECT_DOUBLE_EQ(evalText(QString(20, QLatin1Char('(')) + QStringLiteral("2") + QString(20, QLatin1Char(')')), row).number, 2.0);
+}
+
 TEST(ExpressionTest, FilePropertyAccess)
 {
     Row row = makeRow(QStringLiteral("Home"), QStringLiteral("Projects"));

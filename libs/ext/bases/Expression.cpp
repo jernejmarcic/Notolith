@@ -141,6 +141,19 @@ namespace {
 
 // --- parser ----------------------------------------------------------------
 
+// An expression is a vault's text. The parser, the evaluator and the tree's destructor all recurse once per level,
+// so what a formula may nest, and how long it may be, is capped well under what a stack holds.
+constexpr int kMaxNesting = 200;
+constexpr qsizetype kMaxTokens = 4000;
+
+struct DepthGuard {
+    explicit DepthGuard(int &depth) : m_depth(depth) { ++m_depth; }
+    ~DepthGuard() { --m_depth; }
+    DepthGuard(const DepthGuard &) = delete;
+    DepthGuard &operator=(const DepthGuard &) = delete;
+    int &m_depth;
+};
+
 class Parser {
 public:
     Parser(const QList<Token> &tokens, QString *error) : m_tokens(tokens), m_error(error) {}
@@ -163,6 +176,7 @@ private:
     const QList<Token> &m_tokens;
     QString *m_error;
     qsizetype m_pos = 0;
+    int m_depth = 0;
     bool m_failed = false;
 
     void fail(const QString &message)
@@ -204,6 +218,11 @@ private:
 
     std::unique_ptr<Node> parseOr()
     {
+        const DepthGuard guard(m_depth);
+        if (m_depth > kMaxNesting) {
+            fail(QStringLiteral("expression nested too deeply"));
+            return nullptr;
+        }
         auto node = parseAnd();
         while (!m_failed && checkOp(QStringLiteral("||"))) {
             advance();
@@ -286,6 +305,11 @@ private:
 
     std::unique_ptr<Node> parseUnary()
     {
+        const DepthGuard guard(m_depth);
+        if (m_depth > kMaxNesting) {
+            fail(QStringLiteral("expression nested too deeply"));
+            return nullptr;
+        }
         if (checkOp(QStringLiteral("!")) || checkOp(QStringLiteral("-"))) {
             const QString op = advance().text;
             auto operand = parseUnary();
@@ -1251,6 +1275,10 @@ std::unique_ptr<Expression> Expression::parse(const QString &source, QString *er
     QString localError;
     if (!tokenize(source, tokens, &localError)) {
         if (error) *error = localError;
+        return nullptr;
+    }
+    if (tokens.size() > kMaxTokens) {
+        if (error) *error = QStringLiteral("expression too long");
         return nullptr;
     }
     Parser parser(tokens, &localError);
