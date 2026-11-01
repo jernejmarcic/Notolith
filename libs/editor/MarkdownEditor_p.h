@@ -344,7 +344,6 @@ struct MarkdownEditor::BlockExtras {
     QString notebookLanguage;
     QString notebookSource;
     QString notebookWorkingDir;
-    bool notebookSandboxHost = false;
     bool notebookSandboxWasm = false;
     bool notebookCacheOn = true;
     bool notebookShowOutput = true; ///< `#| output: false` clears it

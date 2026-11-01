@@ -197,11 +197,9 @@ struct CodeOptions {
     bool eval = true;  ///< `eval: false` - the block never runs, no run control at all
     bool echo = true;  ///< `echo: false` - live preview shows only the run control and
                        ///< output, never the listing; the caret entering the block reveals it
-    /// `sandbox: host` - tier 0, opt-in: the kernel runs as the user, unsandboxed.
-    /// Anything else (absent, or `bubblewrap`) is the tier-1 default.
-    bool sandboxHost = false;
     /// `sandbox: wasm` - the block runs as a WebAssembly module under wasmtime,
-    /// stricter than the default; never set together with `sandboxHost`.
+    /// stricter than the default. Anything else (absent, `bubblewrap`, and `host`,
+    /// which no longer exists: code never runs outside the sandbox) is the tier-1 default.
     bool sandboxWasm = false;
     /// `output: false` - the block still runs and is cached, its output is
     /// just not shown (Quarto's key). `include: false` is echo and output both.

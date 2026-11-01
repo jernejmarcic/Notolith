@@ -929,7 +929,7 @@ void SettingsPage::setCommands(const QList<HotkeyCommand> &commands)
 
 QList<QKeySequence> SettingsPage::effectiveKeys(const HotkeyCommand &command) const
 {
-    const Hotkeys::Bindings bindings = Hotkeys::load(m_vaultRoot);
+    const Hotkeys::Bindings bindings = Hotkeys::load(m_vaultRoot, m_settings && m_settings->isVaultTrusted(m_vaultRoot));
     const auto found = bindings.constFind(command.id);
     return found != bindings.constEnd() ? *found : command.builtIn;
 }
@@ -1094,9 +1094,11 @@ QWidget *SettingsPage::buildCorePluginsPage()
     addLineEditRow(layout, QStringLiteral("sync.email"), tr("Sync account"), tr("The account's email address."));
 #endif
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
-    addToggleRow(layout, QStringLiteral("notebooks.allowHostTier"), tr("Let notes run code outside the sandbox"),
-                 tr("A code block's \"#| sandbox: host\" runs it as you, with your files. Off, every block "
-                    "runs sandboxed whatever it asks."));
+    addSpinRow(layout, QStringLiteral("notebooks.maxRunnableBytes"), tr("Largest code block that runs"),
+               tr("A block with more source than this is not run. 0 lifts the limit. Code always runs "
+                  "in the sandbox; a vault you have not trusted (Vault: Trust or stop trusting this vault) asks "
+                  "before each block."),
+               0, 100'000'000, tr(" bytes"));
     addLineEditRow(layout, QStringLiteral("notebooks.wasmModules"), tr("WebAssembly modules for \"#| sandbox: wasm\""),
                    tr("The module that runs each language in the wasm sandbox, as language=path pairs "
                       "separated by semicolons. \"wat\" blocks need none."),

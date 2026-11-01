@@ -252,7 +252,6 @@ void MarkdownEditor::appendNotebookMessage(BlockView &view, const QString &text,
 MarkdownEditor::NotebookRunOptions MarkdownEditor::notebookOptionsOf(const BlockView &view) const
 {
     NotebookRunOptions options;
-    options.sandboxHost = view.x().notebookSandboxHost;
     options.sandboxWasm = view.x().notebookSandboxWasm;
     options.workingDir = view.x().notebookWorkingDir;
     options.cache = view.x().notebookCacheOn;
@@ -276,14 +275,13 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
                                               const QString &blockID, const QString &workingDir,
                                               const CodeOptions *options, int duplicateOrdinal)
 {
-    const bool sandboxHost = options && options->sandboxHost;
     const bool sandboxWasm = options && options->sandboxWasm;
-    // The tier is part of the key: a host-tier and a bubblewrap-tier run of
+    // The tier is part of the key: a wasm-tier and a bubblewrap-tier run of
     // the same source must never share a cached result - the working directory is not, since it never changes
     // what the code itself does, only what files sit beside it. The kernel
     // choice is: it changes what state the code runs against.
     QString key = language.trimmed().toLower() + QLatin1Char('|')
-                  + (sandboxHost ? QStringLiteral("host") : sandboxWasm ? QStringLiteral("wasm") : QStringLiteral("bwrap"))
+                  + (sandboxWasm ? QStringLiteral("wasm") : QStringLiteral("bwrap"))
                   + QLatin1Char('|') + (options ? options->kernel : QString()) + QLatin1Char('|') + source;
     // The note's own `implicit-<lang>[-main]` frontmatter, unless the block
     // opts out. Part of the key: editing it makes the block look itself up
@@ -311,7 +309,6 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
     view.extrasMut().notebookLanguage = language;
     view.extrasMut().notebookSource = source;
     view.extrasMut().notebookWorkingDir = workingDir;
-    view.extrasMut().notebookSandboxHost = sandboxHost;
     view.extrasMut().notebookSandboxWasm = sandboxWasm;
     view.extrasMut().notebookCacheOn = !options || options->cache;
     view.extrasMut().notebookShowOutput = !options || options->output;
@@ -493,12 +490,10 @@ void MarkdownEditor::paintNotebookRunControl(QPainter &painter, const BlockView 
 void MarkdownEditor::paintNotebookHostBadge(QPainter &painter, const BlockView &view, qreal left,
                                             qreal top) const
 {
-    // "host" for tier 0, "wasm" for the WebAssembly tier, then Jupyter's execution count: [3] after a run in a
+    // "wasm" for the WebAssembly tier, then Jupyter's execution count: [3] after a run in a
     // kernel, [*] while one runs there.
     QString text;
-    if (view.x().notebookSandboxHost)
-        text = tr("host");
-    else if (view.x().notebookSandboxWasm)
+    if (view.x().notebookSandboxWasm)
         text = tr("wasm");
     if (!view.x().notebookImplicit.isEmpty() || !view.x().notebookImplicitMain.isEmpty())
         text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + tr("+implicit");

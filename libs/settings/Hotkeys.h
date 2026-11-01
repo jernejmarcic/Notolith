@@ -14,13 +14,16 @@ namespace noteAppC {
 ///
 /// Two files, the later winning per command: the vault's
 /// `.obsidian/hotkeys.json`, read when present so an Obsidian user keeps their
-/// keys, and Notolith's own `~/.config/notolith/hotkeys.json`, which is the
-/// only one ever written. A command in neither keeps its built-in keys.
+/// keys - but only for a vault the person trusts: an untrusted vault could
+/// bind "run all code blocks" to Ctrl+S - and Notolith's own
+/// `~/.config/notolith/hotkeys.json`, which is the only one ever written. A
+/// command in neither keeps its built-in keys.
 class Hotkeys {
 public:
     using Bindings = QHash<QString, QList<QKeySequence>>;
 
-    static Bindings load(const QString &vaultRoot = {});
+    /// `vaultRoot` is read only when `vaultTrusted`.
+    static Bindings load(const QString &vaultRoot = {}, bool vaultTrusted = false);
     /// noteAppC's own file alone: what the settings page has changed.
     static Bindings loadOwn();
     /// Writes `bindings` as noteAppC's own file. Only what differs from the

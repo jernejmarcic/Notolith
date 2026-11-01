@@ -279,8 +279,7 @@ QString keySourceOf(QString source)
 }
 
 /// A cell runs in tier 1 unless its own `#| sandbox:` line says another (Quarto's hash-pipe in any comment style:
-/// `#| sandbox: wasm`, `//| sandbox: host`). A host cell runs in tier 1 unless Settings allows the host, so
-/// it is looked up under either key; anything else the parser reads as tier 1.
+/// `#| sandbox: wasm`). Anything else, `host` included, the parser reads as tier 1.
 QList<SandboxTier> tiersOf(const QString &source)
 {
     static const QRegularExpression sandboxLine(QStringLiteral("^\\s*\\S{1,2}\\|\\s*sandbox\\s*:\\s*[\"']?(\\w+)"),
@@ -288,8 +287,6 @@ QList<SandboxTier> tiersOf(const QString &source)
     const QString asked = sandboxLine.match(source).captured(1).toLower();
     if (asked == QLatin1String("wasm"))
         return {SandboxTier::Wasm};
-    if (asked == QLatin1String("host"))
-        return {SandboxTier::Bubblewrap, SandboxTier::Host};
     return {SandboxTier::Bubblewrap};
 }
 

@@ -4182,7 +4182,7 @@ bool MarkdownEditor::handleMediaClick(const BlockView &view, const QPoint &point
     if (!onButton && !bar.contains(point))
         return false;
     if (!MediaPlayback::isAvailable()) {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(view.x().mediaPath));
+        emit openFileRequested(view.x().mediaPath);
         return true;
     }
     if (!d->m_media) {

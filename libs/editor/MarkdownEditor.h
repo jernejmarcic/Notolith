@@ -686,9 +686,6 @@ public:
     /// struct rather than growing NotebookRunner's own parameter list again
     /// for the next thing this needs to carry.
     struct NotebookRunOptions {
-        /// `#| sandbox: host` on a fenced block - tier 0, opt-in. Always
-        /// false for a runnable embed (no `#|` lines to set it from).
-        bool sandboxHost = false;
         /// `#| sandbox: wasm`: a WebAssembly module under wasmtime. Stricter
         /// than the default, so no setting gates it.
         bool sandboxWasm = false;
@@ -1167,6 +1164,10 @@ public:
     int footnotesListRowCount() const;
 
 signals:
+    /// A click on a file card, an embedded file or the media bar's fallback asks for `path` (a vault file) to be
+    /// opened by the desktop. The editor never does that itself: the window decides (it asks, and never
+    /// hands over an executable).
+    void openFileRequested(const QString &path);
     /// A click on a running block's stop control: the window interrupts the
     /// kernel (or the process) running `language` in this note.
     void notebookInterruptRequested(const QString &language);
@@ -1403,10 +1404,9 @@ private:
     QRectF notebookRunRectFor(const BlockView &view, qreal left, qreal top) const;
     void paintNotebookRunControl(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void paintNotebookOutput(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
-    /// A small "host" marker left of the run control, on a fenced block that
-    /// opted into `#| sandbox: host` - the reader's only sign that this
-    /// block runs unsandboxed - or "wasm" for `#| sandbox: wasm`. Nothing on
-    /// any other block.
+    /// A small "wasm" marker left of the run control, on a fenced block with
+    /// `#| sandbox: wasm`, and the "+implicit" and execution-count marks.
+    /// Nothing on any other block.
     void paintNotebookHostBadge(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void collectTabGroups();
     const TabGroup *tabGroupAt(qsizetype source) const;
@@ -1704,7 +1704,7 @@ private:
     void deliverEpubCover(const QString &key, const QString &path, QImage cover);
     void paintFileCard(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     bool handleFileCardClick(const BlockView &view, const QPoint &point, qreal left,
-                             qreal top) const;
+                             qreal top);
     /// A crude, cheap binary sniff over the file's first few KB: a NUL byte,
     /// or a high enough share of bytes that are neither printable ASCII nor
     /// part of a valid UTF-8 sequence, both say "binary" the way `file(1)`
@@ -1774,7 +1774,7 @@ private:
     /// NotebookBlock.cpp: a fenced code block's output, shown below its own
     /// listing rather than in place of it - the one difference from
     /// layoutPluginCode's shape just above, which this otherwise mirrors.
-    /// `workingDir`/`sandboxHost` are a runnable embed's folder and a
+    /// `workingDir`/`options` are a runnable embed's folder and a
     /// fenced block's own `#| sandbox:` - see NotebookRunOptions.
     void appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
                               const QString &blockID, const QString &workingDir = QString(),

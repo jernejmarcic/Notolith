@@ -233,6 +233,18 @@ public:
     /// gets the members' names, one per line.
     void setSharedRunApprovalForTests(std::function<bool(const QString &members)> approve);
 #endif
+    /// The open vault is one the person has trusted (kept in their own settings, never in the vault). An
+    /// untrusted vault - and a lone file - has its hotkeys and feature switches ignored, asks before each
+    /// code block runs, and asks before a file is handed to the desktop. Code runs in the sandbox either way.
+    bool vaultTrusted() const;
+    void setVaultTrusted(bool trusted);
+    /// For the tests: who answers "run this block of an untrusted vault?" (gets the code shown), in place of
+    /// the dialog, and "open this file with the desktop?" (gets the file name and its type).
+    void setRunApprovalForTests(std::function<bool(const QString &code)> approve);
+    void setOpenApprovalForTests(std::function<bool(const QString &name, const QString &type)> approve);
+    /// The editor's file cards, media and embeds ask for a file to be opened by the desktop here: never an
+    /// executable or a launcher, and in an untrusted vault only after the person says yes.
+    bool openFileExternally(const QString &path, bool ask = true);
 
     /// Where a dragged tab lands over a tab group's body: the outer quarter
     /// along an edge splits there, the rest joins the group.
@@ -665,6 +677,10 @@ private:
     QString notePathOf(const MarkdownEditor *editor) const;
     /// The editor shows a note that is shared (P2P) right now.
     bool isSharedNote(const MarkdownEditor *editor) const;
+    bool allowRun(const QString &language, const QString &source);
+    std::function<bool(const QString &)> m_runApproval;
+    std::function<bool(const QString &, const QString &)> m_openApproval;
+    QSet<QByteArray> m_runsAllowed; ///< sha256 of language + source asked about, for this run of the app
     void encryptCurrentNote();
     void decryptCurrentNote();
     void newEncryptedNote();
@@ -717,9 +733,11 @@ private:
     Q_INVOKABLE void importWithPandoc(const QString &file, const QString &folderRelative);
     void importWithPandocChosen();
     /// A pandoc run with a cancel button. `done` runs when it succeeds; a failure shows pandoc's own words, a cancel nothing.
+    /// It runs in bubblewrap's sandbox (no network, no home): `workingDirectory` is the one place it writes,
+    /// `readOnlyBinds` the files and folders it may read.
     void runPandoc(const QString &program, const QStringList &arguments, const QByteArray &input,
                    const QString &workingDirectory, const QString &title,
-                   std::function<void()> done);
+                   std::function<void()> done, const QStringList &readOnlyBinds = {});
     pandoc::Runner *m_pandocRunner = nullptr;
     /// Imports asked for while one runs (several files dropped at once): file and folder, taken in order as each finishes.
     QList<QPair<QString, QString>> m_pandocQueue;

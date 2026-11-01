@@ -45,6 +45,8 @@
 #include <QElapsedTimer>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QMimeDatabase>
+#include <QMimeType>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSaveFile>
@@ -1304,13 +1306,9 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                                                  3000);
                     });
         }
-        // A shared note's block can be someone else's: it never leaves the sandbox.
+        // Every block runs in the sandbox, whoever wrote it; `#| sandbox: wasm` is a stricter one.
         const bool shared = isSharedNote(editor);
-        const bool host = !shared && options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"));
-        // `#| sandbox: wasm` is stricter than the default, so asking for it needs no setting.
-        const notebook::SandboxTier tier = host                  ? notebook::SandboxTier::Host
-                                           : options.sandboxWasm ? notebook::SandboxTier::Wasm
-                                                                 : notebook::SandboxTier::Bubblewrap;
+        const notebook::SandboxTier tier = options.sandboxWasm ? notebook::SandboxTier::Wasm : notebook::SandboxTier::Bubblewrap;
         notebook::NotebookController::RunRequest request;
         request.language = language;
         request.source = source;
@@ -1329,28 +1327,37 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             deliver(MarkdownEditor::NotebookRunResult());
             return;
         }
-#ifdef NOTEAPPC_HAVE_SHARE
-        if (forceRun && shared && !allowSharedRun(editor, language, source)) {
+        if (forceRun) {
             MarkdownEditor::NotebookRunResult refused;
             refused.hasRun = true;
-            refused.kernelError = tr("Not run: a block of a shared note runs only once you allow it");
-            deliver(refused);
-            return;
-        }
+            if (const QString tooBig = notebook::oversizeMessage(source, m_settings.integer(QStringLiteral("notebooks.maxRunnableBytes")));
+                !tooBig.isEmpty()) {
+                refused.kernelError = tooBig;
+                deliver(refused);
+                return;
+            }
+#ifdef NOTEAPPC_HAVE_SHARE
+            if (shared && !allowSharedRun(editor, language, source)) {
+                refused.kernelError = tr("Not run: a block of a shared note runs only once you allow it");
+                deliver(refused);
+                return;
+            }
 #endif
-        // `#| sandbox: host` is the note asking, and a note can come from
-        // anyone: it leaves the sandbox only when the person has allowed that
-        // in settings. A runnable embed's own folder is bound read-only.
-        if (options.sandboxHost && !host && forceRun) {
-            statusBar()->showMessage(shared ? tr("This block asks to run outside the sandbox; a shared note's "
-                                                 "code always runs inside it")
-                                            : tr("This block asks to run outside the sandbox; it runs inside it unless "
-                                                 "Settings allows that"),
-                                     6000);
+            // Nothing a note holds runs by itself, and in a vault the person has not trusted each block asks first.
+            if (!shared && !allowRun(language, source)) {
+                refused.kernelError = tr("Not run: the vault is not trusted, and this block was not allowed");
+                deliver(refused);
+                return;
+            }
         }
         request.wasmModules = m_settings.text(QStringLiteral("notebooks.wasmModules"));
-        if (!options.workingDir.isEmpty())
-            request.extraReadOnlyBinds = {options.workingDir};
+        // A runnable embed's own folder is bound read-only, when it is inside the vault (and the vault is not the
+        // whole home directory): a symlink or a vault opened at $HOME must not hand a cell the rest of the disk.
+        if (!options.workingDir.isEmpty()) {
+            if (const QString bind = m_vault.isValid() ? notebook::confinedBind(options.workingDir, m_vault.root()) : QString();
+                !bind.isEmpty())
+                request.extraReadOnlyBinds = {bind};
+        }
         request.cache = options.cache;
         request.timeoutMs = options.timeoutSeconds * 1000;
         chooseKernel(request, options, notePathOf(editor),
@@ -1403,10 +1410,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             return false; // a wasm block never has a kernel
         notebook::NotebookController::RunRequest request;
         request.language = language;
-        request.tier = options.sandboxHost && !isSharedNote(editor)
-                               && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"))
-                           ? notebook::SandboxTier::Host
-                           : notebook::SandboxTier::Bubblewrap;
+        request.tier = notebook::SandboxTier::Bubblewrap;
         chooseKernel(request, options, notePathOf(editor),
                      m_settings.boolean(QStringLiteral("notebooks.sharedKernel")) || notebook::isIpynbPath(notePathOf(editor)));
         if (!request.useKernel && request.kernelName.isEmpty())
@@ -1422,6 +1426,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                                       });
     });
     // A click on a running block's stop control.
+    connect(editor, &MarkdownEditor::openFileRequested, this, [this](const QString &path) { openFileExternally(path); });
     connect(editor, &MarkdownEditor::notebookInterruptRequested, this, [this, editor](const QString &language) {
         if (m_notebook)
             m_notebook->interruptKernel(language, notePathOf(editor));
@@ -3719,6 +3724,13 @@ void MainWindow::buildActions()
         });
     add(QStringLiteral("app:open-settings"), tr("Open settings"), QStringLiteral("Ctrl+,"),
         &MainWindow::openSettings);
+    // The one switch for the trust gate: kept in the person's own settings, never in the vault.
+    add(QStringLiteral("vault:toggle-trust"), tr("Vault: Trust or stop trusting this vault"), QString(), [this] {
+        if (m_vault.isValid())
+            setVaultTrusted(!vaultTrusted());
+        else
+            statusBar()->showMessage(tr("Only a vault can be trusted"), 3000);
+    });
     add(QStringLiteral("noteAppC:quit"), tr("Quit"), QStringLiteral("Ctrl+Q"), &MainWindow::close);
     add(QStringLiteral("noteAppC:next-meta-note"), tr("Meta notes: Next meta note"), QStringLiteral("Alt+]"),
         [this] { jumpMetaNote(+1); });
@@ -3781,7 +3793,7 @@ void MainWindow::rebuildHotkeyCommands()
 
 void MainWindow::applyHotkeys()
 {
-    const Hotkeys::Bindings bindings = Hotkeys::load(m_vault.isValid() ? m_vault.root() : QString());
+    const Hotkeys::Bindings bindings = Hotkeys::load(m_vault.isValid() ? m_vault.root() : QString(), vaultTrusted());
     for (QAction *action : std::as_const(m_commands)) {
         const auto own = bindings.constFind(action->objectName());
         action->setShortcuts(own != bindings.constEnd()
@@ -6502,6 +6514,143 @@ void MainWindow::syncSignIn()
 #endif
 }
 
+bool MainWindow::vaultTrusted() const
+{
+    return m_vault.isValid() && m_settings.isVaultTrusted(m_vault.root());
+}
+
+void MainWindow::setVaultTrusted(bool trusted)
+{
+    if (!m_vault.isValid())
+        return;
+    m_settings.setVaultTrusted(m_vault.root(), trusted);
+    m_settings.save();
+    applyHotkeys(); // its hotkeys count (or stop counting) from now on; its feature switches at the next open
+    statusBar()->showMessage(trusted ? tr("This vault is trusted: its hotkeys apply, and code still runs only in the sandbox")
+                                     : tr("This vault is not trusted"),
+                             5000);
+}
+
+void MainWindow::setOpenApprovalForTests(std::function<bool(const QString &, const QString &)> approve)
+{
+    m_openApproval = std::move(approve);
+}
+
+namespace {
+
+/// Whether the desktop would run `info` rather than show it: an executable bit, a launcher, a script or a
+/// program by its suffix, its first bytes (an ELF, a Windows program, a shebang) or its type.
+bool desktopWouldRun(const QFileInfo &info)
+{
+    static const QSet<QString> suffixes = {
+        QStringLiteral("desktop"), QStringLiteral("exe"),   QStringLiteral("msi"),   QStringLiteral("jar"),
+        QStringLiteral("appimage"), QStringLiteral("sh"),   QStringLiteral("bash"),  QStringLiteral("zsh"),
+        QStringLiteral("fish"),    QStringLiteral("bat"),   QStringLiteral("cmd"),   QStringLiteral("com"),
+        QStringLiteral("scr"),     QStringLiteral("lnk"),   QStringLiteral("url"),   QStringLiteral("jnlp"),
+        QStringLiteral("py"),      QStringLiteral("pl"),    QStringLiteral("rb"),    QStringLiteral("js"),
+        QStringLiteral("mjs"),     QStringLiteral("vbs"),   QStringLiteral("vbe"),   QStringLiteral("wsf"),
+        QStringLiteral("ps1"),     QStringLiteral("run"),   QStringLiteral("bin"),   QStringLiteral("so"),
+        QStringLiteral("dll"),     QStringLiteral("hta"),   QStringLiteral("reg"),   QStringLiteral("deb"),
+        QStringLiteral("rpm"),     QStringLiteral("apk"),   QStringLiteral("pif"),   QStringLiteral("cpl"),
+        QStringLiteral("application"), QStringLiteral("service"), QStringLiteral("flatpakref"),
+        QStringLiteral("flatpak"), QStringLiteral("snap"),  QStringLiteral("workflow"),
+    };
+    if (info.isExecutable() || suffixes.contains(info.suffix().toLower()))
+        return true;
+    QFile file(info.canonicalFilePath());
+    if (file.open(QIODevice::ReadOnly)) {
+        const QByteArray head = file.read(4);
+        if (head.startsWith("\x7f" "ELF") || head.startsWith("MZ") || head.startsWith("#!"))
+            return true;
+    }
+    const QMimeType type = QMimeDatabase().mimeTypeForFile(info);
+    for (const char *runnable : {"application/x-executable", "application/x-sharedlib", "application/x-desktop",
+                                 "application/x-shellscript", "application/x-ms-dos-executable",
+                                 "application/vnd.microsoft.portable-executable", "application/x-java-archive",
+                                 "application/x-executable-script"}) {
+        if (type.inherits(QLatin1String(runnable)))
+            return true;
+    }
+    return false;
+}
+
+} // namespace
+
+/// A file of the vault to the desktop's default app. Never what the desktop would run (an executable, a
+/// launcher, a script); and unless the vault is trusted (or `ask` is false: the person chose this file
+/// themselves) only after a yes that names the file and its type.
+bool MainWindow::openFileExternally(const QString &path, bool ask)
+{
+    const QFileInfo info(path);
+    if (!info.isFile())
+        return false;
+    if (desktopWouldRun(info)) {
+        statusBar()->showMessage(tr("%1 is a program or a launcher: it is not opened from here").arg(info.fileName()), 6000);
+        return false;
+    }
+    if (ask && !vaultTrusted()) {
+        const QString type = QMimeDatabase().mimeTypeForFile(info).comment();
+        bool yes = false;
+        if (m_openApproval) {
+            yes = m_openApproval(info.fileName(), type);
+        } else {
+            QMessageBox box(QMessageBox::Question, tr("Open file"),
+                            tr("Open \"%1\" (%2) with the default app?\n\nThis vault is not trusted: the file may "
+                               "have been made to harm the app that opens it.")
+                                .arg(info.fileName(), type),
+                            QMessageBox::NoButton, this);
+            box.setTextFormat(Qt::PlainText);
+            QPushButton *open = box.addButton(tr("Open"), QMessageBox::AcceptRole);
+            box.setDefaultButton(box.addButton(tr("Cancel"), QMessageBox::RejectRole));
+            box.exec();
+            yes = box.clickedButton() == open;
+        }
+        if (!yes)
+            return false;
+    }
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(info.canonicalFilePath()));
+}
+
+void MainWindow::setRunApprovalForTests(std::function<bool(const QString &)> approve)
+{
+    m_runApproval = std::move(approve);
+}
+
+/// A block of a vault that is not trusted asks before it first runs: what runs is the person's decision, not the
+/// vault's. "Trust this vault" ends the asking for this vault; either way the block runs in the sandbox.
+bool MainWindow::allowRun(const QString &language, const QString &source)
+{
+    if (vaultTrusted())
+        return true;
+    const QByteArray key = QCryptographicHash::hash((language + QChar(0) + source).toUtf8(), QCryptographicHash::Sha256);
+    if (m_runsAllowed.contains(key))
+        return true;
+    QString shown = source.left(600);
+    if (source.size() > shown.size())
+        shown += QStringLiteral("\n...");
+    bool allowed = false;
+    if (m_runApproval) {
+        allowed = m_runApproval(shown);
+    } else {
+        QMessageBox ask(QMessageBox::Warning, tr("Run code"),
+                        tr("This vault is not trusted, so this %1 block may have been written by anyone.\n\n%2\n\n"
+                           "It runs in the sandbox: no network, none of your files. Run it?")
+                            .arg(language, shown),
+                        QMessageBox::NoButton, this);
+        ask.setTextFormat(Qt::PlainText); // the code is the vault's
+        QPushButton *run = ask.addButton(tr("Run"), QMessageBox::AcceptRole);
+        QPushButton *trust = m_vault.isValid() ? ask.addButton(tr("Trust this vault"), QMessageBox::AcceptRole) : nullptr;
+        ask.setDefaultButton(ask.addButton(tr("Cancel"), QMessageBox::RejectRole));
+        ask.exec();
+        allowed = ask.clickedButton() == run || (trust && ask.clickedButton() == trust);
+        if (allowed && trust && ask.clickedButton() == trust)
+            setVaultTrusted(true);
+    }
+    if (allowed)
+        m_runsAllowed.insert(key);
+    return allowed;
+}
+
 #ifdef NOTEAPPC_HAVE_SHARE
 void MainWindow::setShareConfigForTests(ShareEngineBase::Config config)
 {
@@ -8778,7 +8927,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     else if (chosen == copyAction)
         copyPath(path);
     else if (chosen == openOutsideAction)
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        openFileExternally(path, /*ask=*/false); // the menu entry is the person's own request
 #ifdef NOTEAPPC_HAVE_PANDOC
     else if (chosen == importAction)
         importWithPandoc(path, m_vault.relative(QFileInfo(path).absolutePath()));

@@ -10,13 +10,15 @@
 
 namespace noteAppC::notebook {
 
+/// There is no tier that runs outside the sandbox: every one is bubblewrap
+/// with the syscall filter, and without them nothing runs. The numbers are
+/// part of the output cache's key and stay as they were.
 enum class SandboxTier {
-    Host = 0,       ///< no sandbox: the kernel runs as the user, full filesystem access
-    Bubblewrap = 1, ///< namespaces + an explicit bind allowlist (the desktop default)
+    Bubblewrap = 1, ///< namespaces + an explicit bind allowlist (the default)
     /// A WebAssembly module under `wasmtime run`, nested inside tier 1's
-    /// bubblewrap when it is installed. Only DirectRunner builds this one:
-    /// wrapCommand knows nothing of it and treats it as Bubblewrap, so a
-    /// kernel asked for in this tier is confined, never run as the user.
+    /// bubblewrap. Only DirectRunner builds this one: wrapCommand knows
+    /// nothing of it and treats it as Bubblewrap, so a kernel asked for in
+    /// this tier is confined all the same.
     Wasm = 2,
 };
 
@@ -28,6 +30,7 @@ enum class SandboxTier {
 struct SandboxRequest {
     QString runtimeDir;          ///< rw; must be set for SandboxTier::Bubblewrap
     QStringList readOnlyBinds;   ///< extra ro binds, e.g. the vault root for `![[x.py]]`
+    int processes = 256;         ///< at most this many tasks (threads included) run inside
 };
 
 /// What is actually installed, checked once at startup rather than assumed.
@@ -45,19 +48,27 @@ struct SandboxAvailability {
 };
 SandboxAvailability detectSandboxAvailability();
 
-/// Wraps `program`+`args` for `tier`. Only SandboxTier::Host is left alone;
-/// every other tier (Wasm included) gets bubblewrap. When Bubblewrap was asked for and
-/// `bwrap` is not on PATH, `*outProgram` comes back empty and the caller
-/// refuses the run: a block never falls back to running as the user unless
-/// it asked for SandboxTier::Host (which Settings has to allow).
+/// Wraps `program`+`args` in bubblewrap (every tier, Wasm included), in its
+/// own pid, net, ipc, uts, cgroup and user namespaces, with the syscall
+/// filter. When `bwrap` is not on PATH, or the filter cannot be built,
+/// `*outProgram` comes back empty and the caller refuses the run: a block
+/// never runs as the user.
 ///
-/// With `filterFD` set, tier 1 also gets the syscall filter
-/// (sandbox::addSyscallFilter): `*filterFD` is its descriptor, for the
-/// caller to keep open in the child and close after start; -1 when there is
-/// no filter (a build without libseccomp, or tier 0).
+/// `*filterFD` is the filter's descriptor, for the caller to keep open in the
+/// child (sandbox::prepareChild) and close after start; -1 when `*outProgram`
+/// is empty.
 void wrapCommand(SandboxTier tier, const QString &program, const QStringList &args,
                  const SandboxRequest &request, QString *outProgram, QStringList *outArgs,
-                 SandboxTier *usedTier, int *filterFD = nullptr);
+                 SandboxTier *usedTier, int *filterFD);
+
+/// Why a block of `source` is too big to run (empty when it is not): more than `maxBytes` of UTF-8, the
+/// setting `notebooks.maxRunnableBytes`. 0 means no limit.
+QString oversizeMessage(const QString &source, qint64 maxBytes);
+
+/// What a vault's note is let to bind into a run: `path` canonical, and only
+/// when it is inside `vaultRoot` (itself canonical) and that root is neither
+/// `/` nor the home directory. Empty otherwise, and the run goes without it.
+QString confinedBind(const QString &path, const QString &vaultRoot);
 
 
 } // namespace noteAppC::notebook

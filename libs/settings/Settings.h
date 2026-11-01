@@ -114,6 +114,12 @@ public:
 
     QString vaultRoot() const { return m_vaultRoot; }
 
+    /// Whether the person trusts the vault at `vaultRoot` (compared as a canonical path): kept in the user's
+    /// own settings, never in the vault. An untrusted vault's hotkeys, feature switches and anything else it
+    /// supplies that could start a program are ignored, and each code block it holds asks before it runs.
+    bool isVaultTrusted(const QString &vaultRoot) const;
+    void setVaultTrusted(const QString &vaultRoot, bool trusted);
+
     /// Recently opened vaults and files, most recent first.
     QStringList recentVaults() const;
     QStringList recentFiles() const;

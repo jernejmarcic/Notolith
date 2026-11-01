@@ -235,6 +235,16 @@ protected:
         write(QStringLiteral("Welcome.md"), "# Welcome\n\nBody.\n");
         write(QStringLiteral("Projects/Crlf.md"), "one\r\ntwo\r\n");
         write(QStringLiteral("attachment.txt"), "not a note\n");
+        // A vault is untrusted until the user says so, and an untrusted one asks before it runs a block or opens
+        // a file: the tests that are not about that trust this one.
+        setTrust(true);
+    }
+
+    void setTrust(bool trusted)
+    {
+        Settings settings = Settings::load();
+        settings.setVaultTrusted(dir.path(), trusted);
+        EXPECT_TRUE(settings.save());
     }
 
     void write(const QString &relative, const QByteArray &bytes)
@@ -1507,6 +1517,8 @@ TEST_F(WindowTest, PandocExportRefusesToOverwriteANote)
     const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
     qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
     const QString mark = out.filePath(QStringLiteral("ran"));
+    // pandoc runs in the sandbox, which sees nothing of the test's directories: this one is let in to write the mark.
+    qputenv("NOTEAPPC_SANDBOX_TEST_BINDS", out.path().toUtf8());
     usePandoc(fakePandoc(bin, "cat > /dev/null; echo ran > '" + mark.toUtf8() + "'; echo x > \"$last\""));
     write(QStringLiteral("Plan.md"), "# Plan\n\n[[Welcome]]\n");
     write(QStringLiteral("Other.md"), "other\n");
@@ -1539,6 +1551,7 @@ TEST_F(WindowTest, PandocExportRefusesToOverwriteANote)
         EXPECT_EQ(window.findChild<QMessageBox *>(QStringLiteral("pandocRefusedDialog")), nullptr);
     }
     qputenv("XDG_CONFIG_HOME", previous);
+    qunsetenv("NOTEAPPC_SANDBOX_TEST_BINDS");
 }
 
 // Several documents dropped at once are all imported, one after the other, and a failure does not stop the rest.
@@ -8882,6 +8895,7 @@ TEST_F(WindowTest, ARememberedHeadingFoldAroundTheRememberedCaretStaysFolded)
 TEST_F(WindowTest, FoldCommandsAreInThePaletteAndRebindable)
 {
     PrivateConfig config;
+    setTrust(true); // the vault below binds a key of its own
     write(QStringLiteral("Fold.md"), "# A\n\nbody a\n\n# B\n\nbody b\n");
     ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
     write(QStringLiteral(".obsidian/hotkeys.json"),
@@ -8917,6 +8931,27 @@ TEST_F(WindowTest, FoldCommandsAreInThePaletteAndRebindable)
     editor->setFocus();
     QTest::keyClick(editor, Qt::Key_U, Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
     EXPECT_TRUE(editor->foldState().isEmpty()) << "Ctrl+Alt+Shift+U runs editor:unfold-all";
+}
+
+// A vault's hotkeys.json can bind any command, "run all" among them, to any key: until the vault is trusted the
+// file is not read at all.
+TEST_F(WindowTest, AnUntrustedVaultsHotkeysAreIgnored)
+{
+    PrivateConfig config;
+    setTrust(false);
+    write(QStringLiteral("Fold.md"), "# A\n\nbody a\n\n# B\n\nbody b\n");
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    write(QStringLiteral(".obsidian/hotkeys.json"),
+          R"({"editor:fold-all": [{"modifiers": ["Mod", "Alt", "Shift"], "key": "U"}]})");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_FALSE(window.vaultTrusted());
+    window.openNote(path(QStringLiteral("Fold.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setFocus();
+    QTest::keyClick(editor, Qt::Key_U, Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
+    EXPECT_FALSE(editor->isFoldedAt(0)) << "the vault's key did not run editor:fold-all";
 }
 
 TEST_F(WindowTest, TheFoldHeadingAndFoldIndentSettingsReachTheEditor)
@@ -12111,3 +12146,136 @@ TEST_F(WindowTest, AnOpenPdfSavesToTheNewPathAfterItsFileOrFolderIsRenamed)
     EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Notes")))) << "the old folder is not recreated";
 }
 #endif
+
+// --- trust and the limits of what runs ------------------------------------------------------------------------
+
+namespace {
+bool bubblewrapCanRunBlocks()
+{
+    return !QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty();
+}
+
+QString outputOf(MarkdownEditor *editor, qsizetype offset)
+{
+    return editor->notebookOutputTextAt(offset).join(QLatin1Char('\n'));
+}
+} // namespace
+
+TEST_F(WindowTest, AnUntrustedVaultAsksBeforeABlockRunsAndNothingRunsOnANo)
+{
+    if (!bubblewrapCanRunBlocks())
+        GTEST_SKIP() << "no bubblewrap on this machine";
+    setTrust(false);
+    write(QStringLiteral("Code.md"), "```bash\necho block-ran-here\n```\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_FALSE(window.vaultTrusted());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Code.md"))));
+    int asked = 0;
+    bool answer = false;
+    window.setRunApprovalForTests([&](const QString &shown) {
+        ++asked;
+        EXPECT_TRUE(shown.contains(QStringLiteral("block-ran-here")));
+        return answer;
+    });
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype block = editor->noteText().indexOf(QStringLiteral("echo"));
+    ASSERT_TRUE(editor->notebookInfoAt(block).eligible);
+
+    ASSERT_TRUE(editor->runNotebookBlockAt(block));
+    WAIT_TRUE(editor->notebookInfoAt(block).hasRun && !editor->notebookInfoAt(block).running, 10000);
+    EXPECT_EQ(asked, 1);
+    EXPECT_FALSE(editor->notebookInfoAt(block).ok) << "a no is a refusal, not a run";
+    EXPECT_FALSE(outputOf(editor, block).contains(QStringLiteral("block-ran-here")));
+
+    answer = true;
+    ASSERT_TRUE(editor->runNotebookBlockAt(block));
+    WAIT_TRUE(outputOf(editor, block).contains(QStringLiteral("block-ran-here")), 15000);
+    EXPECT_EQ(asked, 2);
+
+    // Allowed once, the same code in this session does not ask again.
+    ASSERT_TRUE(editor->runNotebookBlockAt(block));
+    WAIT_TRUE(editor->notebookInfoAt(block).hasRun && !editor->notebookInfoAt(block).running, 15000);
+    EXPECT_EQ(asked, 2);
+}
+
+TEST_F(WindowTest, ATrustedVaultRunsABlockOnTheClickAloneAndNeverBefore)
+{
+    if (!bubblewrapCanRunBlocks())
+        GTEST_SKIP() << "no bubblewrap on this machine";
+    write(QStringLiteral("Code.md"), "```bash\necho trusted-block-ran\n```\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.vaultTrusted());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Code.md"))));
+    window.setRunApprovalForTests([](const QString &) {
+        ADD_FAILURE() << "a trusted vault is not asked";
+        return false;
+    });
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    const qsizetype block = editor->noteText().indexOf(QStringLiteral("echo"));
+    QTest::qWait(300);
+    EXPECT_FALSE(editor->notebookInfoAt(block).hasRun) << "opening a note runs nothing";
+    ASSERT_TRUE(editor->runNotebookBlockAt(block));
+    WAIT_TRUE(outputOf(editor, block).contains(QStringLiteral("trusted-block-ran")), 15000);
+}
+
+TEST_F(WindowTest, ABlockOverTheSizeLimitIsNotRunWhoeverAsks)
+{
+    if (!bubblewrapCanRunBlocks())
+        GTEST_SKIP() << "no bubblewrap on this machine";
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("notebooks.maxRunnableBytes"), 20);
+    ASSERT_TRUE(settings.save());
+    write(QStringLiteral("Code.md"), "```bash\necho small\n```\n\n```bash\necho this-block-is-over-the-limit-set\n```\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Code.md"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(0);
+    const qsizetype small = editor->noteText().indexOf(QStringLiteral("echo small"));
+    const qsizetype big = editor->noteText().indexOf(QStringLiteral("echo this"));
+
+    ASSERT_TRUE(editor->runNotebookBlockAt(big));
+    WAIT_TRUE(editor->notebookInfoAt(big).hasRun && !editor->notebookInfoAt(big).running, 10000);
+    EXPECT_FALSE(editor->notebookInfoAt(big).ok);
+    EXPECT_FALSE(outputOf(editor, big).contains(QStringLiteral("this-block")));
+
+    ASSERT_TRUE(editor->runNotebookBlockAt(small));
+    WAIT_TRUE(outputOf(editor, small).contains(QStringLiteral("small")), 15000);
+}
+
+TEST_F(WindowTest, AFileIsOpenedByTheDesktopOnlyAfterAYesInAnUntrustedVaultAndNeverIfItIsAProgram)
+{
+    write(QStringLiteral("picture.png"), "not really a picture\n");
+    write(QStringLiteral("launcher.desktop"), "[Desktop Entry]\nType=Application\nExec=/bin/true\n");
+    write(QStringLiteral("tool.bin"), "#!/bin/sh\ntrue\n");
+    QFile::setPermissions(path(QStringLiteral("tool.bin")), QFile::permissions(path(QStringLiteral("tool.bin"))) | QFile::ExeOwner);
+    for (const bool trusted : {false, true}) {
+        setTrust(trusted);
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_EQ(window.vaultTrusted(), trusted);
+        QStringList asked;
+        window.setOpenApprovalForTests([&](const QString &name, const QString &type) {
+            asked << name;
+            EXPECT_FALSE(type.isEmpty());
+            return false;
+        });
+        for (const QString &program : {QStringLiteral("launcher.desktop"), QStringLiteral("tool.bin")})
+            EXPECT_FALSE(window.openFileExternally(path(program))) << program.toStdString();
+        EXPECT_TRUE(asked.isEmpty()) << "a program is refused before it is even asked about";
+        // An untrusted vault asks about an ordinary file and a no ends it; a trusted one hands it to the
+        // desktop, which this test does not let happen (no handler is installed under offscreen).
+        if (!trusted) {
+            EXPECT_FALSE(window.openFileExternally(path(QStringLiteral("picture.png"))));
+            EXPECT_EQ(asked, QStringList{QStringLiteral("picture.png")});
+        }
+    }
+}

@@ -107,7 +107,12 @@ QVariantMap &defaults()
         {QStringLiteral("files.autosave"), true}, // Obsidian's way: typed is kept
         {QStringLiteral("sync.serverURL"), QString()},
         {QStringLiteral("sync.email"), QString()},
-        {QStringLiteral("notebooks.allowHostTier"), false}, // a note's "#| sandbox: host" is only a request
+        // A code block bigger than this many bytes of source is not run (a note's own limit never raises it).
+        // 0: no limit. Read from the user's file only; a vault cannot set it.
+        {QStringLiteral("notebooks.maxRunnableBytes"), 65536},
+        // Vaults the person has trusted, as canonical paths. Until then a vault is untrusted: its own hotkeys and
+        // feature switches are ignored, and each code block and file open asks. Never read from a vault.
+        {QStringLiteral("vault.trusted"), QStringList()},
         // false: each block is a short process of the system's own tool. true: a note's blocks share
         // one Jupyter kernel per language (variables persist, execution counts, rich output) where one is installed.
         {QStringLiteral("notebooks.sharedKernel"), false},
@@ -935,7 +940,35 @@ Settings Settings::load(const QString &vaultRoot)
     settings.m_baseUser = settings.m_user;
     settings.m_baseIndex = settings.m_index;
     settings.m_vault = fromObsidianConfig(vaultRoot);
+    // An untrusted vault may switch features off but never on: its core-plugins.json would otherwise
+    // turn on, say, notebooks for whoever opens it.
+    if (!settings.isVaultTrusted(vaultRoot)) {
+        for (auto it = settings.m_vault.begin(); it != settings.m_vault.end();) {
+            if (it.key().startsWith(QLatin1String("plugins.")) && it.value().toBool())
+                it = settings.m_vault.erase(it);
+            else
+                ++it;
+        }
+    }
     return settings;
+}
+
+bool Settings::isVaultTrusted(const QString &vaultRoot) const
+{
+    const QString real = QFileInfo(vaultRoot).canonicalFilePath();
+    return !real.isEmpty() && value(QStringLiteral("vault.trusted")).toStringList().contains(real);
+}
+
+void Settings::setVaultTrusted(const QString &vaultRoot, bool trusted)
+{
+    const QString real = QFileInfo(vaultRoot).canonicalFilePath();
+    if (real.isEmpty())
+        return;
+    QStringList list = value(QStringLiteral("vault.trusted")).toStringList();
+    list.removeAll(real);
+    if (trusted)
+        list.append(real);
+    setValue(QStringLiteral("vault.trusted"), list);
 }
 
 QVariant Settings::value(const QString &key) const
