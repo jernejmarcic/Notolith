@@ -9,33 +9,77 @@
 namespace noteAppC {
 
 namespace {
-/// A format Qt decodes by itself: told by its first bytes, so the common case does not load every image
-/// plugin to ask which format it is.
-bool isRasterMagic(const QByteArray &b)
+/// An SVG starts with `<` (after a byte order mark and blanks): the prolog, a comment, a doctype or the
+/// root. safeSvg() parses it strictly and refuses what is not XML.
+bool looksLikeSVG(const QByteArray &b)
 {
-    return b.startsWith("\x89PNG") || b.startsWith("\xff\xd8\xff") || b.startsWith("GIF8") || b.startsWith("BM")
-        || (b.size() > 12 && b.startsWith("RIFF") && b.mid(8, 4) == "WEBP");
+    qsizetype i = b.startsWith("\xef\xbb\xbf") ? 3 : 0;
+    while (i < b.size() && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r'))
+        ++i;
+    return i < b.size() && b[i] == '<';
+}
+
+/// A reader that tries `format` and nothing else.
+QImage readAs(QIODevice *device, const QByteArray &format, bool autoTransform, int maxWidth = 0)
+{
+    QImageReader reader(device, format);
+    reader.setAutoDetectImageFormat(false);
+    reader.setAutoTransform(autoTransform);
+    if (maxWidth > 0) {
+        const QSize size = reader.size();
+        if (size.width() > maxWidth)
+            reader.setScaledSize(size.scaled(maxWidth, size.height(), Qt::KeepAspectRatio));
+    }
+    return reader.read();
 }
 } // namespace
 
+QByteArray imageFormat(const QByteArray &b)
+{
+    if (b.startsWith("\x89PNG\r\n\x1a\n"))
+        return "png";
+    if (b.startsWith("\xff\xd8\xff"))
+        return "jpeg";
+    if (b.startsWith("GIF87a") || b.startsWith("GIF89a"))
+        return "gif";
+    if (b.startsWith("BM"))
+        return "bmp";
+    if (b.size() >= 12 && b.startsWith("RIFF") && b.mid(8, 4) == "WEBP")
+        return "webp";
+    if (b.size() >= 12 && b.mid(4, 4) == "ftyp" && (b.mid(8, 4) == "avif" || b.mid(8, 4) == "avis"))
+        return "avif";
+    if (looksLikeSVG(b))
+        return "svg";
+    return {};
+}
+
+bool isImageSuffix(const QString &suffix)
+{
+    static const QStringList images = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                                       QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("svg"),
+                                       QStringLiteral("webp"), QStringLiteral("avif")};
+    return images.contains(suffix);
+}
+
+bool isPictureFile(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) && !imageFormat(file.peek(512)).isEmpty();
+}
+
 QImage decodeImage(const QByteArray &bytes, bool autoTransform)
 {
-    if (bytes.isEmpty())
+    const QByteArray format = imageFormat(bytes);
+    if (format.isEmpty())
         return {};
+    if (format == "svg") {
+        const QByteArray safe = safeSvg(bytes);
+        return safe.isEmpty() ? QImage() : QImage::fromData(safe, "svg");
+    }
     QBuffer buffer;
     buffer.setData(bytes);
     buffer.open(QIODevice::ReadOnly);
-    // A format told by its first bytes needs no asking; any other is asked, and cleaned if it is an SVG.
-    if (!isRasterMagic(bytes)) {
-        const QByteArray format = QImageReader(&buffer).format();
-        if (format == "svg" || format == "svgz") {
-            const QByteArray safe = format == "svg" ? safeSvg(bytes) : QByteArray();
-            return safe.isEmpty() ? QImage() : QImage::fromData(safe, "svg");
-        }
-    }
-    QImageReader reader(&buffer);
-    reader.setAutoTransform(autoTransform);
-    return reader.read();
+    return readAs(&buffer, format, autoTransform);
 }
 
 QImage readImage(const QString &path, int maxWidth, bool autoTransform)
@@ -43,14 +87,11 @@ QImage readImage(const QString &path, int maxWidth, bool autoTransform)
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return {};
-    if (isRasterMagic(file.peek(16))) {
-        QImageReader reader(&file);
-        reader.setAutoTransform(autoTransform);
-        const QSize size = reader.size();
-        if (maxWidth > 0 && size.width() > maxWidth)
-            reader.setScaledSize(size.scaled(maxWidth, size.height(), Qt::KeepAspectRatio));
-        return reader.read();
-    }
+    const QByteArray format = imageFormat(file.peek(512));
+    if (format.isEmpty())
+        return {};
+    if (format != "svg") // decoded from the file, at the size wanted
+        return readAs(&file, format, autoTransform, maxWidth);
     QImage image = decodeImage(file.readAll(), autoTransform);
     if (maxWidth > 0 && image.width() > maxWidth)
         image = image.scaledToWidth(maxWidth, Qt::SmoothTransformation);

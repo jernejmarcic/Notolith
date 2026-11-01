@@ -4,7 +4,6 @@
 #include <QActionGroup>
 #include <QFileInfo>
 #include <QHelpEvent>
-#include <QImageReader>
 #include "ImageLoad.h"
 #include <QKeyEvent>
 #include <QLabel>

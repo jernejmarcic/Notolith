@@ -25,7 +25,6 @@
 #include <QScreen>
 #include <QWindow>
 #include <QHBoxLayout>
-#include <QImageReader>
 #include "ImageLoad.h"
 #include <QInputDialog>
 #include <QJsonArray>
@@ -177,7 +176,7 @@ namespace {
 
 /// "image", "audio", "video", or empty: the files Obsidian opens in a tab
 /// of their own, by the lists the editor's embeds use (layoutEmbed).
-QString mediaKindOf(const QString &path, bool askPlugins = true)
+QString mediaKindOf(const QString &path)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
@@ -189,25 +188,16 @@ QString mediaKindOf(const QString &path, bool askPlugins = true)
                                       QStringLiteral("mov"), QStringLiteral("mkv")};
     if (video.contains(suffix))
         return QStringLiteral("video");
-    // Asking Qt for its image formats dlopens every image plugin (libheif, libjxl
-    // and what they pull in) on the UI thread, and the first note opened would
-    // pay for it: the common suffixes are answered from a list, the notes and
-    // views the app opens itself never reach the plugins, and only a suffix
-    // nothing else claims is looked up there.
-    static const QStringList images = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
-                                       QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("svg"),
-                                       QStringLiteral("webp"), QStringLiteral("avif")};
-    if (images.contains(suffix))
+    // Obsidian's image set and no other: a file Qt's plugins could read (eps, psd, tiff, raw...) is not
+    // opened as a picture (decodeImage() refuses it as well).
+    if (isImageSuffix(suffix))
         return QStringLiteral("image");
     static const QStringList notImages = {QString(), QStringLiteral("md"), QStringLiteral("mdlock"),
                                           QStringLiteral("pdf"), QStringLiteral("canvas"), QStringLiteral("base"),
                                           QStringLiteral("ipynb"), QStringLiteral("epub")};
     if (notImages.contains(suffix))
         return {};
-    if (!askPlugins)
-        return {};
-    static const QByteArrayList plugged = QImageReader::supportedImageFormats();
-    return plugged.contains(suffix.toUtf8()) ? QStringLiteral("image") : QString();
+    return {};
 }
 /// A suffix the app opens itself: a module may not claim it (the registry gives
 /// such a module a problem notice and never loads it). Per kind, under the same
@@ -233,18 +223,7 @@ bool isBuiltInSuffix(const QString &suffix)
     if (suffix == QLatin1String("ipynb"))
         return true;
 #endif
-    // The module scan runs this on a worker for every suffix a module claims. The image plugins are
-    // asked only about a suffix one of them is known to read (a module claiming "ink" does not load
-    // them all); a module for such a suffix is refused, as the app opens the file as an image itself.
-    static const QStringList pluginImages = {
-        QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("heic"), QStringLiteral("heif"),
-        QStringLiteral("hif"), QStringLiteral("jxl"), QStringLiteral("jp2"), QStringLiteral("j2k"),
-        QStringLiteral("ico"), QStringLiteral("cur"), QStringLiteral("icns"), QStringLiteral("tga"),
-        QStringLiteral("ppm"), QStringLiteral("pgm"), QStringLiteral("pbm"), QStringLiteral("xbm"),
-        QStringLiteral("xpm"), QStringLiteral("wbmp"), QStringLiteral("dds"), QStringLiteral("ani"),
-        QStringLiteral("exr"), QStringLiteral("qoi"), QStringLiteral("pcx"), QStringLiteral("psd"),
-        QStringLiteral("xcf"), QStringLiteral("hdr")};
-    return !mediaKindOf(QStringLiteral("x.") + suffix, pluginImages.contains(suffix)).isEmpty();
+    return !mediaKindOf(QStringLiteral("x.") + suffix).isEmpty();
 }
 constexpr auto kGeometry = "window/geometry";
 /// Narrower than this there is no room for a sidebar beside a readable line:
@@ -4897,7 +4876,7 @@ void MainWindow::showPagePreview()
     }
     // Images and PDFs preview as a picture, as in Obsidian. The reader looks
     // at the header first, so a note is never decoded as an image.
-    if (QImageReader reader(path); reader.canRead()) {
+    if (isPictureFile(path)) {
         const QImage image = readImage(path, 1040);
         if (!image.isNull())
             pagePreview()->showImage(image, m_previewPos);

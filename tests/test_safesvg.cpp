@@ -200,6 +200,94 @@ TEST(SafeSvg, DecodeImageAndReadImageCleanWhateverTheFileIsCalled)
     EXPECT_TRUE(readImage(d.vault + QStringLiteral("/missing.png")).isNull());
 }
 
+// What Qt's plugins read beyond Obsidian's set (eps, psd, tiff, raw, pdf...) is never decoded: the format
+// is told by the first bytes, and the reader is then forced to it. kimg_eps would run ghostscript on a
+// %!PS file whatever it is called.
+const QByteArray kEPS = QByteArray("%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 30 30\n1 0 0 setrgbcolor 0 0 30 30 rectfill\nshowpage\n");
+
+TEST(ImageFormat, OnlyObsidiansSetIsRecognised)
+{
+    const QImage red = redPicture();
+    QByteArray bytes[5];
+    const char *const names[5] = {"png", "jpeg", "gif", "bmp", "webp"};
+    for (int i = 0; i < 5; ++i) {
+        QBuffer b(&bytes[i]);
+        b.open(QIODevice::WriteOnly);
+        if (!red.save(&b, names[i]))
+            continue; // no plugin to write it here
+        EXPECT_EQ(imageFormat(bytes[i]), QByteArray(names[i])) << names[i];
+    }
+    EXPECT_EQ(imageFormat("<svg xmlns='http://www.w3.org/2000/svg'/>"), QByteArray("svg"));
+    EXPECT_EQ(imageFormat("\xef\xbb\xbf  \n<?xml version='1.0'?><svg/>"), QByteArray("svg"));
+    EXPECT_EQ(imageFormat(QByteArray("\0\0\0\x1c" "ftypavif\0\0\0\0avifmif1", 20)), QByteArray("avif"));
+    EXPECT_EQ(imageFormat(QByteArray("\0\0\0\x18" "ftypavis\0\0\0\0", 16)), QByteArray("avif"));
+    for (const QByteArray &other : {kEPS, QByteArray("8BPS\0\x01\0\0\0\0\0\0"), QByteArray("II*\0\x08\0\0\0"), QByteArray("MM\0*\0\0\0\x08"),
+                                    QByteArray("%PDF-1.7\n"), QByteArray("\0\0\0\x18" "ftypheic\0\0\0\0", 16), QByteArray("gimp xcf file"),
+                                    QByteArray("RIFF\0\0\0\0WAVE"), QByteArray("GIF"), QByteArray("\x76\x2f\x31\x01"), QByteArray("")})
+        EXPECT_TRUE(imageFormat(other).isEmpty()) << other.left(12).toStdString();
+}
+
+TEST(ImageFormat, AFileOfAnotherFormatDecodesToNothingWhateverItIsCalled)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const auto write = [&](const QString &name, const QByteArray &bytes) {
+        QFile file(dir.filePath(name));
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+        return file.fileName();
+    };
+    EXPECT_TRUE(readImage(write(QStringLiteral("evil.eps"), kEPS)).isNull());
+    EXPECT_TRUE(readImage(write(QStringLiteral("pic.png"), kEPS)).isNull()) << "an EPS called .png";
+    EXPECT_TRUE(decodeImage(kEPS).isNull());
+    EXPECT_FALSE(isPictureFile(dir.filePath(QStringLiteral("pic.png"))));
+    // A format only a plugin writes, when one is here: the same picture as a PNG draws, as a TIFF it does not.
+    for (const char *format : {"tiff", "ico", "tga", "ppm"}) {
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        buffer.open(QIODevice::WriteOnly);
+        if (!redPicture().save(&buffer, format))
+            continue;
+        const QString path = write(QStringLiteral("x.png"), bytes);
+        EXPECT_TRUE(readImage(path).isNull()) << format;
+        EXPECT_TRUE(decodeImage(bytes).isNull()) << format;
+    }
+}
+
+// Each allowed format a writer exists for here still draws, forced to its own reader.
+TEST(ImageFormat, EachAllowedFormatStillDraws)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    int drawn = 0;
+    for (const char *format : {"png", "jpeg", "gif", "bmp", "webp", "avif"}) {
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        buffer.open(QIODevice::WriteOnly);
+        if (!redPicture().save(&buffer, format)) {
+            std::printf("no writer for %s here\n", format);
+            continue;
+        }
+        const QImage fromBytes = decodeImage(bytes);
+        ASSERT_FALSE(fromBytes.isNull()) << format;
+        EXPECT_GT(redPixels(fromBytes), 1000) << format;
+        QFile file(dir.filePath(QStringLiteral("wrong-name.dat")));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+        file.close();
+        EXPECT_FALSE(readImage(file.fileName(), 20).isNull()) << format;
+        EXPECT_LE(readImage(file.fileName(), 20).width(), 20) << format;
+        ++drawn;
+    }
+    EXPECT_GE(drawn, 3);
+    // Qt writes no GIF: a one-pixel red one, by hand.
+    const QByteArray gif = QByteArray::fromBase64("R0lGODlhAQABAIAAAP8AAAAAACwAAAAAAQABAAACAkQBADs=");
+    EXPECT_EQ(imageFormat(gif), QByteArray("gif"));
+    const QImage pixel = decodeImage(gif);
+    ASSERT_FALSE(pixel.isNull());
+    EXPECT_EQ(pixel.pixelColor(0, 0).red(), 255);
+}
+
 // The cost of the cleaning on an SVG of a typical size (a diagram, 50 kB), against the 10 ms budget.
 TEST(SafeSvg, CostOnATypicalFiftyKilobyteSvg)
 {

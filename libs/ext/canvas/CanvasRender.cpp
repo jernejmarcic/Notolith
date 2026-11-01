@@ -9,7 +9,6 @@
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QImage>
-#include <QImageReader>
 #include "ImageLoad.h"
 #include <QPainter>
 #include <QPainterPath>
@@ -470,7 +469,7 @@ QString CanvasView::contentSignature(const CanvasNode &node)
 namespace {
 bool isImageFile(const QString &absolute)
 {
-    return QImageReader(absolute).canRead(); // the header only, not a decode
+    return isPictureFile(absolute); // the first bytes only, not a decode
 }
 
 QString markdownFileSection(const QString &absolute, const QString &subpath)

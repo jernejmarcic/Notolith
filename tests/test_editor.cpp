@@ -10191,6 +10191,54 @@ TEST(HTMLBlockTest, AnSVGThatNamesAFileOutsideTheVaultDrawsNothingOfIt)
     }
 }
 
+// Fails on the old code: an installed Qt image plugin (kimg_eps runs ghostscript) read any vault file
+// it recognised, whatever it was called.
+TEST(HTMLBlockTest, AFileOnlyAnImagePluginReadsIsNotDrawn)
+{
+    QTemporaryDir vaultDir;
+    ASSERT_TRUE(vaultDir.isValid());
+    const QString vault = vaultDir.path();
+    QImage red(80, 80, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    ASSERT_TRUE(red.save(vault + QStringLiteral("/ok.png")));
+    const auto write = [&](const QString &name, const QByteArray &bytes) {
+        QFile file(vault + QLatin1Char('/') + name);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+    };
+    const QByteArray eps = "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 80 80\n1 0 0 setrgbcolor 0 0 80 80 rectfill\nshowpage\n";
+    write(QStringLiteral("evil.eps"), eps);
+    write(QStringLiteral("pic.png"), eps);
+    QByteArray tiff;
+    QBuffer buffer(&tiff);
+    buffer.open(QIODevice::WriteOnly);
+    const bool haveTIFF = red.save(&buffer, "tiff");
+    write(QStringLiteral("scan.tiff"), tiff);
+    write(QStringLiteral("scan-as.png"), tiff);
+    const auto resolver = [vault](const QString &target) -> QString {
+        const QString path = QDir::cleanPath(QDir(vault).absoluteFilePath(target));
+        return QFileInfo::exists(path) ? path : QString();
+    };
+    const auto drawn = [&](const QString &note) {
+        auto editor = editorWith(note);
+        editor->setLinkResolver(resolver);
+        return redPixels(*editor);
+    };
+    EXPECT_GT(drawn(QStringLiteral("Intro\n\n![[ok.png]]\n\nAfter\n")), 500) << "control: a PNG is drawn";
+    EXPECT_EQ(drawn(QStringLiteral("Intro\n\n![[evil.eps]]\n\nAfter\n")), 0) << ".eps";
+    EXPECT_EQ(drawn(QStringLiteral("Intro\n\n![[pic.png]]\n\nAfter\n")), 0) << "an EPS called .png";
+    if (haveTIFF) {
+        EXPECT_EQ(drawn(QStringLiteral("Intro\n\n![[scan.tiff]]\n\nAfter\n")), 0) << ".tiff";
+        EXPECT_EQ(drawn(QStringLiteral("Intro\n\n![[scan-as.png]]\n\nAfter\n")), 0) << "a TIFF called .png";
+    }
+    if (HtmlRenderer::isAvailable()) {
+        EXPECT_EQ(drawn(QStringLiteral("Intro\n\n<div style=\"padding:4px\"><img src=\"evil.eps\" width=\"80\" height=\"80\"></div>\n\nAfter\n")), 0)
+            << "<img> of an .eps";
+        EXPECT_EQ(drawn(QStringLiteral("Intro\n\n<div style=\"padding:4px\"><img src=\"pic.png\" width=\"80\" height=\"80\"></div>\n\nAfter\n")), 0)
+            << "<img> of an EPS called .png";
+    }
+}
+
 TEST(HTMLBlockTest, CaretInsideRevealsSourceInsteadOfTheImage)
 {
     if (!HtmlRenderer::isAvailable())

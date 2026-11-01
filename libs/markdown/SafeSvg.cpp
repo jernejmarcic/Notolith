@@ -7,17 +7,12 @@ namespace noteAppC {
 
 namespace {
 
-bool startsWith(const QByteArray &bytes, const char *prefix)
-{
-    return bytes.startsWith(prefix);
-}
-
 /// A picture format Qt decodes without looking at anything else: told by its first bytes, so the
 /// common case does not load every image plugin to ask.
 bool isRasterMagic(const QByteArray &b)
 {
-    return startsWith(b, "\x89PNG") || startsWith(b, "\xff\xd8\xff") || startsWith(b, "GIF8") || startsWith(b, "BM")
-        || (b.size() > 12 && startsWith(b, "RIFF") && b.mid(8, 4) == "WEBP");
+    return b.startsWith("\x89PNG") || b.startsWith("\xff\xd8\xff") || b.startsWith("GIF8") || b.startsWith("BM")
+        || (b.size() > 12 && b.startsWith("RIFF") && b.mid(8, 4) == "WEBP");
 }
 
 /// `data:image/<png|jpeg|gif|webp>;base64,<payload>` whose payload really starts like such a picture:
