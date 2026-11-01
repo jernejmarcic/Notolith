@@ -53,9 +53,12 @@ DailyNotes::DailyNotes(const QString &vaultRoot, Config config)
 QString DailyNotes::pathFor(const QDate &date) const
 {
     const QString name = MomentFormat::format(QDateTime(date, QTime(0, 0)), m_config.format);
-    const QDir folder(m_config.folder.isEmpty() ? m_vaultRoot
-                                                : QDir(m_vaultRoot).filePath(m_config.folder));
-    return folder.filePath(name + QStringLiteral(".md"));
+    const QString file = name + QStringLiteral(".md");
+    // The folder and the format come from the vault's own settings: a path that leaves the vault is
+    // the file's name alone, in the vault's root.
+    const QString inFolder = m_config.folder.isEmpty() ? file : m_config.folder + QLatin1Char('/') + file;
+    const QString path = Vault::pathInside(m_vaultRoot, inFolder);
+    return path.isEmpty() ? QDir(m_vaultRoot).filePath(QFileInfo(file).fileName()) : path;
 }
 
 QString DailyNotes::ensureNote(const QDate &date, QString *error) const
@@ -64,6 +67,13 @@ QString DailyNotes::ensureNote(const QDate &date, QString *error) const
     if (QFileInfo::exists(path))
         return path;
 
+    // A link inside the vault that points out of it is no better than a "..".
+    // (An empty or missing root fails here too.)
+    if (!Vault::resolvesInside(m_vaultRoot, QFileInfo(path).absolutePath())) {
+        if (error)
+            *error = QStringLiteral("%1 is outside the vault").arg(path);
+        return {};
+    }
     if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
         if (error)
             *error = QStringLiteral("cannot create %1").arg(QFileInfo(path).absolutePath());
@@ -76,11 +86,12 @@ QString DailyNotes::ensureNote(const QDate &date, QString *error) const
         // Obsidian stores this setting the way it stores a link target: the
         // note's path without its ".md".
         const QString templateAbsolute =
-            QDir(m_vaultRoot).filePath(m_config.templatePath + QStringLiteral(".md"));
+            Vault::pathInside(m_vaultRoot, m_config.templatePath + QStringLiteral(".md"));
         // A missing or unreadable template is not a reason to fail creating
         // the note - it opens empty, same as Obsidian when the template file
         // has gone away.
-        if (Vault::read(templateAbsolute, templateNote)) {
+        // A link out of the vault is no template either: missing.
+        if (Vault::resolvesInside(m_vaultRoot, templateAbsolute) && Vault::read(templateAbsolute, templateNote)) {
             const QString title = QFileInfo(path).completeBaseName();
             // {{date}}/{{time}} with no format of their own fall back to the
             // Templates plugin's own date/time format, same as Obsidian: the

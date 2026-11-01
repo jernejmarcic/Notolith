@@ -22,7 +22,7 @@
 
 #include <QFile>
 #include <QFileInfo>
-#include <QImageReader>
+#include "ImageLoad.h"
 #include <QLocale>
 #include <QPainter>
 #include <QPainterPath>
@@ -651,14 +651,10 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
         return missingCard(embed.target);
 
     const QString suffix = QFileInfo(path).suffix().toLower();
-    static const QByteArrayList images = QImageReader::supportedImageFormats();
     // An <img> is an image or it is nothing: never a PDF page or a note card.
-    if (embed.html && (suffix == QLatin1String("pdf") || !images.contains(suffix.toUtf8())))
+    if (embed.html && !isImageSuffix(suffix))
         return missingCard(QFileInfo(path).fileName());
-    // See the same guard in layoutEmbed: some installs can technically
-    // decode a PDF as a flat image, but a PDF page always goes through the
-    // richer, page-aware path below instead.
-    if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8())) {
+    if (isImageSuffix(suffix)) {
         QPixmap pixmap = d->m_images.value(path);
         if (pixmap.isNull()) {
             pixmap = loadEmbedPixmap(path);

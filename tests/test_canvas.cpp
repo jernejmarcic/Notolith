@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -126,6 +127,31 @@ TEST(CanvasDocumentTest, LoadAndSaveRoundTripToDiskByteForByte)
     ASSERT_TRUE(doc.save(QString(), &error)) << error.toStdString();
 
     QFile check(path);
+    ASSERT_TRUE(check.open(QIODevice::ReadOnly));
+    EXPECT_EQ(check.readAll(), kSpecExample);
+}
+
+// A vault can ship the canvas as a link; saving must not write the link's target.
+TEST(CanvasDocumentTest, SavingALinkedCanvasWritesNothingThroughIt)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(dir.isValid() && outside.isValid());
+    const QString real = QDir(outside.path()).filePath(QStringLiteral("real.canvas"));
+    QFile seed(real);
+    ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
+    seed.write(kSpecExample);
+    seed.close();
+    const QString link = QDir(dir.path()).filePath(QStringLiteral("x.canvas"));
+    ASSERT_TRUE(QFile::link(real, link));
+
+    CanvasDocument doc;
+    QString error;
+    ASSERT_TRUE(doc.load(link, &error)) << error.toStdString();
+    EXPECT_FALSE(doc.save(QString(), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(QFileInfo(link).isSymLink());
+    QFile check(real);
     ASSERT_TRUE(check.open(QIODevice::ReadOnly));
     EXPECT_EQ(check.readAll(), kSpecExample);
 }

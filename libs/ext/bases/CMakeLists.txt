@@ -22,4 +22,4 @@ set_target_properties(noteAppC_bases PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_bases PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_bases
     PUBLIC Qt6::Core Qt6::Widgets noteAppC_index noteAppC_vault noteAppC_markdown
-    PRIVATE Qt6::Concurrent yaml-cpp::yaml-cpp)
+    PRIVATE Qt6::Concurrent noteAppC_theme yaml-cpp::yaml-cpp)

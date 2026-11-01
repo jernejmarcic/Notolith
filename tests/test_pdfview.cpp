@@ -10,6 +10,7 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
 #include <QFont>
 #include <QMouseEvent>
 #include <QPageSize>
@@ -149,6 +150,36 @@ TEST(PdfDocumentTest, OpensAndReportsPageGeometry)
     // A4 in points, allowing for QPdfWriter's own rounding.
     EXPECT_NEAR(size.width(), 595, 2);
     EXPECT_NEAR(size.height(), 842, 2);
+}
+
+TEST(PdfDocumentTest, SavingALinkedPdfWritesNothingThroughIt)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(dir.isValid() && outside.isValid());
+    const QString real = makeTestPdf(outside.path(), 1);
+    QFile before(real);
+    ASSERT_TRUE(before.open(QIODevice::ReadOnly));
+    const QByteArray bytes = before.readAll();
+    before.close();
+    const QString link = QDir(dir.path()).filePath(QStringLiteral("x.pdf"));
+    ASSERT_TRUE(QFile::link(real, link));
+
+    PdfDocument doc;
+    ASSERT_TRUE(doc.load(link));
+    PdfAnnotationData highlight;
+    highlight.kind = PdfAnnotationKind::Highlight;
+    highlight.page = 0;
+    highlight.quads = {QRectF(0.10, 0.10, 0.30, 0.03)};
+    highlight.boundary = highlight.quads.first();
+    highlight.color = QColor(255, 0, 0);
+    doc.addAnnotation(highlight);
+    QString error;
+    EXPECT_FALSE(doc.save(&error));
+    EXPECT_FALSE(error.isEmpty());
+    QFile after(real);
+    ASSERT_TRUE(after.open(QIODevice::ReadOnly));
+    EXPECT_EQ(after.readAll(), bytes);
 }
 
 TEST(PdfDocumentTest, EachAnnotationKindSurvivesSaveAndReopen)

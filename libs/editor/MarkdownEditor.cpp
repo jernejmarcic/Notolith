@@ -39,7 +39,7 @@
 #include <QOpenGLWidget>
 #endif
 #include <QFileInfo>
-#include <QImageReader>
+#include "ImageLoad.h"
 #include <QLineEdit>
 #include <QLocale>
 #include <QMenu>
@@ -174,20 +174,6 @@ qreal blockGap(const QString &text, const View &above, const View &below)
     if (bleed == 0 || isBlankBlock(text, above) || isBlankBlock(text, below))
         return kBlockSpacing;
     return kBlockSpacing + bleed;
-}
-
-/// Whether Qt reads this file suffix as an image. The usual ones are answered
-/// from a list: asking QImageReader first loads every image plugin, 28 ms and
-/// 13 MB for a note whose only content is a table.
-bool isImageSuffix(const QString &suffix)
-{
-    static const QStringList common = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
-                                       QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("svg"),
-                                       QStringLiteral("webp"), QStringLiteral("avif")};
-    if (common.contains(suffix))
-        return true;
-    static const QByteArrayList supported = QImageReader::supportedImageFormats();
-    return supported.contains(suffix.toUtf8());
 }
 
 /// Width of the margin a list keeps for its bullets and checkboxes.
@@ -342,11 +328,10 @@ QString MarkdownEditor::attachmentPathOf(const EmbedSpan &embed) const
 
 QPixmap MarkdownEditor::loadEmbedPixmap(const QString &path) const
 {
+    // Through readImage / decodeImage: an SVG may not pull in files of its own.
     if (!path.startsWith(QLatin1String("attachment:")))
-        return QPixmap(path);
-    QPixmap pixmap;
-    pixmap.loadFromData(d->m_inlineImages.value(path.mid(11)));
-    return pixmap;
+        return QPixmap::fromImage(readImage(path));
+    return QPixmap::fromImage(decodeImage(d->m_inlineImages.value(path.mid(11))));
 }
 
 void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> resolver)
@@ -3348,17 +3333,11 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
         return false;
 
     const QString suffix = QFileInfo(path).suffix().toLower();
-    // Before the image formats below are asked for: listing them loads every
-    // image plugin, which a note of tables has no use for.
     if (d->m_features.fileEmbeds && d->m_features.CSVembeds
         && (suffix == QLatin1String("csv") || suffix == QLatin1String("tsv")))
         return layoutCSVembed(view, path);
 
-    // Some installs register a PDF-reading QImageIOHandler (a thumbnailer
-    // plugin, commonly), which would otherwise steal every PDF into a flat
-    // one-page raster here before the richer, page-aware PdfPage path below
-    // ever gets a look at it.
-    if (suffix != QLatin1String("pdf") && isImageSuffix(suffix))
+    if (isImageSuffix(suffix))
         return layoutImage(view, *embed, path);
     // Obsidian's audio and video formats, and the two Ogg audio spellings
     // its list leaves out (the freedesktop sounds are .oga).

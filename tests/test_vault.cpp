@@ -167,30 +167,60 @@ TEST(VaultIo, EditKeepsTheFilesLineEndings)
     EXPECT_EQ(readAll(path), QByteArray("one\r\nthree\r\n"));
 }
 
-// A save replaces the file atomically; what the file was besides its bytes
-// stays: a symlink stays a link to the same file, and the mode is kept.
-TEST(VaultIo, ASaveKeepsASymlinkAndTheFilesMode)
+// A save replaces the file atomically and keeps its mode.
+TEST(VaultIo, ASaveKeepsTheFilesMode)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    const QString target = dir.filePath(QStringLiteral("elsewhere.md"));
-    const QString link = dir.filePath(QStringLiteral("linked.md"));
+    const QString target = dir.filePath(QStringLiteral("plain.md"));
     {
         QFile file(target);
         ASSERT_TRUE(file.open(QIODevice::WriteOnly));
         file.write("old\n");
     }
     ASSERT_TRUE(QFile::setPermissions(target, QFile::ReadOwner | QFile::WriteOwner));
-    ASSERT_TRUE(QFile::link(target, link));
 
     Note note;
     note.text = QStringLiteral("new\n");
     QString error;
-    ASSERT_TRUE(Vault::write(link, note, &error)) << error.toStdString();
-    EXPECT_TRUE(QFileInfo(link).isSymLink());
+    ASSERT_TRUE(Vault::write(target, note, &error)) << error.toStdString();
     EXPECT_EQ(readAll(target), QByteArray("new\n"));
     const QFileDevice::Permissions mode = QFile::permissions(target) & 0xF0FF; // owner, group, other
     EXPECT_EQ(mode, QFile::ReadOwner | QFile::WriteOwner);
+}
+
+// A vault is untrusted: a link at the path must not carry a write to wherever it points.
+TEST(VaultIo, AWriteThroughALeafLinkIsRefused)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(outside.isValid());
+    Note note;
+    note.text = QStringLiteral("new\n");
+
+    const QString dangling = dir.filePath(QStringLiteral("dangling.md"));
+    const QString missing = outside.filePath(QStringLiteral("missing.md"));
+    ASSERT_TRUE(QFile::link(missing, dangling));
+    QString error;
+    EXPECT_FALSE(Vault::write(dangling, note, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(missing));
+    EXPECT_FALSE(Vault::writeBytes(dangling, QByteArray("x"), &error));
+    EXPECT_FALSE(QFileInfo::exists(missing));
+
+    const QString existing = outside.filePath(QStringLiteral("existing.md"));
+    {
+        QFile file(existing);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("old\n");
+    }
+    const QString link = dir.filePath(QStringLiteral("linked.md"));
+    ASSERT_TRUE(QFile::link(existing, link));
+    EXPECT_FALSE(Vault::write(link, note, &error));
+    EXPECT_FALSE(Vault::writeBytes(link, QByteArray("x"), &error));
+    EXPECT_EQ(readAll(existing), QByteArray("old\n"));
+    EXPECT_TRUE(QFileInfo(link).isSymLink());
 }
 
 TEST(VaultIo, ReadReportsAMissingFile)
@@ -1034,4 +1064,93 @@ TEST(VaultFileOps, RenamingAFolderKeepsEachSidecarBesideItsImage)
     QString renamed, error;
     ASSERT_TRUE(vault.renamePath(dir.filePath(QStringLiteral("Notes")), QStringLiteral("Archive"), &renamed, &error));
     EXPECT_EQ(readAll(dir.filePath(QStringLiteral("Archive/pic.png annotations.md"))), QByteArray("marks"));
+}
+
+// --- links out of the vault (a vault is untrusted input) ---------------------
+
+TEST(VaultResolvesInside, FollowsLinksAndNeedsNothingToExist)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("real")));
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral("away"))));
+    ASSERT_TRUE(QFile::link(dir.filePath(QStringLiteral("real")), dir.filePath(QStringLiteral("home"))));
+    ASSERT_TRUE(QFile::link(outside.filePath(QStringLiteral("missing")), dir.filePath(QStringLiteral("dangling"))));
+    const Vault vault(dir.path());
+    EXPECT_TRUE(vault.resolvesInside(dir.path()));
+    EXPECT_TRUE(vault.resolvesInside(dir.filePath(QStringLiteral("real/new/deep.md"))));
+    EXPECT_TRUE(vault.resolvesInside(dir.filePath(QStringLiteral("home/x.md")))); // a link that stays in
+    EXPECT_FALSE(vault.resolvesInside(dir.filePath(QStringLiteral("away"))));
+    EXPECT_FALSE(vault.resolvesInside(dir.filePath(QStringLiteral("away/x/y.md"))));
+    EXPECT_FALSE(vault.resolvesInside(dir.filePath(QStringLiteral("dangling"))));
+    EXPECT_FALSE(vault.resolvesInside(dir.filePath(QStringLiteral("../elsewhere.md"))));
+    EXPECT_FALSE(vault.resolvesInside(outside.path()));
+    EXPECT_FALSE(vault.resolvesInside(QString()));
+    EXPECT_FALSE(Vault::resolvesInside(QString(), dir.path()));
+    EXPECT_FALSE(Vault::resolvesInside(dir.filePath(QStringLiteral("nowhere")), dir.filePath(QStringLiteral("nowhere/x"))));
+}
+
+// Fails on the old code: contains() is lexical, so "att" passed and the paste went through the link.
+TEST(VaultAttachmentFolder, AFolderThatIsALinkOutOfTheVaultIsTheRootInstead)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral("att"))));
+    const Vault vault(dir.path());
+    const QString note = dir.filePath(QStringLiteral("Day.md"));
+    EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("att"), note), vault.root());
+    EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("att/sub"), note), vault.root());
+    EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("./att"), note), vault.root());
+}
+
+TEST(VaultAttachmentFolder, ALinkAtTheFileNameCountsAsTaken)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QFile::link(outside.filePath(QStringLiteral("x.png")), dir.filePath(QStringLiteral("a.png")))); // dangling
+    EXPECT_EQ(Vault::uniqueAttachmentPath(dir.path(), QStringLiteral("a.png")), dir.filePath(QStringLiteral("a 1.png")));
+}
+
+// Fails on the old code: the rename followed the link, so the file ended up in `outside`.
+TEST(VaultFileOps, MoveToTrashRefusesATrashFolderThatIsALink)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral(".trash"))));
+    writeFile(dir.filePath(QStringLiteral("evil.desktop")), "x");
+    const Vault vault(dir.path());
+    QString error;
+    EXPECT_FALSE(vault.moveToTrash(dir.filePath(QStringLiteral("evil.desktop")), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(QFileInfo::exists(dir.filePath(QStringLiteral("evil.desktop"))));
+    EXPECT_TRUE(QDir(outside.path()).isEmpty());
+}
+
+TEST(VaultFileOps, MoveToTrashRefusesALinkedFolderBelowTheTrash)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".trash")));
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Sub")));
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral(".trash/Sub"))));
+    writeFile(dir.filePath(QStringLiteral("Sub/x.md")), "x");
+    const Vault vault(dir.path());
+    QString error;
+    EXPECT_FALSE(vault.moveToTrash(dir.filePath(QStringLiteral("Sub/x.md")), &error));
+    EXPECT_TRUE(QFileInfo::exists(dir.filePath(QStringLiteral("Sub/x.md"))));
+    EXPECT_TRUE(QDir(outside.path()).isEmpty());
+}
+
+// Fails on the old code: mkpath followed the link and made "sub" in `outside`.
+TEST(VaultFileOps, CreatingInAFolderThroughALinkMakesNothingOutside)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral("lnk"))));
+    const Vault vault(dir.path());
+    QString error;
+    EXPECT_TRUE(vault.createNote(QStringLiteral("lnk/sub"), QStringLiteral("N"), &error).isEmpty());
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(vault.createFolder(QStringLiteral("lnk/sub"), QStringLiteral("F"), &error).isEmpty());
+    EXPECT_TRUE(QDir(outside.path()).isEmpty());
 }

@@ -480,6 +480,10 @@ bool loadInkFile(const QString &path, InkDocument &out, InkReadResult *result)
 
 bool saveInkFile(const QString &path, const InkDocument &document, QString *error)
 {
+    if (QFileInfo(path).isSymLink()) { // QSaveFile would write the link's target
+        if (error) *error = QStringLiteral("%1 is a link, so it was not written").arg(path);
+        return false;
+    }
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         if (error) *error = file.errorString();

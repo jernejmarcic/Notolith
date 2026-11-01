@@ -105,9 +105,12 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
         theme.codeBackground = d->m_theme.color(QStringLiteral("--background-primary-alt"));
         theme.textFont = d->m_theme.textFont();
         theme.codeFont = d->m_theme.monospaceFont();
-        // resolveHtmlImages already turned every local <img src> into an
-        // absolute path, so HtmlRenderer needs no base directory of its own.
-        const QImage image = HtmlRenderer::render(html, theme, width, QString(), ratio);
+        // Every local image, a CSS url() and an unquoted src too, is the vault's to find: the note's own
+        // resolver, or nothing - never a path as written (which could be absolute, or climb out).
+        const QImage image = HtmlRenderer::render(html, theme, width, QString(), ratio, QString(), nullptr,
+                                                  [this](const QString &path) {
+                                                      return m_resolver ? m_resolver(path) : QString();
+                                                  });
         if (image.isNull())
             return false; // falls back to showing the source, not to an error
         pixmap = QPixmap::fromImage(image);
@@ -148,7 +151,7 @@ QString MarkdownEditor::resolveHtmlImages(const QString &html) const
         } else {
             const QString resolved = m_resolver(value);
             const QChar quote = doubleQuoted ? QLatin1Char('"') : QLatin1Char('\'');
-            out += QLatin1String("src=") + quote + (resolved.isEmpty() ? value : resolved) + quote;
+            out += QLatin1String("src=") + quote + resolved + quote;
         }
         last = match.capturedEnd();
     }

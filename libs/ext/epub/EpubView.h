@@ -91,6 +91,7 @@ public:
     /// True once spineIndex's chapter has actually landed in the render
     /// cache - real content, not a placeholder (see RenderedChapter).
     bool chapterCachedForTest(int spineIndex) const { return m_cache.contains(spineIndex); }
+    QImage chapterImageForTest(int spineIndex) const { return m_cache.value(spineIndex).image; }
     /// Kicks off (or joins) spineIndex's render exactly like paint would,
     /// without a real paint event.
     void requestChapterForTest(int spineIndex) { renderedChapter(spineIndex); }

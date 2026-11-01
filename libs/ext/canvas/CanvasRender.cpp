@@ -9,7 +9,7 @@
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QImage>
-#include <QImageReader>
+#include "ImageLoad.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
@@ -230,7 +230,7 @@ void CanvasView::paintGroups(QPainter &painter) const
 
         if (!node.background().isEmpty() && m_fileResolver) {
             const QString absolute = m_fileResolver(node.background());
-            const QImage image = absolute.isEmpty() ? QImage() : QImage(absolute);
+            const QImage image = absolute.isEmpty() ? QImage() : readImage(absolute);
             if (!image.isNull()) {
                 painter.save();
                 painter.setClipRect(screen);
@@ -398,7 +398,7 @@ QPixmap CanvasView::renderMarkdownContent(const QString &text, const QSize &phys
 
 QPixmap CanvasView::renderImageContent(const QString &absolutePath, const QSize &physicalSize) const
 {
-    const QImage image(absolutePath);
+    const QImage image = readImage(absolutePath);
     if (image.isNull())
         return QPixmap();
     QPixmap canvas(physicalSize);
@@ -469,7 +469,7 @@ QString CanvasView::contentSignature(const CanvasNode &node)
 namespace {
 bool isImageFile(const QString &absolute)
 {
-    return QImageReader(absolute).canRead(); // the header only, not a decode
+    return isPictureFile(absolute); // the first bytes only, not a decode
 }
 
 QString markdownFileSection(const QString &absolute, const QString &subpath)

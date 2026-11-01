@@ -1,4 +1,6 @@
 add_library(noteAppC_theme STATIC
+    ImageLoad.cpp
+    ImageLoad.h
     PopupStyle.cpp
     PopupStyle.h
     Theme.cpp

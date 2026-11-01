@@ -18,6 +18,8 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QSvgRenderer>
+#include "SafeSvg.h"
+#include "ImageLoad.h"
 #include <QUrl>
 
 namespace noteAppC {
@@ -102,7 +104,7 @@ QIcon iconFromSVG(QByteArray svg, const QColor &color, int size)
     // "is this the bundled Lucide path", the replace just never matches.
     svg.replace("currentColor", color.name().toLatin1());
 
-    QSvgRenderer renderer(svg);
+    QSvgRenderer renderer(safeSvg(svg)); // a user's own icon may not pull in files either
     if (!renderer.isValid())
         return {};
     const QRectF target = centeredTarget(renderer.viewBoxF().size(), size);
@@ -144,10 +146,8 @@ QIcon iconFromImage(const QImage &image, int size)
 
 QIcon iconFromRaster(const QByteArray &bytes, int size)
 {
-    QImage image;
-    if (!image.loadFromData(bytes))
-        return {};
-    return iconFromImage(image, size);
+    // By its bytes, Obsidian's formats only, and an SVG cleaned first (ImageLoad.h).
+    return iconFromImage(decodeImage(bytes), size);
 }
 
 QIcon iconFromBytes(const QByteArray &bytes, const QString &suffix, const QColor &color, int size)

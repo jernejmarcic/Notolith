@@ -10,6 +10,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QImage>
 #include <QPaintDevice>
 #include <QPaintEngine>
@@ -855,6 +856,27 @@ TEST(InkFormatTest, ShapesWithTooFewPointsAreRefused)
     }
 }
 
+
+TEST(InkFormatTest, SavingToALinkWritesNothingThroughIt)
+{
+    QTemporaryDir tmp;
+    QTemporaryDir outside;
+    const QString real = outside.filePath(QStringLiteral("real.ink"));
+    ASSERT_TRUE(saveInkFile(real, sampleDocument()));
+    QFile before(real);
+    ASSERT_TRUE(before.open(QIODevice::ReadOnly));
+    const QByteArray bytes = before.readAll();
+    before.close();
+    const QString link = tmp.filePath(QStringLiteral("x.ink"));
+    ASSERT_TRUE(QFile::link(real, link));
+    QString error;
+    EXPECT_FALSE(saveInkFile(link, InkDocument(), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(QFileInfo(link).isSymLink());
+    QFile after(real);
+    ASSERT_TRUE(after.open(QIODevice::ReadOnly));
+    EXPECT_EQ(after.readAll(), bytes);
+}
 
 TEST(InkFormatTest, SavesAndLoadsThroughAnAtomicReplace)
 {

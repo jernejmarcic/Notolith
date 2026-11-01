@@ -466,7 +466,10 @@ TEST(PandocRunner, CancelStopsTheChildrenToo)
     // Gone (a zombie is not running either): no /proc entry, or one in state Z, soon after the cancel.
     const auto alive = [child] {
         QFile status(QStringLiteral("/proc/%1/status").arg(child));
-        return status.open(QIODevice::ReadOnly) && !status.readAll().contains("State:\tZ");
+        if (!status.open(QIODevice::ReadOnly))
+            return false;
+        const QByteArray text = status.readAll(); // empty while the kernel tears the process down
+        return !text.isEmpty() && !text.contains("State:\tZ");
     };
     QElapsedTimer waited;
     waited.start();

@@ -4,7 +4,7 @@
 #include <QActionGroup>
 #include <QFileInfo>
 #include <QHelpEvent>
-#include <QImageReader>
+#include "ImageLoad.h"
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
@@ -628,12 +628,10 @@ void ImageView::buildToolbar()
 
 bool ImageView::load(const QString &path, QString *error)
 {
-    QImageReader reader(path);
-    reader.setAutoTransform(true);
-    const QImage image = reader.read();
+    const QImage image = readImage(path, 0, true);
     if (image.isNull()) {
         if (error)
-            *error = reader.errorString();
+            *error = tr("%1 is not a picture that can be read").arg(QFileInfo(path).fileName());
         return false;
     }
     m_path = path;

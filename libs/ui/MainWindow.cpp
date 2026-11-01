@@ -25,7 +25,7 @@
 #include <QScreen>
 #include <QWindow>
 #include <QHBoxLayout>
-#include <QImageReader>
+#include "ImageLoad.h"
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -176,7 +176,7 @@ namespace {
 
 /// "image", "audio", "video", or empty: the files Obsidian opens in a tab
 /// of their own, by the lists the editor's embeds use (layoutEmbed).
-QString mediaKindOf(const QString &path, bool askPlugins = true)
+QString mediaKindOf(const QString &path)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
@@ -188,25 +188,16 @@ QString mediaKindOf(const QString &path, bool askPlugins = true)
                                       QStringLiteral("mov"), QStringLiteral("mkv")};
     if (video.contains(suffix))
         return QStringLiteral("video");
-    // Asking Qt for its image formats dlopens every image plugin (libheif, libjxl
-    // and what they pull in) on the UI thread, and the first note opened would
-    // pay for it: the common suffixes are answered from a list, the notes and
-    // views the app opens itself never reach the plugins, and only a suffix
-    // nothing else claims is looked up there.
-    static const QStringList images = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
-                                       QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("svg"),
-                                       QStringLiteral("webp"), QStringLiteral("avif")};
-    if (images.contains(suffix))
+    // Obsidian's image set and no other: a file Qt's plugins could read (eps, psd, tiff, raw...) is not
+    // opened as a picture (decodeImage() refuses it as well).
+    if (isImageSuffix(suffix))
         return QStringLiteral("image");
     static const QStringList notImages = {QString(), QStringLiteral("md"), QStringLiteral("mdlock"),
                                           QStringLiteral("pdf"), QStringLiteral("canvas"), QStringLiteral("base"),
                                           QStringLiteral("ipynb"), QStringLiteral("epub")};
     if (notImages.contains(suffix))
         return {};
-    if (!askPlugins)
-        return {};
-    static const QByteArrayList plugged = QImageReader::supportedImageFormats();
-    return plugged.contains(suffix.toUtf8()) ? QStringLiteral("image") : QString();
+    return {};
 }
 /// A suffix the app opens itself: a module may not claim it (the registry gives
 /// such a module a problem notice and never loads it). Per kind, under the same
@@ -232,18 +223,7 @@ bool isBuiltInSuffix(const QString &suffix)
     if (suffix == QLatin1String("ipynb"))
         return true;
 #endif
-    // The module scan runs this on a worker for every suffix a module claims. The image plugins are
-    // asked only about a suffix one of them is known to read (a module claiming "ink" does not load
-    // them all); a module for such a suffix is refused, as the app opens the file as an image itself.
-    static const QStringList pluginImages = {
-        QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("heic"), QStringLiteral("heif"),
-        QStringLiteral("hif"), QStringLiteral("jxl"), QStringLiteral("jp2"), QStringLiteral("j2k"),
-        QStringLiteral("ico"), QStringLiteral("cur"), QStringLiteral("icns"), QStringLiteral("tga"),
-        QStringLiteral("ppm"), QStringLiteral("pgm"), QStringLiteral("pbm"), QStringLiteral("xbm"),
-        QStringLiteral("xpm"), QStringLiteral("wbmp"), QStringLiteral("dds"), QStringLiteral("ani"),
-        QStringLiteral("exr"), QStringLiteral("qoi"), QStringLiteral("pcx"), QStringLiteral("psd"),
-        QStringLiteral("xcf"), QStringLiteral("hdr")};
-    return !mediaKindOf(QStringLiteral("x.") + suffix, pluginImages.contains(suffix)).isEmpty();
+    return !mediaKindOf(QStringLiteral("x.") + suffix).isEmpty();
 }
 constexpr auto kGeometry = "window/geometry";
 /// Narrower than this there is no room for a sidebar beside a readable line:
@@ -965,11 +945,15 @@ QString MainWindow::resolveLinkFrom(const QString &target, const QString &notePa
     const QString resolved = m_index.resolve(target, notePath);
     if (!resolved.isEmpty())
         return m_vault.absolute(resolved);
-    const QString beside = QFileInfo(notePath).absolutePath() + QLatin1Char('/') + target;
-    if (QFileInfo::exists(beside))
-        return beside;
-    const QString fromRoot = m_vault.absolute(target);
-    return QFileInfo::exists(fromRoot) ? fromRoot : QString();
+    // The vault's own text names these, so ".." or an absolute target (or a link)
+    // must not lead out of the vault.
+    for (const QString &candidate : {QFileInfo(notePath).absolutePath() + QLatin1Char('/') + target,
+                                     m_vault.absolute(target)}) {
+        const QString path = QDir::cleanPath(candidate);
+        if (QFileInfo::exists(path) && m_vault.resolvesInside(path))
+            return path;
+    }
+    return {};
 }
 
 QWidget *MainWindow::buildMainArea()
@@ -1903,9 +1887,9 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
             return QString();
         }
         const QString path = Vault::uniqueAttachmentPath(attachmentFolder(note), name);
-        QSaveFile file(path);
-        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
-            statusBar()->showMessage(tr("Could not save %1: %2").arg(name, file.errorString()), 5000);
+        QString writeError;
+        if (!Vault::writeBytes(path, bytes, &writeError)) { // refuses a link at the path
+            statusBar()->showMessage(tr("Could not save %1: %2").arg(name, writeError), 5000);
             return QString();
         }
         return QStringLiteral("![[") + QFileInfo(path).fileName() + QStringLiteral("]]");
@@ -3251,10 +3235,16 @@ void MainWindow::applyFeatures()
          [this, parent] {
              m_bookmarks = new BookmarksPane(parent);
              m_bookmarks->setVaultRoot(m_vault.isValid() ? m_vault.root() : QString());
-             connect(m_bookmarks, &BookmarksPane::noteActivated, this, &MainWindow::openRelative);
+             // Bookmarks are this app's own (the vault's file is filtered when read), so a note
+             // outside the vault that was bookmarked stays openable.
+             const auto openBookmark = [this](const QString &relativePath) {
+                 if (m_vault.isValid() && !relativePath.isEmpty())
+                     openNote(m_vault.absolute(relativePath));
+             };
+             connect(m_bookmarks, &BookmarksPane::noteActivated, this, openBookmark);
              connect(m_bookmarks, &BookmarksPane::headingActivated, this,
-                     [this](const QString &relativePath, const QString &subpath) {
-                         openRelative(relativePath);
+                     [this, openBookmark](const QString &relativePath, const QString &subpath) {
+                         openBookmark(relativePath);
                          jumpToHeading(subpath);
                      });
              connect(m_bookmarks, &BookmarksPane::searchActivated, this,
@@ -4250,18 +4240,29 @@ void MainWindow::leaveSettings()
     m_mainStack->setCurrentIndex(0);
 }
 
+// The path of a canvas card, an embed or a base row comes from the vault's own text:
+// ".." or an absolute one does not open anything outside it.
+QString MainWindow::insideVault(const QString &relativePath) const
+{
+    if (relativePath.isEmpty() || !m_vault.isValid())
+        return {};
+    const QString path = QDir::cleanPath(m_vault.absolute(relativePath));
+    return m_vault.contains(path) ? path : QString();
+}
+
 void MainWindow::openRelative(const QString &relativePath)
 {
-    if (!relativePath.isEmpty() && m_vault.isValid())
-        openNote(m_vault.absolute(relativePath));
+    if (const QString path = insideVault(relativePath); !path.isEmpty())
+        openNote(path);
 }
 
 void MainWindow::openRelativeInNewTab(const QString &relativePath)
 {
-    if (relativePath.isEmpty() || !m_vault.isValid())
+    const QString path = insideVault(relativePath);
+    if (path.isEmpty())
         return;
     newTab();
-    openNote(m_vault.absolute(relativePath));
+    openNote(path);
 }
 
 void MainWindow::refreshOpenVaultFiles()
@@ -4480,9 +4481,7 @@ void MainWindow::startRecording()
     QDir().mkpath(folder);
     // Obsidian's name for it; a second in the same second gets " 1".
     const QString base = QStringLiteral("Recording ") + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMddHHmmss"));
-    QString path = QDir(folder).filePath(base + QLatin1Char('.') + suffix);
-    for (int n = 1; QFileInfo::exists(path); ++n)
-        path = QDir(folder).filePath(QStringLiteral("%1 %2.%3").arg(base).arg(n).arg(suffix));
+    const QString path = Vault::uniqueAttachmentPath(folder, base + QLatin1Char('.') + suffix);
     if (!m_recorder) {
         m_recorder = new AudioRecorder(this);
         connect(m_recorder, &AudioRecorder::finished, this, [this](const QString &file, const QString &error) {
@@ -4877,11 +4876,8 @@ void MainWindow::showPagePreview()
     }
     // Images and PDFs preview as a picture, as in Obsidian. The reader looks
     // at the header first, so a note is never decoded as an image.
-    if (QImageReader reader(path); reader.canRead()) {
-        QSize size = reader.size();
-        if (size.width() > 1040)
-            reader.setScaledSize(size.scaled(1040, size.height(), Qt::KeepAspectRatio));
-        const QImage image = reader.read();
+    if (isPictureFile(path)) {
+        const QImage image = readImage(path, 1040);
         if (!image.isNull())
             pagePreview()->showImage(image, m_previewPos);
         return;

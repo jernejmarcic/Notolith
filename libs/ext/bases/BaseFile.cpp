@@ -85,7 +85,8 @@ QList<BaseFormula> parseFormulas(const YAML::Node &node)
 
 SortDirection parseDirection(const YAML::Node &node)
 {
-    if (node.IsScalar() && scalarOf(node).startsWith(QLatin1String("DESC"), Qt::CaseInsensitive))
+    // A key that is not there is an undefined node, and asking one its type throws.
+    if (node.IsDefined() && node.IsScalar() && scalarOf(node).startsWith(QLatin1String("DESC"), Qt::CaseInsensitive))
         return SortDirection::Descending;
     return SortDirection::Ascending;
 }

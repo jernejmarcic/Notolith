@@ -476,6 +476,12 @@ bool PdfDocument::save(QString *error)
         return false;
     }
 
+    if (QFileInfo(m_path).isSymLink()) { // QSaveFile would write the link's target
+        if (error)
+            *error = QStringLiteral("%1 is a link, so it was not written").arg(m_path);
+        return false;
+    }
+
     // The previous bytes, kept outside the vault, before anything on disk
     // changes - mirrors Snapshots' own ordering in MainWindow's save path.
     // Five minutes apart, Obsidian's snapshot default: a PDF is a whole copy

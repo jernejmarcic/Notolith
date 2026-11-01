@@ -55,6 +55,10 @@ public:
     /// it is not a note, or when "..", an absolute path or a symlink would
     /// take it out of the vault. It need not exist, but its folder must.
     QString confinedNotePath(const QString &relativePath) const;
+    /// `relative` joined to `root` and cleaned, for a folder or file a vault's own
+    /// settings name (daily notes, templates): empty when it is absolute or would
+    /// climb out of the root with "..". Lexical only - links are not looked at.
+    static QString pathInside(const QString &root, const QString &relative);
     /// Whether `relativePath`, from outside this device (a sync record), names
     /// somewhere inside the vault that a write may go to: relative, with no
     /// empty, "." / ".." or dot-prefixed segment, no backslash or NUL, and its
@@ -62,10 +66,18 @@ public:
     /// out of it is not). The file itself may not be a symlink unless
     /// `leafMayBeLink`. Nothing need exist.
     bool isConfinedPath(const QString &relativePath, bool leafMayBeLink = false) const;
+    /// Whether `absolutePath`, links followed, really is inside the vault (its
+    /// nearest existing ancestor is, when it does not exist yet). Unlike
+    /// contains(), a symlink out of the vault does not pass.
+    bool resolvesInside(const QString &absolutePath) const;
+    /// The same against any `root`, for the settings that hold a root and not a
+    /// Vault (daily notes, templates). False when `root` does not exist.
+    static bool resolvesInside(const QString &root, const QString &absolutePath);
     /// Where a new attachment for `notePath` goes, by Obsidian's
     /// attachmentFolderPath: "" or "/" the vault root, "./" the note's own
     /// folder, "./sub" a folder beneath it, anything else a folder in the
-    /// vault. Never outside the vault. Not created here.
+    /// vault. Never outside the vault, a linked folder included (the root then).
+    /// Not created here.
     QString attachmentFolderFor(const QString &setting, const QString &notePath) const;
     /// `folder`/`fileName`, or with " 1", " 2" ... inserted before the
     /// extension when that already exists - the same collision rule

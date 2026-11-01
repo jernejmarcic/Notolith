@@ -11,6 +11,7 @@
 #include <optional>
 
 #include "ConfigFile.h"
+#include "Vault.h"
 
 namespace noteAppC {
 
@@ -111,6 +112,19 @@ bool removeItem(QList<BookmarkItem> &items, const QString &id)
     return false;
 }
 
+/// The file bookmarks of `items` that name something outside `vaultRoot` (absolute, or climbing out with "..")
+/// taken out: the vault's own bookmarks.json is not trusted to say what to open.
+void dropOutside(QList<BookmarkItem> &items, const QString &vaultRoot)
+{
+    for (qsizetype i = items.size() - 1; i >= 0; --i) {
+        BookmarkItem &item = items[i];
+        if (item.type == BookmarkItem::Type::Group)
+            dropOutside(item.items, vaultRoot);
+        else if (item.type == BookmarkItem::Type::File && Vault::pathInside(vaultRoot, item.path).isEmpty())
+            items.removeAt(i);
+    }
+}
+
 } // namespace
 
 const BookmarkItem *Bookmarks::find(const QString &id) const
@@ -143,6 +157,8 @@ void Bookmarks::load()
         if (auto item = parseItem(value.toObject()))
             m_items.append(*item);
     }
+    if (!haveOwnCopy)
+        dropOutside(m_items, m_vaultRoot);
 }
 
 bool Bookmarks::save(QString *error) const

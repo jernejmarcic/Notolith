@@ -5,6 +5,7 @@
 #include "BaseTableModel.h"
 #include "Index.h"
 #include "Vault.h"
+#include "ImageLoad.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -273,6 +274,8 @@ void BaseView::onHeaderSortChanged(int column, Qt::SortOrder order)
     const std::optional<QString> rewritten = BaseFile::rewriteViewSort(m_yamlText, m_currentView, propertyReference, direction);
     if (!rewritten)
         return; // this .base file's shape can't be edited safely; the on-screen sort still applies
+    if (QFileInfo(m_path).isSymLink())
+        return; // a link is not written through, so the on-screen sort is all there is
     QSaveFile file(m_path);
     if (!file.open(QIODevice::WriteOnly))
         return;
@@ -342,7 +345,7 @@ QWidget *BaseView::makeCard(int position)
             const qsizetype hash = target.indexOf(QLatin1Char('#'));
             if (hash >= 0) target.truncate(hash);
             QString absolutePath = m_linkResolver ? m_linkResolver(target) : QString();
-            if (absolutePath.isEmpty() && m_vault)
+            if (!m_linkResolver && m_vault && m_vault->resolvesInside(QDir::cleanPath(m_vault->absolute(target))))
                 absolutePath = m_vault->absolute(target); // no resolver: assume an already vault-relative path
             if (!absolutePath.isEmpty())
                 loadCardImage(cover, absolutePath, cover->size());
@@ -512,8 +515,8 @@ void BaseView::loadCardImage(QLabel *target, const QString &absolutePath, const 
         m_imageCache.insert(cacheKey, new QPixmap(pixmap));
     });
     watcher->setFuture(QtConcurrent::run([absolutePath, size] {
-        QImage image;
-        if (!image.load(absolutePath))
+        const QImage image = readImage(absolutePath);
+        if (image.isNull())
             return QImage();
         return image.scaled(size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
     }));

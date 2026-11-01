@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QImage>
 #include <QLabel>
+#include <QTest>
 #include <QLineEdit>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -75,6 +76,40 @@ TEST(ExpressionTest, Literals)
     EXPECT_TRUE(evalText(QStringLiteral("true"), row).boolean);
     EXPECT_FALSE(evalText(QStringLiteral("false"), row).boolean);
     EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2.5)"), row).number, 2.5);
+}
+
+// A number a formula writes is any double: the casts to int and to an index were undefined for one that does not
+// fit (found by tools/fuzz), and repeat() made whatever length it was asked for.
+TEST(ExpressionTest, HugeNumbersAreClampedNotCast)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    EXPECT_EQ(evalText(QStringLiteral("(2.5).toFixed(1000000000000000000)"), row).text.size(), 102); // "2." and 100 digits
+    EXPECT_EQ(evalText(QStringLiteral("(2.5).toFixed(-5)"), row).text, QStringLiteral("3"));
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2.567).round(1000000000000000000)"), row).number, 2.567);
+    EXPECT_EQ(evalText(QStringLiteral("\"abc\".slice(1000000000000000000000000000000)"), row).text, QString());
+    EXPECT_EQ(evalText(QStringLiteral("\"abc\".slice(0 - 1000000000000000000000000000000, 2)"), row).text, QStringLiteral("ab"));
+    EXPECT_EQ(evalText(QStringLiteral("\"ab\".repeat(3)"), row).text, QStringLiteral("ababab"));
+    QString error;
+    EXPECT_TRUE(evalText(QStringLiteral("\"abc\".repeat(1000000000)"), row, nullptr, &error).type == Value::Type::Empty);
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(evalText(QStringLiteral("\"abc\".repeat(-5)"), row).text, QString());
+}
+
+// The parser, the evaluator and the tree's destructor recurse once per level: a formula of ten thousand brackets,
+// or of a hundred thousand terms, overflowed the stack (found by tools/fuzz). It is refused instead.
+TEST(ExpressionTest, ADeeplyNestedOrVeryLongFormulaIsRefused)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    QString error;
+    EXPECT_FALSE(Expression::parse(QString(100000, QLatin1Char('(')) + QStringLiteral("1") + QString(100000, QLatin1Char(')')), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(Expression::parse(QString(100000, QLatin1Char('!')) + QStringLiteral("true"), &error));
+    QString chain = QStringLiteral("1");
+    for (int i = 0; i < 100000; ++i)
+        chain += QStringLiteral("+1");
+    EXPECT_FALSE(Expression::parse(chain, &error));
+    EXPECT_EQ(error, QStringLiteral("expression too long"));
+    EXPECT_DOUBLE_EQ(evalText(QString(20, QLatin1Char('(')) + QStringLiteral("2") + QString(20, QLatin1Char(')')), row).number, 2.0);
 }
 
 TEST(ExpressionTest, FilePropertyAccess)
@@ -483,6 +518,17 @@ TEST(BaseFileTest, InvalidYamlFails)
     auto file = BaseFile::parse(QStringLiteral("filters: [oops"), &error);
     EXPECT_FALSE(file.has_value());
     EXPECT_FALSE(error.isEmpty());
+}
+
+// A sort entry or a group with no `direction:` is an undefined node; reading its type used to throw out of parse().
+TEST(BaseFileTest, SortAndGroupWithoutADirectionParse)
+{
+    auto file = BaseFile::parse(QStringLiteral("views:\n  - type: table\n    sort:\n      - property: rating\n"
+                                               "    groupBy:\n      property: category\n"));
+    ASSERT_TRUE(file.has_value());
+    ASSERT_EQ(file->views().first().sort.size(), 1);
+    EXPECT_EQ(file->views().first().sort.first().direction, SortDirection::Ascending);
+    EXPECT_EQ(file->views().first().groupBy.direction, SortDirection::Ascending);
 }
 
 TEST(BaseFileTest, NoViewsGetsAnImplicitTable)
@@ -1145,6 +1191,79 @@ TEST_F(BasesIndexTest, BaseViewOpensAndSwitchesViews)
     EXPECT_EQ(switcher->itemText(1), QStringLiteral("Cards"));
     switcher->setCurrentIndex(1);
     ASSERT_TRUE(opened.wait(5000));
+}
+
+// Fails on the old code: a cover the resolver could not place was taken as a path from the vault root, so an
+// absolute path or a ".." one loaded a picture from outside the vault.
+TEST_F(BasesIndexTest, ACardCoverOutsideTheVaultIsNotLoaded)
+{
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    QImage red(40, 40, QImage::Format_RGB32);
+    red.fill(Qt::red);
+    const QString outsidePicture = outside.filePath(QStringLiteral("out.png"));
+    ASSERT_TRUE(red.save(outsidePicture));
+    ASSERT_TRUE(red.save(dir.filePath(QStringLiteral("in.png"))));
+
+    const auto coverImage = [&](const QString &cover, bool withResolver) {
+        write(QStringLiteral("Card.md"), ("---\ncover: \"" + cover + "\"\n---\n").toUtf8());
+        Index index;
+        EXPECT_TRUE(index.open(dir.path()));
+        build(index);
+        BaseView view;
+        view.setIndex(&index);
+        view.setVault(&vault);
+        if (withResolver) // the window's: a file of the vault, or nothing
+            view.setLinkResolver([](const QString &) { return QString(); });
+        view.show();
+        QSignalSpy opened(&view, &BaseView::viewOpened);
+        EXPECT_TRUE(view.open(dir.filePath(QStringLiteral("x.base")),
+                              QStringLiteral("filters:\n  and:\n    - file.name == \"Card\"\nviews:\n  - type: cards\n"
+                                             "    image: cover\n    order: [file.name]\n")));
+        EXPECT_TRUE(opened.wait(5000));
+        QImage found;
+        QTest::qWaitFor([&] {
+            for (QLabel *label : view.findChildren<QLabel *>()) {
+                if (label->size() == QSize(150, 90) && !label->pixmap().isNull())
+                    found = label->pixmap().toImage();
+            }
+            return !found.isNull();
+        }, 1500);
+        return found;
+    };
+    const auto coverLoaded = [&](const QString &cover, bool withResolver) {
+        return !coverImage(cover, withResolver).isNull();
+    };
+    const auto redIn = [](const QImage &image) {
+        qsizetype count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor c = image.pixelColor(x, y);
+                count += c.alpha() > 200 && c.red() > 200 && c.green() < 60 && c.blue() < 60;
+            }
+        }
+        return count;
+    };
+    EXPECT_TRUE(coverLoaded(QStringLiteral("in.png"), false)) << "control: a picture of the vault loads";
+    // An SVG of the vault is fine to show, but not for the file it names (Qt loads that from any path).
+    {
+        QFile ok(dir.filePath(QStringLiteral("ok.svg")));
+        ASSERT_TRUE(ok.open(QIODevice::WriteOnly));
+        ok.write("<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' height='40' fill='red'/></svg>");
+        ok.close();
+        QFile evil(dir.filePath(QStringLiteral("evil.svg")));
+        ASSERT_TRUE(evil.open(QIODevice::WriteOnly));
+        evil.write(("<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='40' height='40'>"
+                    "<image xlink:href='" + outsidePicture + "' width='40' height='40'/></svg>").toUtf8());
+        evil.close();
+        EXPECT_GT(redIn(coverImage(QStringLiteral("ok.svg"), false)), 500) << "control: an SVG of the vault loads";
+        EXPECT_EQ(redIn(coverImage(QStringLiteral("evil.svg"), false)), 0);
+    }
+    for (const bool withResolver : {true, false}) {
+        EXPECT_FALSE(coverLoaded(outsidePicture, withResolver)) << "absolute, resolver " << withResolver;
+        EXPECT_FALSE(coverLoaded(QDir(dir.path()).relativeFilePath(outsidePicture), withResolver))
+            << "climbing, resolver " << withResolver;
+    }
 }
 
 TEST_F(BasesIndexTest, TheTableKeepsTheBasesOwnSortOrder)

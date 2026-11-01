@@ -96,6 +96,19 @@ QString EpubView::extractToCache(const QString &archivePath) const
     return QFileInfo::exists(cachePath) ? cachePath : QString();
 }
 
+namespace {
+/// What the renderer may load for a book: a file under `resourceRoot` (its extraction cache) and nothing else.
+/// Runs on the render thread, so it holds a copy of the path and touches no widget.
+std::function<QString(const QString &)> onlyUnder(const QString &resourceRoot)
+{
+    return [root = resourceRoot](const QString &path) {
+        const QString real = QFileInfo(path).canonicalFilePath();
+        const QString realRoot = QFileInfo(root).canonicalFilePath();
+        return !real.isEmpty() && !realRoot.isEmpty() && real.startsWith(realRoot + QLatin1Char('/')) ? real : QString();
+    };
+}
+} // namespace
+
 QString EpubView::rewriteResourceRefs(QString html, const QString &chapterArchivePath)
 {
     static const QRegularExpression attrRe(
@@ -119,11 +132,8 @@ QString EpubView::rewriteResourceRefs(QString html, const QString &chapterArchiv
                 if (!cachePath.isEmpty())
                     replacement = cachePath;
                 // else: refused (escaped the archive) or unreadable - leave
-                // `value` as written, which HtmlRenderer's own filesystem
-                // resolution then also fails to find, so nothing draws;
-                // same degrade-to-nothing behaviour a missing local path or
-                // a remote one already gets (see HtmlRenderer's class
-                // comment).
+                // `value` as written; the renderer only loads files under the
+                // extraction cache (onlyUnder), so nothing draws.
             }
         }
         const QString wholeMatch = match.captured(0);
@@ -284,9 +294,10 @@ void EpubView::requestChapterRender(int spineIndex)
     // already sitting in the font database (never registers a new one - see
     // above), which is what makes it safe; see the report for the profiling
     // that confirmed both.
-    (void)QtConcurrent::run([this, lifeline = m_lifeline, spineIndex, epoch, withImages, css, theme, width, ratio] {
+    const auto localPath = onlyUnder(resourceCachePath(QString()));
+    (void)QtConcurrent::run([this, lifeline = m_lifeline, spineIndex, epoch, withImages, css, theme, width, ratio, localPath] {
         QList<HtmlRenderer::TextRun> textRuns;
-        QImage image = HtmlRenderer::render(withImages, theme, width, QString(), ratio, css, &textRuns);
+        QImage image = HtmlRenderer::render(withImages, theme, width, QString(), ratio, css, &textRuns, localPath);
         lifeline->post(this, [this, spineIndex, epoch, image = std::move(image), textRuns = std::move(textRuns)]() mutable {
             deliverChapterRender(spineIndex, epoch, std::move(image), std::move(textRuns));
         });
@@ -348,7 +359,8 @@ const EpubView::RenderedChapter *EpubView::renderedChapterBlocking(int spineInde
     RenderedChapter chapter;
     const qreal ratio = devicePixelRatioF();
     chapter.image =
-        HtmlRenderer::render(withImages, rendererTheme(), contentWidth(), QString(), ratio, css, &chapter.textRuns);
+        HtmlRenderer::render(withImages, rendererTheme(), contentWidth(), QString(), ratio, css, &chapter.textRuns,
+                             onlyUnder(resourceCachePath(QString())));
     chapter.height = chapter.image.isNull() ? 40 : int(chapter.image.height() / chapter.image.devicePixelRatio());
     chapter.textLength =
         chapter.textRuns.isEmpty() ? 0 : chapter.textRuns.last().offset + chapter.textRuns.last().text.size();

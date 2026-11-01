@@ -24,6 +24,7 @@
 #include <QRegularExpression>
 #include <QStatusBar>
 #include <QSvgRenderer>
+#include "SafeSvg.h"
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -187,7 +188,7 @@ void showNotice(QWidget *parent, const QString &objectName, const QString &title
 /// A diagram's cached SVG as a PNG in `folder`, wide enough to stay sharp on paper, on white.
 QString rasterised(const QByteArray &svg, const QString &folder)
 {
-    QSvgRenderer renderer(svg);
+    QSvgRenderer renderer(safeSvg(svg));
     if (!renderer.isValid() || renderer.defaultSize().isEmpty())
         return {};
     const QSize natural = renderer.defaultSize();

@@ -1,0 +1,43 @@
+# LeakSanitizer suppressions for the sanitizer build (README.md, Development). Only what lives for the whole process
+# and is not Notolith's to free: the font stack, Qt's thread pool, and the one-time setup of third-party libraries.
+# Not by library name (leak:libQt6Core would hide a QObject Notolith forgot to delete): by what leaks.
+leak:QFontDatabase
+leak:QFontEngine
+leak:QFontPrivate
+leak:QFontCache
+leak:QFontconfigDatabase
+leak:QFreetypeFace
+leak:QPlatformFontDatabase
+leak:QThreadPoolPrivate::startThread
+leak:QCoreApplicationPrivate::init
+leak:QApplicationPrivate::init
+leak:QGuiApplicationPrivate
+leak:hb_
+leak:FT_
+leak:FcInit
+leak:FcConfig
+leak:libfontconfig
+leak:libharfbuzz
+leak:libfreetype
+# MicroTeX sets up its symbol tables once and never tears them down.
+leak:tex::
+leak:ensureInitialised
+# PdfPage keeps its QLibrary for the process (libs/render/PdfPage.cpp).
+leak:PdfPage.cpp
+# A std::function a test keeps in a global to answer the next message box.
+leak:onNextBox
+# The graphics driver, loaded by Qt's platform plugin even offscreen.
+leak:libnvidia
+leak:libGLX
+leak:libGLdispatch
+leak:libEGL
+leak:libX11
+leak:libxcb
+leak:libdbus
+leak:libglib
+leak:libgobject
+leak:microtex
+leak:libcrypto
+# Blind spot: an allocation whose whole stack is in a library dlclosed before exit (the graphics driver, or an
+# optional module a test loads) has no frame to name, so this hides a leak from such a module too (README).
+leak:<unknown module>

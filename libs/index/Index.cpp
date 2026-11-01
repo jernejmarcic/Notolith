@@ -1465,6 +1465,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     int rewritten = 0;
     QStringList skippedLossy;
     QStringList skippedUnreadable;
+    QStringList skippedLinked;
 
     const auto reindex = [&](const QString &absolutePath, const QString &text) {
         Metadata metadata = parser.parse(text, absolutePath, options);
@@ -1596,6 +1597,11 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         if (note.text == textBefore)
             continue; // a sibling link in a moved folder: still right, nothing to write
 
+        // A note that is a link is not written through (Vault::write refuses): named, the rest go on.
+        if (QFileInfo(absolutePath).isSymLink()) {
+            skippedLinked.append(actualRelative);
+            continue;
+        }
         if (!Vault::write(absolutePath, note, error)) {
             endBatch();
             return -1;
@@ -1616,7 +1622,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     }
 
     endBatch();
-    if (error && (!skippedLossy.isEmpty() || !skippedUnreadable.isEmpty())) {
+    if (error && (!skippedLossy.isEmpty() || !skippedUnreadable.isEmpty() || !skippedLinked.isEmpty())) {
         QStringList notes;
         if (!skippedLossy.isEmpty())
             notes << QStringLiteral("not UTF-8, so its links were left as they are: %1")
@@ -1624,6 +1630,9 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         if (!skippedUnreadable.isEmpty())
             notes << QStringLiteral("could not be read, so its links were left as they are: %1")
                          .arg(skippedUnreadable.join(QStringLiteral(", ")));
+        if (!skippedLinked.isEmpty())
+            notes << QStringLiteral("is a link, so its links were left as they are: %1")
+                         .arg(skippedLinked.join(QStringLiteral(", ")));
         *error = notes.join(QStringLiteral("; "));
     }
     return rewritten;

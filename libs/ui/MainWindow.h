@@ -837,6 +837,8 @@ void updateVimStatus();
     void onIndexChanged();
     /// Opens a vault-relative path from the index or the switcher.
     void openRelative(const QString &relativePath);
+    /// `relativePath` as an absolute path when it is inside the vault, else empty.
+    QString insideVault(const QString &relativePath) const;
     void openRelativeInNewTab(const QString &relativePath); ///< the graph's node menu
     void openSingleFile(const QString &path);
     /// Resets the editor, tab and both panes to "nothing open", without

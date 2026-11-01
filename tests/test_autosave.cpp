@@ -146,11 +146,10 @@ protected:
 
 } // namespace
 
-// The module scan asks about every suffix a module claims, on a worker. A
-// suffix that no image plugin could read ("ink") must not load them all; one
-// only a plugin reads (tiff, heic) must still be refused, since the app opens
-// it as an image itself and the module would never be used.
-TEST(ModuleSuffixTest, OnlyAPluginImageSuffixAsksThePlugins)
+// The module scan asks about every suffix a module claims, on a worker. It must
+// not load the image plugins to answer: the app opens Obsidian's image set only,
+// so a suffix only a plugin reads (tiff, heic) is a module's to claim.
+TEST(ModuleSuffixTest, NoSuffixAsksThePlugins)
 {
     ASSERT_EQ(imagePluginsLoaded(), 0) << "an earlier test loaded them";
     for (const char *suffix : {"ink", "md", "png", "pdf", "mp3", "glyphs"})
@@ -158,10 +157,9 @@ TEST(ModuleSuffixTest, OnlyAPluginImageSuffixAsksThePlugins)
                   QByteArray(suffix) == "md" || QByteArray(suffix) == "png" || QByteArray(suffix) == "mp3") // a PDF is the pdfview module's
             << suffix;
     EXPECT_EQ(imagePluginsLoaded(), 0) << "the scan loaded the image plugins for suffixes none of them reads";
-    for (const char *suffix : {"tiff", "heic", "jxl"}) {
-        const bool qtReadsIt = QImageReader::supportedImageFormats().contains(suffix);
-        EXPECT_EQ(MainWindow::isBuiltInSuffixForTests(QString::fromLatin1(suffix)), qtReadsIt) << suffix;
-    }
+    for (const char *suffix : {"tiff", "heic", "jxl", "eps", "psd"})
+        EXPECT_FALSE(MainWindow::isBuiltInSuffixForTests(QString::fromLatin1(suffix))) << suffix;
+    EXPECT_EQ(imagePluginsLoaded(), 0) << "the scan loaded the image plugins";
 }
 
 // The commit is not on the UI thread: with it held open the autosave call has

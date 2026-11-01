@@ -775,6 +775,39 @@ protected:
 
 } // namespace
 
+// A note that is a link is named and skipped; the notes around it are still rewritten.
+// (Before, the first refusal returned -1 with the rest of the batch undone.)
+TEST_F(RenameLinksTest, ANoteThatIsALinkIsSkippedAndTheBatchGoesOn)
+{
+    write(QStringLiteral("A.md"), "# A\n");
+    write(QStringLiteral("Aaa.md"), "[[A]]");
+    write(QStringLiteral("Zzz.md"), "[[A]]");
+    QTemporaryDir outside;
+    const QString real = QDir(outside.path()).filePath(QStringLiteral("dot.md"));
+    {
+        QFile file(real);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("[[A]]");
+    }
+    ASSERT_TRUE(QFile::link(real, dir.filePath(QStringLiteral("Mid.md"))));
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("A.md")), QStringLiteral("B"), &newPath, &error))
+        << error.toStdString();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("A.md"), QStringLiteral("B.md"), vault, &error), 2)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Aaa.md"))), QByteArray("[[B]]"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Zzz.md"))), QByteArray("[[B]]"));
+    EXPECT_EQ(read(real), QByteArray("[[A]]")) << "not written through";
+    EXPECT_TRUE(QFileInfo(dir.filePath(QStringLiteral("Mid.md"))).isSymLink());
+    EXPECT_TRUE(error.contains(QStringLiteral("Mid.md"))) << error.toStdString();
+}
+
 TEST_F(RenameLinksTest, FolderRenameRewritesPathLinksIntoIt)
 {
     write(QStringLiteral("Folder/A.md"), "# A\n");
