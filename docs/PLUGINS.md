@@ -65,23 +65,20 @@ not exist until the module did.
 A module is a Qt plugin (`QPluginLoader`) found in `<libdir>/notolith/modules`
 (`NOTEAPPC_MODULE_DIRS` replaces it in `-DNOTEAPPC_DEV_ENV_OVERRIDES=ON` builds only). Its manifest is read without loading it; the library
 loads the first time one of its suffixes is opened or one of its commands runs. Nothing else
-loads a module: indexing never does. Three packages ship by default (the sharing engine, `notolith-share`, only with `NOTEAPPC_WITH_SHARE`, docs/OFFLINE.md): `notolith-ink` (the ink core library
-and the ink module), `notolith-hwfont` (depends on `notolith-ink`), `notolith-pdfview` (the
+loads a module: indexing never does. Two modules ship: `notolith-pdfview` (the
 PDF viewer module, and `libnotolith-pdfpage.so`, poppler behind a three-function C face that
 PDF embeds and the hover preview resolve by name on first use from any thread, so the base
-executable links no poppler) and `notolith-share` (the sharing engine behind
+executable links no poppler) and, only with `NOTEAPPC_WITH_SHARE` (docs/OFFLINE.md), `notolith-share` (the sharing engine behind
 `ShareEngineBase`: owns no suffix and no command, so it is loaded by feature, when a vault holds
 a share or a note is shared or joined; the executable links none of protobuf, Abseil,
 libdatachannel or avahi); the manifest has no
-dependency list, so a module whose core library is missing fails to load with the loader's
+dependency list, so a module whose library is missing fails to load with the loader's
 message, shown in Settings. A module must match the host's ABI tag
 (`version-token-qtversion`, the token random per build directory); a second module claiming
-a suffix an earlier one claims is refused. With `NOTEAPPC_STATIC_MODULES` (the Android build) the
-ink and hwfont modules are Qt static plugins linked into the executable instead, found through
-`QPluginLoader::staticPlugins()` with the same manifest and loaded on first use all the same
-([PLATFORMS.md](PLATFORMS.md), "Mobile"). The mechanism is in `libs/modules/`; the first two
-modules are documented in [INK.md](INK.md). Spec:
-`docs/INK-DESIGN.md` section 4.
+a suffix an earlier one claims is refused. With `NOTEAPPC_STATIC_MODULES` (the Android build) a module can be a Qt static
+plugin linked into the executable instead, found through `QPluginLoader::staticPlugins()` with the same
+manifest and loaded on first use all the same ([PLATFORMS.md](PLATFORMS.md), "Mobile"). The mechanism is
+in `libs/modules/`.
 
 ### Tier 2: runtime plugins - out-of-process, over a C ABI
 

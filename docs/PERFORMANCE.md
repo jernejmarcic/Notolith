@@ -27,52 +27,7 @@ on a machine with no GPU at all.
 6. **Numbers taken on a busy machine are not numbers.** See
    [Measurement pitfalls](#measurement-pitfalls).
 
-## Handwriting
-
-The `ink` bench phase (`noteAppC-bench --phase ink --json`; `Bench.cpp`, "handwriting (phase `ink`)") measures the
-handwriting tab (libs/ext/ink, design in docs/INK-DESIGN.md). The design that the rows
-test: the live stroke is rasterised per segment into an overlay image, committed items come from 512 px tiles rendered
-on the thread pool (a paint never renders: it paints the tiles it has, blurry or the page colour where it has none, and
-asks the pool for the rest), a file above 256 KB is parsed off the UI thread, and the module scan runs after the first
-paint. Nothing of it runs until an ink tab is opened.
-
-How the rows are taken: a 1200x800 canvas (the scroll rows: inside a 1200x800 scroll area) holding a synthetic page of
-30-point squiggles at one density (a cell is 12 x 40 px; 10 000 strokes make a 4 000 px page, 50 000 a 20 000 px one);
-the pen row is 5 strokes of 400 samples at 200 Hz, each move timed as `sendEvent` plus `processEvents`, with the paint
-counted to prove it ran; the scroll row steps one viewport height at a time down and back up over the same 4 000 px
-once the tile cache is warm (the first two passes untimed; the cold rows use an 8 MB cache and steps two screens
-apart, so every step needs new tiles); the zoom row holds the cache to one screen so "nothing in flight" is exactly
-"the visible tiles are rendered", and times from the moment the canvas switched its tiles to the new zoom; the module
-rows alternate "present" and "empty" sample by sample. Every number above is the median of the medians of three
-invocations, run as `taskset -c 6-11,18-23 chrt --idle 0 systemd-run --user --scope -q -p MemoryMax=8G`
-(six cores and their hyperthreads, idle scheduling class, 8 GB cap), in an isolated XDG home.
-
-**The rows are provisional.** Another heavy process ran for the whole session, the pinned cores were
-71-77 % idle, and under `chrt --idle` the bench yields to it, so the pool-side rows (tile
-latency, zoom re-render, cold start) are pessimistic and noisy; the rows nearest their gate are the cold-start
-difference and the keystroke ratio. Both use `--phase inkmodules` (61 alternated pairs, 9 rounds of 30 keys, spread
-reported in the row, and a guard that the "present" condition finds the module manifests and the "empty" one finds
-none) and read 0.09 ms with quartiles of about +-0.5 ms, and a ratio of 1.00 over three runs (rounds 0.90-1.16). One
-caveat is recorded rather than removed: the ink feature registration is process-global (`Settings::registerFeature`),
-so after the first "present" window every "empty" window of the same process already has the feature row; "empty"
-means no manifests to scan, which is what the scan costs. A rerun on an idle machine would tighten every row of this
-section.
-
-Also measured, not gated (`--phase inkcarry`, same conditions): tile render latency for a screen of cold
-tiles 32.5 ms at 10 000 strokes and 32.7 ms at 50 000 (a frame that asks for them: 2.1 / 2.3 ms on the UI thread,
-which includes building the tile jobs); `selectItems` over 100 050 segments inside an 800-vertex lasso 7.4 ms, over
-3 000 shapes 10.9 ms; one sample of dragging a selection of 9 600 points 0.32 ms; one eraser sample over 3 000 shapes
-0.077 ms; 50 text boxes on one screen 2.0 ms for the first paint and 1.9 / 1.4 ms for the paint after a zoom 2 / 4
-settle; a keystroke in an open box of 16 384 characters 6.1 ms; pen-up in a 50 000-stroke page through the view
-1.8 ms; parsing a clipboard payload 95 ms at 7.5 MiB and 187 ms at 15.2 MiB (about 12 ms a MiB, on the UI thread).
-
-Three limits came out of those rows, each with its test:
-
-| what | before | after |
-|---|---|---|
-| a fast scroll over 50 000 strokes (20 viewport steps without waiting): time until the last screen is sharp, tile jobs that ran | 229.6 ms, 90 jobs | 70.0 ms, 28 jobs (`TileCache::keepOnly`: a paint cancels the queued renders for cells it no longer wants; a cell wanted again after being cancelled gets a new job at once and the abandoned result is dropped) |
-| a clipboard payload of 62 MiB pasted | parsed on the UI thread, about 0.75 s (11.9 ms a MiB from the 7.5 and 15.2 MiB rows) | refused by its size at once; the cap is 16 MiB (`kMaxClipboardBytes`) |
-| one paint of 8 text boxes of 8 MB each | all 8 rendered and held, 64 MB | rendering stops once the pictures this paint rendered fill the 32 MB budget (a test: at most the budget plus one picture); pictures already cached do not count against it, and a paint that skipped boxes schedules one more, so every box gets its picture within a few paints; all cached pictures together are held under a hard ceiling of 4 x the budget, 128 MB (`kTextCacheCeilingBytes`): over it a box keeps its stale picture or the placeholder and asks for no more paints (a test: 100 boxes of 8 MB in view, painted 12 times, never above the ceiling plus one picture, and the paints stop) |
+## Loadable modules
 
 Cold start and executable size: `ENABLE_EXPORTS` makes the executables carry their whole dynamic symbol table so
 modules can resolve host classes (`.dynsym` 2.9 k symbols without it, 15.5 k with it). `noteAppC-bench` from builds
@@ -129,12 +84,6 @@ machine, so read ratios more than single milliseconds:
 | Settings, first open in a window (bench) | 30 ms (252 ms before) | - |
 | cold index, 20 000 notes | 0.95 s on a quiet machine; 1.04 s with the tag-heavy note | 5 s |
 | peak RSS, vault plus a 1 MB note | 228 MB | 250 MB |
-| ink pen sample, 10 000-stroke page (bench) | 0.047 ms (provisional; runs 0.047, 0.047, 0.047) | 1 ms |
-| ink scrolled frame, 10 000 strokes (bench) | 1.03 ms (provisional; runs 1.01-1.08) | 4 ms |
-| ink scrolled frame, 50 000 strokes, ratio to 10 000 | 1.07x (provisional; 1.10 / 1.03 ms; per-run ratios 1.01-1.09) | 2x |
-| ink zoom settle to sharp (bench), the re-render after the tiles switch | 20.8 ms (provisional; runs 20.7-22.2; plus kZoomSettleMs = 400 ms, 403.9 ms in all) | 100 ms |
-| cold start, module directory present vs empty | 0.09 ms paired median difference (provisional; three runs of 61 alternated pairs: medians 0.09, -0.03, -0.03; quartiles about -0.5 .. +0.55 each; the earlier 21-pair runs of 0.47, -0.37, 1.37 were noise of this size, which is why the count went to 61) | 1 ms |
-| window keystroke on the 1 MB note, module directory present vs empty (after the scan), ratio | 1.00x pooled (provisional; three runs of 9 rounds: 0.58 / 0.57 ms; the rounds' own ratios range 0.90-1.16, 0.94-1.16, 0.97-1.04) | 1.10x |
 | cold start, with vs without the symbol export (`ENABLE_EXPORTS`) | +2.1 % later windows, -2.2 % the first window (provisional); the loader's own time equal | +5 % |
 | `noteAppC` executable size, with vs without the symbol export | +1.3 % file (292 070 216 vs 288 271 616 bytes, the gate); +10.4 % stripped, +10.6 % text segment, of which the dynamic tables are +9.5 % of the base text (13.89 vs 12.56 MB; just under the line on those readings) | +10 % |
 

@@ -43,7 +43,7 @@ internal identifiers, not in installed paths or in your vault. The binary is
   palette (Ctrl+P), and a right-click menu with a web search.
 - **Modules** - spellcheck, graph view (global and local), canvas (JSON
   Canvas), bases (`.base` views), a PDF viewer with annotation, image
-  annotation, handwritten notes with pen input (preview), code blocks run
+  annotation, code blocks run
   through a Jupyter kernel, Git-backed note history, and static-site
   publishing. Each can be switched off at build time.
 - **EPUB reader** - opens `.epub` books (EPUB 2 and 3) with a table of
@@ -87,8 +87,8 @@ cd Notolith/packaging/arch
 makepkg -si
 ```
 
-This builds, runs the tests and installs four packages together: `notolith`,
-`notolith-ink`, `notolith-hwfont` and `notolith-pdfview`. `makepkg -si
+This builds, runs the tests and installs two packages together: `notolith`
+and `notolith-pdfview`. `makepkg -si
 --nocheck` skips the tests, which build the whole tree a second time. The first
 build needs network access to fetch its sources (see the header of
 `packaging/arch/PKGBUILD`); the installed app uses none.
@@ -98,7 +98,7 @@ Update: `git pull`, then `makepkg -sif` in `packaging/arch`.
 Uninstall:
 
 ```sh
-sudo pacman -Rns notolith notolith-ink notolith-hwfont notolith-pdfview
+sudo pacman -Rns notolith notolith-pdfview
 ```
 
 ### Other Linux: build from source
@@ -107,29 +107,25 @@ Needs Qt 6.7 or newer, a C++20 compiler, CMake 3.28 or newer, Ninja and git.
 The package names below are Arch's.
 
 - **Always:** `qt6-base` `qt6-svg` `cmake` `ninja` `git` `python3`
-  `pkgconf` `zlib`, and a C++20 compiler. `python3` runs at configure time. `pkgconf` finds most of the optional libraries: without it
+  `pkgconf`, and a C++20 compiler. `python3` runs at configure time. `pkgconf` finds most of the optional libraries: without it
   they are all silently left out.
 - **Optional modules** (each is left out cleanly when its library is missing,
   and the configure step lists what was built): `qt6-multimedia` (audio and
   video embeds) `hunspell` `syntax-highlighting` `litehtml` `gumbo-parser`
-  (editing HTML blocks in place) `libgit2` `libarchive` `zeromq` `abseil-cpp`
-  (handwriting) `poppler-qt6` (PDF viewer).
+  (editing HTML blocks in place) `libgit2` `libarchive` `zeromq` `poppler-qt6` (PDF viewer).
   `yaml-cpp` is used when installed and fetched otherwise.
 - **Needed to run code, diagrams and plugins:** `libseccomp` at build time
   (required unless you pass `-DNOTEAPPC_ALLOW_NO_SECCOMP=ON`; then nothing that
   needs the sandbox runs), and `bubblewrap` and util-linux's `prlimit` at run
   time. When `systemd-run` and a user manager are present, each sandbox also
   gets a memory cap in its own cgroup. CMake warns when a tool is missing.
-- **Network at configure time:** md4qt, MicroTeX and tinyxml2 are fetched, plus
-  ink-stroke-modeler with the handwriting module, and yaml-cpp when it is not
+- **Network at configure time:** md4qt, MicroTeX and tinyxml2 are fetched, and yaml-cpp when it is not
   installed. Rust is needed only for the optional yrs sharing backend
   (`NOTEAPPC_WITH_SHARE_YRS`, off by default), and its build then downloads
   about 45 crates.
 - **Tests:** `gtest`. Configure with `-DBUILD_TESTING=OFF` to skip the tests;
   a release build must, since a build with tests honours test-only
   environment variables that load native code.
-  The handwriting module's configure step looks for gtest even then, so
-  without gtest build with `-DNOTEAPPC_WITH_INK=OFF` too.
 
 ```sh
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
@@ -196,7 +192,6 @@ Documentation, in `docs/`:
 - `STYLING.md` - callout and code-block styles
 - `GRAPH.md`, `CANVAS.md` - graph view and JSON Canvas
 - `ANNOTATIONS.md` - image annotation
-- `INK.md`, `INK-DESIGN.md` - handwritten notes: usage and design
 - `NOTEBOOKS.md` - running code blocks, and the sandbox
 - `OFFLINE.md` - what the default build leaves out, and the options that bring it back
 - `ENCRYPTION.md` - encrypted notes (not in the default build)
@@ -215,4 +210,4 @@ releases, and `THIRD-PARTY.md` lists every other component and its licence.
 
 GPL-3.0-or-later, see `LICENSE`. Every file is under GPL-3.0-or-later unless it
 says otherwise. Third-party components and their licences (md4qt, MicroTeX and
-its fonts, tinyxml2, ink-stroke-modeler, Lucide icons) are in `THIRD-PARTY.md`.
+its fonts, tinyxml2, Lucide icons) are in `THIRD-PARTY.md`.
