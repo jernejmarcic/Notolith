@@ -55,7 +55,7 @@ In Source mode nothing is underlined at all.
 ## Your own dictionary
 
 "Add "w" to dictionary" appends the word to
-`~/.config/noteAppC/dictionary.txt`, one word per line, and remembers it for
+`~/.config/notolith/dictionary.txt`, one word per line, and remembers it for
 the next start; the underline goes at once. Add "Notolith" here, a word no
 dictionary has: Notolith. Right-click it afterwards: the menu now says
 "Remove "Notolith" from dictionary", and choosing it puts the underline back.

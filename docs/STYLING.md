@@ -2,7 +2,7 @@
 
 Callouts and code blocks share one style system: named styles in a config file,
 overridable on any single block, written so a note still opens in Obsidian. Both
-files live in `~/.config/noteAppC/` (or under `$XDG_CONFIG_HOME`), both are
+files live in `~/.config/notolith/` (or under `$XDG_CONFIG_HOME`), both are
 optional, and both are reread the moment they change - no restart.
 
 ## The shared rules
@@ -20,7 +20,7 @@ optional, and both are reread the moment they change - no restart.
     entirely if there is none, rather than drawn as a box;
   - a local file, as a path or `file://` URL: `.svg`, `.png`, `.jpg`, or
     `.webp` where Qt's image formats plugin is installed (`qt6-imageformats`);
-  - an `https://` URL, fetched once into `~/.cache/noteAppC/icons` and shown
+  - an `https://` URL, fetched once into `~/.cache/notolith/icons` and shown
     when it arrives. It never holds up drawing the note.
 - **The INI format**: one `[section]` per type or language, `key = value`,
   `;` or `#` for a comment line, ` ; comment` after a value, and double quotes
@@ -39,7 +39,7 @@ The Obsidian form works unchanged:
 > Body.
 ```
 
-`~/.config/noteAppC/callouts.ini` styles a type - one of Obsidian's thirteen,
+`~/.config/notolith/callouts.ini` styles a type - one of Obsidian's thirteen,
 or a new one of your own:
 
 ```ini
@@ -88,7 +88,7 @@ without it, CommonMark joins the next `>` line to the nested one's paragraph.
 ## Task checkboxes
 
 With the "Checkbox states" core plugin on (docs/EDITOR.md lists the built-in
-states), `~/.config/noteAppC/tasks.ini` changes or adds states (the index command and
+states), `~/.config/notolith/tasks.ini` changes or adds states (the index command and
 publishing read it too, with no editor open). One section per
 state; a section named for a built-in state (`cancelled`, `dropped`,
 `in-progress`, `forwarded`, `scheduled`, `question`, `important`, `star`, `idea`,
@@ -135,7 +135,7 @@ corner.
 The caret in a tab group, or Source mode, shows the plain text instead: no
 strip, panel or run control, the listing still highlighted.
 
-`~/.config/noteAppC/codeblocks.ini` styles a language:
+`~/.config/notolith/codeblocks.ini` styles a language:
 
 ```ini
 [python]
@@ -435,7 +435,7 @@ its `key: value` lines.
 ## Themes
 
 Pick a colour scheme on the settings page's Appearance tab. A theme file goes
-in `~/.config/noteAppC/themes/` (or under `$XDG_CONFIG_HOME`), or in a vault's
+in `~/.config/notolith/themes/` (or under `$XDG_CONFIG_HOME`), or in a vault's
 own `.obsidian/themes/` or `.obsidian/noteAppC-themes/` to travel with that
 vault. Three forms are read from any of those directories:
 
@@ -586,7 +586,7 @@ being lit up.
   icons (searchable, each shown) or takes one typed character; "Remove icon"
   clears it. The icon shows left of the name in the tree and on the note's tabs,
   in `--text-normal` and `--text-muted`. UI only: kept in
-  `<config dir>/noteAppC/vaults/<digest>/icons.json` next to the bookmarks, never
+  `$XDG_DATA_HOME/notolith/vaults/<digest>/icons.json` next to the bookmarks, never
   in the vault or a file name; a rename or move takes it along (a folder's
   children too), a delete drops it. Settings > Appearance > "Icons on files and
   folders" hides them all and keeps them. Not shown in the quick switcher or the

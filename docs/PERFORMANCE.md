@@ -266,7 +266,7 @@ particular screen does not work - Hyprland put a fullscreen test window on the
 main panel regardless of `setScreen()`.
 
 The bench generates its vault with `tools/gen_bench_vault.py` unless one is
-given, never touches `~/.config/noteAppC`, and reports median, p95 and worst.
+given, never touches `~/.config/notolith`, and reports median, p95 and worst.
 
 The `save` phase times `MainWindow::save()` (the path an autosave and Ctrl+S
 share: `QSaveFile` commit with `fdatasync`, the recovery snapshot, the history
@@ -275,7 +275,7 @@ vault of their own, 15 saves each. Run it with `TMPDIR` on a real disk: `/tmp`
 is tmpfs on the development machine and `fdatasync` there costs nothing (0.14 / 0.48 ms
 median, which says nothing about a disk). The bench also points
 `XDG_DATA_HOME` at a private directory, so the snapshots stay out of the real
-`~/.local/share/noteAppC/recovery`.
+`~/.local/share/notolith/recovery`.
 
 ```sh
 mkdir ~/.cache/bench-tmp && TMPDIR=~/.cache/bench-tmp \

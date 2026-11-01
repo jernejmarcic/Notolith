@@ -9,7 +9,7 @@ own icon and accent colour, an alias should look identical to its canonical
 type, `-`/`+` callouts should start folded/open and be clickable to toggle,
 nesting should keep each level's own colour, and the two styled-inline
 examples at the bottom should restyle without any `callouts.ini` file -
-remove `~/.config/noteAppC/callouts.ini` (there is none by default) and they
+remove `~/.config/notolith/callouts.ini` (there is none by default) and they
 still look right, because the style rides in the `|` slot / `:::` braces
 that Obsidian itself parses and ignores.
 
@@ -138,7 +138,7 @@ that Obsidian itself parses and ignores.
 
 > [!deadline] Not a built-in type
 > An unrecognised type still renders as a callout - generic styling unless a
-> `[deadline]` section exists in `~/.config/noteAppC/callouts.ini`
+> `[deadline]` section exists in `~/.config/notolith/callouts.ini`
 > (`docs/STYLING.md`).
 
 ## The `:::` container form

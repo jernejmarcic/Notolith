@@ -26,6 +26,6 @@ The local graph is the branch icon in the right sidebar. It shows the open
 note's neighbours only, with Depth (1 to 5) and Incoming/Outgoing switches in
 its gear. Open [[Hub]] to see a busy one.
 
-The settings are kept in the app's own copy of `graph.json`; the file in this
+The settings are kept in the app's own copy of `graph.json` (in `~/.local/state/notolith`); the file in this
 vault is only the starting point. The whole feature is Settings > Core plugins
 > Graph view.

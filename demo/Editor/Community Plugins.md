@@ -5,7 +5,7 @@ tags: [demo, editor, plugins]
 # Community plugins
 
 What to look for: Settings > Community plugins (the switch is off by default)
-loads plugins from `~/.local/share/noteAppC/plugins/<id>/`. Each is a
+loads plugins from `~/.local/share/notolith/plugins/<id>/`. Each is a
 `plugin.ini` and a shared library, run in its own sandboxed process, started
 only when something it declared is used, with only the permissions its
 `plugin.ini` asks for and you grant. There are no JavaScript plugins.
@@ -30,7 +30,7 @@ Say hello in three words.
 
 Without the plugin that block is plain code, as above. Its settings, including
 the *name* of an environment variable that holds an API key (never the key),
-live in `~/.config/noteAppC/plugins/ai/ai.ini`, outside the vault.
+live in `~/.config/notolith/plugins/ai/ai.ini`, outside the vault.
 
 Plugins are a runtime extra, so this vault cannot ship one. Build the project
 and see `docs/PLUGINS.md`.

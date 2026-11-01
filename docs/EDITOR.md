@@ -495,7 +495,7 @@ when wanted):
 | group | items | when |
 |---|---|---|
 | spelling | the suggestions, "Add "w" to dictionary" | on a misspelt word (as before) |
-| | "Remove "w" from dictionary" | on a word in `~/.config/noteAppC/dictionary.txt` |
+| | "Remove "w" from dictionary" | on a word in `~/.config/notolith/dictionary.txt` |
 | edit | Cut, Copy, Paste | Cut and Paste not in reading view; Cut and Copy greyed with nothing selected |
 | format | Format > Bold, Italic, Strikethrough, Highlight, Code, Math, Comment; Add link | not in reading view; with nothing selected a format applies to the word under the pointer |
 | | Checkbox state > one item per state, the item's own checked | on a list item, with Checkbox states on; on a plain bullet it gives it a box |
@@ -660,7 +660,7 @@ which way it was set - so an edit above a fold, or a different offset in
 another tab, does not lose it; `setFoldState()` puts it back after
 `setNoteText()` and drops what no longer matches. A note too big to parse at
 once takes it when the parse lands. `MainWindow` keeps it with the note's
-caret and scroll in `Settings` (`state.notePositions`, `vaults.ini`, last 50
+caret and scroll in `Settings` (`state.notePositions`, `~/.local/state/notolith/vaults.ini`, last 50
 notes, percent-encoded so a line's commas and tabs cannot split an entry):
 written on leaving the note and on closing the window, never per keystroke,
 moved with a rename or move and forgotten on delete or merge. Tests
@@ -1110,7 +1110,7 @@ while the setting is on (see SEARCH.md, `meta:`). Tests:
 (vault mode: `TheMetaNotesPaneVaultMode*`).
 Fixture: `demo/Editor/Meta Notes.md`; to see the pane in
 `noteAppC_shot`, put `[editor]` / `meta-notes = true` in a private
-`$XDG_CONFIG_HOME/noteAppC/settings.ini` and set `NOTEAPPC_SHOT_KEEP_CONFIG=1`.
+`$XDG_CONFIG_HOME/notolith/settings.ini` and set `NOTEAPPC_SHOT_KEEP_CONFIG=1`.
 
 ## Fenced code and the caret
 
@@ -1452,7 +1452,7 @@ already linked for notebook output).
   process there and the diagram still draws.
 - **Cache**: `libs/render/MermaidCache.{h,cpp}` (in libs/render because publish
   does not link the editor). The SVG is kept as
-  `$XDG_CACHE_HOME/noteAppC/mermaid/<hash of source>-<hash of config>.svg`, and in
+  `$XDG_CACHE_HOME/notolith/mermaid/<hash of source>-<hash of config>.svg`, and in
   memory. A cached diagram never starts the tool again. The first diagram made
   or read in a process, once it has been delivered and never at startup, prunes
   the directory on the render thread: files not used for 30 days go, then the
@@ -1495,7 +1495,7 @@ one test against the installed tool, run in the sandbox (skipped when absent, a 
 drawn the same way and by the same code (`diagramRenderer` in
 `libs/editor/MermaidBlock.cpp`; `mermaidRenderer` is its Mermaid case): the one
 pool (one per kind, two threads), the tool found by the first fence and remembered, the memo, the
-disk cache (one directory per kind: `.../noteAppC/{mermaid,plantuml,tikz,dot}`),
+disk cache (one directory per kind: `.../notolith/{mermaid,plantuml,tikz,dot}`),
 the source with one dim hint when the tool is missing or fails, nothing at
 startup, a cached diagram drawn without starting a process, and the caret
 inside the fence showing its source. Settings, next to Mermaid's, each on by

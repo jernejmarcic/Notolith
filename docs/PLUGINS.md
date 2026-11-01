@@ -94,10 +94,15 @@ not take the app with it.
 A plugin is a directory:
 
 ```
-~/.local/share/noteAppC/plugins/word-stats/
+~/.local/share/notolith/plugins/word-stats/
   plugin.ini            what it is, what it provides, what it asks for
   libword-stats.so       loaded only when needed, in its own process
 ```
+
+`~/.local/share/notolith/plugins` is where a plugin is installed for one user. A
+package installs one for everybody in `notolith/plugins` under any `$XDG_DATA_DIRS`
+entry (`/usr/share/notolith/plugins`); both are scanned, and the user's wins when two
+carry the same id.
 
 `plugin.ini` is INI for the same reason `settings.ini` is: a person can read
 and edit it. The real shape, from `examples/plugins/word-stats/plugin.ini`:
@@ -194,7 +199,7 @@ ABI above) is the only engine. `plugin.ini`'s `engine` key accepts only
 **Capability allowlist, enforced on every request.** `plugin.ini`'s
 `[permissions]` declares what a plugin *wants*: `read-notes`, `write-notes`,
 `network`, `clipboard`. What it actually gets is a separate, user-controlled
-*granted* set (`~/.config/noteAppC/plugins.ini`, never the vault), set when
+*granted* set (`~/.config/notolith/plugins.ini`, never the vault), set when
 the user enables the plugin on the Community plugins settings page. Every
 host request that needs a capability is checked against the granted set
 before the corresponding app callback ever runs
@@ -209,7 +214,7 @@ a few `/etc` entries (`sandbox::etcBinds`, never all of `/etc`: no `machine-id`,
 `hostname` or user list; a plugin granted `network` also gets `resolv.conf`,
 `hosts`, `ssl`, `ca-certificates`, `nsswitch.conf`, `localtime`, `gai.conf`),
 the plugin's own directory, the host binary's own directory and
-`$XDG_CONFIG_HOME/noteAppC/plugins/<id>` (all read-only), a private `/tmp`, no home, every
+`$XDG_CONFIG_HOME/notolith/plugins/<id>` (all read-only), a private `/tmp`, no home, every
 namespace unshared except network, which is shared only when the plugin's
 `network` permission was granted. The config-directory bind is `--ro-bind-try`
 (most plugins have none) and exists so a plugin can read its own config file
@@ -329,7 +334,7 @@ function above exist for. Commands: summarize (a notice - stays inside `read-not
 A fenced ` ```ai ` block's source is the prompt, its rendered answer is the
 block. Configuration - provider, base URL, model, and the *name* of an
 environment variable holding a key, never the key itself - lives in
-`$XDG_CONFIG_HOME/noteAppC/plugins/ai/ai.ini`, outside the vault; the key is read from
+`$XDG_CONFIG_HOME/notolith/plugins/ai/ai.ini`, outside the vault; the key is read from
 the app's own environment at call time and is never written to a file,
 logged, or put in a URL (`plugins/ai/AiConfig.cpp`, `plugins/ai/AiProvider.cpp`).
 Also: `translate` (the selection in place; with nothing

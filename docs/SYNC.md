@@ -402,7 +402,7 @@ forgets the entity.
 ### Resumption
 
 `lastPulledSeq` and the outbox both live in `SyncJournal`'s SQLite database
-under `$XDG_DATA_HOME/noteAppC/sync/<vault digest>/journal.db` (see "What the
+under `$XDG_DATA_HOME/notolith/sync/<vault digest>/journal.db` (see "What the
 client keeps" below) - never in the vault, per the non-negotiable rule.
 Losing that database is not catastrophic: `lastPulledSeq` resets to 0 and a
 full pull re-applies everything (idempotent, if slower), and the outbox
@@ -412,7 +412,7 @@ rebuilds itself from a full rescan.
 
 Three-way merge needs a base: the text both sides last agreed on. `SyncJournal`
 keeps the *current* base per note-entity under
-`$XDG_DATA_HOME/noteAppC/sync/<vault digest>/base/<entityID>` - a plain UTF-8
+`$XDG_DATA_HOME/notolith/sync/<vault digest>/base/<entityID>` - a plain UTF-8
 copy, written (through `QSaveFile`, so a crash or a failed write leaves the
 previous base, never an empty one) only when a pull is applied or a push is
 confirmed. It is local-only and never syncs. The base is always **the sender's
@@ -778,7 +778,7 @@ run a follow-up rewrap against the new salt/loginKey; nothing today
 triggers that automatically. Worth fixing once multi-vault accounts are
 actually exercised - not before.
 
-## What the client keeps (`$XDG_DATA_HOME/noteAppC/sync/<vault digest>/`)
+## What the client keeps (`$XDG_DATA_HOME/notolith/sync/<vault digest>/`)
 
 Mirrors `libs/ext/history`'s own rule (never a vault dotfile, never inside the
 vault): `<vault digest>` is `NoteHistory::repositoryPathFor`'s own hashing

@@ -22,7 +22,7 @@ save). To see it on this note:
 ## File recovery snapshots
 
 A separate, older mechanism: a snapshot on save at most every 5 minutes per
-note, kept for 7 days, under `$XDG_DATA_HOME/noteAppC/recovery`. To see it:
+note, kept for 7 days, under `$XDG_DATA_HOME/notolith/recovery`. To see it:
 
 1. Make an edit and wait past the 5-minute snapshot interval (or make
    several edits across a longer session).

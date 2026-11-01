@@ -17,7 +17,7 @@ Obsidian ignores the file.
 
 The same folder may hold a loose `Name.css` or an installed Obsidian theme as
 `Name/theme.css`; only the colours in them are used, never their layout. Schemes
-for every vault go in `~/.config/noteAppC/themes/`. Edit a scheme file and the
+for every vault go in `~/.config/notolith/themes/`. Edit a scheme file and the
 window restyles with no restart.
 
 ## Formatting colours
@@ -31,11 +31,11 @@ on the same page.
 
 ## Config files for callouts, code and tasks
 
-- `~/.config/noteAppC/callouts.ini`: new callout types and the look of old ones,
+- `~/.config/notolith/callouts.ini`: new callout types and the look of old ones,
   see [[Callouts]].
-- `~/.config/noteAppC/codeblocks.ini` and the attributes on a fence line: code
+- `~/.config/notolith/codeblocks.ini` and the attributes on a fence line: code
   block colours, icons and tabs, see [[Code Blocks]].
-- `~/.config/noteAppC/tasks.ini`: the checkbox states, see [[Lists]]. A section
+- `~/.config/notolith/tasks.ini`: the checkbox states, see [[Lists]]. A section
   such as `[waiting]` with `char = w` adds a state.
 
 All three reload the moment the file changes. A file is not needed: the notes

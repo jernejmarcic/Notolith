@@ -29,4 +29,5 @@ A few things worth doing once:
 
 Vault settings that Obsidian also reads live in `.obsidian/` (this vault has
 `app.json`, `appearance.json`, `core-plugins.json`, `hotkeys.json` and more).
-The app's own extras are kept outside the vault in `~/.config/noteAppC/`.
+The app's own extras are kept outside the vault, in the XDG directories: settings and
+style files in `~/.config/notolith/`, what it remembers in `~/.local/state/notolith/`.

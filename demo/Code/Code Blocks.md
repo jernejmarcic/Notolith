@@ -9,7 +9,7 @@ language, show a clickable language label with copy-on-click (copying the
 listing without the fences or any `#|`/attribute text), and the block with
 no language should show "Copy" on hover instead of a label. Per-language
 look (name, icon, colour) and per-fence overrides come from
-`~/.config/noteAppC/codeblocks.ini`, documented in `docs/STYLING.md` - this
+`~/.config/notolith/codeblocks.ini`, documented in `docs/STYLING.md` - this
 note works unstyled with no such file present.
 
 ## C++

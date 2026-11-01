@@ -62,7 +62,7 @@ and folders, so a file manager runs `notolith %f`. Like Obsidian, a vault is
 open in one window only, but two vaults are two windows - two processes, each
 with its own indexer, autosaver and sync engine. The first launch for a vault
 makes its window and listens on a socket named after the vault in the runtime
-directory (`$XDG_RUNTIME_DIR`, owner-only): `notolith-<16 hex digits>.sock`,
+directory (`$XDG_RUNTIME_DIR/notolith`, owner-only): `instance-<16 hex digits>.sock`,
 the digits being a SHA-256 of the vault's canonical path, so the same vault
 spelled with a trailing slash, `..` or a symbolic link has the same name. A
 later launch for that vault connects, sends the absolute path it was given
@@ -112,7 +112,7 @@ instead of only flagging the window. Whether it does depends on the
 compositor and on the file manager passing a token (the desktop file's
 `StartupNotify=true` asks it to); that cannot be tested without one.
 
-`NOTEAPPC_INSTANCE_SOCKET` replaces `$XDG_RUNTIME_DIR/notolith` as the start of
+`NOTEAPPC_INSTANCE_SOCKET` replaces `$XDG_RUNTIME_DIR/notolith/instance` as the start of
 every socket name: it is a prefix, not one socket. `/tmp/run/bench` makes
 `/tmp/run/bench-<id>.sock` for a vault and `/tmp/run/bench-none.sock` for the
 no-vault process (its directory must exist; keep the whole path under 100
@@ -121,24 +121,53 @@ Notolith is in use should set it, or the launch is handed to the open window of
 the same vault. Nothing in the repository's tests or benchmark scripts starts the
 binary, so none sets it; the window tests set it to a directory of their own.
 
+### Where the files live
+
+Everything the app writes outside a vault is in one of the four XDG Base Directory
+roots, under `notolith` (`kAppDirName` in `libs/markdown/ConfigFile.h`; a relative
+`$XDG_*` value is invalid and ignored, as the spec says), and a directory the app has
+to make is mode 0700.
+
+| root | what |
+|---|---|
+| `$XDG_CONFIG_HOME/notolith` (`~/.config`) | `settings.ini`, `hotkeys.json`, `callouts.ini`, `codeblocks.ini`, `tasks.ini`, `dictionary.txt`, `plugins.ini`, `themes/`, `templates/`, `plugins/<id>/` |
+| `$XDG_DATA_HOME/notolith` (`~/.local/share`) | per vault under `vaults/<digest>/`: `bookmarks.json`, `icons.json`, `workspaces.json`; and `recovery/`, `pdf-recovery/`, `history/`, `sync/`, `share/`, user-installed `plugins/` |
+| `$XDG_STATE_HOME/notolith` (`~/.local/state`) | `vaults.ini`, `window.ini` (geometry, splitter, publish choices), `epub-positions.ini`, `notolith.log`, `link.log`, per vault `vaults/<digest>/workspace.json` and `graph.json` |
+| `$XDG_CACHE_HOME/notolith` (`~/.cache`) | the vault index (`vaults/<digest>/index.db`), `icons/`, `tex/`, `mermaid/` and the other diagram caches, `notebook/`, `epub/` |
+| `$XDG_RUNTIME_DIR/notolith` | the single-instance sockets and locks, `settings.lock`, `notolith.log.lock`, `link-<id>.lock`, the notebook kernels' runtime directories |
+
+The digest is 16 hex of the SHA-256 of the vault's absolute path (`vaultDigest()`).
+Read-only lookups go through `$XDG_DATA_DIRS` too: plugins in `notolith/plugins` and
+MicroTeX's tables in `notolith/microtex/res`. A build from before this layout kept
+everything under `noteAppC` in those roots (and window state in Qt's `noteAppC.conf`);
+`migrateStorage()` (`libs/settings/StorageMigration.h`) moves it on the first start, never
+overwriting a file already there, and deletes the old cache.
+
 ### What two processes share
 
 Per user, not per vault, and what was done about it:
 
-- `settings.ini` and `vaults.ini` (recent vaults and files, remembered note
-  positions): each process holds what it loaded, so `Settings::save()` writes
-  what the object changed since it loaded on top of what the files hold now,
-  under `~/.config/noteAppC/.save.lock` (200 ms wait at most). Another window's change to another
+- `settings.ini` (`~/.config/notolith`) and `vaults.ini` (recent vaults and files,
+  remembered note positions; `~/.local/state/notolith`): each process holds what it
+  loaded, so `Settings::save()` writes what the object changed since it loaded on top
+  of what the files hold now, under `$XDG_RUNTIME_DIR/notolith/settings.lock` (200 ms
+  wait at most). Another window's change to another
   setting, a vault it opened, a note it positioned survive; a reset or a forgotten
   position stays; a setting both changed takes the later save. A setting changed
   in one window shows in another only after that other loads or saves.
-- Window geometry, sidebar state, plugin switches, EPUB positions
+- Window geometry, sidebar state, the publish dialog's choices
+  (`~/.local/state/notolith/window.ini`), plugin switches, EPUB positions
   (`QSettings`): Qt merges per key under its own file lock. The geometry key is
   one per user, so the last window closed decides where the next opens.
+- The log (`~/.local/state/notolith/notolith.log`): every process appends to the one
+  file, each line carrying its process id. A process holds a shared lock on
+  `$XDG_RUNTIME_DIR/notolith/notolith.log.lock` while it writes, and starts a fresh log
+  (the old one kept as `notolith.log.old`) only when it can take the lock exclusively,
+  that is when no other window has the log open.
 - Sharing (`docs/SHARE.md`): a device's link is online once. A peer keeps one
   connection per identity and every process would publish the same mDNS name,
-  so the share engine takes a lock per identity key (`link-<id>.lock` in the
-  share directory) and the second process says "Sharing is already running in
+  so the share engine takes a lock per identity key (`link-<id>.lock` in
+  `$XDG_RUNTIME_DIR/notolith`) and the second process says "Sharing is already running in
   another Notolith window" in the status bar instead of starting a second
   link. Stored shares, the vault's index, note history and sync journal are
   per vault digest and need nothing.

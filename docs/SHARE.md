@@ -220,7 +220,7 @@ Hearth, the author's separate peer-to-peer chat project. No Qt.
 - **What Notolith will pass** (wired by the engine): `Node::Config`
   `signatureDomain = "notolith"` and `serviceType = "_notolith._tcp"`, so a Notolith
   node and a Hearth node never see or accept each other, and its own debug log via
-  `setDebugLogPath()` (`$XDG_STATE_HOME/noteAppC/link.log`; left alone, it logs into Hearth's directory).
+  `setDebugLogPath()` (`$XDG_STATE_HOME/notolith/link.log`; left alone, it logs into Hearth's directory).
 - **Build:** `NOTEAPPC_WITH_SHARE` (on by default) builds `noteAppC_link`. It needs
   libdatachannel, avahi-client, protobuf, nlohmann_json and libsodium; when any is
   missing the option is silently off and the rest of the app builds as before.
@@ -272,7 +272,7 @@ access, no socket, no file.
 - **Threads.** The engine and every `CrdtDoc` live on the UI thread; link callbacks
   copy their arguments and queue onto it. A keystroke costs one `localEdit`, one AEAD
   seal and one signature per connected member.
-- **Persistence.** `<GenericDataLocation>/noteAppC/share/<16 hex of sha256 of the vault
+- **Persistence.** `$XDG_DATA_HOME/notolith/share/<16 hex of sha256 of the vault
   path>/<share id>/`: `share.json` (key, epoch, signed member list, path, replica id, and on a
   joiner the invite's owner addresses),
   `state.bin` (the CRDT state), `base.md` (the text the file and the CRDT last agreed
@@ -297,12 +297,12 @@ What the engine refuses (each case is a test in `tests/test_share.cpp`):
 A device is online once per machine. Notolith runs one process per vault, and every
 process would carry the same device keys: a peer keeps one connection per identity, so a
 second link would split its peers between the two, and both would publish one mDNS name.
-`start()` therefore takes a lock per identity key (`link-<id>.lock`, in the share
-directory, or in `Config::storeDirectory` when a test gives one; a dead owner frees it) and
+`start()` therefore takes a lock per identity key (`link-<id>.lock`, in
+`$XDG_RUNTIME_DIR/notolith`, or in `Config::storeDirectory` when a test gives one; a dead owner frees it) and
 a process that cannot get it fails with "Sharing is already running in another Notolith
 window", shown in the status bar. The first process keeps its port, name and shares; the
 other opens no link, and can share once that window's vault is closed or its sharing is
-off and this vault is reopened (the window does not retry by itself). The lock never goes stale by age, so the share directory (`~/.local/share/noteAppC/share`) must stay machine-local: never part of a synced tree. The stores are per vault, so nothing else is shared.
+off and this vault is reopened (the window does not retry by itself). The lock never goes stale by age and is gone with the login session, being in the runtime directory. The share directory (`~/.local/share/notolith/share`) is the fallback for a session with none, and must stay machine-local: never part of a synced tree. The stores are per vault, so nothing else is shared.
 
 Tests: `ctest -R '^share$'` - loopback only, mDNS off, port 0, an in-memory secret
 store, temporary store directories.

@@ -34,7 +34,7 @@ sidebar ignores it).
 ## Where the settings live
 
 Changes are written 500 ms after the last one to the app's own copy,
-`<config dir>/noteAppC/vaults/<sha1 of the vault path>/graph.json`, in
+`$XDG_STATE_HOME/notolith/vaults/<digest>/graph.json` (the digest is 16 hex of the SHA-256 of the vault path), in
 Obsidian's key names (`collapse-filter`, `colorGroups[{query, color:{a, rgb}}]`,
 `localJumps`, ...) plus `animate`. The vault's `.obsidian/graph.json` is only
 read - as the starting point when there is no copy yet - and never written. The
