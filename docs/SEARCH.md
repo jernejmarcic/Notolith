@@ -99,3 +99,9 @@ index scan, so it is not searchable, and it does not open in the editor ("too
 large to open"). The size is checked on the opened file and the read stops one
 byte past the limit, so a file that grows while it is read is skipped too. Each
 skipped file is logged once and the status bar counts them when a scan ends.
+
+Every other read of a vault file has a cap too, through `Vault::readBytes`: the
+embeds (note, `.base`, `.tex`, text file), a `.canvas` and its cards, a `.base`
+open, and publish (`Vault::readInside`). A vault's settings files go through
+`readConfigBytes` (`libs/markdown/ConfigFile.h`) at 1 MiB, from the open file;
+past that the file counts as absent and a line is logged.

@@ -23,11 +23,17 @@ only if you grant it. If `bwrap` or libseccomp is missing, they refuse to run;
 there is no unsandboxed fallback. A vault is untrusted until you trust it, and
 nothing runs without a click: in an untrusted vault a diagram or plugin fence
 shows its source and a "Render diagram" button, and its tool starts only after
-you say Run. Details: `docs/NOTEBOOKS.md#sandbox`.
+you say Run. A `![[doc.tex]]` embed of a full LaTeX document (it runs pdflatex)
+does the same: its source and a "Render" button. An approval is for the vault
+it was given in. Details: `docs/NOTEBOOKS.md#sandbox`.
 
-Limits on what a vault can ask of the app: a note or notebook over 32 MiB is
-not indexed and does not open, and an HTML block is drawn at most 16384 pixels
-tall and 64 million pixels in all; past that a short notice is drawn instead.
+Limits on what a vault can ask of the app: a note, notebook, `.canvas` or
+`.base` over 32 MiB is not indexed and does not open, and an embed of one (a
+note, `.base`, `.tex` or text file) shows "too large to show inline" and does
+not read it. A vault's own settings files (`.obsidian/app.json`, `hotkeys.json`,
+`graph.json` and the like) are read to 1 MiB; past that the file is ignored and
+a line is logged. An HTML block is drawn at most 16384 pixels tall and 64
+million pixels in all; past that a short notice is drawn instead.
 
 ## What it does not cover
 

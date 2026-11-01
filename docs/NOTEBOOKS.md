@@ -236,8 +236,9 @@ or Graphviz fence (and a plugin's fence) shows its source and a "Render
 diagram" button instead of the diagram; the button asks the same Run, Trust
 this vault, Cancel question a code block does, and Run draws that one block.
 Trusting the vault draws them all, and a trusted vault draws them as it
-always did. TeX maths and mind maps are drawn in the app itself and stay
-automatic. The regex entries (`/.../`) of a vault's `.obsidian/app.json`
+always did. A full-document `.tex` embed asks the same way (its button is
+"Render"). TeX maths and mind maps are drawn in the app itself and stay
+automatic. A yes is kept for that vault only: opening another vault clears it. The regex entries (`/.../`) of a vault's `.obsidian/app.json`
 `userIgnoreFilters` are not applied, or even compiled, until the vault is
 trusted; its plain path filters are. A drag onto a folder of the file tree, or
 "Move to folder", refuses a folder that is a link or leads outside the vault.

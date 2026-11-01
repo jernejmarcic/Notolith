@@ -1451,6 +1451,17 @@ again that session. Trusting the vault re-registers the renderers, so every
 fence draws. A trusted vault draws on layout, as described below. Plugin fences
 go through the same gate (`MainWindow::gatedRenderer`).
 
+A full-document `![[x.tex]]` (the file has `\documentclass`; pdflatex runs on it)
+goes through the same question. `MarkdownEditor::setProcessGate` is the one
+seam: the window sets it, and `layoutTexEmbed` asks it (without prompting)
+before it compiles. Not allowed, the embed is the source and a "Render"
+button (`layoutTexNotRun`, the same hotspot machinery a fence's picture uses);
+the button asks Run, Trust this vault, Cancel, and the approval is keyed by the
+file's path and text. Maths-only `.tex` is drawn by MicroTeX in this process and
+needs no gate. An embed inside an embedded note gets the same gate, but its
+picture has no button: open that note to answer. The approvals are cleared when
+another vault (or none) is opened in the window.
+
 The drawing is done by an external program, not linked in: `mmdr`, the
 pure-Rust `mermaid-rs-renderer` crate (installed with
 `cargo install mermaid-rs-renderer`; 1-5 ms a diagram, about 300 ms for the very
