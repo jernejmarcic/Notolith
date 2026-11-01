@@ -891,6 +891,40 @@ TEST(VaultFileOps, MovePathRefusesWhatWouldLoseOrHideAFile)
     EXPECT_TRUE(QFileInfo::exists(clash));
 }
 
+// A hostile vault ships "Launchers -> somewhere outside": a drop onto it must not leave the vault.
+TEST(VaultFileOps, MovePathRefusesAFolderThatIsALinkOutOfTheVault)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(outside.isValid());
+    Vault vault(dir.path());
+    QString error;
+    const QString note = vault.createNote(QString(), QStringLiteral("evil"), &error);
+    const QString plain = vault.createFolder(QString(), QStringLiteral("Plain"), &error);
+    ASSERT_FALSE(note.isEmpty() || plain.isEmpty());
+    const QString link = dir.filePath(QStringLiteral("Launchers"));
+    ASSERT_TRUE(QFile::link(outside.path(), link));
+    // A real folder behind the link, and a link to a folder inside the vault.
+    ASSERT_TRUE(QDir(outside.path()).mkpath(QStringLiteral("deep")));
+    const QString inner = dir.filePath(QStringLiteral("Launchers/deep"));
+    const QString inVaultLink = dir.filePath(QStringLiteral("ToPlain"));
+    ASSERT_TRUE(QFile::link(plain, inVaultLink));
+
+    QString moved;
+    EXPECT_FALSE(vault.movePath(note, link, &moved, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("Launchers"))) << error.toStdString();
+    EXPECT_FALSE(vault.movePath(note, inner, &moved, &error)) << "behind a link";
+    EXPECT_FALSE(vault.movePath(note, inVaultLink, &moved, &error)) << "a link is no destination";
+    EXPECT_TRUE(QFileInfo::exists(note));
+    EXPECT_EQ(QDir(outside.path()).entryList(QDir::NoDotAndDotDot | QDir::AllEntries),
+              QStringList{QStringLiteral("deep")});
+    EXPECT_TRUE(QDir(plain).entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty());
+
+    ASSERT_TRUE(vault.movePath(note, plain, &moved, &error)) << error.toStdString();
+    EXPECT_TRUE(QFileInfo::exists(moved));
+}
+
 TEST(VaultFileOps, MovePathIntoItsOwnFolderChangesNothing)
 {
     QTemporaryDir dir;

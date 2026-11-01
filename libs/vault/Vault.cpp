@@ -1009,6 +1009,10 @@ bool Vault::movePath(const QString &absolutePath, const QString &targetFolder,
         return refuse(QStringLiteral("%1 cannot be moved").arg(source));
     if (!QFileInfo(target).isDir())
         return refuse(QStringLiteral("%1 is not a folder").arg(target));
+    // A folder that is a link, or sits behind one, would carry the file out of the vault.
+    if ((target != m_root && QFileInfo(target).isSymLink()) || !resolvesInside(target))
+        return refuse(QStringLiteral("%1 is a link or leads outside the vault, so nothing was moved into it")
+                          .arg(QFileInfo(target).fileName()));
     // The vault's own bookkeeping folders and any hidden one are no place for a note.
     const QString targetRelative = relative(target);
     if (targetRelative != QLatin1String(".")
