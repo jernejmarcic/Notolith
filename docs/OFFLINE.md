@@ -20,7 +20,20 @@ block with a URL says "Remote files are not supported in this build."
 What remains, and why it is not the app talking to a network:
 
 - Qt6::Network is linked for `QLocalSocket`, the single-instance socket (a Unix
-  socket in the runtime directory).
+  socket in the runtime directory). Dropping that link would not unmap it:
+  Qt6Multimedia and KSyntaxHighlighting load libQt6Network themselves. The
+  library is in the process; nothing calls a network class from it, which
+  `offline_exe` and the socket trap below check.
+- The settings file still knows the keys of the removed features
+  (`sync.serverURL`, `sync.email`, `lookup.server`, `editor.remoteReferences`,
+  `encryption.*` and the `sync`, `share`, `encrypted-notes`, `word-lookup`
+  feature switches). A settings file from a networked build keeps them and
+  they are written back; no code in this build acts on them and no settings
+  page shows them. Keyring entries of an older build are not touched.
+- The developer tools in the build tree (`noteAppC-bench`, `noteAppC_shot`)
+  link the UI library directly and list libzmq and libQt6Network as NEEDED.
+  They are not installed and `offline_exe` / `offline_modules` do not look at
+  them.
 - A link or "Search the web" opens the browser through `QDesktopServices` on a
   click. The app sends nothing.
 - Notebook kernels talk over libzmq on `ipc://` sockets only, in a sandbox with
@@ -36,6 +49,18 @@ What remains, and why it is not the app talking to a network:
 
 The ctest entries `offline_exe` and `offline_modules` (`tests/check_offline.sh`)
 fail when the executable or a module lists a networking or crypto library as
-NEEDED, or names a Qt network client class. Only direct dependencies are
-visible to them: libgit2 (note history), libarchive (EPUB) and Qt6Network
-themselves link libcrypto, so it is in the process through them.
+NEEDED, or names a Qt network client class or a libc name-resolution or
+datagram call. Only direct dependencies are visible to them: libgit2 (note
+history), libarchive (EPUB) and Qt6Network themselves link libcrypto, so it is
+in the process through them.
+
+Link-time checks cannot see a library opened with `dlopen` or a socket made by
+code that is loaded later, so every test of the default build also runs under
+`tests/nettrap.c`, an `LD_PRELOAD` library that ends the process (exit status
+86) on `socket()` with `AF_INET` or `AF_INET6`, on `connect()` to anything but
+a Unix socket, on `getaddrinfo`, `gethostbyname*` and `getnameinfo` of an inet
+address, and on `dlopen` of a network library. Unix sockets (the
+single-instance socket, notebook `ipc://`) pass. The trap applies to the test
+process only, not to programs it starts (a Jupyter kernel binds its own
+loopback ports). The `nettrap_*` entries run a probe that makes each call, so
+the trap itself is tested.

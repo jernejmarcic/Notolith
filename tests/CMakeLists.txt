@@ -256,9 +256,12 @@ if(NOT NOTEAPPC_WITH_SYNC AND NOT NOTEAPPC_WITH_ENCRYPTION AND NOT NOTEAPPC_WITH
     list(APPEND noteappc_offline_needed "libsodium")
 endif()
 if(NOT NOTEAPPC_WITH_NETWORK)
-    list(APPEND noteappc_offline_needed "libcurl" "libssl" "libcrypto" "libgnutls")
+    list(APPEND noteappc_offline_needed "libcurl" "libssl" "libcrypto" "libgnutls" "libQt6WebSockets" "libQt6HttpServer"
+        "libzmq")
+    # The libc names are anchored on the undefined-symbol column: an unanchored connect would match QObject::connect.
     list(APPEND noteappc_offline_symbols "QNetworkAccessManager" "QNetworkRequest" "QNetworkReply" "QAbstractSocket"
-        "QTcpSocket" "QTcpServer" "QUdpSocket" "QSslSocket" "QSsl" "QHostInfo" "QHostAddress" "QDnsLookup" "QWebSocket")
+        "QTcpSocket" "QTcpServer" "QUdpSocket" "QSslSocket" "QSsl" "QHostInfo" "QHostAddress" "QDnsLookup" "QWebSocket"
+        " U (socket|getaddrinfo|getnameinfo|gethostbyname2?|res_query|sendto|recvfrom)(@|$)")
 endif()
 list(JOIN noteappc_offline_needed "|" noteappc_offline_needed_pattern)
 list(JOIN noteappc_offline_symbols "|" noteappc_offline_symbols_pattern)
@@ -714,4 +717,26 @@ if(TARGET noteAppC_pandoc)
     target_link_libraries(test_pandoc PRIVATE noteAppC_pandoc Qt6::Gui GTest::gtest)
     add_test(NAME pandoc COMMAND test_pandoc)
     set_tests_properties(pandoc PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;HOME=${CMAKE_BINARY_DIR}/pandoc-test-home")
+endif()
+
+# The default build has no networking (docs/OFFLINE.md), and the link-time checks above cannot see a socket made at
+# run time or a library opened with dlopen. So every test of that build runs under nettrap.c, which stops the
+# process when it reaches for the network (an AF_INET or AF_INET6 socket, a connect() to anything but a Unix
+# socket, name resolution, dlopen of a network library); Unix sockets, the single-instance one and the notebook's,
+# pass. The probe makes each call, so the trap itself is tested. A build that has the networking on makes such
+# calls in its own tests, so it does not get the trap. Last in this file so that every test above is covered.
+if(NOT NOTEAPPC_WITH_NETWORK)
+    enable_language(C)
+    add_library(nettrap SHARED nettrap.c)
+    target_link_libraries(nettrap PRIVATE ${CMAKE_DL_LIBS})
+    add_executable(nettrap_probe nettrap_probe.c)
+    foreach(probe inet connect resolve dlopen)
+        add_test(NAME nettrap_${probe} COMMAND nettrap_probe ${probe})
+        set_tests_properties(nettrap_${probe} PROPERTIES WILL_FAIL TRUE)
+    endforeach()
+    add_test(NAME nettrap_unix COMMAND nettrap_probe unix)
+    get_property(noteappc_trapped_tests DIRECTORY PROPERTY TESTS)
+    foreach(test IN LISTS noteappc_trapped_tests)
+        set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT "LD_PRELOAD=$<TARGET_FILE:nettrap>")
+    endforeach()
 endif()
