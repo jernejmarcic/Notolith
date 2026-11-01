@@ -15,8 +15,7 @@ namespace noteAppC::notebook {
 /// Runs a code block with the system's own interpreter or compiler - one
 /// short process per run, in the sandbox the block asked for - rather than
 /// through a Jupyter kernel: nothing to install beyond the language itself,
-/// nothing left running between runs. It uses the system's own interpreters, not
-/// a Jupyter kernel, as the most efficient way.
+/// nothing left running between runs.
 ///
 /// A block behaves as a notebook cell does where the language allows it: a
 /// Python block's last expression and every Haskell expression print their

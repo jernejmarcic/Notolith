@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* Header-only C++ convenience wrapper over plugin.h (docs/PLUGINS.md, Tier
  * 2). Optional: examples/plugins/word-stats is plain C and does not include
  * this. It exists for a future first-party plugin (an AI integration,

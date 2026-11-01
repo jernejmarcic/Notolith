@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 /* word-stats: the example plugin docs/PLUGINS.md's Tier 2 asks for, plain C
  * against include/noteappc/plugin.h with no wrapper - the shortest path to a
  * real plugin, which is also the best proof the C ABI actually works. It

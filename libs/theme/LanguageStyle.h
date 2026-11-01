@@ -82,7 +82,7 @@ class LanguageStyles {
 public:
     /// `defaultPath()` when `path` is empty.
     static LanguageStyles load(const QString &path = {});
-    /// `$XDG_CONFIG_HOME` or `~/.config`, then `noteAppC/codeblocks.ini`.
+    /// `$XDG_CONFIG_HOME` or `~/.config`, then `notolith/codeblocks.ini`.
     static QString defaultPath();
 
     /// Case-insensitive, and reached through any of a section's `aliases`
