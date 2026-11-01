@@ -221,7 +221,9 @@ Settings only, never from a vault) is not run, and the status bar says why.
 A vault is untrusted until you trust it ("Vault: Trust or stop trusting this
 vault" in the command palette); the choice is kept in your own settings,
 never in the vault. In an untrusted vault the vault's own `hotkeys.json` and
-any vault setting that would switch a feature on are ignored, each block asks
+any vault setting that would switch a feature on or lower a safety are ignored
+(the Obsidian `trashOption` and `promptDelete`, which could make Delete
+permanent and silent, and `cssTheme`; only your own settings set those), each block asks
 before it runs (Run, Trust this vault, Cancel), and opening a file from a
 file card or "Open in default app" asks first, naming the file and its type.
 Executables and `.desktop` files are never handed to the desktop, trusted

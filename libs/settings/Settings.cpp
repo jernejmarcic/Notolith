@@ -941,7 +941,10 @@ Settings Settings::load(const QString &vaultRoot)
     settings.m_baseIndex = settings.m_index;
     settings.m_vault = fromObsidianConfig(vaultRoot);
     // An untrusted vault may switch features off but never on: its core-plugins.json would otherwise
-    // turn on, say, notebooks for whoever opens it.
+    // turn on, say, notebooks for whoever opens it. Nor may it lower a safety the user has: its app.json
+    // could make Delete permanent and silent (files.deletedFiles, files.confirmDelete), and its cssTheme,
+    // carried over as the colour scheme's file path, would have the app read any file it names
+    // (appearance.scheme: /dev/zero). Those three come only from the user, trusted vault or not.
     if (!settings.isVaultTrusted(vaultRoot)) {
         for (auto it = settings.m_vault.begin(); it != settings.m_vault.end();) {
             if (it.key().startsWith(QLatin1String("plugins.")) && it.value().toBool())
@@ -949,6 +952,8 @@ Settings Settings::load(const QString &vaultRoot)
             else
                 ++it;
         }
+        for (const char *key : {"files.deletedFiles", "files.confirmDelete", "appearance.scheme"})
+            settings.m_vault.remove(QLatin1String(key));
     }
     return settings;
 }
