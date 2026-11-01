@@ -60,10 +60,10 @@ package_notolith() {
     conflicts=('noteappc')
     replaces=('noteappc')
     # bubblewrap is a hard dependency: without it code blocks, TeX and plugins
-    # would fall back to running unsandboxed.
+    # are refused (there is no unsandboxed fallback). util-linux is prlimit, the sandbox's task limit.
     depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell'
              'syntax-highlighting' 'litehtml' 'libgit2' 'libarchive' 'zeromq' 'libseccomp'
-             'bubblewrap')
+             'bubblewrap' 'util-linux')
     optdepends=('hunspell-en_gb: British English spelling'
                 'hunspell-en_us: American English spelling')
     DESTDIR="$pkgdir" cmake --install build

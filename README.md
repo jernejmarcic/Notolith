@@ -81,7 +81,14 @@ names; most are optional and switched off cleanly when missing.
 - Optional modules: `qt6-multimedia` `hunspell` `syntax-highlighting`
   `litehtml` `libgit2` `libarchive` `zeromq` `libseccomp` `abseil-cpp`
   `poppler-qt6`
-- At run time: `bubblewrap` (sandboxes code blocks, TeX and plugins)
+- At run time: `bubblewrap` (sandboxes code blocks, TeX and plugins) and
+  util-linux's `prlimit` (the task limit inside the sandbox); `systemd-run`
+  with a user manager is used when present, to cap a sandbox's memory in a
+  cgroup. CMake checks for both tools and warns when one is missing
+- `libseccomp` is required unless you pass `-DNOTEAPPC_ALLOW_NO_SECCOMP=ON`
+  (then nothing that needs the sandbox runs). A release build must set
+  `-DBUILD_TESTING=OFF -DNOTEAPPC_DEV_ENV_OVERRIDES=OFF`: with tests on, the
+  binary honours test-only environment variables that load native code
 - Tests: `gtest`
 
 md4qt, MicroTeX, tinyxml2 and ink-stroke-modeler are fetched at configure time.
