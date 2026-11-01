@@ -372,6 +372,17 @@ if(NOTEAPPC_WITH_NETWORK)
     add_test(NAME lookup COMMAND test_lookup)
 endif()
 
+# Remote images (docs/OFFLINE.md): the URL rules, the magic bytes, the sandboxed decoder helper, the allowlist and
+# the cache, and the editor's placeholder, all against a network manager that answers from memory.
+if(NOTEAPPC_WITH_NETWORK)
+    add_executable(test_remote_images test_remote_images.cpp)
+    target_link_libraries(test_remote_images PRIVATE noteAppC_editor noteAppC_remoteimage noteAppC_sandbox Qt6::Widgets Qt6::Test GTest::gtest)
+    target_include_directories(test_remote_images PRIVATE ${CMAKE_SOURCE_DIR}/libs/sandbox ${CMAKE_SOURCE_DIR}/libs/markdown)
+    target_compile_definitions(test_remote_images PRIVATE NOTEAPPC_TEST_HELPER="$<TARGET_FILE:notolith-imagedecode>")
+    add_dependencies(test_remote_images notolith-imagedecode)
+    add_test(NAME remote_images COMMAND test_remote_images)
+endif()
+
 add_executable(test_theme test_theme.cpp)
 target_link_libraries(test_theme PRIVATE noteAppC_theme Qt6::Test GTest::gtest GTest::gtest_main)
 add_test(NAME theme COMMAND test_theme)

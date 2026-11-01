@@ -811,6 +811,11 @@ void MarkdownEditor::setNoteText(const QString &text)
     d->m_pdfNavLast.clear();
     d->m_folds.clear();
     d->m_pendingFolds.clear();
+#ifdef NOTEAPPC_HAVE_NETWORK
+    // "Load image" holds for the note it was clicked in.
+    d->m_remoteSession.clear();
+    d->m_remoteErrors.clear();
+#endif
     d->m_queryCollapsed.clear();
     d->m_queryNameSort.clear();
     // A big note is shown before it is understood: its text goes up as plain
@@ -3311,6 +3316,9 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
         e->pdfCells.clear();
         e->pdfError.clear();
         e->isFileCard = false;
+#ifdef NOTEAPPC_HAVE_NETWORK
+        e->remoteURL.clear();
+#endif
     }
     // A runnable embed (layoutSourceFile, NotebookEmbed part) sets these;
     // reset here so a file that stops being runnable - a non-code extension
@@ -3323,6 +3331,10 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     const EmbedSpan *embed = soleEmbedOf(view);
     if (!embed)
         return false;
+#ifdef NOTEAPPC_HAVE_NETWORK
+    if (const QString url = remoteImageURL(*embed); !url.isEmpty())
+        return layoutRemoteImage(view, *embed, url);
+#endif
 
     QString path = attachmentPathOf(*embed); // a notebook cell's own picture is not a vault link
     if (path.isEmpty()) {
@@ -3793,6 +3805,10 @@ bool MarkdownEditor::layoutTable(BlockView &view)
                     continue;
                 if (!embed.html && !isImageSuffix(QFileInfo(embed.target).suffix().toLower()))
                     continue;
+#ifdef NOTEAPPC_HAVE_NETWORK
+                if (!remoteImageURL(embed).isEmpty())
+                    continue; // a remote image in a cell stays its source (RemoteImageBlock.cpp)
+#endif
                 EmbedCell built = buildEmbedCell(embed, columnCap - 2 * padX);
                 if (built.image.isNull() && !(built.isFileCard && embed.html))
                     continue; // an unresolved Markdown image stays its source
@@ -4285,6 +4301,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         e->imageCentred = false;
         e->embedCells.clear();
         e->isFileCard = false;
+#ifdef NOTEAPPC_HAVE_NETWORK
+        e->remoteURL.clear();
+#endif
         e->embedPanel = false;
         e->embedLabel.clear();
         e->previewImage = QPixmap();

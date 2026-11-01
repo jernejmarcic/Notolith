@@ -846,6 +846,11 @@ public:
     /// Whether a ```reference block may fetch an `http(s)` URL. Off by
     /// default: nothing touches the network unasked (ReferenceBlock.cpp).
     void setRemoteReferences(bool on);
+    /// The person asked for the remote image at `url` (a click on its placeholder; `always` is the
+    /// "Always load from" button, which also remembers the origin): shown for this note from now on, fetched
+    /// and decoded in the background (RemoteImageBlock.cpp). Nothing remote is asked for before this, except
+    /// the images of an origin already remembered.
+    void loadRemoteImage(const QString &url, bool always);
 #endif
     /// Whether a file or URL a reference block shows is still being read, or its excerpt cut.
     bool referencesPending() const;
@@ -2027,6 +2032,28 @@ private:
     void fetchReference(const QString &key, const QString &url, quint64 generation, int hops);
     /// Forgets every URL's text and the network manager: remote fetching went off.
     void dropRemoteReferences();
+    // --- remote images, RemoteImageBlock.cpp ---------------------------
+    /// The URL an embed asks for when it is a remote image (`![](https://...)`, `<img src="https://...">`),
+    /// normalised the way every map here is keyed; empty for any other embed.
+    static QString remoteImageURL(const EmbedSpan &embed);
+    /// What to draw for `url` now: the picture, or a placeholder's words and whether it has buttons.
+    /// Starts the load of an image that was asked for and is not there yet.
+    struct RemoteShow {
+        QPixmap pixmap;
+        QString notice;
+        bool canLoad = false;
+    };
+    RemoteShow remoteImageShow(const QString &url);
+    /// A sole `![](https://...)` block: the picture, or the placeholder card.
+    bool layoutRemoteImage(BlockView &view, const EmbedSpan &embed, const QString &url);
+    /// The same for an image inside a line of text.
+    EmbedCell remoteImageCell(const EmbedSpan &embed, const QString &url, qreal maxWidth);
+    void paintRemotePlaceholder(QPainter &painter, const QRectF &rect, const QString &host, const QString &notice,
+                                bool canLoad) const;
+    /// A click on a placeholder: "Load image", "Always load from", or neither. True when `rect` took it.
+    bool handleRemoteImageClick(const QString &url, bool canLoad, const QRectF &rect, const QPoint &point);
+    void deliverRemoteImage(const QUrl &url, const QImage &image, const QString &error);
+    void relayRemoteImageBlocks(const QString &url);
 #endif
     /// Relays out the blocks showing `key`.
     void relayReferenceBlocks(const QString &key);

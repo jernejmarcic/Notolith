@@ -323,6 +323,12 @@ void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qre
                                    qreal top) const
 {
     const QRectF card = view.x().fileCardRect.translated(left, top);
+#ifdef NOTEAPPC_HAVE_NETWORK
+    if (!view.x().remoteURL.isEmpty()) {
+        paintRemotePlaceholder(painter, card, view.x().fileCardLabel, view.x().remoteNotice, view.x().remoteCanLoad);
+        return;
+    }
+#endif
     painter.save();
     QPainterPath rounded;
     rounded.addRoundedRect(card, 6, 6);
@@ -418,6 +424,10 @@ bool MarkdownEditor::handleFileCardClick(const BlockView &view, const QPoint &po
         return false;
     if (!view.x().fileCardRect.translated(left, top).contains(point))
         return false;
+#ifdef NOTEAPPC_HAVE_NETWORK
+    if (!view.x().remoteURL.isEmpty())
+        return handleRemoteImageClick(view.x().remoteURL, view.x().remoteCanLoad, view.x().fileCardRect.translated(left, top), point);
+#endif
     emit openFileRequested(view.x().fileCardPath);
     return true;
 }
@@ -621,6 +631,10 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     EmbedCell cell;
     cell.source = embed.range;
 
+#ifdef NOTEAPPC_HAVE_NETWORK
+    if (const QString url = remoteImageURL(embed); !url.isEmpty())
+        return remoteImageCell(embed, url, maxWidth);
+#endif
     QString path = attachmentPathOf(embed);
     const bool attached = !path.isEmpty();
     if (!attached && m_resolver)
@@ -809,6 +823,12 @@ void MarkdownEditor::paintEmbedCellList(QPainter &painter, const std::vector<Emb
     const QColor text = d->m_theme.color(QStringLiteral("--text-normal"));
     for (const EmbedCell &cell : cells) {
         const QRectF rect = cell.rect.translated(left, top);
+#ifdef NOTEAPPC_HAVE_NETWORK
+        if (!cell.remoteURL.isEmpty()) {
+            paintRemotePlaceholder(painter, rect, cell.label, cell.remoteNotice, cell.remoteCanLoad);
+            continue;
+        }
+#endif
         if (cell.isFileCard) {
             painter.save();
             QPainterPath rounded;
@@ -967,6 +987,10 @@ bool MarkdownEditor::handleEmbedCellClick(const BlockView &view, const QPoint &p
     for (const EmbedCell &cell : view.x().embedCells) {
         if (!cell.rect.translated(left, top).contains(point))
             continue;
+#ifdef NOTEAPPC_HAVE_NETWORK
+        if (!cell.remoteURL.isEmpty())
+            return handleRemoteImageClick(cell.remoteURL, cell.remoteCanLoad, cell.rect.translated(left, top), point);
+#endif
         if (cell.isNote)
             emit linkActivated(cell.openPath);
         else if (!cell.openPath.isEmpty())

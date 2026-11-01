@@ -133,6 +133,7 @@ EmbedSpan embedOf(const Link &link)
     EmbedSpan embed;
     embed.range = link.range;
     embed.target = link.target;
+    embed.raw = link.raw;
     embed.subpath = link.subpath;
     embed.alias = link.alias;
 
@@ -210,6 +211,7 @@ void HTMLimageEmbed(const QString &text, const Range &range, Decorations &decora
         embed.subpath = src.mid(hash);
         src = src.left(hash);
     }
+    embed.raw = src;
     embed.target = QUrl::fromPercentEncoding(src.toUtf8());
     embed.alias = alt;
     embed.width = width;

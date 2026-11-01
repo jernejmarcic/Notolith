@@ -59,7 +59,8 @@ target_include_directories(noteAppC_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # and it is the command palette's own matcher rather than a second one.
 target_link_libraries(noteAppC_editor PUBLIC Qt6::Widgets noteAppC_markdown noteAppC_theme noteAppC_render noteAppC_vault noteAppC_index PRIVATE Qt6::Concurrent Qt6::Svg noteAppC_sandbox)
 if(NOTEAPPC_WITH_NETWORK)
-    target_link_libraries(noteAppC_editor PRIVATE Qt6::Network)
+    target_link_libraries(noteAppC_editor PRIVATE Qt6::Network noteAppC_remoteimage)
+    target_sources(noteAppC_editor PRIVATE RemoteImageBlock.cpp)
     target_compile_definitions(noteAppC_editor PUBLIC NOTEAPPC_HAVE_NETWORK)
 endif()
 
