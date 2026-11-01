@@ -7,21 +7,27 @@ reachable: a file manager can open any `.md` with Notolith, and
 `resolveLaunchTarget()` decides whether that means one file or the vault it
 sits in. `inode/directory` is listed too, so "Open folder with" offers it for a
 vault. `io.github.jernejmarcic.Notolith.metainfo.xml` describes the app to
-software centres and Flatpak.
+software centres.
 
 `cmake --install <build> --prefix /usr` puts the binary (`notolith`) in `bin/`,
-the desktop file in `share/applications/` and the metainfo in
-`share/metainfo/`.
+the desktop file in `share/applications/`, the metainfo in `share/metainfo/`,
+the licence and third-party notices in `share/licenses/notolith/` and the demo
+asset notice in `share/doc/notolith/`.
 
-Every recipe here builds the source tree it sits in. None of them passes
-`-march`: a package has to run on any x86-64 or arm64 machine
-(`docs/PLATFORMS.md`).
+Arch (the PKGBUILD) is the supported package. It builds the source tree it
+sits in and passes no `-march` and no `target-cpu=native`: a package has to run
+on any x86-64 machine (`docs/PLATFORMS.md`). Earlier Flatpak and AppImage
+recipes were untested and were removed; they are in the git history.
 
-| recipe | state |
-|---|---|
-| `arch/PKGBUILD` | Builds with `makepkg -si --nocheck` in `arch/`; strips the `-march=native` that CachyOS puts in `makepkg.conf`. One build, four packages: `notolith` (the application), `notolith-ink` (handwriting core library and module, needs `abseil-cpp`), `notolith-hwfont` (glyph studio module, needs `notolith-ink`) and `notolith-pdfview` (PDF viewer module, needs `poppler-qt6`). The module packages pin the exact `notolith` version, and all four of one run are installed together (`docs/INK.md`). No package has a networking or encryption dependency (`docs/OFFLINE.md`). |
-| `flatpak/io.github.jernejmarcic.Notolith.yml` | Untested: needs flatpak-builder; the command is at the top of the file. PDF embeds are off because poppler is not in the KDE runtime. |
-| `appimage/build-appimage.sh` | Untested: downloads linuxdeploy and its Qt plugin. |
+`arch/PKGBUILD`: `makepkg -si` in `arch/` builds, runs the test suites (in a
+second build directory with tests on) and installs; `--nocheck` skips the
+tests. One build, four packages: `notolith` (the application),
+`notolith-ink` (handwriting core library and module, needs `abseil-cpp`),
+`notolith-hwfont` (glyph studio module, needs `notolith-ink`) and
+`notolith-pdfview` (PDF viewer module, needs `poppler-qt6`). The module
+packages pin the exact `notolith` version, and all four of one run are
+installed together (`docs/INK.md`). No package has a networking or encryption
+dependency (`docs/OFFLINE.md`).
 
 The icon is `libs/theme/icons/noteAppC.svg`, installed to
 `share/icons/hicolor/scalable/apps/` under the app id, and built into the

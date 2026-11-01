@@ -3,10 +3,11 @@
 #
 #   git clone https://github.com/jernejmarcic/Notolith
 #   cd Notolith/packaging/arch
-#   makepkg -si --nocheck
+#   makepkg -si
 #
-# makepkg builds in src/ and pkg/ beside this file. --nocheck skips the test
-# suites; drop it to run them (QT_QPA_PLATFORM=offscreen is set for you).
+# makepkg builds in src/ and pkg/ beside this file. It also runs the test
+# suites (check() builds them in a second build directory, with
+# QT_QPA_PLATFORM=offscreen); `makepkg -si --nocheck` skips that.
 #
 # One build, four packages (docs/INK.md): notolith (the application),
 # notolith-ink (the handwriting core library and module), notolith-hwfont
@@ -19,43 +20,57 @@
 # CMake options that default to OFF and are not turned on here.
 #
 # The first build fetches md4qt, MicroTeX and tinyxml2 (pinned in the root
-# CMakeLists.txt) and ink-stroke-modeler (pinned in
-# libs/ext/ink/core/CMakeLists.txt), so it needs the network.
-# source=() cannot pin the modeler without a tarball; a later change can
-# vendor it.
+# CMakeLists.txt), yaml-cpp when it is not installed, and ink-stroke-modeler
+# (pinned in libs/ext/ink/core/CMakeLists.txt), so it needs the network.
+# source=() cannot pin them without tarballs.
 
 pkgbase=notolith
 pkgname=('notolith' 'notolith-ink' 'notolith-hwfont' 'notolith-pdfview')
-pkgver=0.1.0
+# The beta tag is "-beta.1" in CMake; pacman has no hyphen or tilde in a pkgver, and
+# 0.1.0beta1 sorts before 0.1.0 under vercmp.
+pkgver=0.1.0beta1
 pkgrel=1
-arch=('x86_64' 'aarch64')
+arch=('x86_64')
 license=('GPL-3.0-or-later')
 # abseil-cpp is the system Abseil that the ink core requires (docs/INK.md): without it the ink
 # packages would silently not be built.
 # poppler-qt6 is the PDF module's, not the application's: the executable links none of it.
 makedepends=('cmake' 'ninja' 'git' 'gtest' 'abseil-cpp' 'poppler-qt6')
 
-build() {
-    # A distribution's makepkg.conf may target the build machine's own CPU
-    # (CachyOS ships -march=native). noteAppC takes no -march at all - it has
-    # to run on any x86-64 or arm64 machine, see docs/PLATFORMS.md - so the
-    # package must not carry one either.
+# A distribution's makepkg.conf may target the build machine's own CPU
+# (CachyOS ships -march=native, and target-cpu=native for Rust). noteAppC takes
+# none at all - it has to run on any x86-64 machine, see docs/PLATFORMS.md - so
+# the package must not carry one either. Each function runs in its own shell,
+# so build() and check() both call this.
+_noNativeCPU() {
     CFLAGS=$(printf '%s' "$CFLAGS" | sed -E 's/-m(arch|tune)=[^ ]+//g')
     CXXFLAGS=$(printf '%s' "$CXXFLAGS" | sed -E 's/-m(arch|tune)=[^ ]+//g')
-    export CFLAGS CXXFLAGS
+    RUSTFLAGS=$(printf '%s' "${RUSTFLAGS:-}" | sed -E 's/-C ?target-cpu=[^ ]+//g')
+    export CFLAGS CXXFLAGS RUSTFLAGS
+}
+
+build() {
+    _noNativeCPU
     cmake -S "$startdir/../.." -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
-        -DBUILD_TESTING=ON
+        -DBUILD_TESTING=OFF
     cmake --build build
 }
 
+# The packaged build has no tests (they are not installed and would only slow
+# build() down), so this configures a second tree with them on.
 check() {
-    QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+    _noNativeCPU
+    cmake -S "$startdir/../.." -B build-test -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_TESTING=ON
+    cmake --build build-test
+    QT_QPA_PLATFORM=offscreen ctest --test-dir build-test --output-on-failure
 }
 
 package_notolith() {
-    pkgdesc='Markdown notes and Obsidian vaults, native and fast'
+    pkgdesc='A Markdown note app for developers'
     # The package was called noteappc before the app was named Notolith.
     conflicts=('noteappc')
     replaces=('noteappc')
@@ -66,6 +81,7 @@ package_notolith() {
              'bubblewrap')
     optdepends=('hunspell-en_gb: British English spelling'
                 'hunspell-en_us: American English spelling')
+    # cmake --install also puts LICENSE and THIRD-PARTY.md in usr/share/licenses/notolith.
     DESTDIR="$pkgdir" cmake --install build
     # The modules belong to their own packages; the base application never links them.
     # (usr/lib is what CMake's GNUInstallDirs gives on Arch with prefix /usr; the packages below name it the same way.)
@@ -82,6 +98,8 @@ package_notolith-ink() {
     # One install unit: later markup and recognition hooks go into this module.
     install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
         build/modules/libnotolith-inkcore.so build/modules/notolith-ink.so
+    # The Apache-2.0 text of ink-stroke-modeler is in THIRD-PARTY.md.
+    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$startdir/../../LICENSE" "$startdir/../../THIRD-PARTY.md"
 }
 
 package_notolith-hwfont() {
@@ -89,6 +107,7 @@ package_notolith-hwfont() {
     # No manifest "dependencies" key: pacman enforces this one.
     depends=("notolith-ink=$pkgver-$pkgrel")
     install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" build/modules/notolith-hwfont.so
+    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$startdir/../../LICENSE" "$startdir/../../THIRD-PARTY.md"
 }
 
 package_notolith-pdfview() {
@@ -99,4 +118,5 @@ package_notolith-pdfview() {
     depends=("notolith=$pkgver-$pkgrel" 'poppler-qt6')
     install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
         build/modules/libnotolith-pdfpage.so build/modules/notolith-pdfview.so
+    install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" "$startdir/../../LICENSE" "$startdir/../../THIRD-PARTY.md"
 }
