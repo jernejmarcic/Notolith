@@ -316,7 +316,16 @@ StorageSettled settleStorage(const QString &argument, QStringList *lines, QStrin
     // moved yet).
     if (!SingleInstance::ownSockets().isEmpty()) {
         const SingleInstance::Launch launch = SingleInstance::launchFor(argument);
-        return SingleInstance(launch).handOver(argument) ? StorageSettled::HandedOver : StorageSettled::Carry;
+        if (SingleInstance(launch).handOver(argument))
+            return StorageSettled::HandedOver;
+        // Said, or an always-open window would put this off for ever without a word.
+        const QString line = QStringLiteral("storage: files of the previous version are waiting; they move at a "
+                                            "start with no Notolith window open");
+        if (warnings)
+            warnings->append(line);
+        else
+            qWarning().noquote() << line;
+        return StorageSettled::Carry;
     }
     if (!SingleInstance::previousBuildSockets().isEmpty()) {
         if (SingleInstance::handOverToPreviousBuild(SingleInstance::launchFor(argument), argument))

@@ -33,8 +33,9 @@ namespace noteAppC {
 /// marker, which ends every later call at one read, and a machine with no old
 /// directory is left untouched. When the copy of a file is in place but the
 /// original cannot be removed (a directory this user cannot write), it counts
-/// as moved and the original is listed the same way. Run it before the first
-/// Settings::load().
+/// as moved and the original is listed the same way. Two starts at once take turns (a lock in the runtime
+/// directory); the second, finding nothing left, does nothing. Delete the marker to have a later start try
+/// everything left again. Run it before the first Settings::load().
 ///
 /// One info line per file moved goes to qInfo(), or is appended to `lines` when
 /// the caller has none to spare yet (the log file is opened after this runs);
