@@ -160,11 +160,11 @@ SyncEngine::~SyncEngine()
 }
 
 void SyncEngine::start(const QString &vaultRoot, const QString &serverURL, const QString &email,
-                       PasswordPrompt prompt, bool viaLockbox)
+                       PasswordPrompt prompt, bool viaLockbox, bool vaultTrusted)
 {
     QMetaObject::invokeMethod(
-        this, [this, vaultRoot, serverURL, email, prompt, viaLockbox] {
-            startOnWorker(vaultRoot, serverURL, email, prompt, viaLockbox);
+        this, [this, vaultRoot, serverURL, email, prompt, viaLockbox, vaultTrusted] {
+            startOnWorker(vaultRoot, serverURL, email, prompt, viaLockbox, vaultTrusted);
         },
         Qt::QueuedConnection);
 }
@@ -196,7 +196,7 @@ void SyncEngine::setStatus(Status status, const QString &message)
 }
 
 void SyncEngine::startOnWorker(QString vaultRoot, QString serverURL, QString email, PasswordPrompt prompt,
-                               bool viaLockbox)
+                               bool viaLockbox, bool vaultTrusted)
 {
     stopOnWorker(); // switching vaults (or restarting) tears down the old session first
     if (!SyncCrypto::init()) {
@@ -204,6 +204,7 @@ void SyncEngine::startOnWorker(QString vaultRoot, QString serverURL, QString ema
         return;
     }
     m_vault = Vault(vaultRoot);
+    m_vault.setTrusted(vaultTrusted);
     if (!m_vault.isValid()) {
         setStatus(Status::Error, QStringLiteral("not a vault"));
         return;

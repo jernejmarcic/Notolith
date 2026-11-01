@@ -1138,7 +1138,7 @@ bool Vault::moveToTrash(const QString &absolutePath, QString *error) const
 void Vault::loadIgnoreFilters()
 {
     m_ignorePrefixes.clear();
-    m_ignoreRegexes.clear();
+    m_regexEntries.clear();
     m_filtersConfigured = false;
 
     QFile file(m_root + QLatin1String("/.obsidian/app.json"));
@@ -1174,17 +1174,42 @@ void Vault::loadIgnoreFilters()
         if (flags.contains(QLatin1Char('m')))
             options |= QRegularExpression::MultilineOption;
 
-        QRegularExpression re(match.captured(1), options);
+        // Kept as text: a pattern from the vault is neither compiled nor run until the vault is trusted.
+        m_regexEntries.append({entry, match.captured(1), options});
+    }
+    compileIgnoreRegexes();
+}
+
+void Vault::setTrusted(bool trusted)
+{
+    if (m_trusted == trusted)
+        return;
+    m_trusted = trusted;
+    compileIgnoreRegexes();
+}
+
+void Vault::compileIgnoreRegexes()
+{
+    m_ignoreRegexes.clear();
+    m_ignoreLiterals.clear();
+    if (!m_trusted)
+        return;
+    for (const RegexEntry &entry : std::as_const(m_regexEntries)) {
+        QRegularExpression re(entry.pattern, entry.options);
         if (re.isValid())
             m_ignoreRegexes.append(re);
         else
-            m_ignorePrefixes.append(entry); // not valid PCRE either; treat literally
+            m_ignoreLiterals.append(entry.entry); // not valid PCRE either; treat literally
     }
 }
 
 bool Vault::isIgnored(const QString &relativePath) const
 {
     for (const QString &prefix : m_ignorePrefixes) {
+        if (relativePath.startsWith(prefix))
+            return true;
+    }
+    for (const QString &prefix : m_ignoreLiterals) {
         if (relativePath.startsWith(prefix))
             return true;
     }

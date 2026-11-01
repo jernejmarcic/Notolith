@@ -71,9 +71,10 @@ public:
     /// password even though it still authenticates with one (see
     /// docs/SYNC.md "Device enrolment with lockboxes") - it registers
     /// itself and waits for an already-approved device to seal it a
-    /// lockbox. Safe to call from any thread.
+    /// lockbox. `vaultTrusted`: the person trusted this vault, so its regex ignore filters count (Vault::setTrusted).
+    /// Safe to call from any thread.
     void start(const QString &vaultRoot, const QString &serverURL, const QString &email,
-              PasswordPrompt prompt, bool viaLockbox = false);
+              PasswordPrompt prompt, bool viaLockbox = false, bool vaultTrusted = false);
     void stop();
 
     /// Called by the vault's file watcher/index on any change - schedules
@@ -129,7 +130,7 @@ signals:
 
 private:
     void startOnWorker(QString vaultRoot, QString serverURL, QString email, PasswordPrompt prompt,
-                       bool viaLockbox);
+                       bool viaLockbox, bool vaultTrusted);
     void stopOnWorker();
     void runCycle();
     void setStatus(Status status, const QString &message = {});

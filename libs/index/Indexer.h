@@ -38,6 +38,9 @@ public:
     /// size already match the cache are skipped, so a warm start is cheap.
     /// An invalid vault stops everything.
     void setVault(const Vault &vault);
+    /// The open vault was trusted or not: its regex ignore filters count from the next scan, which this starts
+    /// when that changes what they do.
+    void setVaultTrusted(bool trusted);
     /// The whole vault: every file the cache does not hold as it is on disk,
     /// and every note no longer there. Queued behind a scan in progress.
     void rebuild();

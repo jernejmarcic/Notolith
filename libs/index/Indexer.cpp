@@ -171,6 +171,15 @@ void Indexer::setVault(const Vault &vault)
     }
 }
 
+void Indexer::setVaultTrusted(bool trusted)
+{
+    if (m_vault.isTrusted() == trusted)
+        return;
+    m_vault.setTrusted(trusted);
+    if (m_vault.isValid())
+        rebuild();
+}
+
 namespace {
 
 /// A foreign file's text through its reader: nullopt when there is none for the suffix, the file cannot be read,
@@ -396,8 +405,8 @@ void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QS
         // walk: what was in a folder it read, or in a folder that is gone.
         QHash<QString, bool> folderExists;
         const auto isGone = [&](const QString &known) {
-            if (whole)
-                return !QFileInfo::exists(vault.absolute(known));
+            if (whole) // also a file a filter ignores now (a vault that was trusted since its last scan)
+                return !QFileInfo::exists(vault.absolute(known)) || vault.isIgnored(known);
             const qsizetype slash = known.lastIndexOf(QLatin1Char('/'));
             const QString folder = slash < 0 ? QString() : known.left(slash);
             if (walked.contains(folder) && !QFileInfo::exists(vault.absolute(known)))

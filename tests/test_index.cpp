@@ -1308,6 +1308,37 @@ TEST(IndexerIgnoreFilters, SkipsPathsMatchingAConfiguredFilter)
     EXPECT_EQ(index.allPaths(), QStringList({QStringLiteral("Home.md")}));
 }
 
+// The scan applies a vault's regex filters only once the vault is trusted (Vault::setTrusted).
+TEST(IndexerIgnore, ARegexFilterCountsOnlyOnceTheVaultIsTrusted)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const auto write = [&](const QString &relative, const QByteArray &bytes) {
+        ASSERT_TRUE(QDir().mkpath(QFileInfo(dir.filePath(relative)).absolutePath()));
+        QFile file(dir.filePath(relative));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+    };
+    write(QStringLiteral("Home.md"), "# Home\n");
+    write(QStringLiteral("vendor/Thing.md"), "# Thing\n");
+    write(QStringLiteral(".obsidian/app.json"), R"({"userIgnoreFilters": ["/^vendor\\//"]})");
+
+    Index index;
+    Indexer indexer(&index);
+    {
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(Vault(dir.path())); // untrusted
+        ASSERT_TRUE(done.wait(20000));
+    }
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("vendor/Thing.md"))) << "its regex is not applied";
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Home.md")));
+
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVaultTrusted(true);
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_EQ(index.allPaths(), QStringList({QStringLiteral("Home.md")})) << "trusted: the filter applies, rows included";
+}
+
 TEST(FuzzyTest, SubsequenceMatchingAndRanking)
 {
     EXPECT_TRUE(Fuzzy::matches(QStringLiteral("nac"), QStringLiteral("noteAppC")));

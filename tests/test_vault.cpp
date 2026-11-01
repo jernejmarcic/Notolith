@@ -5,6 +5,7 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -724,6 +725,7 @@ TEST(VaultIgnoreFilters, ConfiguredFiltersMatchPrefixAndRegexAndDropTheBuildDefa
     file.close();
 
     Vault vault(dir.path()); // filters are read at construction time
+    vault.setTrusted(true);  // a regex of the vault's counts only once it is trusted
 
     EXPECT_TRUE(vault.isIgnored(QStringLiteral("Templates/daily.md")));
     EXPECT_TRUE(vault.isIgnored(QStringLiteral("src/node_modules/pkg/index.js")));
@@ -731,6 +733,42 @@ TEST(VaultIgnoreFilters, ConfiguredFiltersMatchPrefixAndRegexAndDropTheBuildDefa
     EXPECT_FALSE(vault.isIgnored(QStringLiteral("Projects/notes.md")));
     // Filters are configured, so the build*/ fallback no longer applies.
     EXPECT_FALSE(vault.isIgnored(QStringLiteral("build/output.md")));
+}
+
+// A regex in a stranger's app.json is a program for the matcher: not compiled, not run, until the vault is trusted.
+TEST(VaultIgnoreFilters, ARegexOfAnUntrustedVaultIsNeitherCompiledNorRun)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    QJsonArray filters;
+    filters.append(QStringLiteral("Templates/"));
+    filters.append(QStringLiteral("/(a+)+$/"));
+    filters.append(QStringLiteral("/([/")); // not valid: taken as a path once trusted
+    QJsonObject appJson;
+    appJson[QStringLiteral("userIgnoreFilters")] = filters;
+    QFile file(dir.filePath(QStringLiteral(".obsidian/app.json")));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(appJson).toJson());
+    file.close();
+
+    Vault vault(dir.path());
+    ASSERT_FALSE(vault.isTrusted()) << "a Vault starts untrusted";
+    const QString catastrophic = QString(60, QLatin1Char('a')) + QLatin1Char('b');
+    QElapsedTimer timer;
+    timer.start();
+    EXPECT_FALSE(vault.isIgnored(catastrophic)) << "its regex is not run";
+    EXPECT_FALSE(vault.isIgnored(QStringLiteral("aaa")));
+    EXPECT_LT(timer.elapsed(), 500);
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("Templates/daily.md"))) << "a plain filter still applies";
+    EXPECT_FALSE(vault.isIgnored(QStringLiteral("build/output.md"))) << "the vault has filters of its own";
+
+    vault.setTrusted(true);
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("aaa"))) << "trusted: its regex applies";
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("/([/x.md"))) << "an invalid regex is a path";
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("Templates/daily.md")));
+    vault.setTrusted(false);
+    EXPECT_FALSE(vault.isIgnored(QStringLiteral("aaa")));
 }
 
 // --- file recovery -------------------------------------------------------------

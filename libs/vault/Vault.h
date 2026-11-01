@@ -226,12 +226,27 @@ public:
     /// already caught by Indexer's own dot-prefix rule; this covers the rest.
     bool isIgnored(const QString &relativePath) const;
 
+    /// The person has trusted this vault. Until then a regex filter (`/.../`) from its app.json is not applied
+    /// - not even compiled: a hostile pattern could keep the scan busy for good - while a plain path filter is.
+    /// A Vault starts untrusted.
+    void setTrusted(bool trusted);
+    bool isTrusted() const { return m_trusted; }
+
 private:
+    struct RegexEntry {
+        QString entry;   ///< as written, `/.../flags`
+        QString pattern; ///< between the slashes
+        QRegularExpression::PatternOptions options;
+    };
     void loadIgnoreFilters();
+    void compileIgnoreRegexes();
 
     QString m_root;
     QStringList m_ignorePrefixes;
-    QList<QRegularExpression> m_ignoreRegexes;
+    QList<RegexEntry> m_regexEntries;
+    QList<QRegularExpression> m_ignoreRegexes; ///< compiled from m_regexEntries, only while trusted
+    QStringList m_ignoreLiterals;              ///< entries that are not valid regexes, taken as paths, only while trusted
+    bool m_trusted = false;
     bool m_filtersConfigured = false;
 };
 

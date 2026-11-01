@@ -5615,6 +5615,7 @@ void MainWindow::openVault(const QString &path)
     // are indexed by the first one, and a warm cache is checked against them.
     updateNotebookIndex();
     m_indexer->setMetaNotes(parseOptions());
+    m_vault.setTrusted(vaultTrusted()); // a trusted vault's regex ignore filters count
     m_indexer->setVault(m_vault);
     applySettings();
     if (m_bookmarks)
@@ -6540,7 +6541,7 @@ void MainWindow::updateSync()
     m_syncStatus->setText(tr("Sync: signing in"));
     m_sync->start(m_vault.root(), server, email, [password](const QString &) {
         return std::exchange(*password, QString());
-    });
+    }, false, vaultTrusted());
 #endif
 }
 
@@ -6574,6 +6575,8 @@ void MainWindow::setVaultTrusted(bool trusted)
         return;
     m_settings.setVaultTrusted(m_vault.root(), trusted);
     m_settings.save();
+    m_vault.setTrusted(trusted);
+    m_indexer->setVaultTrusted(trusted);
     applyHotkeys(); // its hotkeys count (or stop counting) from now on; its feature switches at the next open
     // Diagrams and plugin fences stop (or start) asking for a click: handed over again, which redraws them.
     for (const auto &leaf : m_leaves) {
