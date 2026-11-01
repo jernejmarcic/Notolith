@@ -215,7 +215,8 @@ void startFetch(const QString &url)
                          [](const QUrl &failed, const QString &why) { onRemoteIcon(failed, {}, why); });
     }
     pendingURLs().insert(url);
-    images.load(QUrl(url, QUrl::TolerantMode));
+    // A note names the icon, so a redirect to another site is not followed: the setting is the only consent.
+    images.load(QUrl(url, QUrl::TolerantMode), /*sameOriginOnly=*/true);
 }
 
 bool remoteAllowed = false;
