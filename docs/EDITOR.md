@@ -1449,14 +1449,12 @@ already linked for notebook output).
   stdout; `-o -` is not used, 0.3.1 writes a file named `-` for it) and
   rasterises the SVG with `QSvgRenderer` at the column width and the display's
   pixel ratio. The tool gets 5 s, then is killed.
-- **Sandbox**: a fence can come from a shared note, so where bubblewrap is
-  installed mmdr runs in the same sandbox as the other diagram tools (see
+- **Sandbox**: a fence can come from a shared note, so mmdr runs only in
+  the same sandbox as the other diagram tools (see
   "Sandbox" under PlantUML, TikZ and Graphviz below), with the 5 s budget and
   the 4 GB address-space limit; the config goes in the temporary directory,
-  the one writable place. Unlike the other tools it is not refused without
-  bwrap: mmdr only parses text, comparable to the poppler and QSvg parsers
-  this process runs, and Mermaid is on by default, so it runs as a plain
-  process there and the diagram still draws.
+  the one writable place. Without bubblewrap it does not run, as with the
+  other tools, and the fence shows its source.
 - **Cache**: `libs/render/MermaidCache.{h,cpp}` (in libs/render because publish
   does not link the editor). The SVG is kept as
   `$XDG_CACHE_HOME/notolith/mermaid/<hash of source>-<hash of config>.svg`, and in
@@ -1523,7 +1521,7 @@ is the wrong place for it).
   no other disk, no network, no inherited environment, a 64 MiB `/tmp` and `/dev/shm`, and one temporary
   directory writable; the whole sandbox is also in a cgroup of 1 GiB of RAM and 256 tasks when a systemd user manager
   is there (`sandbox::limitInCgroup`, docs/NOTEBOOKS.md, Sandbox). Without bwrap there is no diagram, only the hint: never an
-  unsandboxed run (Mermaid alone is the exception, above). A tool set by path outside `/usr` is resolved (a symlink
+  unsandboxed run. A tool set by path outside `/usr` is resolved (a symlink
   to the file it points to) and bound in read-only; whatever it needs besides
   itself (a wrapper script's jar, a home's libraries) is not, so install those
   under `/usr`. 20 s for a

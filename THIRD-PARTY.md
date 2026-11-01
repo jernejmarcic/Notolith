@@ -45,6 +45,7 @@ distribution's package metadata reports them (checked 2026-11-01).
 | Qt 6 (`qt6-base`, `qt6-svg`, `qt6-multimedia`) | GPL-3.0-only, LGPL-3.0-only, Qt commercial licence, Qt GPL exception 1.0 |
 | yaml-cpp | MIT |
 | hunspell | LGPL-2.1-or-later OR GPL-2.0-or-later OR MPL-1.1 |
+| gumbo-parser | Apache-2.0 |
 | KSyntaxHighlighting (`syntax-highlighting`) | MIT |
 | litehtml | BSD-3-Clause |
 | libgit2 | GPL-2.0-only with a linking exception |

@@ -14,8 +14,9 @@
     </p>
     <p>
       It opens and works with Obsidian vaults: settings, hotkeys, bookmarks and
-      layouts are read from the vault's .obsidian folder and never written
-      back, and a note is only ever changed where it was edited.
+      layouts are read from the vault's .obsidian folder, and Obsidian's
+      settings are never written back. Renaming a note updates the links to
+      it in other notes.
     </p>
   </description>
   <developer id="io.github.jernejmarcic">
