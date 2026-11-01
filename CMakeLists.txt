@@ -59,9 +59,12 @@ include(CTest)
 # Native code is loaded from places an environment variable could name only in a developer's build: the
 # NOTEAPPC_MODULE_DIRS list of module directories and the NOTEAPPC_PLUGIN_HOST binary are ignored unless this is
 # ON, which it is by default only when the tests are built (-DBUILD_TESTING=ON). A release leaves it OFF.
-option(NOTEAPPC_DEV_ENV_OVERRIDES "Honour NOTEAPPC_MODULE_DIRS and NOTEAPPC_PLUGIN_HOST (tests, development)" ${BUILD_TESTING})
+option(NOTEAPPC_DEV_ENV_OVERRIDES "Honour NOTEAPPC_MODULE_DIRS, NOTEAPPC_PLUGIN_HOST and NOTEAPPC_SANDBOX_TEST_BINDS (tests, development)" ${BUILD_TESTING})
 if(NOTEAPPC_DEV_ENV_OVERRIDES)
     add_compile_definitions(NOTEAPPC_DEV_ENV_OVERRIDES)
+    message(WARNING "NOTEAPPC_DEV_ENV_OVERRIDES is ON (the default while BUILD_TESTING is): this binary loads native "
+                    "code and binds host paths into the sandbox as an environment variable says. A release build must "
+                    "not ship with it: configure with -DBUILD_TESTING=OFF -DNOTEAPPC_DEV_ENV_OVERRIDES=OFF.")
 endif()
 option(NOTEAPPC_STATIC_MODULES "Build the loadable modules as Qt static plugins linked into the executable" ${noteappc_static_default})
 
@@ -255,8 +258,29 @@ find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(SECCOMP QUIET IMPORTED_TARGET libseccomp)
 endif()
+# Required, then: a build that cannot run its blocks is a packaging mistake to hear about now, not at the first click.
+# -DNOTEAPPC_ALLOW_NO_SECCOMP=ON builds without (Android has none), and nothing that needs the sandbox runs.
+option(NOTEAPPC_ALLOW_NO_SECCOMP "Build without libseccomp: code blocks, plugins, diagrams, TeX and pandoc then never run" OFF)
 if(NOT TARGET PkgConfig::SECCOMP)
-    message(WARNING "libseccomp not found: nothing that needs the sandbox (code blocks, plugins, diagrams, TeX, pandoc) will run")
+    if(NOTEAPPC_ALLOW_NO_SECCOMP OR ANDROID)
+        message(WARNING "libseccomp not found: nothing that needs the sandbox (code blocks, plugins, diagrams, TeX, pandoc) will run")
+    else()
+        message(FATAL_ERROR "libseccomp (with its development files) is required: the sandbox every code block, plugin, "
+                            "diagram, TeX and pandoc run goes through needs its syscall filter. Install it, or configure "
+                            "with -DNOTEAPPC_ALLOW_NO_SECCOMP=ON to build without it.")
+    endif()
+endif()
+# Runtime dependencies of the sandbox, checked here because a missing one is found otherwise only when a block is
+# run: bubblewrap, and util-linux's prlimit (the task limit is set inside the sandbox's user namespace, where
+# only the job's own tasks count, which a limit set before bwrap starts cannot do).
+if(NOT ANDROID)
+    foreach(tool bwrap prlimit)
+        find_program(NOTEAPPC_RUNTIME_${tool} ${tool})
+        if(NOT NOTEAPPC_RUNTIME_${tool})
+            message(WARNING "${tool} not found: it is a runtime dependency (bubblewrap, util-linux); without it "
+                            "nothing that needs the sandbox will run. Make the package depend on it.")
+        endif()
+    endforeach()
 endif()
 
 add_compile_options(-Wall -Wextra)

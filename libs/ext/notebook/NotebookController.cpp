@@ -90,6 +90,19 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
         return;
     }
 
+    // The one place every run passes: too big a block, or one the person (or a vault's trust) has not allowed,
+    // never gets as far as a process.
+    QString refusal = oversizeMessage(request.source, request.maxSourceBytes);
+    if (refusal.isEmpty() && m_runGate)
+        refusal = m_runGate(request);
+    if (!refusal.isEmpty()) {
+        NotebookRunResult refused;
+        refused.hasRun = true;
+        refused.kernelError = refusal;
+        deliver(refused);
+        return;
+    }
+
     // The system's own interpreter or compiler first: one short process, no
     // kernel to install or keep running. A Jupyter kernel for a language
     // noteAppC does not know how to run itself, or when the block (or the

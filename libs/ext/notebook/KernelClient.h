@@ -24,6 +24,17 @@
 
 namespace noteAppC::notebook {
 
+/// What lies at one of a kernel's endpoints. The kernel runs in a sandbox that writes the directory its ipc
+/// sockets are in, so it can leave anything at the path: a link to a socket of the user's (the session bus,
+/// an agent), which the app would then connect to as the user.
+enum class EndpointState {
+    Missing, ///< nothing there yet
+    Plain,   ///< a socket this user owns and no link (or not an ipc endpoint: nothing to check)
+    Refused, ///< a link, a file of another kind or another owner's: never connected to
+};
+/// An `ipc://path` endpoint by lstat(2), which does not follow a link.
+EndpointState checkEndpoint(const QString &endpoint);
+
 class KernelClient : public QThread {
     Q_OBJECT
 public:

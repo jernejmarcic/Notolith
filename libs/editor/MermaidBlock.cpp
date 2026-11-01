@@ -288,7 +288,7 @@ Made runTikZ(const QString &tool, const QString &source, const QByteArray &confi
     const Ran tex = runSandboxed(dir.path(), tool,
                                  {QStringLiteral("-interaction=nonstopmode"), QStringLiteral("-halt-on-error"),
                                   QStringLiteral("-no-shell-escape"), QStringLiteral("-no-parse-first-line"), QStringLiteral("cell.tex")},
-                                 {}, {}, false);
+                                 {QStringLiteral("openout_any=p")}, {}, false); // as TexCompiler: not a texmf.cnf's choice
     if (!tex.failure.isEmpty() || tex.code != 0) {
         // The log's first "! ..." line is TeX's own error.
         QString message;

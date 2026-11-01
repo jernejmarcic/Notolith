@@ -97,6 +97,7 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     SandboxRequest request;
     request.runtimeDir = dir;
     request.readOnlyBinds = extraReadOnlyBinds;
+    request.memoryBytes = 4LL << 30; // the interpreter's own 4 GiB address-space cap below, now for what it holds
     int filterFD = -1;
     wrapCommand(tier, argv.constFirst(), argv.mid(1), request, &program, &args, &m_tierUsed,
                 &filterFD);

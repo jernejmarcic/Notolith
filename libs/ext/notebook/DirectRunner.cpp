@@ -376,6 +376,10 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     SandboxRequest sandbox;
     sandbox.runtimeDir = dir;
     sandbox.readOnlyBinds = request.readOnlyBinds;
+    // 1 GiB of RAM for the cell, its files and /dev/shm together (the default); a wasm guest's linear memory
+    // alone may be that big, so its runtime gets room on top.
+    if (wasm)
+        sandbox.memoryBytes = kWasmMemory + (256LL << 20);
     QString program;
     QStringList args;
     SandboxTier used = SandboxTier::Bubblewrap;

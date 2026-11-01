@@ -28,6 +28,7 @@
 #include <QPainterPath>
 #include <QScroller>
 #include <QScrollBar>
+#include <QThreadPool>
 #include <QUrl>
 #include <QtConcurrent>
 
@@ -376,7 +377,12 @@ const MarkdownEditor::TexCacheEntry &MarkdownEditor::ensureTexCompiled(const QSt
     it = d->m_texCache.insert(key, entry);
     const quint64 generation = entry.generation;
 
-    (void)QtConcurrent::run([this, lifeline = d->m_lifeline, key, generation, path] {
+    // Two compiles at a time, as the diagrams: a note of thirty embeds on a 24-thread machine would otherwise
+    // start twenty-four sandboxed TeX runs at once, each with its own gigabyte.
+    static QThreadPool texPool;
+    static const bool sized = (texPool.setMaxThreadCount(2), true);
+    Q_UNUSED(sized);
+    (void)QtConcurrent::run(&texPool, [this, lifeline = d->m_lifeline, key, generation, path] {
         TexCompiler::Result result = TexCompiler::compile(path);
         lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
             deliverTexCompiled(key, generation, std::move(result));

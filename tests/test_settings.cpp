@@ -191,16 +191,46 @@ TEST(Settings, HiddenFileTypesAreAnEmptyListByDefaultAndSurviveASaveNormalised)
 TEST(Settings, DeletedFilesDefaultsToTheSystemTrashAndFollowsObsidiansTrashOption)
 {
     EXPECT_EQ(Settings::load().text(QStringLiteral("files.deletedFiles")), QStringLiteral("system"));
+    // A trusted vault's: an untrusted one's cannot lower this (the test after).
     const auto loadWith = [](const char *trashOption) {
         QTemporaryDir vault;
         writeFile(vault.filePath(QStringLiteral(".obsidian/app.json")),
                   QStringLiteral(R"({"trashOption":"%1"})").arg(QLatin1String(trashOption)));
+        Settings user = Settings::load();
+        user.setVaultTrusted(vault.path(), true);
+        EXPECT_TRUE(user.save());
         return Settings::load(vault.path()).text(QStringLiteral("files.deletedFiles"));
     };
     EXPECT_EQ(loadWith("system"), QStringLiteral("system"));
     EXPECT_EQ(loadWith("local"), QStringLiteral("local"));
     EXPECT_EQ(loadWith("none"), QStringLiteral("permanent"));
     EXPECT_EQ(loadWith("nonsense"), QStringLiteral("system")) << "an unknown value is not taken";
+}
+
+TEST(Settings, anUntrustedVaultCannotMakeDeletePermanentOrSilentNorNameAFileForTheColourScheme)
+{
+    QTemporaryDir vault;
+    writeFile(vault.filePath(QStringLiteral(".obsidian/app.json")),
+              QStringLiteral(R"({"trashOption":"none","promptDelete":false,"tabSize":2})"));
+    writeFile(vault.filePath(QStringLiteral(".obsidian/appearance.json")),
+              QStringLiteral(R"({"cssTheme":"/dev/zero","baseFontSize":20})"));
+
+    const Settings untrusted = Settings::load(vault.path());
+    ASSERT_FALSE(untrusted.isVaultTrusted(vault.path()));
+    EXPECT_EQ(untrusted.text(QStringLiteral("files.deletedFiles")), QStringLiteral("system"));
+    EXPECT_TRUE(untrusted.boolean(QStringLiteral("files.confirmDelete")));
+    EXPECT_EQ(untrusted.text(QStringLiteral("appearance.scheme")), QString());
+    // What is harmless is still taken.
+    EXPECT_EQ(untrusted.integer(QStringLiteral("editor.tabWidth")), 2);
+    EXPECT_EQ(untrusted.integer(QStringLiteral("appearance.baseFontSize")), 20);
+
+    // The person's own setting is theirs either way, and a trusted vault's file counts.
+    Settings user = Settings::load();
+    user.setVaultTrusted(vault.path(), true);
+    ASSERT_TRUE(user.save());
+    const Settings trusted = Settings::load(vault.path());
+    EXPECT_EQ(trusted.text(QStringLiteral("files.deletedFiles")), QStringLiteral("permanent"));
+    EXPECT_FALSE(trusted.boolean(QStringLiteral("files.confirmDelete")));
 }
 
 TEST(Settings, aVaultIsUntrustedUntilTheUserSaysSoAndTheChoiceIsKeptInTheUsersOwnConfig)

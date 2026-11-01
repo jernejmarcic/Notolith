@@ -10,9 +10,95 @@
 #include <QProcessEnvironment>
 #include <QStandardPaths>
 
+#include <atomic>
+
 #include <unistd.h>
 
 namespace noteAppC::sandbox {
+
+namespace {
+std::atomic<int> scopeState{0}; // 0 not asked yet, 1 a user manager takes scopes, 2 none does
+
+/// `env XDG_RUNTIME_DIR=.. DBUS_SESSION_BUS_ADDRESS=.. systemd-run --user --scope -q`, or nothing without
+/// systemd-run. bwrap and its callers run with a bare environment, and systemd-run finds the user manager by
+/// these two variables, so they go on the command line (bwrap's --clearenv drops them inside).
+QStringList scopePrefix()
+{
+    const QString systemdRun = QStandardPaths::findExecutable(QStringLiteral("systemd-run"));
+    const QString env = QStandardPaths::findExecutable(QStringLiteral("env"));
+    if (systemdRun.isEmpty() || env.isEmpty())
+        return {};
+    // The runtime directory that has the user manager's bus: $XDG_RUNTIME_DIR, else the standard one.
+    QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    const QString standard = QStringLiteral("/run/user/%1").arg(getuid());
+    if (!QFileInfo::exists(runtime + QStringLiteral("/bus")) && QFileInfo::exists(standard + QStringLiteral("/bus")))
+        runtime = standard;
+    QStringList prefix = {env};
+    if (!runtime.isEmpty())
+        prefix << QStringLiteral("XDG_RUNTIME_DIR=") + runtime;
+    if (const QString bus = qEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS"); !bus.isEmpty())
+        prefix << QStringLiteral("DBUS_SESSION_BUS_ADDRESS=") + bus;
+    prefix << systemdRun << QStringLiteral("--user") << QStringLiteral("--scope") << QStringLiteral("-q");
+    return prefix;
+}
+
+/// Asked once, by starting a scope around `true`: whether systemd-run is installed and a user manager answers.
+bool scopesAvailable()
+{
+    int state = scopeState.load();
+    if (state != 0)
+        return state == 1;
+    QStringList probe = scopePrefix();
+    bool ok = false;
+    if (!probe.isEmpty()) {
+        probe << QStringLiteral("--") << QStringLiteral("/usr/bin/true");
+        QProcess process;
+        QProcessEnvironment bare;
+        bare.insert(QStringLiteral("PATH"), QStringLiteral("/usr/bin:/bin"));
+        process.setProcessEnvironment(bare);
+        const QString program = probe.takeFirst();
+        process.start(program, probe);
+        ok = process.waitForFinished(5000) && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+        if (process.state() != QProcess::NotRunning)
+            process.kill();
+    }
+    int expected = 0;
+    if (scopeState.compare_exchange_strong(expected, ok ? 1 : 2) && !ok)
+        qInfo("sandbox: no systemd user manager to put the sandbox in a cgroup; memory and task caps are the "
+              "per-process rlimits only");
+    return ok;
+}
+} // namespace
+
+bool cgroupLimitsAvailable()
+{
+    return scopesAvailable();
+}
+
+void overrideCgroupLimits(bool available)
+{
+    scopeState = available ? 1 : 2;
+}
+
+void forgetCgroupProbe()
+{
+    scopeState = 0;
+}
+
+void limitInCgroup(QString &program, QStringList &arguments, qint64 memoryBytes, int tasks)
+{
+    if (program.isEmpty() || !scopesAvailable())
+        return;
+    QStringList wrapped = scopePrefix();
+    if (wrapped.isEmpty())
+        return;
+    // Swap off: a page pushed out is a page that did not count against the cap.
+    wrapped << QStringLiteral("-p") << QStringLiteral("MemoryMax=%1").arg(memoryBytes) << QStringLiteral("-p")
+            << QStringLiteral("MemorySwapMax=0") << QStringLiteral("-p") << QStringLiteral("TasksMax=%1").arg(tasks)
+            << QStringLiteral("--") << program << arguments;
+    program = wrapped.takeFirst();
+    arguments = wrapped;
+}
 
 QStringList etcBinds(const QStringList &extra)
 {
@@ -34,7 +120,7 @@ QStringList etcBinds(const QStringList &extra)
 }
 
 Command bubblewrapCommand(const QString &dir, const QString &program, const QStringList &arguments,
-                          const QStringList &environment, const QStringList &readOnlyBinds)
+                          const QStringList &environment, const QStringList &readOnlyBinds, qint64 memoryBytes)
 {
     Command command;
     command.program = QStandardPaths::findExecutable(QStringLiteral("bwrap"));
@@ -64,6 +150,9 @@ Command bubblewrapCommand(const QString &dir, const QString &program, const QStr
                          QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/sbin"),
                          QStringLiteral("--proc"), QStringLiteral("/proc"),
                          QStringLiteral("--dev"), QStringLiteral("/dev"),
+                         // /dev/shm is a tmpfs of half the RAM unless it is sized: the same 64 MiB as /tmp,
+                         // mounted over the one --dev made.
+                         QStringLiteral("--size"), QStringLiteral("67108864"), QStringLiteral("--tmpfs"), QStringLiteral("/dev/shm"),
                          QStringLiteral("--size"), QStringLiteral("67108864"), QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
                          QStringLiteral("--bind"), dir, dir,
                          QStringLiteral("--clearenv"),
@@ -91,7 +180,9 @@ Command bubblewrapCommand(const QString &dir, const QString &program, const QStr
     if (command.filterFD < 0) { // no filter, no run
         command.program.clear();
         command.arguments.clear();
+        return command;
     }
+    limitInCgroup(command.program, command.arguments, memoryBytes);
     return command;
 }
 

@@ -161,6 +161,8 @@ QStringList PluginHost::sandboxArguments(QString *program) const
         QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/sbin"),
         QStringLiteral("--proc"), QStringLiteral("/proc"),
         QStringLiteral("--dev"), QStringLiteral("/dev"),
+        // /dev/shm unsized is half the RAM.
+        QStringLiteral("--size"), QStringLiteral("67108864"), QStringLiteral("--tmpfs"), QStringLiteral("/dev/shm"),
         QStringLiteral("--size"), QStringLiteral("268435456"), QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
         // Read-only: a plugin's own directory is data (its library, its
         // plugin.ini, any assets it shipped), never a place it writes.

@@ -31,6 +31,9 @@ struct SandboxRequest {
     QString runtimeDir;          ///< rw; must be set for SandboxTier::Bubblewrap
     QStringList readOnlyBinds;   ///< extra ro binds, e.g. the vault root for `![[x.py]]`
     int processes = 256;         ///< at most this many tasks (threads included) run inside
+    /// The cgroup's cap on RAM, swap off (sandbox::limitInCgroup): what the cell, its tmpfs files and /dev/shm
+    /// can hold together. The per-process rlimits stay; this is the one that adds up.
+    qint64 memoryBytes = 1LL << 30;
 };
 
 /// What is actually installed, checked once at startup rather than assumed.
@@ -53,6 +56,9 @@ SandboxAvailability detectSandboxAvailability();
 /// filter. When `bwrap` is not on PATH, or the filter cannot be built,
 /// `*outProgram` comes back empty and the caller refuses the run: a block
 /// never runs as the user.
+///
+/// Unless there is no systemd user manager, the line is `env ... systemd-run --user --scope ... bwrap ...`
+/// (sandbox::limitInCgroup): the same process, so `*outProgram` is not always bwrap.
 ///
 /// `*filterFD` is the filter's descriptor, for the caller to keep open in the
 /// child (sandbox::prepareChild) and close after start; -1 when `*outProgram`

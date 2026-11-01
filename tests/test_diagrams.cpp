@@ -335,6 +335,29 @@ TEST_F(DiagramTest, TikZCannotReadFilesUnderEtc)
     }
 }
 
+// TikZ's latex run gets openout_any=p as TexCompiler's does, not whatever a texmf.cnf of the user's says. A stand-in
+// latex reports the variable in the "! ..." line TeX's own errors start with.
+TEST_F(DiagramTest, TheTikZRunIsToldToWriteOnlyBesideTheDocument)
+{
+    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "bwrap is not installed";
+    QTemporaryDir bin;
+    ASSERT_TRUE(bin.isValid());
+    for (const auto &[name, body] : {std::pair{"latex", "#!/bin/sh\necho \"! openout_any=$openout_any\"\nexit 1\n"},
+                                     std::pair{"dvisvgm", "#!/bin/sh\nexit 1\n"}}) {
+        QFile tool(bin.filePath(QLatin1String(name)));
+        ASSERT_TRUE(tool.open(QIODevice::WriteOnly));
+        tool.write(body);
+        tool.close();
+        tool.setPermissions(tool.permissions() | QFileDevice::ExeOwner);
+    }
+    const auto answer = ask(rendererFor(DiagramKind::TikZ, bin.filePath(QStringLiteral("latex"))), QStringLiteral("tikz"), kTikZ);
+    EXPECT_TRUE(answer->result.isMarkdown);
+    QString shown = answer->result.text;
+    shown.remove(QLatin1Char('\\')); // the message is Markdown: "openout\_any"
+    EXPECT_TRUE(shown.contains(QLatin1String("openout_any=p"))) << answer->result.text.toStdString();
+}
+
 // The sandbox itself, whatever tool runs in it.
 TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
 {

@@ -323,6 +323,33 @@ TEST(PandocImport, MediaIsCopiedNeverOver)
     EXPECT_EQ(kept.readAll(), QByteArray("keep"));
 }
 
+// What pandoc (in its sandbox) leaves in the scratch directory is its to write, links included: a link to a file of
+// the user's is not a picture and is not copied into the vault.
+TEST(PandocMedia, aLinkInTheScratchDirectoryIsNotCopiedIntoTheVault)
+{
+    QTemporaryDir scratch;
+    QTemporaryDir vault;
+    QTemporaryDir secretDir;
+    ASSERT_TRUE(QDir(scratch.path()).mkpath(QStringLiteral("media")));
+    QFile picture(scratch.filePath(QStringLiteral("media/real.png")));
+    ASSERT_TRUE(picture.open(QIODevice::WriteOnly));
+    picture.write("png");
+    picture.close();
+    QFile secret(secretDir.filePath(QStringLiteral("secret.txt")));
+    ASSERT_TRUE(secret.open(QIODevice::WriteOnly));
+    secret.write("TOP SECRET");
+    secret.close();
+    ASSERT_TRUE(QFile::link(secret.fileName(), scratch.filePath(QStringLiteral("media/stolen.png"))));
+    ASSERT_TRUE(QFile::link(secretDir.path(), scratch.filePath(QStringLiteral("media/folder"))));
+
+    const QHash<QString, QString> names = moveMedia(scratch.path(), vault.path());
+    EXPECT_TRUE(names.contains(QStringLiteral("media/real.png")));
+    EXPECT_FALSE(names.contains(QStringLiteral("media/stolen.png")));
+    EXPECT_FALSE(QFileInfo::exists(vault.filePath(QStringLiteral("stolen.png"))));
+    EXPECT_FALSE(QFileInfo::exists(vault.filePath(QStringLiteral("secret.txt"))));
+    EXPECT_EQ(QDir(vault.path()).entryList(QDir::Files | QDir::NoDotAndDotDot).size(), 1);
+}
+
 TEST(PandocImport, SiblingImagesAreOnlyPicturesBesideTheDocument)
 {
     QTemporaryDir area;

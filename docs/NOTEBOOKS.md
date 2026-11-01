@@ -184,17 +184,33 @@ a reopened note shows only output that matches the code as written.
 Every block, kernel and wasm module runs under bubblewrap, and there is no way
 to run one as you. Inside: `/usr` and a few `/etc` entries (the loader cache,
 fonts, the timezone, the passwd, group and nsswitch files; not the machine id
-or hostname) read-only, a fresh empty size-capped `/tmp`, no network, its own
+or hostname; the passwd and group files are a one-line pair made for the
+block, not the system's) read-only, a fresh empty `/tmp` and `/dev/shm` of 64 MiB
+each, no network, its own
 pid, user, ipc, uts and cgroup namespaces (a block sees only its own
 processes, none of the app's), no capabilities, and nothing of the home
 directory or the vault - only its own temporary directory, which is its `HOME`
 too. A seccomp filter (libseccomp, required) makes namespaces and mounts,
 ptrace, the kernel keyring, BPF, modules, io_uring, perf, userfaultfd and
-`TIOCSTI` answer "operation not permitted". The limits: CPU time, data
-memory, file size, open files and processes (`prlimit` inside), a wall-clock
-timeout, and 1 MiB of output. Without `bwrap` or libseccomp no block runs; there
-is no unsandboxed fallback, and a kernel, a diagram, a TeX or a pandoc
-run is refused the same way, with a message.
+`TIOCSTI` answer "operation not permitted", and sockets of the families
+vsock, alg, key, packet, rds, tipc, xdp and bluetooth answer "address
+family not supported" (and so does netlink except its route protocol, which
+getifaddrs and so every Jupyter kernel needs). The limits: CPU time, data memory, file size, open
+files and processes (`prlimit` inside), a wall-clock timeout, and 1 MiB of
+output. Without `bwrap` or libseccomp no block runs; there is no unsandboxed
+fallback, and a kernel, a diagram, a TeX or a pandoc run is refused the same
+way, with a message.
+
+What the per-process limits cannot add up is capped by a cgroup: when
+`systemd-run` is installed and a systemd user manager answers, every sandbox
+(blocks, kernels, diagrams, TeX, pandoc) is started as
+`systemd-run --user --scope -p MemoryMax=... -p MemorySwapMax=0 -p TasksMax=256`
+in front of bubblewrap. Pages a sandbox writes to a tmpfs (`/dev/shm`, `/tmp`,
+its work directory when that is on one) are charged to its cgroup, so the one
+cap covers them and the process's own memory together: 1 GiB for a block, a
+diagram, TeX or pandoc, 4 GiB for a kernel; a sandbox that goes over is killed,
+not the desktop. Without systemd the program still runs under the rlimits
+above, and the log says once that the cgroup caps are off.
 
 Nothing runs by itself: a block or kernel starts only on a click or command.
 A block over `notebooks.maxRunnableBytes` (default 64 KiB; `0` lifts it; set in
@@ -205,12 +221,14 @@ Settings only, never from a vault) is not run, and the status bar says why.
 A vault is untrusted until you trust it ("Vault: Trust or stop trusting this
 vault" in the command palette); the choice is kept in your own settings,
 never in the vault. In an untrusted vault the vault's own `hotkeys.json` and
-any vault setting that would switch a feature on are ignored, each block asks
+any vault setting that would switch a feature on or lower a safety are ignored
+(the Obsidian `trashOption` and `promptDelete`, which could make Delete
+permanent and silent, and `cssTheme`; only your own settings set those), each block asks
 before it runs (Run, Trust this vault, Cancel), and opening a file from a
-file card or link inside a note asks first, naming the file and its type (the
-file tree's "Open in default app" is the person's own request and does not).
-Executables and `.desktop` files are never handed to the desktop, trusted
-vault or not.
+file card or a link inside a note asks first, naming the file and its type.
+The file tree's "Open in default app" is your own request and opens without
+asking. Programs, launchers and scripts (executables, `.desktop` files and
+the like) are never handed to the desktop by either, trusted vault or not.
 
 A note shared with other devices (docs/SHARE.md) holds code anyone in the
 share may have written. Its blocks never leave the sandbox, whatever the

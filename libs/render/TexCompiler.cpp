@@ -127,8 +127,11 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
     const bool finished = ran.failure.isEmpty();
     const QString log = QString::fromUtf8(ran.out);
     const QString producedPdf = work.filePath(jobName + QStringLiteral(".pdf"));
-    const bool succeeded = finished && ran.code == 0 && QFile::exists(producedPdf)
-                           && QFileInfo(producedPdf).size() <= kMaxPDFBytes;
+    // The work directory is the sandbox's to write: a link there to a file of the user's would be copied
+    // into the cache as if TeX had made it. Only a regular file is taken.
+    const QFileInfo produced(producedPdf);
+    const bool succeeded = finished && ran.code == 0 && !produced.isSymLink() && produced.isFile()
+                           && produced.size() <= kMaxPDFBytes;
 
     ensurePrivateDir(outDir);
     if (succeeded) {

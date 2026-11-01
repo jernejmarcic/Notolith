@@ -107,15 +107,19 @@ The package names below are Arch's.
   (editing HTML blocks in place) `libgit2` `libarchive` `zeromq` `abseil-cpp`
   (handwriting) `poppler-qt6` (PDF viewer).
   `yaml-cpp` is used when installed and fetched otherwise.
-- **Needed to run code, diagrams and plugins:** `bubblewrap` and `libseccomp`.
-  Without `libseccomp` the build still works, but nothing that needs the
-  sandbox will run.
+- **Needed to run code, diagrams and plugins:** `libseccomp` at build time
+  (required unless you pass `-DNOTEAPPC_ALLOW_NO_SECCOMP=ON`; then nothing that
+  needs the sandbox runs), and `bubblewrap` and util-linux's `prlimit` at run
+  time. When `systemd-run` and a user manager are present, each sandbox also
+  gets a memory cap in its own cgroup. CMake warns when a tool is missing.
 - **Network at configure time:** md4qt, MicroTeX and tinyxml2 are fetched, plus
   ink-stroke-modeler with the handwriting module, and yaml-cpp when it is not
   installed. Rust is needed only for the optional yrs sharing backend
   (`NOTEAPPC_WITH_SHARE_YRS`, off by default), and its build then downloads
   about 45 crates.
-- **Tests:** `gtest`. Configure with `-DBUILD_TESTING=OFF` to skip the tests.
+- **Tests:** `gtest`. Configure with `-DBUILD_TESTING=OFF` to skip the tests;
+  a release build must, since a build with tests honours test-only
+  environment variables that load native code.
   The handwriting module's configure step looks for gtest even then, so
   without gtest build with `-DNOTEAPPC_WITH_INK=OFF` too.
 

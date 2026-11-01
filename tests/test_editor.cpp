@@ -5463,6 +5463,47 @@ TEST(TexCompilerTest, ADocumentCannotReadAFileOutsideItsOwnDirectory)
     EXPECT_TRUE(result.log.contains(QLatin1String("not found"))) << result.log.toStdString();
 }
 
+// The compile directory is the sandbox's to write, and the PDF is copied out of it by the app, as the user: a
+// link standing in for it (made here by a stand-in engine; the real one cannot) must not be followed.
+TEST(TexCompilerTest, AnOutputThatIsALinkToAUsersFileIsNotCached)
+{
+    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "needs bubblewrap";
+    QTemporaryDir bin;
+    QTemporaryDir secretDir;
+    QTemporaryDir dir;
+    ASSERT_TRUE(bin.isValid() && secretDir.isValid() && dir.isValid());
+    const QString secret = secretDir.filePath(QStringLiteral("secret.txt"));
+    {
+        QFile file(secret);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("TOP SECRET\n");
+    }
+    {
+        QFile engine(bin.filePath(QStringLiteral("pdflatex")));
+        ASSERT_TRUE(engine.open(QIODevice::WriteOnly));
+        engine.write("#!/bin/sh\nln -s '" + secret.toUtf8() + "' doc.pdf\nexit 0\n");
+        engine.close();
+        engine.setPermissions(engine.permissions() | QFileDevice::ExeOwner);
+    }
+    const QByteArray path = qgetenv("PATH");
+    qputenv("PATH", bin.path().toUtf8() + ":" + path);
+    const QString tex = dir.filePath(QStringLiteral("linked.tex"));
+    {
+        QFile file(tex);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("\\documentclass{article}\\begin{document}a link, not a document\\end{document}\n");
+    }
+    const TexCompiler::Result result = TexCompiler::compile(tex);
+    qputenv("PATH", path);
+    EXPECT_FALSE(result.ok) << "the link was taken for the PDF";
+    if (!result.pdfPath.isEmpty() && QFileInfo::exists(result.pdfPath)) {
+        QFile cached(result.pdfPath);
+        ASSERT_TRUE(cached.open(QIODevice::ReadOnly));
+        EXPECT_FALSE(cached.readAll().contains("TOP SECRET")) << "the user's file is in the cache";
+    }
+}
+
 TEST(TexCompilerTest, WithoutBubblewrapNothingIsCompiled)
 {
     if (!TexCompiler::isAvailable())

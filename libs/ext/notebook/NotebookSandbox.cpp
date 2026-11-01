@@ -6,7 +6,10 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QStandardPaths>
+
+#include <unistd.h>
 
 namespace noteAppC::notebook {
 
@@ -45,11 +48,10 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     // --unshare-net costs the kernel nothing it was using and denies it outright.
     // /etc is the few entries sandbox::etcBinds names, not all of it: a cell
     // is user-run code, but the machine id and hostname still have no
-    // business in a note's saved output. Added for a cell: the timezone
-    // and the passwd/group/nsswitch trio, without which `whoami`, `ls -l`
-    // and getpwuid() in a cell fail on a uid with no name.
-    QStringList wrapped = sandbox::etcBinds({QStringLiteral("localtime"), QStringLiteral("passwd"), QStringLiteral("group"),
-                                             QStringLiteral("nsswitch.conf")});
+    // business in a note's saved output. Added for a cell: the timezone, nsswitch.conf and a passwd/group
+    // of one line each, written below (not the host's: it lists every account), without which `whoami`,
+    // `ls -l` and getpwuid() in a cell fail on a uid with no name.
+    QStringList wrapped = sandbox::etcBinds({QStringLiteral("localtime"), QStringLiteral("nsswitch.conf")});
     wrapped << QStringList{
         QStringLiteral("--ro-bind"), QStringLiteral("/usr"), QStringLiteral("/usr"),
         QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/bin"),
@@ -58,10 +60,31 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
         QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/sbin"),
         QStringLiteral("--proc"), QStringLiteral("/proc"),
         QStringLiteral("--dev"), QStringLiteral("/dev"),
+        // /dev/shm unsized is half the RAM; the same 64 MiB as /tmp, over the one --dev made.
+        QStringLiteral("--size"), QStringLiteral("67108864"), QStringLiteral("--tmpfs"), QStringLiteral("/dev/shm"),
         QStringLiteral("--size"), QStringLiteral("67108864"), QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
     };
     for (const QString &path : request.readOnlyBinds)
         wrapped << QStringLiteral("--ro-bind") << path << path;
+    // The cell's own account files, bound over the system's names. Written into the runtime directory (the
+    // only host path that is this run's own); the cell can rewrite them, which changes nothing outside it.
+    const struct {
+        const char *name;
+        QString text;
+    } accounts[] = {
+        {"passwd", QStringLiteral("user:x:%1:%2:user:%3:/bin/sh\n").arg(getuid()).arg(getgid()).arg(request.runtimeDir)},
+        {"group", QStringLiteral("user:x:%1:\n").arg(getgid())},
+    };
+    for (const auto &account : accounts) {
+        const QString file = request.runtimeDir + QStringLiteral("/.") + QLatin1String(account.name);
+        QSaveFile out(file);
+        if (!out.open(QIODevice::WriteOnly) || out.write(account.text.toUtf8()) < 0 || !out.commit()) {
+            outProgram->clear(); // no private account files, no run: the host's must not be bound
+            outArgs->clear();
+            return;
+        }
+        wrapped << QStringLiteral("--ro-bind") << file << QStringLiteral("/etc/") + QLatin1String(account.name);
+    }
     // Bound last, and read-write: the connection file and the five ipc
     // socket files the kernel creates in it. Bound after --tmpfs /tmp so it
     // is never buried under that mount even when it happens to sit under
@@ -95,6 +118,7 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     }
     *outProgram = bwrap;
     *outArgs = wrapped;
+    sandbox::limitInCgroup(*outProgram, *outArgs, request.memoryBytes, request.processes);
 }
 
 QString oversizeMessage(const QString &source, qint64 maxBytes)
