@@ -12,6 +12,9 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <csignal>
+#include <sys/resource.h>
+
 #include "FileIcons.h"
 #include "ConfigFile.h"
 #include "Settings.h"
@@ -223,6 +226,71 @@ TEST(VaultIo, AWriteThroughALeafLinkIsRefused)
     EXPECT_FALSE(Vault::writeBytes(link, QByteArray("x"), &error));
     EXPECT_EQ(readAll(existing), QByteArray("old\n"));
     EXPECT_TRUE(QFileInfo(link).isSymLink());
+}
+
+TEST(VaultIo, CopyReplacingKeepsTheOldFileWhenTheCopyFails)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString from = dir.filePath(QStringLiteral("from.bin"));
+    const QString to = dir.filePath(QStringLiteral("to.bin"));
+    const auto write = [](const QString &path, const QByteArray &bytes) {
+        QFile f(path);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(bytes);
+    };
+    write(from, QByteArray(64 * 1024, 'n'));
+    write(to, "EARLIER");
+
+    struct rlimit saved {};
+    ASSERT_EQ(::getrlimit(RLIMIT_FSIZE, &saved), 0);
+    ::signal(SIGXFSZ, SIG_IGN);
+    struct rlimit tight = saved;
+    tight.rlim_cur = 1024;
+    ASSERT_EQ(::setrlimit(RLIMIT_FSIZE, &tight), 0);
+    QString error;
+    const bool failed = Vault::copyReplacing(from, to, &error);
+    ::setrlimit(RLIMIT_FSIZE, &saved);
+    EXPECT_FALSE(failed);
+    EXPECT_FALSE(error.isEmpty());
+    QFile kept(to);
+    ASSERT_TRUE(kept.open(QIODevice::ReadOnly));
+    EXPECT_EQ(kept.readAll(), QByteArray("EARLIER"));
+    EXPECT_EQ(QDir(dir.path()).entryList(QDir::Files | QDir::Hidden).size(), 2) << "no temporary file left behind";
+
+    ASSERT_TRUE(Vault::copyReplacing(from, to, &error)) << error.toStdString();
+    EXPECT_EQ(QFileInfo(to).size(), 64 * 1024);
+}
+
+TEST(VaultIo, RemoveNoFollowNeverLeavesTheFolder)
+{
+    QTemporaryDir dir;
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(dir.isValid() && elsewhere.isValid());
+    const auto touch = [](const QString &path) {
+        QFile f(path);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("x");
+    };
+    touch(dir.filePath(QStringLiteral("inside.txt")));
+    touch(elsewhere.filePath(QStringLiteral("outside.txt")));
+    ASSERT_TRUE(QFile::link(elsewhere.path(), dir.filePath(QStringLiteral("out"))));
+    ASSERT_TRUE(QFile::link(elsewhere.filePath(QStringLiteral("outside.txt")), dir.filePath(QStringLiteral("leaf"))));
+
+    QString error;
+    EXPECT_FALSE(Vault::removeNoFollowUnder(dir.path(), QStringLiteral("out/outside.txt"), &error));
+    EXPECT_FALSE(error.isEmpty()) << "a link on the way is refused";
+    EXPECT_FALSE(Vault::removeNoFollowUnder(dir.path(), QStringLiteral("../x"), &error));
+    EXPECT_FALSE(Vault::removeNoFollowUnder(dir.path(), QStringLiteral("a//b"), &error));
+    EXPECT_FALSE(Vault::removeNoFollowUnder(dir.path(), QStringLiteral("a\\b"), &error));
+    EXPECT_TRUE(QFileInfo::exists(elsewhere.filePath(QStringLiteral("outside.txt"))));
+
+    EXPECT_TRUE(Vault::removeNoFollowUnder(dir.path(), QStringLiteral("leaf"), &error)); // the link, not its target
+    EXPECT_FALSE(QFileInfo(dir.filePath(QStringLiteral("leaf"))).isSymLink());
+    EXPECT_TRUE(QFileInfo::exists(elsewhere.filePath(QStringLiteral("outside.txt"))));
+    EXPECT_TRUE(Vault::removeNoFollowUnder(dir.path(), QStringLiteral("inside.txt"), &error));
+    EXPECT_FALSE(Vault::removeNoFollowUnder(dir.path(), QStringLiteral("inside.txt"), &error));
+    EXPECT_TRUE(error.isEmpty()) << "a file that was not there is not a refusal";
 }
 
 TEST(VaultIo, ReadReportsAMissingFile)

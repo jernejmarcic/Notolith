@@ -105,6 +105,20 @@ public:
     /// rename as write(); the temp file is dot-prefixed and removed on failure.
     /// Linux only. `relativePath` should already pass isConfinedPath().
     bool writeBytesNoFollow(const QString &relativePath, const QByteArray &bytes, QString *error = nullptr) const;
+    /// Copies `source` over `target` through a temporary file beside it and a rename, so a failed copy leaves
+    /// the earlier `target` as it was (an export replacing a file).
+    static bool copyReplacing(const QString &source, const QString &target, QString *error = nullptr);
+    /// Whether `relativePath` is a clean relative path: no empty, "." or ".." segment (so not absolute either),
+    /// no backslash, no NUL. Lexical only.
+    static bool isCleanRelativePath(const QString &relativePath);
+    /// writeBytesNoFollow() against any `root` (the publish output folder), which need not be a vault. `sync` off
+    /// skips the fsync, for a folder of many files that can be made again.
+    static bool writeBytesNoFollowUnder(const QString &root, const QString &relativePath, const QByteArray &bytes,
+                                        QString *error = nullptr, bool sync = true);
+    /// Removes the file `relativePath` under `root` without following a link: one on any folder of the way means
+    /// nothing is removed, and a link as the file itself is removed, not what it points at. False when nothing
+    /// was removed; `*error` is then set only when that is a refusal and not a file that was not there.
+    static bool removeNoFollowUnder(const QString &root, const QString &relativePath, QString *error = nullptr);
     /// encode() then writeBytesNoFollow(); fails for a `lossy` note.
     bool writeNoteNoFollow(const QString &relativePath, const Note &note, QString *error = nullptr) const;
 

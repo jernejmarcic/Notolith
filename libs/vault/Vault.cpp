@@ -321,15 +321,109 @@ QString errnoText(int err)
 }
 } // namespace
 
-bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &bytes, QString *error) const
+bool Vault::copyReplacing(const QString &source, const QString &target, QString *error)
 {
     const auto fail = [error](const QString &what) {
         if (error)
             *error = what;
         return false;
     };
-    if (!isValid())
-        return fail(QStringLiteral("vault is not open"));
+    QFile in(source);
+    if (!in.open(QIODevice::ReadOnly))
+        return fail(in.errorString());
+    // A temporary file beside the target, renamed over it once whole: the old file is never removed first.
+    QSaveFile out(target);
+    if (!out.open(QIODevice::WriteOnly))
+        return fail(out.errorString());
+    qint64 copied = 0;
+    for (;;) {
+        const QByteArray chunk = in.read(1 << 20);
+        if (chunk.isEmpty())
+            break;
+        if (out.write(chunk) != chunk.size()) {
+            out.cancelWriting();
+            return fail(out.errorString());
+        }
+        copied += chunk.size();
+    }
+    if (in.error() != QFileDevice::NoError || copied != in.size()) {
+        out.cancelWriting();
+        return fail(in.errorString());
+    }
+    if (!out.commit())
+        return fail(out.errorString());
+    return true;
+}
+
+bool Vault::isCleanRelativePath(const QString &relativePath)
+{
+    if (relativePath.isEmpty() || relativePath.contains(QLatin1Char('\\')) || relativePath.contains(QChar(0)))
+        return false;
+    for (const QStringView part : QStringView(relativePath).split(QLatin1Char('/'))) {
+        if (part.isEmpty() || part == QLatin1String(".") || part == QLatin1String(".."))
+            return false; // empty (so also absolute), "." and ".."
+    }
+    return true;
+}
+
+namespace {
+/// Opens the folder `parts` (all but the leaf) under `root`, one openat(O_NOFOLLOW) per component, so a link
+/// anywhere on the way fails instead of leading out. `create` makes the missing folders in the descriptor already
+/// held. Returns -1 with `*err` set (ENOENT when a folder is absent and `create` is off).
+int openFolderNoFollow(const QString &root, const QStringList &parts, bool create, int *err, QString *failedPart)
+{
+    Fd dir(::open(QFile::encodeName(root).constData(), O_PATH | O_DIRECTORY | O_CLOEXEC));
+    if (dir.fd < 0) {
+        *err = errno;
+        if (failedPart)
+            failedPart->clear();
+        return -1;
+    }
+    for (int i = 0; i < parts.size() - 1; ++i) {
+        const QByteArray name = parts.at(i).toUtf8();
+        constexpr int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+        int next = ::openat(dir.fd, name.constData(), flags);
+        if (next < 0 && errno == ENOENT && create) {
+            if (::mkdirat(dir.fd, name.constData(), 0755) < 0 && errno != EEXIST) {
+                *err = errno;
+                if (failedPart)
+                    *failedPart = parts.at(i);
+                return -1;
+            }
+            next = ::openat(dir.fd, name.constData(), flags); // a link raced in is refused here
+        }
+        if (next < 0) {
+            *err = errno;
+            if (failedPart)
+                *failedPart = parts.at(i);
+            return -1;
+        }
+        dir.reset(next);
+    }
+    const int out = dir.fd;
+    dir.fd = -1; // handed over
+    return out;
+}
+} // namespace
+
+bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &bytes, QString *error) const
+{
+    if (!isValid()) {
+        if (error)
+            *error = QStringLiteral("vault is not open");
+        return false;
+    }
+    return writeBytesNoFollowUnder(m_root, relativePath, bytes, error);
+}
+
+bool Vault::writeBytesNoFollowUnder(const QString &root, const QString &relativePath, const QByteArray &bytes,
+                                    QString *error, bool sync)
+{
+    const auto fail = [error](const QString &what) {
+        if (error)
+            *error = what;
+        return false;
+    };
     const QStringList parts = relativePath.split(QLatin1Char('/'));
     for (const QString &part : parts) {
         if (part.isEmpty() || part == QLatin1String(".") || part == QLatin1String("..")
@@ -337,29 +431,16 @@ bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &by
             return fail(QStringLiteral("%1 is not a path inside the vault").arg(relativePath));
     }
 
-    // Walk from the root one folder at a time. O_NOFOLLOW on every component
-    // means a link anywhere on the way fails instead of leading out; a missing
-    // folder is made, in the descriptor we already hold.
-    Fd dir(::open(QFile::encodeName(m_root).constData(), O_PATH | O_DIRECTORY | O_CLOEXEC));
-    if (dir.fd < 0)
-        return fail(QStringLiteral("cannot open the vault: %1").arg(errnoText(errno)));
-    for (int i = 0; i < parts.size() - 1; ++i) {
-        const QByteArray name = parts.at(i).toUtf8();
-        constexpr int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
-        int next = ::openat(dir.fd, name.constData(), flags);
-        if (next < 0 && errno == ENOENT) {
-            if (::mkdirat(dir.fd, name.constData(), 0755) < 0 && errno != EEXIST)
-                return fail(QStringLiteral("cannot create %1: %2").arg(parts.at(i), errnoText(errno)));
-            next = ::openat(dir.fd, name.constData(), flags); // a link raced in is refused here
-        }
-        if (next < 0) {
-            const int err = errno;
-            return fail(err == ELOOP || err == ENOTDIR
-                            ? QStringLiteral("%1 is a link or not a folder, so %2 was not written")
-                                  .arg(parts.at(i), relativePath)
-                            : QStringLiteral("cannot open %1: %2").arg(parts.at(i), errnoText(err)));
-        }
-        dir.reset(next);
+    int err = 0;
+    QString failedPart;
+    Fd dir(openFolderNoFollow(root, parts, true, &err, &failedPart));
+    if (dir.fd < 0) {
+        if (failedPart.isEmpty())
+            return fail(QStringLiteral("cannot open the vault: %1").arg(errnoText(err)));
+        if (err == ELOOP || err == ENOTDIR)
+            return fail(QStringLiteral("%1 is a link or not a folder, so %2 was not written")
+                            .arg(failedPart, relativePath));
+        return fail(QStringLiteral("cannot open %1: %2").arg(failedPart, errnoText(err)));
     }
 
     // Dot-prefixed so the scanner and indexer never see it. A leaf that is a
@@ -373,10 +454,10 @@ bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &by
     struct stat old {};
     if (::fstatat(dir.fd, leaf.constData(), &old, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(old.st_mode))
         ::fchmod(file.fd, old.st_mode & 07777);
-    const auto cleanup = [&](int err) {
+    const auto cleanup = [&](int why) {
         file.reset(-1);
         ::unlinkat(dir.fd, temp.constData(), 0);
-        return fail(QStringLiteral("cannot write %1: %2").arg(relativePath, errnoText(err)));
+        return fail(QStringLiteral("cannot write %1: %2").arg(relativePath, errnoText(why)));
     };
     for (qsizetype done = 0; done < bytes.size();) {
         const ssize_t n = ::write(file.fd, bytes.constData() + done, size_t(bytes.size() - done));
@@ -386,11 +467,38 @@ bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &by
             return cleanup(n < 0 ? errno : EIO);
         done += n;
     }
-    if (::fsync(file.fd) < 0) // as QSaveFile does: the bytes are on disk before the name moves
+    if (sync && ::fsync(file.fd) < 0) // as QSaveFile does: the bytes are on disk before the name moves
         return cleanup(errno);
     file.reset(-1);
     if (::renameat(dir.fd, temp.constData(), dir.fd, leaf.constData()) < 0)
         return cleanup(errno);
+    return true;
+}
+
+bool Vault::removeNoFollowUnder(const QString &root, const QString &relativePath, QString *error)
+{
+    if (error)
+        error->clear();
+    if (!isCleanRelativePath(relativePath)) {
+        if (error)
+            *error = QStringLiteral("%1 is not a path inside the folder").arg(relativePath);
+        return false;
+    }
+    const QStringList parts = relativePath.split(QLatin1Char('/'));
+    int err = 0;
+    Fd dir(openFolderNoFollow(root, parts, false, &err, nullptr));
+    if (dir.fd < 0) {
+        // A folder that is gone or a link on the way: nothing is removed, and only a link is worth saying.
+        if (error && err != ENOENT)
+            *error = QStringLiteral("%1 was not removed: %2").arg(relativePath, errnoText(err));
+        return false;
+    }
+    // unlinkat removes a link itself, never what it points at; a folder is refused.
+    if (::unlinkat(dir.fd, parts.last().toUtf8().constData(), 0) < 0) {
+        if (error && errno != ENOENT)
+            *error = QStringLiteral("%1 was not removed: %2").arg(relativePath, errnoText(errno));
+        return false;
+    }
     return true;
 }
 
