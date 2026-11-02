@@ -233,6 +233,11 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     viewport()->setCursor(Qt::IBeamCursor);
     viewport()->setMouseTracking(true);
     viewport()->setAcceptDrops(true); // an image or a file dropped in; see PasteDrop.cpp
+    // Scrolling moves what is under a resting pointer, so its cursor changes without a mouse move.
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        if (viewport()->underMouse() && !QGuiApplication::mouseButtons())
+            viewport()->setCursor(cursorShapeAt(viewport()->mapFromGlobal(QCursor::pos())));
+    });
     horizontalScrollBar()->setRange(0, 0);
     // An icon given as an https URL arrives after the first paint. Without
     // this it stayed blank until something unrelated happened to repaint.
@@ -1340,6 +1345,11 @@ QTextCharFormat MarkdownEditor::formatAt(qsizetype sourceOffset) const
     return merged;
 }
 
+QColor MarkdownEditor::spellWaveAt(qsizetype sourceOffset) const
+{
+    return formatAt(sourceOffset).property(kSpellWaveProperty).value<QColor>();
+}
+
 void MarkdownEditor::enterBlockAt(qsizetype offset)
 {
     d->m_interacted = true;
@@ -2108,7 +2118,7 @@ void MarkdownEditor::refreshSpelling()
     viewport()->update();
 }
 
-QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view) const
+QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view, bool typing) const
 {
     QList<Range> words;
     switch (view.span.kind) {
@@ -2121,8 +2131,6 @@ QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view) const
     default:
         return words; // code, maths, tables, properties: not prose
     }
-    if (d->m_mode == Mode::Source)
-        return words;
 
     // A run of letters, with apostrophes inside it ("don't"), standing on its
     // own: part of "abc123" or "snake_case" is not a word to check.
@@ -2139,7 +2147,7 @@ QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view) const
         if (source.length() != found.capturedLength())
             continue;
         // Not the word being typed: it is not finished yet.
-        if (view.active && view.caretWord.isValid() && source.overlaps(view.caretWord))
+        if (typing && view.active && view.caretWord.isValid() && source.overlaps(view.caretWord))
             continue;
         bool skip = false;
         for (int i = view.firstStyle; i < view.lastStyle && !skip; ++i) {
@@ -2193,9 +2201,13 @@ void MarkdownEditor::appendSpellingFormats(const BlockView &view,
 {
     if (!d->m_spelling.isCorrect)
         return;
+    // The theme's error red, whole; a plain red where the theme has none.
+    QColor error = d->m_theme.color(QStringLiteral("--text-error"));
+    if (!error.isValid())
+        error = Qt::red;
+    error.setAlpha(255);
     QTextCharFormat underline;
-    underline.setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
-    underline.setUnderlineColor(d->m_theme.color(QStringLiteral("--text-error")));
+    underline.setProperty(kSpellWaveProperty, error);
     for (const Range &source : checkedWordsOf(view)) {
         if (d->m_spelling.isCorrect(d->m_text.mid(source.start, source.length())))
             continue;
@@ -2214,7 +2226,7 @@ bool MarkdownEditor::addSpellingActions(QMenu &menu, qsizetype sourceOffset, boo
     const BlockView &view = d->m_blocks[size_t(index)];
     if (!view.laidOut)
         return false;
-    for (const Range &source : checkedWordsOf(view)) {
+    for (const Range &source : checkedWordsOf(view, false)) {
         if (sourceOffset < source.start || sourceOffset > source.end)
             continue;
         const QString word = d->m_text.mid(source.start, source.length());
@@ -2479,6 +2491,40 @@ void strikeThrough(QTextCharFormat &format, const Theme &theme)
         format.setProperty(kStrikeLineProperty, line);
     else
         format.setFontStrikeOut(true);
+}
+
+void paintSpellWaves(QPainter &painter, const QTextLayout &layout, const QPointF &origin)
+{
+    const QFontMetricsF metrics(layout.font());
+    // Thickness follows the font: 1.5 px at the default size, more on a larger one.
+    const qreal width = qMax<qreal>(1.5, metrics.height() / 11);
+    const qreal amplitude = width * 1.1;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    for (const QTextLayout::FormatRange &range : layout.formats()) {
+        const QVariant colour = range.format.property(kSpellWaveProperty);
+        if (!colour.isValid())
+            continue;
+        painter.setPen(QPen(colour.value<QColor>(), width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const int end = range.start + range.length;
+        for (QTextLine row = layout.lineForTextPosition(range.start); row.isValid() && row.textStart() < end;
+             row = layout.lineAt(row.lineNumber() + 1)) {
+            const qreal from = origin.x() + row.cursorToX(qMax(range.start, row.textStart()));
+            const qreal to = origin.x() + row.cursorToX(qMin(end, row.textStart() + row.textLength()));
+            // Just under the baseline, but inside the line.
+            const qreal middle = qMin(origin.y() + row.y() + row.ascent() + row.descent() * 0.8 + amplitude + width / 2,
+                                      origin.y() + row.y() + row.height() - amplitude - width);
+            QPainterPath wave;
+            wave.moveTo(from, middle);
+            bool up = true;
+            for (qreal x = from + amplitude; x < to + amplitude; x += amplitude) {
+                wave.lineTo(qMin(x, to), middle + (up ? -amplitude : amplitude) / 2);
+                up = !up;
+            }
+            painter.drawPath(wave);
+        }
+    }
+    painter.restore();
 }
 
 void paintStrikeLines(QPainter &painter, const QTextLayout &layout, const QPointF &origin)
@@ -5267,6 +5313,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             view.layout->draw(&painter, QPointF(textLeft, top + drop), selectionRanges);
             if (strikeLines)
                 paintStrikeLines(painter, *view.layout, QPointF(textLeft, top + drop));
+            paintSpellWaves(painter, *view.layout, QPointF(textLeft, top + drop));
             paintInlineMaths(painter, view, textLeft, top + drop);
             paintAnchorSeparators(painter, view, textLeft, top + drop);
             paintFootnoteMarks(painter, view, textLeft, top + drop);
@@ -5602,6 +5649,7 @@ void MarkdownEditor::leaveEvent(QEvent *event)
         emit linkHoverEnded();
     }
     clearHover();
+    viewport()->setCursor(Qt::IBeamCursor);
     QAbstractScrollArea::leaveEvent(event);
 }
 
@@ -6419,10 +6467,15 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         case Qt::Key_Y:
             redo();
             return;
-        case Qt::Key_A:
+        case Qt::Key_A: {
+            // The caret ends up at the end of the note, but the view stays:
+            // following it scrolled the highlighted text out of sight.
+            const int scroll = verticalScrollBar()->value();
             d->m_anchor = 0;
             moveCursor(d->m_text.size(), true);
+            verticalScrollBar()->setValue(scroll);
             return;
+        }
         case Qt::Key_C:
             copySelection();
             return;
@@ -6881,10 +6934,7 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
     const bool finger = event->pointingDevice() && event->pointingDevice()->type() == QInputDevice::DeviceType::TouchScreen;
     updateHover(event->pos(), !finger);
 
-    const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos()) || d->m_overEditButton;
-    Qt::CursorShape shape = clickable ? Qt::PointingHandCursor : Qt::IBeamCursor;
-    if (const auto nav = pdfNavCursorAt(event->pos()))
-        shape = *nav;
+    Qt::CursorShape shape = cursorShapeAt(event->pos());
     switch (d->m_tableHover.part) {
     case TablePart::RowGrip:
     case TablePart::ColumnGrip:
@@ -6932,10 +6982,17 @@ void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
         return;
     }
 
-    // Select the word the first click landed on. By now that click's release
-    // may have revealed its block's syntax and moved the text, so the pointer
-    // is no longer a reliable way to find the word the reader aimed at.
-    selectWordAt(d->m_pressOffset);
+    // Select the line the first click landed on, without its newline (a table
+    // cell keeps the word: its line is the whole row). By now that click's
+    // release may have revealed its block's syntax and moved the text, so the
+    // pointer is no longer a reliable way to find the line the reader aimed at.
+    if (tableCellAt(d->m_pressOffset).row >= 0) {
+        selectWordAt(d->m_pressOffset);
+        return;
+    }
+    const qsizetype line = d->m_lines.lineAt(d->m_pressOffset);
+    d->m_anchor = d->m_lines.lineStart(line);
+    moveCursor(d->m_lines.lineEnd(line), true);
 }
 
 void MarkdownEditor::selectWordAt(qsizetype offset)

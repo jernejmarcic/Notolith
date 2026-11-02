@@ -186,7 +186,8 @@ QRect MarkdownEditor::codeBlockImageRectAt(qsizetype offset) const
     return view.isPluginBlock && !view.x().image.isNull() ? hookedEmbedImageRect(view).toRect() : QRect();
 }
 
-bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
+const MarkdownEditor::CodeBlockResult::Hotspot *MarkdownEditor::codeBlockHotspotAt(const QPoint &viewportPoint,
+                                                                                    const BlockView **owner) const
 {
     for (const BlockView &view : d->m_blocks) {
         if (!view.isPluginBlock || view.x().image.isNull())
@@ -199,24 +200,35 @@ bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
             continue;
         const QPointF local = viewportPoint - image.topLeft();
         for (const CodeBlockResult::Hotspot &hotspot : it->hotspots) {
-            if (!hotspot.rect.contains(local))
-                continue;
-            // The picture it leads to comes the way any answer does; until then the old one stays, and an
-            // answer that is overtaken by another click is dropped (the generation).
-            const QString key = view.x().codeBlockKey;
-            const int id = hotspot.id;
-            const quint64 generation = ++d->m_codeBlockGeneration;
-            auto activate = it->activate;
-            d->m_codeBlockCache[key].generation = generation;
-            activate(id, [this, lifeline = d->m_lifeline, key, generation](CodeBlockResult result) {
-                lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
-                    deliverCodeBlock(key, generation, std::move(result));
-                });
-            });
-            return true;
+            if (hotspot.rect.contains(local)) {
+                if (owner)
+                    *owner = &view;
+                return &hotspot;
+            }
         }
     }
-    return false;
+    return nullptr;
+}
+
+bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
+{
+    const BlockView *view = nullptr;
+    const CodeBlockResult::Hotspot *hotspot = codeBlockHotspotAt(viewportPoint, &view);
+    if (!hotspot)
+        return false;
+    // The picture it leads to comes the way any answer does; until then the old one stays, and an
+    // answer that is overtaken by another click is dropped (the generation).
+    const QString key = view->x().codeBlockKey;
+    const int id = hotspot->id;
+    const quint64 generation = ++d->m_codeBlockGeneration;
+    auto activate = d->m_codeBlockCache.constFind(key)->activate;
+    d->m_codeBlockCache[key].generation = generation;
+    activate(id, [this, lifeline = d->m_lifeline, key, generation](CodeBlockResult result) {
+        lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
+            deliverCodeBlock(key, generation, std::move(result));
+        });
+    });
+    return true;
 }
 
 } // namespace noteAppC

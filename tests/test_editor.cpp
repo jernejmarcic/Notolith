@@ -7217,10 +7217,10 @@ TEST(RevealTest, AKeyboardSelectionRendersAgain)
     EXPECT_EQ(editor->displayText(), rendered);
 }
 
-TEST(RevealTest, DoubleClickSelectsTheWordThatWasAimedAt)
+TEST(RevealTest, DoubleClickSelectsTheLineThatWasAimedAt)
 {
     // The first click's release reveals the block, which shifts everything
-    // after the markers four characters to the right. The word selected has
+    // after the markers four characters to the right. The line selected has
     // to be the one under the pointer before that happened.
     auto editor = editorWith(kRevealNote);
     const QString rendered = editor->displayText();
@@ -7236,7 +7236,20 @@ TEST(RevealTest, DoubleClickSelectsTheWordThatWasAimedAt)
     send(viewport, QEvent::MouseButtonDblClick, onWords, Qt::LeftButton);
     send(viewport, QEvent::MouseButtonRelease, onWords, Qt::NoButton);
 
-    EXPECT_EQ(editor->selectedText(), QStringLiteral("words"));
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("Some **bold** words to select across."));
+}
+
+TEST(RevealTest, DoubleClickSelectsTheWholeLineButNotItsNewline)
+{
+    const QString note = QStringLiteral("first line\nsecond line here\nthird\n");
+    auto editor = editorWith(note);
+    const QPoint onWord = firstLinePoint(*editor, 10);
+    QWidget *viewport = editor->viewport();
+    send(viewport, QEvent::MouseButtonPress, onWord, Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonRelease, onWord, Qt::NoButton);
+    send(viewport, QEvent::MouseButtonDblClick, onWord, Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonRelease, onWord, Qt::NoButton);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("first line")) << "one source line, no newline";
 }
 
 // --- style files reload live ----------------------------------------------
@@ -8699,7 +8712,7 @@ struct FakeSpelling {
 
 bool underlined(const MarkdownEditor &editor, qsizetype offset)
 {
-    return editor.formatAt(offset).underlineStyle() == QTextCharFormat::SpellCheckUnderline;
+    return editor.spellWaveAt(offset).isValid();
 }
 
 } // namespace
@@ -13883,4 +13896,207 @@ TEST(CodeStylerEditorTest, InlineLanguagePrefixIsTextInSourceModeAndHiddenInRead
     EXPECT_TRUE(editor->displayText().contains(QStringLiteral("{python}")));
     editor->setMode(MarkdownEditor::Mode::Reading);
     EXPECT_FALSE(editor->displayText().contains(QStringLiteral("{python}")));
+}
+
+// --- spelling on right click ----------------------------------------------
+
+TEST(SpellingTest, TheMenuStillOffersTheWordTheCaretIsIn)
+{
+    // A right click puts the caret in the word before the menu is built, and
+    // the word being typed is exempt from underlining: the menu is not.
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    const qsizetype at = note.indexOf(QLatin1String("wrds")) + 2;
+    editor->enterBlockAt(at);
+    ASSERT_FALSE(underlined(*editor, at)) << "the exemption is still there for typing";
+
+    std::unique_ptr<QMenu> menu = editor->spellingMenuAt(at);
+    ASSERT_TRUE(menu);
+    EXPECT_EQ(menu->actions().first()->text(), QStringLiteral("words"));
+    EXPECT_EQ(menu->actions().last()->text(), QStringLiteral("Add \"wrds\" to dictionary"));
+    // And the menu the right click really opens leads with it.
+    const std::unique_ptr<QMenu> full = editor->contextMenuAt(at);
+    ASSERT_TRUE(full);
+    EXPECT_EQ(full->actions().first()->text(), QStringLiteral("words"));
+}
+
+// --- select all -----------------------------------------------------------
+
+TEST(SelectAllTest, CtrlAKeepsTheViewSoTheHighlightIsSeen)
+{
+    QString note;
+    for (int i = 0; i < 80; ++i)
+        note += QStringLiteral("Paragraph %1 of the note.\n\n").arg(i);
+    auto editor = editorWith(note);
+    editor->show();
+    editor->verticalScrollBar()->setValue(0);
+    const QImage before = editor->viewport()->grab().toImage();
+
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+    EXPECT_EQ(editor->selectedText(), note);
+    EXPECT_EQ(editor->verticalScrollBar()->value(), 0) << "not thrown to the end of the note";
+    // The first line is painted selected: its pixels changed.
+    const QImage after = editor->viewport()->grab().toImage();
+    int changed = 0;
+    for (int y = 20; y < 70; ++y)
+        for (int x = 80; x < 400; ++x)
+            changed += before.pixel(x, y) != after.pixel(x, y);
+    EXPECT_GT(changed, 1000);
+}
+
+// --- a click on a code block's header ------------------------------------
+
+namespace {
+
+/// A note with a code block carrying options, so its header strip can fold.
+struct HeaderNote {
+    explicit HeaderNote(const QString &options)
+        : note(QStringLiteral("Intro line\n\n```python\n%1x = 1\ny = 2\n```\n\nAfter.\n").arg(options)),
+          editor(editorWith(note)),
+          inside(note.indexOf(QLatin1String("x = 1")))
+    {
+        editor->show();
+    }
+    /// The header strip's row, `fromRight` pixels in from the panel's right edge.
+    QPoint headerPoint(int fromRight) const
+    {
+        const QRectF panel = editor->blockPanelAt(inside);
+        return QPoint(int(panel.right()) - fromRight, int(panel.top()) + 16);
+    }
+    /// The chevron at the strip's right end, which is where folding is.
+    QPoint chevronPoint() const
+    {
+        const QRectF panel = editor->blockPanelAt(inside);
+        return QPoint(int(panel.right()) - 23, int(panel.top()) + 24);
+    }
+    QString note;
+    std::unique_ptr<MarkdownEditor> editor;
+    qsizetype inside;
+};
+
+} // namespace
+
+TEST(CodeHeaderClickTest, ClickingTheBarShowsTheSourceAndNeverFoldsIt)
+{
+    HeaderNote titled(QStringLiteral("#| title: t\n"));
+    ASSERT_FALSE(titled.editor->isFoldedAt(titled.inside));
+    ASSERT_FALSE(titled.editor->displayText().contains(QLatin1String("```")));
+    QTest::mouseClick(titled.editor->viewport(), Qt::LeftButton, Qt::NoModifier, titled.headerPoint(400));
+    EXPECT_FALSE(titled.editor->isFoldedAt(titled.inside)) << "a click on the bar hid the block";
+    EXPECT_TRUE(titled.editor->displayText().contains(QLatin1String("```"))) << "the fenced source shows";
+    EXPECT_GE(titled.editor->cursorOffset(), titled.note.indexOf(QLatin1String("```python")));
+    EXPECT_LE(titled.editor->cursorOffset(), titled.note.indexOf(QLatin1String("\n```\n\nAfter")));
+}
+
+TEST(CodeHeaderClickTest, ClickingTheBarOfAFoldedBlockOpensItToItsSource)
+{
+    HeaderNote folded(QStringLiteral("#| fold: true\n"));
+    ASSERT_TRUE(folded.editor->isFoldedAt(folded.inside));
+    QTest::mouseClick(folded.editor->viewport(), Qt::LeftButton, Qt::NoModifier, folded.headerPoint(400));
+    EXPECT_FALSE(folded.editor->isFoldedAt(folded.inside));
+    EXPECT_TRUE(folded.editor->displayText().contains(QLatin1String("```")));
+}
+
+TEST(CodeHeaderClickTest, TheChevronStillFolds)
+{
+    HeaderNote titled(QStringLiteral("#| title: t\n"));
+    QTest::mouseClick(titled.editor->viewport(), Qt::LeftButton, Qt::NoModifier, titled.chevronPoint());
+    EXPECT_TRUE(titled.editor->isFoldedAt(titled.inside));
+    QTest::mouseClick(titled.editor->viewport(), Qt::LeftButton, Qt::NoModifier, titled.chevronPoint());
+    EXPECT_FALSE(titled.editor->isFoldedAt(titled.inside));
+}
+
+// --- the mouse cursor over each element -----------------------------------
+
+TEST(CursorShapeTest, ArrowOverChromeHandOverControlsIBeamOverText)
+{
+    const QString note = QStringLiteral("See [[Target]] here.\n\n```python\nprint(1)\n```\n\nPlain text.\n");
+    auto editor = editorWith(note);
+    editor->setNotebookRunner([](const QString &, const QString &, bool, const MarkdownEditor::NotebookRunOptions &,
+                                 const MarkdownEditor::NotebookDeliver &deliver) {
+        QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
+    });
+    editor->show();
+    QTest::qWait(50);
+    const QFontMetricsF metrics(Theme::builtin().textFont());
+
+    EXPECT_EQ(editor->cursorShapeAt(firstLinePoint(*editor, 2)), Qt::IBeamCursor) << "plain text";
+    const int link = int(metrics.horizontalAdvance(QStringLiteral("See "))) + 10;
+    EXPECT_EQ(editor->cursorShapeAt(firstLinePoint(*editor, link)), Qt::PointingHandCursor) << "a wikilink";
+
+    const qsizetype code = note.indexOf(QLatin1String("print(1)"));
+    const auto info = editor->notebookInfoAt(code);
+    ASSERT_TRUE(info.runRect.isValid());
+    EXPECT_EQ(editor->cursorShapeAt(info.runRect.center().toPoint()), Qt::PointingHandCursor) << "the run button";
+    const QRectF panel = editor->blockPanelAt(code);
+    EXPECT_EQ(editor->cursorShapeAt(QPoint(int(panel.left()) + 90, int(panel.top()) + 16)), Qt::ArrowCursor)
+        << "the rest of the header bar";
+    EXPECT_EQ(editor->cursorShapeAt(QPoint(int(panel.left()) + 90, int(panel.bottom()) - 12)), Qt::IBeamCursor)
+        << "the listing";
+
+    // A mouse move sets it on the viewport.
+    send(editor->viewport(), QEvent::MouseMove, info.runRect.center().toPoint(), Qt::NoButton);
+    EXPECT_EQ(editor->viewport()->cursor().shape(), Qt::PointingHandCursor);
+    send(editor->viewport(), QEvent::MouseMove, QPoint(int(panel.left()) + 90, int(panel.top()) + 16), Qt::NoButton);
+    EXPECT_EQ(editor->viewport()->cursor().shape(), Qt::ArrowCursor);
+    send(editor->viewport(), QEvent::MouseMove, firstLinePoint(*editor, 2), Qt::NoButton);
+    EXPECT_EQ(editor->viewport()->cursor().shape(), Qt::IBeamCursor);
+}
+
+TEST(CursorShapeTest, CopyAndTheChevronAreHands)
+{
+    HeaderNote titled(QStringLiteral("#| title: t\n"));
+    EXPECT_EQ(titled.editor->cursorShapeAt(titled.chevronPoint()), Qt::PointingHandCursor) << "the chevron";
+    EXPECT_EQ(titled.editor->cursorShapeAt(titled.headerPoint(400)), Qt::ArrowCursor) << "the bar";
+
+    // A fence with no language shows "Copy" once the pointer is over it.
+    const QString note = QStringLiteral("```\ncode\n```\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const QRectF panel = editor->blockPanelAt(note.indexOf(QLatin1String("code")));
+    send(editor->viewport(), QEvent::MouseMove, QPoint(int(panel.left()) + 90, int(panel.center().y())), Qt::NoButton);
+    EXPECT_EQ(editor->cursorShapeAt(QPoint(int(panel.right()) - 30, int(panel.top()) + 14)), Qt::PointingHandCursor)
+        << "Copy";
+}
+
+TEST(SpellingTest, TheWaveIsTheThemesErrorRedAndVisibleInSourceModeToo)
+{
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here and `codee` and **bold wrds**\n\n```\nwrds\n```\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    const qsizetype word = note.indexOf(QLatin1String("wrds")) + 1;
+    const QColor error = Theme::builtin().color(QStringLiteral("--text-error"));
+    ASSERT_TRUE(error.isValid());
+    EXPECT_EQ(editor->spellWaveAt(word), QColor(error.red(), error.green(), error.blue(), 255)) << "full opacity";
+
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_TRUE(underlined(*editor, word)) << "prose in source mode";
+    EXPECT_TRUE(underlined(*editor, note.indexOf(QLatin1String("wrds"), word + 4) + 1)) << "inside the bold markers";
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("codee")) + 1)) << "inline code";
+    EXPECT_FALSE(underlined(*editor, note.lastIndexOf(QLatin1String("wrds")) + 1)) << "a listing";
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("good")) + 1));
+}
+
+TEST(SpellingTest, TheWaveIsDrawnThickEnoughToSee)
+{
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    editor->show();
+    const QImage shot = editor->viewport()->grab().toImage();
+    // Pixels near the error red, full strength: a 1 px antialiased line has few; a 1.5 px+ wave has a core of them.
+    const QColor error = Theme::builtin().color(QStringLiteral("--text-error"));
+    int strong = 0;
+    for (int y = 0; y < shot.height(); ++y) {
+        for (int x = 0; x < shot.width(); ++x) {
+            const QColor c = shot.pixelColor(x, y);
+            strong += qAbs(c.red() - error.red()) < 24 && qAbs(c.green() - error.green()) < 24
+                      && qAbs(c.blue() - error.blue()) < 24;
+        }
+    }
+    EXPECT_GT(strong, 12);
 }

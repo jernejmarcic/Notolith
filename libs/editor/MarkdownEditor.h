@@ -366,6 +366,9 @@ public:
     /// range covering it; empty when its block has no layout yet. The way to
     /// assert what colour a token got without comparing pixels.
     QTextCharFormat formatAt(qsizetype sourceOffset) const;
+    /// The colour of the wavy underline of the misspelt word at `sourceOffset`;
+    /// invalid where there is none.
+    QColor spellWaveAt(qsizetype sourceOffset) const;
 
     /// Height of the whole note as it is currently laid out. What the scroll
     /// bar is built from, and the only honest way to assert block spacing.
@@ -968,6 +971,10 @@ public:
     /// Where the text column starts, in viewport coordinates: the x a panel
     /// sits 14 px left of. For the tests.
     int textColumn() const { return contentLeft(); }
+    /// The mouse cursor for what is at `viewportPoint`: a pointing hand over
+    /// what a click acts on, an arrow over chrome that is not text, an I-beam
+    /// over text. Set from every mouse move.
+    Qt::CursorShape cursorShapeAt(const QPoint &viewportPoint) const;
     /// The selected tab of the tab group holding `offset`, in viewport
     /// coordinates; null outside a group, or while the caret is in it. For the tests.
     QRectF selectedTabRectAt(qsizetype offset) const;
@@ -1788,6 +1795,10 @@ private:
     /// hotspots): asks the renderer for the picture it leads to. False when
     /// the press is not on one.
     bool pressCodeBlockHotspot(const QPoint &viewportPoint);
+    /// The hotspot of a plugin block's picture under `viewportPoint`, and its
+    /// block in `owner`; null when there is none.
+    const CodeBlockResult::Hotspot *codeBlockHotspotAt(const QPoint &viewportPoint,
+                                                       const BlockView **owner = nullptr) const;
     /// NotebookBlock.cpp: a fenced code block's output, shown below its own
     /// listing rather than in place of it - the one difference from
     /// layoutPluginCode's shape just above, which this otherwise mirrors.
@@ -2367,8 +2378,9 @@ private:
     /// A wavy underline under each word of `view` the dictionary rejects.
     void appendSpellingFormats(const BlockView &view, QList<QTextLayout::FormatRange> &formats) const;
     /// The words of `view` spelling looks at, in source coordinates: prose
-    /// only, never code, links, tags or maths, and not the word being typed.
-    QList<Range> checkedWordsOf(const BlockView &view) const;
+    /// only, never code, links, tags or maths, and not the word being typed
+    /// unless `typing` is off (the menu, which a click opens with the caret in the word).
+    QList<Range> checkedWordsOf(const BlockView &view, bool typing = true) const;
     /// The word the caret is in or just after, while spelling is on.
     Range wordAtCaret() const;
     /// The run of word characters touching `offset`, whatever spelling does.
