@@ -3,13 +3,13 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(noteAppC
-    VERSION 0.1.0
+    VERSION 0.1.2
     DESCRIPTION "A Markdown note app for developers"
     LANGUAGES CXX)
 
 # The release's pre-release tag. project(VERSION) takes digits only, so --version and the About dialog print
 # NOTEAPPC_VERSION_STRING. Empty it for a final release.
-set(NOTEAPPC_VERSION_SUFFIX "-beta.1")
+set(NOTEAPPC_VERSION_SUFFIX "-beta")
 set(NOTEAPPC_VERSION_STRING "${PROJECT_VERSION}${NOTEAPPC_VERSION_SUFFIX}")
 
 set(CMAKE_CXX_STANDARD 20)
