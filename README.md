@@ -2,14 +2,11 @@
 
 Public beta: expect bugs, and back up your vault.
 
-A Markdown note app for developers, for Linux. Notolith is a native app written in C++ with Qt 6.
-
-![A note in live preview with properties and backlinks](docs/images/main-window.png)
-
-![Links between notes in graph view](docs/images/graph.png)
+A native Markdown editor with advanced features written in C++
 
 ![A callout and an embedded image in live preview](docs/images/markdown.png)
 
+![Links between notes in graph view](docs/images/graph.png)
 ## Install
 
 Dependencies:
@@ -33,7 +30,6 @@ Tests: `cmake -B build-test -G Ninja && cmake --build build-test && QT_QPA_PLATF
 
 ## Features
 
-- **Vaults:** Open a Markdown folder with a file tree, atomic saves and recovery snapshots.
 - **Editor:** Live preview, source and reading modes with editable properties.
 - **Links:** Wikilinks, embeds, backlinks, outgoing links and local or global graph views.
 - **Markdown:** Callouts, tables, maths, syntax-highlighted code and Mermaid diagrams.
