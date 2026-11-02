@@ -9398,12 +9398,13 @@ BaseTableData makeBaseTable(const QStringList &headers, QList<BaseTableRow> rows
 TEST(QueryBaseBlockTest, ALongQueryOrBaseFenceIsDrawnOnceNotOncePerPiece)
 {
     // Over 32 lines a fence is laid out in pieces; a query or base block is the fence's, not each piece's.
+    // The lines after the first are blank, so the query or YAML is the same text however long the fence is.
     FakeQueryRunner query;
     FakeBaseRunner base;
-    const auto heightFor = [&](const char *language, const char *line, int lines) {
-        QString body;
-        for (int i = 0; i < lines; ++i)
-            body += QLatin1String(line) + QLatin1Char('\n');
+    const auto heightFor = [&](const char *language, const char *first, int lines) {
+        QString body = QLatin1String(first) + QLatin1Char('\n');
+        for (int i = 1; i < lines; ++i)
+            body += QStringLiteral(" \n");
         auto editor = editorWith(QStringLiteral("```") + QLatin1String(language) + QLatin1Char('\n') + body
                                  + QStringLiteral("```\n\nafter\n"));
         editor->setCursorOffset(editor->noteText().size()); // off the fence
