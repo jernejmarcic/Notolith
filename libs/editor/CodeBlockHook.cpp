@@ -125,6 +125,17 @@ bool MarkdownEditor::layoutPluginCode(BlockView &view)
 
     view.isPluginBlock = true;
     view.extrasMut().codeBlockKey = key;
+    // A long fence is in pieces, each laid out as a block: the first one is the drawing and the rest
+    // are nothing, or the drawing would be repeated once per 32 lines of source.
+    if (view.piece > 0) {
+        view.extrasMut().image = QPixmap();
+        view.extrasMut().embedPanel = false;
+        view.layout.reset();
+        view.map = DisplayMap();
+        view.height = 0;
+        view.laidOut = true;
+        return true;
+    }
     view.extrasMut().embedLabel = fence->language;
     view.extrasMut().embedPanel = true;
     view.layout.reset();

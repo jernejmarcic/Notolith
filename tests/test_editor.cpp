@@ -6600,6 +6600,31 @@ TEST(CodeBlockHookTest, APluginLanguageIsDrawnAsItsRendererAnswers)
     EXPECT_TRUE(editor->embedImageSizeAt(calc).isEmpty());
 }
 
+TEST(CodeBlockHookTest, ALongFenceIsOneDrawingNotOnePerPieceOfItsSource)
+{
+    // A fence over 32 lines is laid out in pieces; the drawing is the fence's, not each piece's.
+    const auto heightFor = [](int lines, qreal *height) {
+        QString body;
+        for (int i = 0; i < lines; ++i)
+            body += QStringLiteral("line %1\n").arg(i);
+        auto editor = editorWith(QStringLiteral("```calc\n") + body + QStringLiteral("```\n\nafter\n"));
+        editor->setCursorOffset(editor->noteText().size()); // off the fence
+        editor->setCodeBlockRenderer({QStringLiteral("calc")}, [](const QString &, const QString &, int width, const QString &,
+                                                                  const auto &deliver) {
+            QImage image(width, 30, QImage::Format_ARGB32);
+            image.fill(Qt::red);
+            deliver({false, QString(), image});
+        });
+        WAIT_TRUE(!editor->embedImageSizeAt(editor->noteText().indexOf(QLatin1String("line 0"))).isEmpty(), 2000);
+        *height = editor->documentHeight();
+    };
+    qreal longFence = 0, shortFence = 0;
+    heightFor(100, &longFence);
+    heightFor(3, &shortFence);
+    EXPECT_GT(shortFence, 0);
+    EXPECT_EQ(longFence, shortFence);
+}
+
 TEST(NoteEmbedTest, ANoteEmbedIsDrawnFormattedAMomentLater)
 {
     QTemporaryDir dir;
