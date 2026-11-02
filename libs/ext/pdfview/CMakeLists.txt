@@ -72,6 +72,7 @@ target_link_libraries(noteAppC_pdfview PUBLIC Qt6::Widgets Qt6::Concurrent noteA
 # BUILD_WITH_INSTALL_RPATH for the reason the executable gives (apps/noteAppC/CMakeLists.txt): CMake's
 # computed build RPATH would carry empty entries, and an empty entry means "the current directory".
 add_library(notolith-pdfview MODULE PdfModule.cpp)
+noteappc_module_manifest_dependency(PdfModule.cpp ${CMAKE_CURRENT_BINARY_DIR}/manifest.json)
 set_target_properties(notolith-pdfview PROPERTIES
     AUTOMOC ON
     PREFIX ""

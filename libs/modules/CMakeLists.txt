@@ -25,6 +25,15 @@ target_include_directories(noteAppC_modules PRIVATE ${CMAKE_BINARY_DIR}/generate
 target_compile_definitions(noteAppC_modules PRIVATE
     NOTEAPPC_MODULE_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/notolith/modules")
 
+# Q_PLUGIN_METADATA FILE "manifest.json" puts the manifest (the ABI tag) into moc's output. moc reruns when the
+# manifest changes, but the object that includes the .moc is judged stale before moc has run, so a version bump
+# relinked it with the old tag until a second build. Making the manifest an object dependency of the module's
+# source marks it stale in the first. Call it in the directory that creates the module.
+#   noteappc_module_manifest_dependency(<module source> <manifest.json>)
+function(noteappc_module_manifest_dependency source manifest)
+    set_property(SOURCE ${source} APPEND PROPERTY OBJECT_DEPENDS ${manifest})
+endfunction()
+
 # A module as a Qt static plugin (NOTEAPPC_STATIC_MODULES): the module's one source file compiled with
 # QT_STATICPLUGIN into a static library, which the executable links and imports with Q_IMPORT_PLUGIN.
 # ModuleRegistry::scan lists it through QPluginLoader::staticPlugins(); nothing
@@ -38,5 +47,6 @@ function(noteappc_add_static_module target source library)
     target_compile_definitions(${target} PRIVATE QT_STATICPLUGIN)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
     target_link_libraries(${target} PUBLIC ${library})
+    noteappc_module_manifest_dependency(${source} ${CMAKE_CURRENT_BINARY_DIR}/manifest.json)
     set_property(GLOBAL APPEND PROPERTY NOTEAPPC_STATIC_MODULE_TARGETS ${target})
 endfunction()
