@@ -6600,6 +6600,31 @@ TEST(CodeBlockHookTest, APluginLanguageIsDrawnAsItsRendererAnswers)
     EXPECT_TRUE(editor->embedImageSizeAt(calc).isEmpty());
 }
 
+TEST(CodeBlockHookTest, ALongFenceIsOneDrawingNotOnePerPieceOfItsSource)
+{
+    // A fence over 32 lines is laid out in pieces; the drawing is the fence's, not each piece's.
+    const auto heightFor = [](int lines, qreal *height) {
+        QString body;
+        for (int i = 0; i < lines; ++i)
+            body += QStringLiteral("line %1\n").arg(i);
+        auto editor = editorWith(QStringLiteral("```calc\n") + body + QStringLiteral("```\n\nafter\n"));
+        editor->setCursorOffset(editor->noteText().size()); // off the fence
+        editor->setCodeBlockRenderer({QStringLiteral("calc")}, [](const QString &, const QString &, int width, const QString &,
+                                                                  const auto &deliver) {
+            QImage image(width, 30, QImage::Format_ARGB32);
+            image.fill(Qt::red);
+            deliver({false, QString(), image});
+        });
+        WAIT_TRUE(!editor->embedImageSizeAt(editor->noteText().indexOf(QLatin1String("line 0"))).isEmpty(), 2000);
+        *height = editor->documentHeight();
+    };
+    qreal longFence = 0, shortFence = 0;
+    heightFor(100, &longFence);
+    heightFor(3, &shortFence);
+    EXPECT_GT(shortFence, 0);
+    EXPECT_EQ(longFence, shortFence);
+}
+
 TEST(NoteEmbedTest, ANoteEmbedIsDrawnFormattedAMomentLater)
 {
     QTemporaryDir dir;
@@ -9369,6 +9394,29 @@ BaseTableData makeBaseTable(const QStringList &headers, QList<BaseTableRow> rows
 }
 
 } // namespace
+
+TEST(QueryBaseBlockTest, ALongQueryOrBaseFenceIsDrawnOnceNotOncePerPiece)
+{
+    // Over 32 lines a fence is laid out in pieces; a query or base block is the fence's, not each piece's.
+    // The lines after the first are blank, so the query or YAML is the same text however long the fence is.
+    FakeQueryRunner query;
+    FakeBaseRunner base;
+    const auto heightFor = [&](const char *language, const char *first, int lines) {
+        QString body = QLatin1String(first) + QLatin1Char('\n');
+        for (int i = 1; i < lines; ++i)
+            body += QStringLiteral(" \n");
+        auto editor = editorWith(QStringLiteral("```") + QLatin1String(language) + QLatin1Char('\n') + body
+                                 + QStringLiteral("```\n\nafter\n"));
+        editor->setCursorOffset(editor->noteText().size()); // off the fence
+        editor->setQueryRunner(std::ref(query));
+        editor->setBaseRunner(std::ref(base));
+        return editor->documentHeight();
+    };
+    EXPECT_GT(heightFor("query", "foo", 3), 0);
+    EXPECT_EQ(heightFor("query", "foo", 100), heightFor("query", "foo", 3));
+    EXPECT_GT(heightFor("base", "# x", 3), 0);
+    EXPECT_EQ(heightFor("base", "# x", 100), heightFor("base", "# x", 3));
+}
 
 TEST(BaseBlockTest, RendersTableFromAnAsyncRunner)
 {

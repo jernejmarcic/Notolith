@@ -63,8 +63,17 @@ QString withoutComments(const QString &css)
 /// variant.
 struct CSSblock {
     QString selector;
-    QString body;
+    QStringView body; ///< into the CSS text, which outlives the blocks
 };
+
+/// Real themes nest three deep (`@media` in `@supports` in a rule). A file that nests further is not one, and
+/// every level is a pass over its whole body.
+constexpr int kMaxNesting = 8;
+/// A colour or a chain of variables is never this long; a longer value is dropped, not copied around.
+constexpr qsizetype kMaxValueLength = 1024;
+/// A variable's value after substitution, and the substitutions one file may make in all.
+constexpr qsizetype kMaxResolvedLength = 4096;
+constexpr int kMaxSubstitutions = 100000;
 
 QList<CSSblock> blocksIn(const QString &css)
 {
@@ -80,16 +89,21 @@ QList<CSSblock> blocksIn(const QString &css)
             continue;
 
         const QString selector = css.mid(selectorStart, i - selectorStart).simplified();
-        // Walk to the matching brace so a nested block does not end this one.
+        // Walk to the matching brace so a nested block does not end this one. Past kMaxNesting levels, or
+        // with no matching brace, it is not a stylesheet: keep what was found and stop.
         int depth = 1;
         qsizetype j = i + 1;
         for (; j < css.size() && depth > 0; ++j) {
-            if (css.at(j) == QLatin1Char('{'))
-                ++depth;
-            else if (css.at(j) == QLatin1Char('}'))
+            if (css.at(j) == QLatin1Char('{')) {
+                if (++depth > kMaxNesting)
+                    return blocks;
+            } else if (css.at(j) == QLatin1Char('}')) {
                 --depth;
+            }
         }
-        blocks.append({selector, css.mid(i + 1, j - i - 2)});
+        if (depth > 0)
+            return blocks;
+        blocks.append({selector, QStringView(css).mid(i + 1, j - i - 2)});
         selectorStart = i + 1; // a nested block's selector starts here
     }
     return blocks;
@@ -98,7 +112,7 @@ QList<CSSblock> blocksIn(const QString &css)
 /// `--name: value;` pairs. The value runs to the first `;` outside brackets,
 /// because `rgba(0, 0, 0, .5)` carries commas and `var(--x, #fff)` carries a
 /// comma and a fallback.
-QHash<QString, QString> declarationsIn(const QString &body)
+QHash<QString, QString> declarationsIn(QStringView body)
 {
     QHash<QString, QString> out;
     for (qsizetype i = 0; i < body.size();) {
@@ -108,7 +122,7 @@ QHash<QString, QString> declarationsIn(const QString &body)
         const qsizetype colon = body.indexOf(QLatin1Char(':'), dash);
         if (colon < 0)
             break;
-        const QString name = body.mid(dash, colon - dash).trimmed();
+        const QString name = body.mid(dash, colon - dash).trimmed().toString();
         if (name.contains(QLatin1Char(' ')) || name.contains(QLatin1Char('{'))) {
             i = colon + 1;
             continue;
@@ -125,10 +139,11 @@ QHash<QString, QString> declarationsIn(const QString &body)
             else if (c == QLatin1Char(';') && depth <= 0)
                 break;
         }
-        QString value = body.mid(colon + 1, end - colon - 1).trimmed();
+        QString value = body.mid(colon + 1, end - colon - 1).trimmed().toString();
         if (value.endsWith(QLatin1String("!important")))
             value.chop(10);
-        out.insert(name, value.trimmed());
+        if (value.size() <= kMaxValueLength)
+            out.insert(name, value.trimmed());
         i = end + 1;
     }
     return out;
@@ -147,10 +162,13 @@ QString Scheme::normaliseColor(const QString &value)
     return color.isValid() ? hexOrRgba(color) : QString();
 }
 
-QString Scheme::resolveVars(const QString &value, const QHash<QString, QString> &raw, int depth)
+QString Scheme::resolveVars(const QString &value, const QHash<QString, QString> &raw, int *budget, int depth)
 {
     if (depth > 8 || !value.contains(QLatin1String("var(")))
         return value;
+    // A value that grows past this, or a file that has spent its substitutions, is not a colour.
+    if (value.size() > kMaxResolvedLength || --*budget < 0)
+        return {};
 
     QString out = value;
     const qsizetype start = out.indexOf(QLatin1String("var("));
@@ -176,15 +194,16 @@ QString Scheme::resolveVars(const QString &value, const QHash<QString, QString> 
 
     QString replacement = raw.value(name, fallback);
     if (replacement.contains(QLatin1String("var(")))
-        replacement = resolveVars(replacement, raw, depth + 1);
+        replacement = resolveVars(replacement, raw, budget, depth + 1);
 
     out.replace(start, end - start + 1, replacement);
-    return resolveVars(out, raw, depth + 1);
+    return resolveVars(out, raw, budget, depth + 1);
 }
 
 QHash<QString, QString> Scheme::parseObsidianCSS(const QString &css, Theme::Mode mode)
 {
-    const QList<CSSblock> blocks = blocksIn(withoutComments(css));
+    const QString stripped = withoutComments(css); // the blocks point into it
+    const QList<CSSblock> blocks = blocksIn(stripped);
     // An OLED scheme reads an Obsidian theme's dark side; only the base
     // greys differ, and those are ours.
     const bool dark = mode != Theme::Mode::Light;
@@ -218,8 +237,9 @@ QHash<QString, QString> Scheme::parseObsidianCSS(const QString &css, Theme::Mode
         merged.insert(it.key(), it.value());
 
     QHash<QString, QString> tokens;
+    int budget = kMaxSubstitutions;
     for (auto it = merged.constBegin(); it != merged.constEnd(); ++it) {
-        const QString value = resolveVars(it.value(), raw).trimmed();
+        const QString value = resolveVars(it.value(), raw, &budget).trimmed();
         if (isNumericToken(it.key())) {
             QString number = value;
             number.remove(QLatin1Char('%'));
