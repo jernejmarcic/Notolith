@@ -13860,3 +13860,27 @@ TEST(SpellingTest, TheMenuStillOffersTheWordTheCaretIsIn)
     ASSERT_TRUE(full);
     EXPECT_EQ(full->actions().first()->text(), QStringLiteral("words"));
 }
+
+// --- select all -----------------------------------------------------------
+
+TEST(SelectAllTest, CtrlAKeepsTheViewSoTheHighlightIsSeen)
+{
+    QString note;
+    for (int i = 0; i < 80; ++i)
+        note += QStringLiteral("Paragraph %1 of the note.\n\n").arg(i);
+    auto editor = editorWith(note);
+    editor->show();
+    editor->verticalScrollBar()->setValue(0);
+    const QImage before = editor->viewport()->grab().toImage();
+
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+    EXPECT_EQ(editor->selectedText(), note);
+    EXPECT_EQ(editor->verticalScrollBar()->value(), 0) << "not thrown to the end of the note";
+    // The first line is painted selected: its pixels changed.
+    const QImage after = editor->viewport()->grab().toImage();
+    int changed = 0;
+    for (int y = 20; y < 70; ++y)
+        for (int x = 80; x < 400; ++x)
+            changed += before.pixel(x, y) != after.pixel(x, y);
+    EXPECT_GT(changed, 1000);
+}

@@ -6405,10 +6405,15 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         case Qt::Key_Y:
             redo();
             return;
-        case Qt::Key_A:
+        case Qt::Key_A: {
+            // The caret ends up at the end of the note, but the view stays:
+            // following it scrolled the highlighted text out of sight.
+            const int scroll = verticalScrollBar()->value();
             d->m_anchor = 0;
             moveCursor(d->m_text.size(), true);
+            verticalScrollBar()->setValue(scroll);
             return;
+        }
         case Qt::Key_C:
             copySelection();
             return;
