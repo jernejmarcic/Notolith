@@ -13836,3 +13836,27 @@ TEST(CodeStylerEditorTest, InlineLanguagePrefixIsTextInSourceModeAndHiddenInRead
     editor->setMode(MarkdownEditor::Mode::Reading);
     EXPECT_FALSE(editor->displayText().contains(QStringLiteral("{python}")));
 }
+
+// --- spelling on right click ----------------------------------------------
+
+TEST(SpellingTest, TheMenuStillOffersTheWordTheCaretIsIn)
+{
+    // A right click puts the caret in the word before the menu is built, and
+    // the word being typed is exempt from underlining: the menu is not.
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    const qsizetype at = note.indexOf(QLatin1String("wrds")) + 2;
+    editor->enterBlockAt(at);
+    ASSERT_FALSE(underlined(*editor, at)) << "the exemption is still there for typing";
+
+    std::unique_ptr<QMenu> menu = editor->spellingMenuAt(at);
+    ASSERT_TRUE(menu);
+    EXPECT_EQ(menu->actions().first()->text(), QStringLiteral("words"));
+    EXPECT_EQ(menu->actions().last()->text(), QStringLiteral("Add \"wrds\" to dictionary"));
+    // And the menu the right click really opens leads with it.
+    const std::unique_ptr<QMenu> full = editor->contextMenuAt(at);
+    ASSERT_TRUE(full);
+    EXPECT_EQ(full->actions().first()->text(), QStringLiteral("words"));
+}

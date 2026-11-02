@@ -2367,8 +2367,9 @@ private:
     /// A wavy underline under each word of `view` the dictionary rejects.
     void appendSpellingFormats(const BlockView &view, QList<QTextLayout::FormatRange> &formats) const;
     /// The words of `view` spelling looks at, in source coordinates: prose
-    /// only, never code, links, tags or maths, and not the word being typed.
-    QList<Range> checkedWordsOf(const BlockView &view) const;
+    /// only, never code, links, tags or maths, and not the word being typed
+    /// unless `typing` is off (the menu, which a click opens with the caret in the word).
+    QList<Range> checkedWordsOf(const BlockView &view, bool typing = true) const;
     /// The word the caret is in or just after, while spelling is on.
     Range wordAtCaret() const;
     /// The run of word characters touching `offset`, whatever spelling does.

@@ -2108,7 +2108,7 @@ void MarkdownEditor::refreshSpelling()
     viewport()->update();
 }
 
-QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view) const
+QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view, bool typing) const
 {
     QList<Range> words;
     switch (view.span.kind) {
@@ -2139,7 +2139,7 @@ QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view) const
         if (source.length() != found.capturedLength())
             continue;
         // Not the word being typed: it is not finished yet.
-        if (view.active && view.caretWord.isValid() && source.overlaps(view.caretWord))
+        if (typing && view.active && view.caretWord.isValid() && source.overlaps(view.caretWord))
             continue;
         bool skip = false;
         for (int i = view.firstStyle; i < view.lastStyle && !skip; ++i) {
@@ -2214,7 +2214,7 @@ bool MarkdownEditor::addSpellingActions(QMenu &menu, qsizetype sourceOffset, boo
     const BlockView &view = d->m_blocks[size_t(index)];
     if (!view.laidOut)
         return false;
-    for (const Range &source : checkedWordsOf(view)) {
+    for (const Range &source : checkedWordsOf(view, false)) {
         if (sourceOffset < source.start || sourceOffset > source.end)
             continue;
         const QString word = d->m_text.mid(source.start, source.length());
