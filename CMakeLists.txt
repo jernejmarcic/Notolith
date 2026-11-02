@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(noteAppC
-    VERSION 0.1.6
+    VERSION 0.1.12
     DESCRIPTION "A Markdown note app for developers"
     LANGUAGES CXX)
 
