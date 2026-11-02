@@ -4370,14 +4370,26 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         return;
 
     const bool renderMedia = !plainSource(view) && !view.active;
-    if (renderMedia && layoutQuery(view))
+    // These draw the whole fence, and a fence over kCodePieceLines is laid out in pieces, each through here:
+    // the first piece carries the drawing and the others take no height, or it would be drawn once per piece.
+    if (renderMedia && (layoutQuery(view) || layoutBase(view) || layoutPluginCode(view) || layoutReference(view))) {
+        if (view.piece > 0) {
+            if (BlockExtras *e = view.extras.get()) {
+                e->image = QPixmap();
+                e->embedPanel = false;
+                e->cells.clear();
+                e->queryRows.clear();
+                e->baseRows.clear();
+            }
+            view.tabHidden = true;
+            view.layout.reset();
+            view.map = DisplayMap();
+            view.height = 0;
+            view.laidOut = true;
+            view.heightEstimated = false;
+        }
         return;
-    if (renderMedia && layoutBase(view))
-        return;
-    if (renderMedia && layoutPluginCode(view))
-        return;
-    if (renderMedia && layoutReference(view))
-        return;
+    }
     if (renderMedia && layoutHtml(view))
         return;
     if (renderMedia && layoutEmbed(view))

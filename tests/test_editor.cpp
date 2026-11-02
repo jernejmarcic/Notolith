@@ -9395,6 +9395,28 @@ BaseTableData makeBaseTable(const QStringList &headers, QList<BaseTableRow> rows
 
 } // namespace
 
+TEST(QueryBaseBlockTest, ALongQueryOrBaseFenceIsDrawnOnceNotOncePerPiece)
+{
+    // Over 32 lines a fence is laid out in pieces; a query or base block is the fence's, not each piece's.
+    FakeQueryRunner query;
+    FakeBaseRunner base;
+    const auto heightFor = [&](const char *language, const char *line, int lines) {
+        QString body;
+        for (int i = 0; i < lines; ++i)
+            body += QLatin1String(line) + QLatin1Char('\n');
+        auto editor = editorWith(QStringLiteral("```") + QLatin1String(language) + QLatin1Char('\n') + body
+                                 + QStringLiteral("```\n\nafter\n"));
+        editor->setCursorOffset(editor->noteText().size()); // off the fence
+        editor->setQueryRunner(std::ref(query));
+        editor->setBaseRunner(std::ref(base));
+        return editor->documentHeight();
+    };
+    EXPECT_GT(heightFor("query", "foo", 3), 0);
+    EXPECT_EQ(heightFor("query", "foo", 100), heightFor("query", "foo", 3));
+    EXPECT_GT(heightFor("base", "# x", 3), 0);
+    EXPECT_EQ(heightFor("base", "# x", 100), heightFor("base", "# x", 3));
+}
+
 TEST(BaseBlockTest, RendersTableFromAnAsyncRunner)
 {
     const QString note = QStringLiteral("Intro\n\n```base\nviews:\n  - order: [file.name]\n```\n");
