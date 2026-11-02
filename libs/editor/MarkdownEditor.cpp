@@ -6311,6 +6311,8 @@ void MarkdownEditor::setKeyBindings(const QHash<QString, QList<QKeySequence>> &b
 void MarkdownEditor::keyPressEvent(QKeyEvent *event)
 {
     const TypingScope typed(d->m_typing); // applyEdit: this edit is the reader's own
+    d->m_cursorOn = true; // the caret stays lit while typing: each key restarts the blink
+    d->m_blink.start();
     if (event->key() == Qt::Key_0 && event->modifiers() == Qt::ControlModifier && resetPdfZoom())
         return;
     // Ctrl pressed with the pointer already resting on a link previews it,
@@ -7004,6 +7006,8 @@ void MarkdownEditor::focusOutEvent(QFocusEvent *event)
 void MarkdownEditor::inputMethodEvent(QInputMethodEvent *event)
 {
     const TypingScope typed(d->m_typing); // applyEdit: this edit is the reader's own
+    d->m_cursorOn = true;
+    d->m_blink.start();
     // Vim's normal and visual modes take keys as commands: composed text
     // would be typed into the note without an insert.
     if (d->m_vim.enabled && d->m_vim.mode != VimState::Mode::Insert) {
