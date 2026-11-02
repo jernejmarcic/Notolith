@@ -421,6 +421,19 @@ void take(QVariantMap &out, const QJsonObject &object, const char *obsidianKey,
         out.insert(key, value.toVariant());
 }
 
+/// Obsidian's `cssTheme` is a theme's name, not a path: the theme is the file `<name>/theme.css` under
+/// the vault's `.obsidian/themes`. The path of that file, or empty for no theme or a name with no file.
+/// A name that holds a separator or climbs out of the folder is not one, so a vault cannot point this
+/// at another file.
+QString obsidianThemePath(const QDir &config, const QString &name)
+{
+    if (name.isEmpty() || name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\'))
+        || name.startsWith(QLatin1Char('.')))
+        return {};
+    const QString path = config.filePath(QStringLiteral("themes/%1/theme.css").arg(name));
+    return QFileInfo(path).isFile() ? path : QString();
+}
+
 /// Separates the three fields of one `state.notePositions` entry. A tab,
 /// because a path can hold a comma - the character `textOf`/`valueOf` already
 /// use to join and split the list itself - but essentially never holds a tab.
@@ -600,7 +613,10 @@ QVariantMap Settings::fromObsidianConfig(const QString &vaultRoot)
     take(out, appearance, "interfaceFontFamily", QStringLiteral("appearance.interfaceFont"));
     take(out, appearance, "textFontFamily", QStringLiteral("appearance.textFont"));
     take(out, appearance, "monospaceFontFamily", QStringLiteral("appearance.monospaceFont"));
-    take(out, appearance, "cssTheme", QStringLiteral("appearance.scheme"));
+    const QString themePath =
+        obsidianThemePath(config, appearance.value(QLatin1String("cssTheme")).toString());
+    if (!themePath.isEmpty())
+        out.insert(QStringLiteral("appearance.scheme"), themePath);
 
     // Newer Obsidian writes {"graph": true, ...}; older wrote the array of
     // the plugins that were on, so any id missing from it was off.
@@ -940,9 +956,9 @@ Settings Settings::load(const QString &vaultRoot)
     settings.m_vault = fromObsidianConfig(vaultRoot);
     // An untrusted vault may switch features off but never on: its core-plugins.json would otherwise
     // turn on, say, notebooks for whoever opens it. Nor may it lower a safety the user has: its app.json
-    // could make Delete permanent and silent (files.deletedFiles, files.confirmDelete), and its cssTheme,
-    // carried over as the colour scheme's file path, would have the app read any file it names
-    // (appearance.scheme: /dev/zero). Those three come only from the user, trusted vault or not.
+    // could make Delete permanent and silent (files.deletedFiles, files.confirmDelete). Those two come only
+    // from the user, trusted vault or not. Its cssTheme is only a name, looked up as one theme.css inside
+    // the vault (obsidianThemePath), so it cannot name /dev/zero and is carried over either way.
     if (!settings.isVaultTrusted(vaultRoot)) {
         for (auto it = settings.m_vault.begin(); it != settings.m_vault.end();) {
             if (it.key().startsWith(QLatin1String("plugins.")) && it.value().toBool())
@@ -950,7 +966,7 @@ Settings Settings::load(const QString &vaultRoot)
             else
                 ++it;
         }
-        for (const char *key : {"files.deletedFiles", "files.confirmDelete", "appearance.scheme"})
+        for (const char *key : {"files.deletedFiles", "files.confirmDelete"})
             settings.m_vault.remove(QLatin1String(key));
     }
     return settings;

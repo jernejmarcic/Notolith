@@ -224,7 +224,7 @@ vault" in the command palette); the choice is kept in your own settings,
 never in the vault. In an untrusted vault the vault's own `hotkeys.json` and
 any vault setting that would switch a feature on or lower a safety are ignored
 (the Obsidian `trashOption` and `promptDelete`, which could make Delete
-permanent and silent, and `cssTheme`; only your own settings set those), each block asks
+permanent and silent; only your own settings set those), each block asks
 before it runs (Run, Trust this vault, Cancel), and opening a file from a
 file card or a link inside a note asks first, naming the file and its type.
 The file tree's "Open in default app" is your own request and opens without

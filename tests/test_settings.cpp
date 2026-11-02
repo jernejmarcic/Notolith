@@ -260,6 +260,25 @@ TEST(Settings, anUntrustedVaultCannotMakeDeletePermanentOrSilentNorNameAFileForT
     EXPECT_FALSE(trusted.boolean(QStringLiteral("files.confirmDelete")));
 }
 
+TEST(Settings, anObsidianCssThemeNameBecomesTheFileItNamesInTheVault)
+{
+    QTemporaryDir vault;
+    const QString css = vault.filePath(QStringLiteral(".obsidian/themes/Vanilla AMOLED Color/theme.css"));
+    writeFile(css, QStringLiteral(".theme-dark { --background-primary: #000; }"));
+    writeFile(vault.filePath(QStringLiteral(".obsidian/appearance.json")),
+              QStringLiteral(R"({"cssTheme":"Vanilla AMOLED Color","theme":"obsidian"})"));
+
+    // Untrusted too: it is a name found in one place, not a path the vault chose.
+    EXPECT_EQ(Settings::load(vault.path()).text(QStringLiteral("appearance.scheme")), css);
+
+    writeFile(vault.filePath(QStringLiteral(".obsidian/appearance.json")),
+              QStringLiteral(R"({"cssTheme":"Not installed"})"));
+    EXPECT_EQ(Settings::load(vault.path()).text(QStringLiteral("appearance.scheme")), QString());
+    writeFile(vault.filePath(QStringLiteral(".obsidian/appearance.json")),
+              QStringLiteral(R"({"cssTheme":"../themes/Vanilla AMOLED Color"})"));
+    EXPECT_EQ(Settings::load(vault.path()).text(QStringLiteral("appearance.scheme")), QString());
+}
+
 TEST(Settings, aVaultIsUntrustedUntilTheUserSaysSoAndTheChoiceIsKeptInTheUsersOwnConfig)
 {
     QTemporaryDir home;
