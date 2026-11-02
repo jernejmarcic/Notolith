@@ -146,9 +146,9 @@ SingleInstance::Launch SingleInstance::launchFor(const QString &argument)
     const QString last = lastUsedVault();
     if (target.mode == OpenMode::Empty && !last.isEmpty())
         return {nameForVault(last), {}};
-    // A loose note, or nothing and nothing to reopen: no vault of its own. The last-used vault's
-    // window takes a loose note as a tab, as the one window always did, when it is running.
-    return {nameForVault(QString()), last.isEmpty() ? QStringList() : QStringList{nameForVault(last)}};
+    // A loose note, or nothing and nothing to reopen: no vault of its own, so a window of its own,
+    // never a tab in whichever vault happens to be open.
+    return {nameForVault(QString()), {}};
 }
 
 SingleInstance::SingleInstance(const QString &name, const QStringList &alsoTry)

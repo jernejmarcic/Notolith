@@ -10008,7 +10008,7 @@ TEST_F(InstanceTest, ALaunchWithNoVaultToReopenSharesTheNoVaultInstance)
 
 // A note outside every vault is not tied to one: the last-used vault's instance takes it when it
 // runs, else the no-vault instance does, else a process starts for it.
-TEST_F(InstanceTest, ALooseFileGoesToTheLastUsedVaultsInstanceElseToANoVaultOne)
+TEST_F(InstanceTest, ALooseFileOpensInANoVaultWindowNeverTheVaults)
 {
     lastUsed({dir.path()});
     const QString note = loose.filePath(QStringLiteral("Loose.md"));
@@ -10021,8 +10021,10 @@ TEST_F(InstanceTest, ALooseFileGoesToTheLastUsedVaultsInstanceElseToANoVaultOne)
     MainWindow vault;
     auto vaultServing = serving(vault, dir.path());
     auto handed = launch(note);
-    EXPECT_EQ(finished(handed), nullptr);
-    WAIT_TRUE(tabsOf(vault).contains(QStringLiteral("Loose")), 5000);
+    auto own = finished(handed);
+    ASSERT_NE(own, nullptr) << "a running vault window does not take a file from outside it";
+    EXPECT_EQ(own->name(), SingleInstance::nameForVault(QString()));
+    EXPECT_FALSE(tabsOf(vault).contains(QStringLiteral("Loose")));
 }
 
 // A window that opens another vault stops serving the one it left and serves the new one.
