@@ -780,6 +780,143 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
     return false;
 }
 
+// What the mouse cursor says is under `point`. It reads the same rects
+// handleBlockClick acts on, so a pointing hand is always a click that does something.
+Qt::CursorShape MarkdownEditor::cursorShapeAt(const QPoint &point) const
+{
+    if (const auto nav = pdfNavCursorAt(point))
+        return *nav;
+    if (!linkAt(point).isEmpty() || codeLabelAt(point) || d->m_overEditButton || codeBlockHotspotAt(point))
+        return Qt::PointingHandCursor;
+    const qsizetype index = blockAtPoint(point);
+    if (index < 0)
+        return Qt::IBeamCursor;
+    const BlockView &view = d->m_blocks[size_t(index)];
+    if (!view.laidOut || view.foldHidden || view.tabHidden)
+        return Qt::IBeamCursor;
+    const qreal left = contentLeft();
+    const qreal top = view.y - verticalScrollBar()->value();
+    const auto over = [&point, this](const QRectF &rect, qreal slop = 0) {
+        return rect.isValid() && touchable(rect, slop).contains(point);
+    };
+    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+    const bool inPanel = panel.contains(point);
+
+    if (d->m_foldHeading || d->m_foldIndent) {
+        for (const FoldMark &mark : foldMarksOf(view, left, top)) {
+            if (over(mark.arrow, 6) || (mark.folded && mark.ellipsis.contains(point)))
+                return Qt::PointingHandCursor;
+        }
+    }
+
+    if (!view.x().mediaPath.isEmpty()) {
+        const QRectF bar = mediaBarRect(view, left, top).adjusted(0, -8, 0, 8);
+        const bool onButton = mediaButtonRect(view, left, top).adjusted(-4, -4, 4, 4).contains(point)
+                              || mediaScreenRect(view, left, top).contains(point);
+        return onButton || bar.contains(point) ? Qt::PointingHandCursor : Qt::ArrowCursor;
+    }
+    if (view.x().isPdfEmbed)
+        return Qt::ArrowCursor;
+    if (view.x().isFileCard)
+        return view.x().fileCardRect.translated(left, top).contains(point) ? Qt::PointingHandCursor
+                                                                           : Qt::IBeamCursor;
+    for (const EmbedCell &cell : view.x().embedCells) {
+        if (!cell.rect.translated(left, top).contains(point))
+            continue;
+        bool clickable = cell.isNote || !cell.openPath.isEmpty();
+#ifdef NOTEAPPC_HAVE_NETWORK
+        clickable = clickable || !cell.remoteURL.isEmpty();
+#endif
+        return clickable ? Qt::PointingHandCursor : Qt::ArrowCursor;
+    }
+    if (hookedEmbedBlockAt(point) >= 0)
+        return Qt::ArrowCursor; // a picture the window drew: nothing to type into
+    if (!view.x().image.isNull() && inPanel)
+        return Qt::ArrowCursor;
+
+    if (view.x().embedPanel && view.notebookEligible && over(notebookRunRectFor(view, left, top), 4))
+        return Qt::PointingHandCursor;
+    if (!view.x().referenceTarget.isEmpty() && QRectF(left, top, contentWidth(), codeHeaderHeight()).contains(point))
+        return Qt::PointingHandCursor;
+
+    if (view.isQuery) {
+        if (over(view.x().queryCollapseRect.translated(left, top)) || over(view.x().querySortRect.translated(left, top)))
+            return Qt::PointingHandCursor;
+        for (const BlockExtras::QueryRow &row : view.x().queryRows) {
+            if (row.rect.translated(left, top).contains(point))
+                return Qt::PointingHandCursor;
+        }
+        return Qt::ArrowCursor;
+    }
+    if (view.isBase) {
+        for (const BlockExtras::BaseRow &row : view.x().baseRows) {
+            if (row.rect.translated(left, top).contains(point))
+                return Qt::PointingHandCursor;
+        }
+        return Qt::ArrowCursor;
+    }
+    for (const NestedCallout &nested : view.x().nested) {
+        if (nested.span->foldable && over(nestedFoldHandleRect(view, nested, left, top), 6))
+            return Qt::PointingHandCursor;
+    }
+
+    if (view.span.kind == BlockSpan::Kind::Code && !view.isPluginBlock) {
+        if (view.notebookEligible && over(notebookRunRectFor(view, left, top), 4))
+            return Qt::PointingHandCursor;
+        for (const TabRect &tab : tabsOf(view, left, top)) {
+            if (tab.rect.contains(point))
+                return Qt::PointingHandCursor;
+        }
+        if (isFoldable(view) && view.textTop > 0 && over(foldHandleRect(view, left, top), 6))
+            return Qt::PointingHandCursor;
+        // The rest of the header strip, and the output under the listing, are
+        // not text: the strip's click shows the source, which is not an I-beam's job.
+        if (!view.editedListing && hasCodeHeader(view) && view.piece == 0
+            && QRectF(left - 14, top - 8, contentWidth() + 28, view.textTop + 8).contains(point))
+            return Qt::ArrowCursor;
+        for (const BlockExtras::NotebookOutputCell &cell : view.x().notebookOutputs) {
+            if (cell.rect.translated(left, top).contains(point))
+                return Qt::ArrowCursor;
+        }
+    }
+
+    if (view.span.kind == BlockSpan::Kind::Frontmatter && d->m_mode != Mode::Source && !d->m_properties.isEmpty()) {
+        if (over(foldHandleRect(view, left, top), 6) || (view.folded && inPanel))
+            return Qt::PointingHandCursor;
+        for (const PropertyRow &row : view.x().propertyRows) {
+            if (over(row.control.translated(left, top), 4) || over(row.adder.translated(left, top)))
+                return Qt::PointingHandCursor;
+            for (int i = 0; i < row.removers.size(); ++i) {
+                if (over(row.removers.at(i).translated(left, top)))
+                    return Qt::PointingHandCursor;
+            }
+            for (int i = 0; i < row.chips.size() && !row.removers.isEmpty(); ++i) {
+                if (over(row.chips.at(i).translated(left, top), 0))
+                    return Qt::PointingHandCursor;
+            }
+            const QRectF value = row.rect.translated(left, top).adjusted(kKeyColumn, 0, 0, 0);
+            if (d->m_properties.at(row.property).type != Property::Type::List && value.contains(point))
+                return Qt::IBeamCursor;
+        }
+        return inPanel ? Qt::ArrowCursor : Qt::IBeamCursor;
+    }
+
+    // A task's box.
+    if (!view.listTextX.empty()) {
+        for (const ListItemSpan &item : listItemsIn(view.span.range)) {
+            if (item.task && std::none_of(view.revealed.cbegin(), view.revealed.cend(),
+                                          [&item](const Range &range) { return range.overlaps(item.marker); })
+                && over(checkboxRect(view, item), 3))
+                return Qt::PointingHandCursor;
+        }
+    }
+    // A callout's title row folds, as a click there does.
+    if (view.span.kind != BlockSpan::Kind::Code && isFoldable(view) && view.textTop > 0
+        && QRectF(left - 14, top - 8, contentWidth() + 28, view.textTop + 8).contains(point))
+        return Qt::PointingHandCursor;
+    return Qt::IBeamCursor;
+}
+
 // --- the properties table -------------------------------------------------
 
 qreal MarkdownEditor::propertyRowHeight() const

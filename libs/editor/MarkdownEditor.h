@@ -968,6 +968,10 @@ public:
     /// Where the text column starts, in viewport coordinates: the x a panel
     /// sits 14 px left of. For the tests.
     int textColumn() const { return contentLeft(); }
+    /// The mouse cursor for what is at `viewportPoint`: a pointing hand over
+    /// what a click acts on, an arrow over chrome that is not text, an I-beam
+    /// over text. Set from every mouse move.
+    Qt::CursorShape cursorShapeAt(const QPoint &viewportPoint) const;
     /// The selected tab of the tab group holding `offset`, in viewport
     /// coordinates; null outside a group, or while the caret is in it. For the tests.
     QRectF selectedTabRectAt(qsizetype offset) const;
@@ -1788,6 +1792,10 @@ private:
     /// hotspots): asks the renderer for the picture it leads to. False when
     /// the press is not on one.
     bool pressCodeBlockHotspot(const QPoint &viewportPoint);
+    /// The hotspot of a plugin block's picture under `viewportPoint`, and its
+    /// block in `owner`; null when there is none.
+    const CodeBlockResult::Hotspot *codeBlockHotspotAt(const QPoint &viewportPoint,
+                                                       const BlockView **owner = nullptr) const;
     /// NotebookBlock.cpp: a fenced code block's output, shown below its own
     /// listing rather than in place of it - the one difference from
     /// layoutPluginCode's shape just above, which this otherwise mirrors.

@@ -13959,3 +13959,56 @@ TEST(CodeHeaderClickTest, TheChevronStillFolds)
     QTest::mouseClick(titled.editor->viewport(), Qt::LeftButton, Qt::NoModifier, titled.chevronPoint());
     EXPECT_FALSE(titled.editor->isFoldedAt(titled.inside));
 }
+
+// --- the mouse cursor over each element -----------------------------------
+
+TEST(CursorShapeTest, ArrowOverChromeHandOverControlsIBeamOverText)
+{
+    const QString note = QStringLiteral("See [[Target]] here.\n\n```python\nprint(1)\n```\n\nPlain text.\n");
+    auto editor = editorWith(note);
+    editor->setNotebookRunner([](const QString &, const QString &, bool, const MarkdownEditor::NotebookRunOptions &,
+                                 const MarkdownEditor::NotebookDeliver &deliver) {
+        QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
+    });
+    editor->show();
+    QTest::qWait(50);
+    const QFontMetricsF metrics(Theme::builtin().textFont());
+
+    EXPECT_EQ(editor->cursorShapeAt(firstLinePoint(*editor, 2)), Qt::IBeamCursor) << "plain text";
+    const int link = int(metrics.horizontalAdvance(QStringLiteral("See "))) + 10;
+    EXPECT_EQ(editor->cursorShapeAt(firstLinePoint(*editor, link)), Qt::PointingHandCursor) << "a wikilink";
+
+    const qsizetype code = note.indexOf(QLatin1String("print(1)"));
+    const auto info = editor->notebookInfoAt(code);
+    ASSERT_TRUE(info.runRect.isValid());
+    EXPECT_EQ(editor->cursorShapeAt(info.runRect.center().toPoint()), Qt::PointingHandCursor) << "the run button";
+    const QRectF panel = editor->blockPanelAt(code);
+    EXPECT_EQ(editor->cursorShapeAt(QPoint(int(panel.left()) + 90, int(panel.top()) + 16)), Qt::ArrowCursor)
+        << "the rest of the header bar";
+    EXPECT_EQ(editor->cursorShapeAt(QPoint(int(panel.left()) + 90, int(panel.bottom()) - 12)), Qt::IBeamCursor)
+        << "the listing";
+
+    // A mouse move sets it on the viewport.
+    send(editor->viewport(), QEvent::MouseMove, info.runRect.center().toPoint(), Qt::NoButton);
+    EXPECT_EQ(editor->viewport()->cursor().shape(), Qt::PointingHandCursor);
+    send(editor->viewport(), QEvent::MouseMove, QPoint(int(panel.left()) + 90, int(panel.top()) + 16), Qt::NoButton);
+    EXPECT_EQ(editor->viewport()->cursor().shape(), Qt::ArrowCursor);
+    send(editor->viewport(), QEvent::MouseMove, firstLinePoint(*editor, 2), Qt::NoButton);
+    EXPECT_EQ(editor->viewport()->cursor().shape(), Qt::IBeamCursor);
+}
+
+TEST(CursorShapeTest, CopyAndTheChevronAreHands)
+{
+    HeaderNote titled(QStringLiteral("#| title: t\n"));
+    EXPECT_EQ(titled.editor->cursorShapeAt(titled.chevronPoint()), Qt::PointingHandCursor) << "the chevron";
+    EXPECT_EQ(titled.editor->cursorShapeAt(titled.headerPoint(400)), Qt::ArrowCursor) << "the bar";
+
+    // A fence with no language shows "Copy" once the pointer is over it.
+    const QString note = QStringLiteral("```\ncode\n```\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const QRectF panel = editor->blockPanelAt(note.indexOf(QLatin1String("code")));
+    send(editor->viewport(), QEvent::MouseMove, QPoint(int(panel.left()) + 90, int(panel.center().y())), Qt::NoButton);
+    EXPECT_EQ(editor->cursorShapeAt(QPoint(int(panel.right()) - 30, int(panel.top()) + 14)), Qt::PointingHandCursor)
+        << "Copy";
+}

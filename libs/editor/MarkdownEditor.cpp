@@ -233,6 +233,11 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     viewport()->setCursor(Qt::IBeamCursor);
     viewport()->setMouseTracking(true);
     viewport()->setAcceptDrops(true); // an image or a file dropped in; see PasteDrop.cpp
+    // Scrolling moves what is under a resting pointer, so its cursor changes without a mouse move.
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        if (viewport()->underMouse() && !QGuiApplication::mouseButtons())
+            viewport()->setCursor(cursorShapeAt(viewport()->mapFromGlobal(QCursor::pos())));
+    });
     horizontalScrollBar()->setRange(0, 0);
     // An icon given as an https URL arrives after the first paint. Without
     // this it stayed blank until something unrelated happened to repaint.
@@ -5590,6 +5595,7 @@ void MarkdownEditor::leaveEvent(QEvent *event)
         emit linkHoverEnded();
     }
     clearHover();
+    viewport()->setCursor(Qt::IBeamCursor);
     QAbstractScrollArea::leaveEvent(event);
 }
 
@@ -6872,10 +6878,7 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
     const bool finger = event->pointingDevice() && event->pointingDevice()->type() == QInputDevice::DeviceType::TouchScreen;
     updateHover(event->pos(), !finger);
 
-    const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos()) || d->m_overEditButton;
-    Qt::CursorShape shape = clickable ? Qt::PointingHandCursor : Qt::IBeamCursor;
-    if (const auto nav = pdfNavCursorAt(event->pos()))
-        shape = *nav;
+    Qt::CursorShape shape = cursorShapeAt(event->pos());
     switch (d->m_tableHover.part) {
     case TablePart::RowGrip:
     case TablePart::ColumnGrip:
