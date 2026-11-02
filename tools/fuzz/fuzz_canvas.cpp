@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // libFuzzer target: a .canvas file (JSON Canvas), read and written back.
 
 #include <QByteArray>

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // The share module: what Notolith dlopens when a vault holds a share or the user shares a note. All it does
 // is hand the window the way to build a ShareEngine; the engine is plain Qt and the link layer.
 #include <QObject>

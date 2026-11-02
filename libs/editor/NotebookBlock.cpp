@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// A fenced code block's Jupyter-kernel output (docs/PLUGINS.md,
 /// Tier 1): unlike CodeBlockHook.cpp's plugin fences, this never replaces
 /// the listing - the source stays exactly as written, a run control joins

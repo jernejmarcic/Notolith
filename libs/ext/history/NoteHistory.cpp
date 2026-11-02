@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #include "NoteHistory.h"
 #include "ConfigFile.h"
 

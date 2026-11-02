@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// Footnotes in the editor, as Obsidian shows them: a reference `[^1]` or
 /// `^[inline]` is its number, raised and in the accent colour; a numbered
 /// definition's `[^1]:` is a small muted "1." - both drawn over one visible

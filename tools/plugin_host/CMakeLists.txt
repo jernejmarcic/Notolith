@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # notolith-plugin-host: one process per enabled plugin (docs/PLUGINS.md,
 # Tier 2). Deliberately thin - Qt6::Core, the protocol library, and libdl -
 # so a plugin's crash or hang is contained to this binary and costs the app

@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # A Tier 1 module (docs/PLUGINS.md): Jupyter-style code execution.
 # Built only with NOTEAPPC_WITH_NOTEBOOK on and libzmq found (root
 # CMakeLists.txt) - PkgConfig::ZMQ is libzmq's own pkg-config name, kept as

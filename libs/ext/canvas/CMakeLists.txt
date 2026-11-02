@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # Canvas, the second Tier 1 module (docs/PLUGINS.md): JSON Canvas 1.0 read,
 # write, and an infinite pan/zoom view over it. Links the editor library only
 # to reuse MarkdownEditor for rendering a node's Markdown the way a note pane

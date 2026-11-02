@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // HTML in live preview edited where it is drawn (libs/editor/HtmlEdit.cpp):
 // an HTML table cell by cell like a pipe table, a <p> or an <li> like
 // Markdown text with its tags hidden, every byte of the note accounted for.

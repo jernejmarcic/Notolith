@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # The root project() only declares CXX (every other target here is C++) -
 # this is the one place in the tree that needs a C compiler, so it is
 # enabled here rather than widening the top-level project() declaration for

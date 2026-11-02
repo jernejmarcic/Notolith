@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Tier 1 (docs/PLUGINS.md): the Jupyter kernel protocol client.
 // Message framing/signing on its own, kernel discovery, the sidecar cache,
 // the tier-1 sandbox actually denying a file outside its allowlist, and -

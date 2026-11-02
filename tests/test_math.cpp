@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Maths and backslash escapes in the editor: a display formula on lines of its
 // own inside a paragraph, a formula kept drawn under its source while the caret
 // is in it (and a diagram fence too), what MicroTeX is asked to draw, and the

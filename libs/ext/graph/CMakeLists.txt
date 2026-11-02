@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # Graph view, a Tier 1 module (docs/PLUGINS.md): the widget links
 # noteAppC_index to read the vault and noteAppC_theme to paint in the current
 # colours, but nothing in the rest of the app links it back - a build with

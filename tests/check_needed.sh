@@ -1,6 +1,5 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # usage: check_needed.sh <elf> <pattern>...
 # Fails when <elf> lists a NEEDED library matching one of the patterns (grep -E, case-insensitive), or has a RUNPATH
 # with an empty entry (the loader reads an empty entry as the current directory). Deterministic, no process started.

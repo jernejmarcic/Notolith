@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #pragma once
 
 // Whether a test that runs a sandboxed tool can run at all. A builder that denies unprivileged user namespaces

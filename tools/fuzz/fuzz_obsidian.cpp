@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // libFuzzer target: the JSON a vault keeps in `.obsidian/`, which a vault's
 // author controls. The input is written as every file the importers read,
 // then each importer runs over it. The vault is one temporary folder, made

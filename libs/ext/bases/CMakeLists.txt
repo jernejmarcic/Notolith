@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # Bases, a Tier 1 module (docs/PLUGINS.md): database-like table/card views
 # over a vault's notes and their properties, from a `.base` YAML file. Built
 # only with NOTEAPPC_WITH_BASES on; nothing links it otherwise.

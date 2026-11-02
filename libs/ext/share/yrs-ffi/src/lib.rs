@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // A C surface over yrs for Notolith's CrdtDoc (libs/ext/share/CrdtDocYrs.cpp).
 //
 // Why not the upstream C bindings (crate yffi): the crate ships no header and

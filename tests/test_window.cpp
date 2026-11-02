@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Widget smoke test: drives the real MainWindow on the offscreen platform, so
 // the basics (open vault, file tree, open note, save) are
 // checked by something other than a human looking at the screen.
@@ -3374,9 +3373,7 @@ TEST_F(WindowTest, AboutPageShowsTheGPLNoticeAndTheFullLicence)
     auto *notice = settingsWidget<QLabel>(window, QStringLiteral("settingsAboutNotice"));
     ASSERT_NE(notice, nullptr);
     EXPECT_TRUE(notice->text().contains(QStringLiteral("ABSOLUTELY NO WARRANTY")));
-    auto *copyright = settingsWidget<QLabel>(window, QStringLiteral("settingsAboutCopyright"));
-    ASSERT_NE(copyright, nullptr);
-    EXPECT_EQ(copyright->text(), QStringLiteral("Copyright (C) 2026 Jernej Marčič"));
+    EXPECT_EQ(settingsWidget<QLabel>(window, QStringLiteral("settingsAboutCopyright")), nullptr);
 
     auto *button = settingsWidget<QPushButton>(window, QStringLiteral("settingsAboutLicenceButton"));
     ASSERT_NE(button, nullptr);

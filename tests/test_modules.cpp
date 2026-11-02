@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // The loadable-module tier (docs/PLUGINS.md): discovery by metadata does not load the library; a module loads
 // on first use; a wrong ABI tag, a duplicate suffix claim, a manifest without
 // an id, a library that is not a module and an unresolvable library are each

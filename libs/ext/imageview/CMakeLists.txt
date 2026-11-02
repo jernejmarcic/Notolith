@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # Image annotation, a Tier 1 module (docs/PLUGINS.md): opens an image in a tab
 # to highlight, draw on and note it. The image file is never touched; the
 # marks live in a Markdown sidecar beside it - the EPUB reader's highlights

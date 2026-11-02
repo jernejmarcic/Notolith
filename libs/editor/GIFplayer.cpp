@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// Animated GIFs in live preview, as Obsidian plays them.
 ///
 /// Every image embed - `![[x.gif]]`, `![](x.gif)`, `<img src="x.gif">`, alone

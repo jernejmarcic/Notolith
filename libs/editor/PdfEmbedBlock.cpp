@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// PDF page embeds (`![[x.pdf#page=...]]`) and `.tex` embeds.
 ///
 /// A PDF page is rendered by PdfPage off the UI thread - 20-50 ms/page,

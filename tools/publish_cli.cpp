@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Publishes a vault - or its `publish: true` part - as a static website.
 //
 //   noteAppC-publish <vault> <outdir> [--only-marked] [--home <note>]

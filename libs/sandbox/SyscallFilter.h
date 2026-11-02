@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #pragma once
 
 // The seccomp filter every bubblewrap sandbox in noteAppC hands to bwrap:

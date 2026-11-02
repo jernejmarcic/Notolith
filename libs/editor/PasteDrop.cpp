@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// Paste and drop, as Obsidian does: an image pasted or dropped is saved as
 /// an attachment and embedded, a file dropped from outside the vault is
 /// copied in and embedded, a file already in the vault is linked without

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// What Obsidian keeps on screen while its source is edited: a `$$` formula
 /// and a diagram fence (mermaid, tikz, plantuml, dot) stay drawn under the
 /// source the caret is in, and follow it as it is typed. A formula whose

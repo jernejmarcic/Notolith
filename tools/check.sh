@@ -1,6 +1,5 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # Everything a CI would run, run locally:
 #
 #   1. the default build (no networking, no encryption: docs/OFFLINE.md) and

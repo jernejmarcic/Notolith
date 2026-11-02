@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #pragma once
 
 // Helpers for the tests that guard a wall-clock budget.

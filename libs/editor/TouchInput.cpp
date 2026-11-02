@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// The editor under a finger: small targets grow while a touch press is
 /// handled (touchable), and a word selected by a long press gets two handles
 /// that drag either end of the selection, as a phone's text fields have.

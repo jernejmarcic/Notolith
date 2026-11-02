@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // libFuzzer target: a Jupyter notebook, opened as a note and merged back
 // with an edited text, as the window does on save.
 

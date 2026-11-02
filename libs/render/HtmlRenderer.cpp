@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #include "HtmlRenderer.h"
 
 #include <QRegularExpression> // used by sanitizeHtml() in both branches below

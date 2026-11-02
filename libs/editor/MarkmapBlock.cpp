@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// ```markmap fences (MarkmapBlock.h has the contract). The layout and the
 /// SVG are libs/render/Markmap.cpp's; this is the editor's side: a pool
 /// thread, the raster, and the fold state a click on a circle changes. Nothing

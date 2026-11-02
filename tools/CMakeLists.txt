@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 qt_add_executable(noteAppC_shot shot.cpp)
 target_link_libraries(noteAppC_shot PRIVATE noteAppC_ui)
 set_target_properties(noteAppC_shot PROPERTIES ENABLE_EXPORTS ON) # modules resolve host symbols here
