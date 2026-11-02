@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Runtime plugin host (docs/PLUGINS.md, Tier 2): protocol framing on its
 // own, then a real notolith-plugin-host process loading the word-stats
 // example/fixture plugin end to end - permission enforcement, a hang killed

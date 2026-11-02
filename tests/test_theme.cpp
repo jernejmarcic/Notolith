@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Colour schemes: the token overrides a custom scheme pins, and the importer
 // that lifts a palette out of an Obsidian theme's CSS.
 

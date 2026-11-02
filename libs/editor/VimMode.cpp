@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// Vim's modal editing for the note editor, optional and off by default.
 ///
 /// Hand-rolled because no vim-emulation library is installed (FakeVim ships

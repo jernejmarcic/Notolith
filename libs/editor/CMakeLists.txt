@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 add_library(noteAppC_editor STATIC
     BaseBlock.cpp
     BaseResult.h

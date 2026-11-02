@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #pragma once
 
 // Remote images in notes (docs/OFFLINE.md), only in a NOTEAPPC_WITH_NETWORK build. One object for the

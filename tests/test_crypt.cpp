@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Encrypted notes (libs/ext/crypt): the file format and the session that
 // holds the keys. Argon2id runs at libsodium's minimum here, so the suite
 // stays fast; the format stores whatever params a file was sealed with.

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #include "SettingsPage.h"
 
 #ifdef NOTEAPPC_HAVE_PANDOC
@@ -1396,8 +1395,6 @@ QWidget *SettingsPage::buildAboutPage()
     configPath->setObjectName(QStringLiteral("settingsAboutConfigPath"));
     configPath->setWordWrap(true);
 
-    auto *copyright = new QLabel(QStringLiteral(NOTEAPPC_COPYRIGHT_LINE), page);
-    copyright->setObjectName(QStringLiteral("settingsAboutCopyright"));
     auto *notice = new QLabel(QStringLiteral(NOTEAPPC_LICENCE_NOTICE), page);
     notice->setObjectName(QStringLiteral("settingsAboutNotice"));
     notice->setWordWrap(true);
@@ -1410,7 +1407,6 @@ QWidget *SettingsPage::buildAboutPage()
     layout->addSpacing(12);
     layout->addWidget(description);
     layout->addSpacing(12);
-    layout->addWidget(copyright);
     layout->addWidget(notice);
     layout->addSpacing(6);
     layout->addWidget(licence, 0, Qt::AlignLeft);
@@ -1495,7 +1491,7 @@ QLabel#settingsVaultTag {
 }
 QToolButton#settingsResetButton { color: %8; font-size: 12px; border: none; }
 QToolButton#settingsResetButton:hover { text-decoration: underline; }
-QLabel#settingsAboutDescription, QLabel#settingsAboutConfigPath, QLabel#settingsAboutCopyright,
+QLabel#settingsAboutDescription, QLabel#settingsAboutConfigPath,
 QLabel#settingsAboutNotice { color: %4; font-size: 12px; }
 QLabel#settingsRowError { color: %9; font-size: 12px; }
 )")

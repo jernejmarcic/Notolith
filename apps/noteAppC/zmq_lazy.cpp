@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // libzmq on first use. The notebook is the only caller of libzmq, and libzmq
 // drags in gnutls, p11-kit, nettle and more: 12 libraries the loader would map
 // and relocate before main() for a feature most starts never touch (47 M

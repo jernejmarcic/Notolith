@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #pragma once
 
 // Owns one kernel per language, lazily: nothing starts until the first

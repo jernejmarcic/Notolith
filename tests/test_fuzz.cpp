@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Seeded round-trip fuzz for the two promises everything else leans on:
 // the file is the truth (a note read and written back is the same bytes),
 // and the editor's incremental keystroke path (applyEdit, the shifted

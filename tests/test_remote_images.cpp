@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Remote images in notes (docs/OFFLINE.md, libs/remoteimage, libs/editor/RemoteImageBlock.cpp).
 //
 // No test reaches the network: the network manager is a QNetworkAccessManager that answers from memory and

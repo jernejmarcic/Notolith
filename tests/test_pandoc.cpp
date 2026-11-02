@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Pandoc export and import: the Markdown pre-conversion and the argument lists are pure
 // and always tested; the last tests run the real pandoc when there is one (and say so when
 // they skip), on a small note -> docx -> import round trip.

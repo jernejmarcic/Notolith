@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// Raw HTML: a top-level block (`<div>`, `<table>`, `<details>`, an `<img>`
 /// with attributes Markdown's own image syntax cannot spell) rendered by
 /// litehtml, and the handful of inline tags (`<b>`, `<kbd>`, `<span

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // libFuzzer target: the CSV/TSV parser behind `![[data.csv]]`, with the
 // limits the embed uses and without.
 

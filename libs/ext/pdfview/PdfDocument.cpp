@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // The poppler-facing half of the PDF module: everything here touches
 // poppler-qt6.h so nothing else in libs/ext/pdfview has to (PdfView.cpp
 // works entirely off PdfAnnotationData/PdfOutlineItem/PdfLinkInfo).

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #pragma once
 
 // A real diagram tool (mmdr, a JVM for PlantUML, TeX) on a machine that is

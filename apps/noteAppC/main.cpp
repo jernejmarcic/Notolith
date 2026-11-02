@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 #include <QApplication>
 #include <cstdio>
 #include <cstdlib>
@@ -204,7 +203,7 @@ std::optional<int> answeredWithoutGUI(int argc, char *argv[])
     if (options.parser.isSet(options.help) && !core.arguments().contains(QStringLiteral("--help-all")))
         options.parser.showHelp(0);
     if (options.parser.isSet(options.version)) {
-        std::printf("Notolith %s\n%s\n%s\n", NOTEAPPC_VERSION, NOTEAPPC_COPYRIGHT_LINE, NOTEAPPC_LICENCE_NOTICE);
+        std::printf("Notolith %s\n%s\n", NOTEAPPC_VERSION, NOTEAPPC_LICENCE_NOTICE);
         return 0;
     }
     // One Notolith per vault: a launch while one has that vault open (a note

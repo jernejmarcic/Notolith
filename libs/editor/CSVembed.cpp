@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 /// `![[data.csv]]` and `![[data.tsv]]`: the file drawn as a table, through
 /// the same layoutDataTable a ```` ```base ```` block's rows use - so it
 /// looks like every other table in the editor, and paintTable's row culling

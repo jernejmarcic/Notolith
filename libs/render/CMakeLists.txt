@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Copyright (C) 2026 Jernej Marčič
 # Colours fenced code blocks. Not in the Android Qt kit, so it is skipped
 # entirely when the option is off or the package is missing - CodeHighlighter
 # then returns no token formats and code still renders, monospaced and

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Jernej Marčič
 // Painting: the dot grid, groups (behind everything), edges (curves with
 // arrowheads and labels), nodes (chrome plus a cached content pixmap),
 // and the selection/hover/drag overlay on top. Also the small geometry
