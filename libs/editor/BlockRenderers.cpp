@@ -754,8 +754,23 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
 
         if (!isFoldable(view) || view.textTop <= 0)
             continue;
-        // The whole header row toggles, which is what Obsidian's callout title
-        // does; the panel it paints is a little wider than the column.
+        // A code block folds from its chevron alone; the rest of its header is
+        // a click into the block, which shows the source whole (an opened block
+        // that was folded is unfolded first, or there would be no source to show).
+        if (view.span.kind == BlockSpan::Kind::Code) {
+            if (touchable(foldHandleRect(view, left, top), 6).contains(point)) {
+                setFolded(view, !view.folded);
+                return true;
+            }
+            const QRectF bar(left - 14, top - 8, contentWidth() + 28, view.textTop + 8);
+            if (view.folded && bar.contains(point)) {
+                setFolded(view, false);
+                return false; // the press goes on to place the caret
+            }
+            continue;
+        }
+        // A callout's whole title row toggles, which is what Obsidian's does;
+        // the panel it paints is a little wider than the column.
         const QRectF header(left - 14, top - 8, contentWidth() + 28, view.textTop + 8);
         if (header.contains(point)) {
             setFolded(view, !view.folded);

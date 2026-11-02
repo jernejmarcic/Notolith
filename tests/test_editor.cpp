@@ -13897,3 +13897,65 @@ TEST(SelectAllTest, CtrlAKeepsTheViewSoTheHighlightIsSeen)
             changed += before.pixel(x, y) != after.pixel(x, y);
     EXPECT_GT(changed, 1000);
 }
+
+// --- a click on a code block's header ------------------------------------
+
+namespace {
+
+/// A note with a code block carrying options, so its header strip can fold.
+struct HeaderNote {
+    explicit HeaderNote(const QString &options)
+        : note(QStringLiteral("Intro line\n\n```python\n%1x = 1\ny = 2\n```\n\nAfter.\n").arg(options)),
+          editor(editorWith(note)),
+          inside(note.indexOf(QLatin1String("x = 1")))
+    {
+        editor->show();
+    }
+    /// The header strip's row, `fromRight` pixels in from the panel's right edge.
+    QPoint headerPoint(int fromRight) const
+    {
+        const QRectF panel = editor->blockPanelAt(inside);
+        return QPoint(int(panel.right()) - fromRight, int(panel.top()) + 16);
+    }
+    /// The chevron at the strip's right end, which is where folding is.
+    QPoint chevronPoint() const
+    {
+        const QRectF panel = editor->blockPanelAt(inside);
+        return QPoint(int(panel.right()) - 23, int(panel.top()) + 24);
+    }
+    QString note;
+    std::unique_ptr<MarkdownEditor> editor;
+    qsizetype inside;
+};
+
+} // namespace
+
+TEST(CodeHeaderClickTest, ClickingTheBarShowsTheSourceAndNeverFoldsIt)
+{
+    HeaderNote titled(QStringLiteral("#| title: t\n"));
+    ASSERT_FALSE(titled.editor->isFoldedAt(titled.inside));
+    ASSERT_FALSE(titled.editor->displayText().contains(QLatin1String("```")));
+    QTest::mouseClick(titled.editor->viewport(), Qt::LeftButton, Qt::NoModifier, titled.headerPoint(400));
+    EXPECT_FALSE(titled.editor->isFoldedAt(titled.inside)) << "a click on the bar hid the block";
+    EXPECT_TRUE(titled.editor->displayText().contains(QLatin1String("```"))) << "the fenced source shows";
+    EXPECT_GE(titled.editor->cursorOffset(), titled.note.indexOf(QLatin1String("```python")));
+    EXPECT_LE(titled.editor->cursorOffset(), titled.note.indexOf(QLatin1String("\n```\n\nAfter")));
+}
+
+TEST(CodeHeaderClickTest, ClickingTheBarOfAFoldedBlockOpensItToItsSource)
+{
+    HeaderNote folded(QStringLiteral("#| fold: true\n"));
+    ASSERT_TRUE(folded.editor->isFoldedAt(folded.inside));
+    QTest::mouseClick(folded.editor->viewport(), Qt::LeftButton, Qt::NoModifier, folded.headerPoint(400));
+    EXPECT_FALSE(folded.editor->isFoldedAt(folded.inside));
+    EXPECT_TRUE(folded.editor->displayText().contains(QLatin1String("```")));
+}
+
+TEST(CodeHeaderClickTest, TheChevronStillFolds)
+{
+    HeaderNote titled(QStringLiteral("#| title: t\n"));
+    QTest::mouseClick(titled.editor->viewport(), Qt::LeftButton, Qt::NoModifier, titled.chevronPoint());
+    EXPECT_TRUE(titled.editor->isFoldedAt(titled.inside));
+    QTest::mouseClick(titled.editor->viewport(), Qt::LeftButton, Qt::NoModifier, titled.chevronPoint());
+    EXPECT_FALSE(titled.editor->isFoldedAt(titled.inside));
+}
