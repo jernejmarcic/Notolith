@@ -426,21 +426,6 @@ void MarkdownEditor::deliverEpubCover(const QString &key, const QString &path, Q
     }
 }
 
-bool MarkdownEditor::handleFileCardClick(const BlockView &view, const QPoint &point, qreal left,
-                                         qreal top)
-{
-    if (!view.x().isFileCard)
-        return false;
-    if (!view.x().fileCardRect.translated(left, top).contains(point))
-        return false;
-#ifdef NOTEAPPC_HAVE_NETWORK
-    if (!view.x().remoteURL.isEmpty())
-        return handleRemoteImageClick(view.x().remoteURL, view.x().remoteCanLoad, view.x().fileCardRect.translated(left, top), point);
-#endif
-    emit openFileRequested(view.x().fileCardPath);
-    return true;
-}
-
 // --- .canvas, .base and anything else the window hooked up -----------------
 
 QString MarkdownEditor::fileEmbedCacheKey(const QString &path, const QString &subpath, int width) const
@@ -984,25 +969,6 @@ QSize MarkdownEditor::embedImageSizeAt(qsizetype offset) const
         return {};
     const BlockView &view = d->m_blocks[size_t(index)];
     return view.x().embedPanel && !view.x().image.isNull() ? view.x().imageSize : QSize();
-}
-
-bool MarkdownEditor::handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,
-                                          qreal top)
-{
-    for (const EmbedCell &cell : view.x().embedCells) {
-        if (!cell.rect.translated(left, top).contains(point))
-            continue;
-#ifdef NOTEAPPC_HAVE_NETWORK
-        if (!cell.remoteURL.isEmpty())
-            return handleRemoteImageClick(cell.remoteURL, cell.remoteCanLoad, cell.rect.translated(left, top), point);
-#endif
-        if (cell.isNote)
-            emit linkActivated(cell.openPath);
-        else if (!cell.openPath.isEmpty())
-            emit openFileRequested(cell.openPath);
-        return true;
-    }
-    return false;
 }
 
 } // namespace noteAppC

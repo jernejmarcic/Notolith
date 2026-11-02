@@ -1436,7 +1436,6 @@ private:
     int selectedTabOf(const TabGroup &group) const;
     std::vector<TabRect> tabsOf(const BlockView &view, qreal left, qreal top) const;
     void copyCodeBlock(const BlockView &view);
-    const BlockView *codeLabelAt(const QPoint &point) const;
     void paintCodeLabel(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     int nestingDepthAt(const BlockView &view, qsizetype source) const;
     void hideFoldedNestedCallouts(const BlockView &view, QList<Range> &hidden) const;
@@ -1521,7 +1520,29 @@ private:
     bool foldCommand(const QString &id);
     /// A fold arrow (and, folded, its ellipsis) for each site in the block.
     QList<FoldMark> foldMarksOf(const BlockView &view, qreal left, qreal top) const;
-    bool handleFoldClick(const BlockView &view, const QPoint &point, qreal left, qreal top);
+    /// What is at a point of a block: the one answer a click is dispatched on
+    /// (activateBlockHit) and the mouse cursor is read from (cursorShapeAt),
+    /// so the two cannot disagree. A new clickable element is a new Kind, a
+    /// line in blockHitAt and a case in activateBlockHit.
+    struct BlockHit {
+        enum class Kind {
+            None, // nothing a click does; `shape` is still the cursor (an arrow over chrome)
+            Fold, MediaControl, PdfNav, FileCard, EmbedCell, NotebookRun, Reference,
+            QueryCollapse, QuerySort, QueryRow, QueryBody, BaseRow, BaseBody, NestedFold,
+            CodeCopy, CodeTab, CodeChevron, CodeUnfold,
+            PropertyFold, PropertyControl, PropertyRemove, PropertyAdd, PropertyChip, PropertyValue,
+            CalloutHeader, Task
+        };
+        Kind kind = Kind::None;
+        Qt::CursorShape shape = Qt::IBeamCursor;
+        qsizetype site = 0; ///< a fold's offset, a property's index
+        int index = 0;      ///< which row, cell, chip, tab or direction
+        bool flag = false;  ///< a tab: it is the selected one
+        const ListItemSpan *item = nullptr;
+    };
+    BlockHit blockHitAt(const BlockView &view, const QPoint &point, qreal left, qreal top) const;
+    /// Does what a click on `hit` does; false when the click goes on to place the caret.
+    bool activateBlockHit(const BlockView &view, const BlockHit &hit, const QPoint &point, qreal left, qreal top);
     void paintFoldMarks(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// What the source itself says: `[!note]-` and `::: details` start folded.
     bool defaultFoldOf(const BlockView &view) const;
@@ -1672,17 +1693,11 @@ private:
     bool buildPdfBlock(BlockView &view, const QString &pdfPath, const QString &label,
                        const PdfEmbedArgs &args, int requestedWidth);
     void paintPdfEmbed(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
-    /// The previous/next controls (slides layout) or nothing; a click on
-    /// either steps pdfSlideIndex and relays out just this block.
-    bool handlePdfEmbedClick(const BlockView &view, const QPoint &point, qreal left, qreal top);
     /// What a point (block-local, below the header) means to a slides embed:
     /// -1 / +1 the button it steps, 0 swallowed with no step (the dead band
     /// along the slide's bottom edge), nothing when the embed does not claim it.
     std::optional<int> pdfNavHit(const BlockView &view, const QPointF &local) const;
     bool pdfNavCanStep(const BlockView &view, int direction) const;
-    /// A hand where a click would step, an arrow where it is swallowed,
-    /// nothing where the embed leaves the pointer to the usual rules.
-    std::optional<Qt::CursorShape> pdfNavCursorAt(const QPoint &point) const;
     /// PDF zoom (PdfEmbedBlock.cpp). The page cell under `point` (its index,
     /// else -1), with the block's index and `point` in block-local space.
     int pdfCellAt(const QPoint &point, qsizetype *block, QPointF *blockLocal) const;
@@ -1727,8 +1742,6 @@ private:
     QPixmap ensureEpubCoverAsync(const QString &path, qint64 mtime, qint64 size);
     void deliverEpubCover(const QString &key, const QString &path, QImage cover);
     void paintFileCard(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
-    bool handleFileCardClick(const BlockView &view, const QPoint &point, qreal left,
-                             qreal top);
     /// A crude, cheap binary sniff over the file's first few KB: a NUL byte,
     /// or a high enough share of bytes that are neither printable ASCII nor
     /// part of a valid UTF-8 sequence, both say "binary" the way `file(1)`
@@ -1934,8 +1947,6 @@ private:
     void pruneGIFs();
     void clearGIFs();
     void paintEmbedCells(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
-    bool handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,
-                              qreal top);
     /// A block that is one `$$...$$` formula, laid out by MicroTeX.
     bool layoutMath(BlockView &view);
     const MathSpan *displayMathOf(const BlockView &view) const;
