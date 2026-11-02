@@ -4220,10 +4220,6 @@ bool MarkdownEditor::handleMediaClick(const BlockView &view, const QPoint &point
     if (view.x().mediaPath.isEmpty())
         return false;
     const QRectF bar = mediaBarRect(view, left, top).adjusted(0, -8, 0, 8);
-    const bool onButton = mediaButtonRect(view, left, top).adjusted(-4, -4, 4, 4).contains(point)
-                          || mediaScreenRect(view, left, top).contains(point);
-    if (!onButton && !bar.contains(point))
-        return false;
     if (!MediaPlayback::isAvailable()) {
         emit openFileRequested(view.x().mediaPath);
         return true;
@@ -6677,30 +6673,6 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     fillShortRowAt(event->pos());
     if (handleBlockClick(event->pos()))
         return;
-
-    for (const BlockView &view : d->m_blocks) {
-        if (view.listTextX.empty() || !view.laidOut || view.foldHidden)
-            continue;
-        const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
-        qsizetype hiddenUntil = 0; // under a folded item
-        for (size_t at = 0; at < items.size(); ++at) {
-            const ListItemSpan &item = items[at];
-            if (item.range.start < hiddenUntil)
-                continue;
-            if (foldedItem(items, at))
-                hiddenUntil = item.range.end;
-            if (!item.task)
-                continue;
-            // A marker the caret has uncovered shows as text, with no box to click.
-            if (std::any_of(view.revealed.cbegin(), view.revealed.cend(),
-                            [&item](const Range &range) { return range.overlaps(item.marker); }))
-                continue;
-            if (touchable(checkboxRect(view, item), 3).contains(event->pos())) {
-                toggleTask(item);
-                return;
-            }
-        }
-    }
 
     d->m_goalX = -1;
     d->m_interacted = true;

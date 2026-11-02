@@ -551,21 +551,6 @@ QList<MarkdownEditor::FoldMark> MarkdownEditor::foldMarksOf(const BlockView &vie
     return marks;
 }
 
-bool MarkdownEditor::handleFoldClick(const BlockView &view, const QPoint &point, qreal left, qreal top)
-{
-    if (!d->m_foldHeading && !d->m_foldIndent)
-        return false;
-    for (const FoldMark &mark : foldMarksOf(view, left, top)) {
-        // The arrow, or the ellipsis of a folded line; the line's text still
-        // places the caret.
-        if (touchable(mark.arrow, 6).contains(point) || (mark.folded && mark.ellipsis.contains(point))) {
-            toggleFoldAt(mark.site);
-            return true;
-        }
-    }
-    return false;
-}
-
 void MarkdownEditor::paintFoldMarks(QPainter &painter, const BlockView &view, qreal left, qreal top) const
 {
     if (!d->m_foldHeading && !d->m_foldIndent)
@@ -598,6 +583,317 @@ void MarkdownEditor::paintFoldArrow(QPainter &painter, const QRectF &rect, bool 
     icon.paint(&painter, rect.toRect());
 }
 
+// What is at `point` of one block. A click acts on it (activateBlockHit) and
+// the mouse cursor is read from it (cursorShapeAt), so a pointing hand is
+// always a click that does something and the two share every rect.
+MarkdownEditor::BlockHit MarkdownEditor::blockHitAt(const BlockView &view, const QPoint &point, qreal left,
+                                                    qreal top) const
+{
+    using Kind = BlockHit::Kind;
+    BlockHit hit;
+    const auto found = [&hit](Kind kind, Qt::CursorShape shape, qsizetype site = 0, int index = 0) {
+        hit.kind = kind;
+        hit.shape = shape;
+        hit.site = site;
+        hit.index = index;
+        return hit;
+    };
+    const auto hand = [&](Kind kind, qsizetype site = 0, int index = 0) {
+        return found(kind, Qt::PointingHandCursor, site, index);
+    };
+    const auto over = [&point, this](const QRectF &rect, qreal slop = 0) {
+        return rect.isValid() && touchable(rect, slop).contains(point);
+    };
+    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+    const bool inPanel = panel.contains(point);
+    // Chrome that is not text but does not take the click either: an arrow
+    // where nothing else claims the point.
+    Qt::CursorShape chrome = Qt::IBeamCursor;
+    const auto finish = [&] {
+        hit.shape = chrome;
+        return hit;
+    };
+
+    if (d->m_foldHeading || d->m_foldIndent) {
+        for (const FoldMark &mark : foldMarksOf(view, left, top)) {
+            // The arrow, or the ellipsis of a folded line; the line's text still places the caret.
+            if (over(mark.arrow, 6) || (mark.folded && mark.ellipsis.contains(point)))
+                return hand(Kind::Fold, mark.site);
+        }
+    }
+
+    if (!view.x().mediaPath.isEmpty()) {
+        const QRectF bar = mediaBarRect(view, left, top).adjusted(0, -8, 0, 8);
+        if (mediaButtonRect(view, left, top).adjusted(-4, -4, 4, 4).contains(point)
+            || mediaScreenRect(view, left, top).contains(point) || bar.contains(point))
+            return hand(Kind::MediaControl);
+        chrome = Qt::ArrowCursor;
+    }
+    if (view.x().isPdfEmbed) {
+        chrome = Qt::ArrowCursor;
+        const QPointF local = QPointF(point) - QPointF(left, top + view.textTop);
+        if (const std::optional<int> nav = pdfNavHit(view, local)) {
+            // A hidden button's half and the dead band swallow the click, nothing more.
+            return found(Kind::PdfNav, *nav != 0 && pdfNavCanStep(view, *nav) ? Qt::PointingHandCursor : Qt::ArrowCursor,
+                         0, *nav);
+        }
+        // Over a zoomed page a drag pans it.
+        const bool onPage = d->m_pdfZoom.contains(view.span.range.start)
+                            && std::any_of(view.x().pdfCells.cbegin(), view.x().pdfCells.cend(),
+                                           [&local](const BlockExtras::PdfCell &cell) { return cell.rect.contains(local); });
+        if (onPage)
+            chrome = Qt::OpenHandCursor;
+    }
+    if (view.x().isFileCard && view.x().fileCardRect.translated(left, top).contains(point))
+        return hand(Kind::FileCard);
+    for (size_t i = 0; i < view.x().embedCells.size(); ++i) {
+        const EmbedCell &cell = view.x().embedCells[i];
+        if (!cell.rect.translated(left, top).contains(point))
+            continue;
+        bool clickable = cell.isNote || !cell.openPath.isEmpty();
+#ifdef NOTEAPPC_HAVE_NETWORK
+        clickable = clickable || !cell.remoteURL.isEmpty();
+#endif
+        return found(Kind::EmbedCell, clickable ? Qt::PointingHandCursor : Qt::ArrowCursor, 0, int(i));
+    }
+    if (!view.x().image.isNull() && inPanel)
+        chrome = Qt::ArrowCursor;
+
+    // A runnable code-file embed's own run control (NotebookEmbed part of
+    // FileEmbedBlock.cpp): the same rect notebookRunRectFor places for a
+    // fenced block's header, reached from here since an embed's own
+    // span.kind is Paragraph, not Code.
+    if (view.x().embedPanel && view.notebookEligible && over(notebookRunRectFor(view, left, top), 4))
+        return hand(Kind::NotebookRun);
+
+    // A reference block's header is the link to what it shows; the rest of
+    // it is an ordinary click, which puts the caret in and shows its source.
+    if (!view.x().referenceTarget.isEmpty()
+        && QRectF(left, top, contentWidth(), codeHeaderHeight()).contains(point))
+        return hand(Kind::Reference);
+
+    if (view.isQuery) {
+        if (over(view.x().queryCollapseRect.translated(left, top)))
+            return hand(Kind::QueryCollapse);
+        if (over(view.x().querySortRect.translated(left, top)))
+            return hand(Kind::QuerySort);
+        for (size_t i = 0; i < view.x().queryRows.size(); ++i) {
+            if (view.x().queryRows[i].rect.translated(left, top).contains(point))
+                return hand(Kind::QueryRow, 0, int(i));
+        }
+        // Anywhere else in a rendered query block: consumed rather than
+        // falling through to offsetAt(), which has no source text of its
+        // own to put a caret in - the block only shows raw source again
+        // once the caret reaches it by keyboard, the way a formula does.
+        if (top <= point.y() && point.y() <= top + view.height)
+            return found(Kind::QueryBody, Qt::ArrowCursor);
+    }
+
+    if (view.isBase) {
+        for (size_t i = 0; i < view.x().baseRows.size(); ++i) {
+            if (view.x().baseRows[i].rect.translated(left, top).contains(point))
+                return hand(Kind::BaseRow, 0, int(i));
+        }
+        // Same rationale as the query block above: a rendered base table has
+        // no source text of its own to place a caret in.
+        if (top <= point.y() && point.y() <= top + view.height)
+            return found(Kind::BaseBody, Qt::ArrowCursor);
+    }
+
+    for (const NestedCallout &nested : view.x().nested) {
+        if (nested.span->foldable && over(nestedFoldHandleRect(view, nested, left, top), 6))
+            return hand(Kind::NestedFold, nested.span->range.start);
+    }
+
+    if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
+        if (view.notebookEligible && over(notebookRunRectFor(view, left, top), 4))
+            return hand(Kind::NotebookRun);
+        const CodeLabel label = codeLabelOf(view, left, top);
+        if (label.visible && over(label.rect, 4))
+            return hand(Kind::CodeCopy);
+        const std::vector<TabRect> tabs = tabsOf(view, left, top);
+        for (const TabRect &tab : tabs) {
+            if (tab.rect.contains(point)) {
+                hand(Kind::CodeTab, 0, tab.member);
+                hit.flag = tab.selected;
+                return hit;
+            }
+        }
+        // The rest of the header strip, and the output under the listing, are
+        // not text. The strip's click shows the source, which an I-beam is not for.
+        if (!view.editedListing && hasCodeHeader(view) && view.piece == 0
+            && QRectF(left - 14, top - 8, contentWidth() + 28, view.textTop + 8).contains(point))
+            chrome = Qt::ArrowCursor;
+        for (const BlockExtras::NotebookOutputCell &cell : view.x().notebookOutputs) {
+            if (cell.rect.translated(left, top).contains(point))
+                chrome = Qt::ArrowCursor;
+        }
+    }
+
+    if (view.span.kind == BlockSpan::Kind::Frontmatter && d->m_mode != Mode::Source
+        && !d->m_properties.isEmpty()) {
+        // Folded, the single row is the only thing left to click.
+        if (over(foldHandleRect(view, left, top), 6)
+            || (view.folded && top <= point.y() && point.y() <= top + view.height))
+            return hand(Kind::PropertyFold);
+        for (const PropertyRow &row : view.x().propertyRows) {
+            if (!row.control.isNull()) {
+                if (over(row.control.translated(left, top), 4))
+                    return hand(Kind::PropertyControl, 0, row.property);
+                continue;
+            }
+            for (int i = 0; i < row.removers.size(); ++i) {
+                if (over(row.removers.at(i).translated(left, top)))
+                    return hand(Kind::PropertyRemove, row.property, i);
+            }
+            if (!row.adder.isNull() && over(row.adder.translated(left, top)))
+                return hand(Kind::PropertyAdd, row.property);
+            for (int i = 0; i < row.chips.size() && !row.removers.isEmpty(); ++i) {
+                if (over(row.chips.at(i).translated(left, top)))
+                    return hand(Kind::PropertyChip, row.property, i);
+            }
+            // The value column of a scalar: click to edit it in place.
+            const QRectF value = row.rect.translated(left, top).adjusted(kKeyColumn, 0, 0, 0);
+            if (d->m_properties.at(row.property).type != Property::Type::List && value.contains(point))
+                return found(Kind::PropertyValue, Qt::IBeamCursor, row.property);
+        }
+        if (inPanel)
+            chrome = Qt::ArrowCursor;
+        return finish();
+    }
+
+    if (isFoldable(view) && view.textTop > 0) {
+        const QRectF bar(left - 14, top - 8, contentWidth() + 28, view.textTop + 8);
+        if (view.span.kind == BlockSpan::Kind::Code) {
+            // A code block folds from its chevron alone; the rest of its header is
+            // a click into the block, which shows the source whole (an opened block
+            // that was folded is unfolded first, or there would be no source to show).
+            if (over(foldHandleRect(view, left, top), 6))
+                return hand(Kind::CodeChevron);
+            if (view.folded && bar.contains(point))
+                return found(Kind::CodeUnfold, chrome);
+        } else if (bar.contains(point)) {
+            // A callout's whole title row toggles, which is what Obsidian's
+            // does; the panel it paints is a little wider than the column.
+            return hand(Kind::CalloutHeader);
+        }
+    }
+
+    // A task's box.
+    if (!view.listTextX.empty()) {
+        for (const ListItemSpan &item : listItemsIn(view.span.range)) {
+            // A marker the caret has uncovered shows as text, with no box to click.
+            if (!item.task
+                || std::any_of(view.revealed.cbegin(), view.revealed.cend(),
+                               [&item](const Range &range) { return range.overlaps(item.marker); }))
+                continue;
+            if (over(checkboxRect(view, item), 3)) {
+                hand(Kind::Task);
+                hit.item = &item;
+                return hit;
+            }
+        }
+    }
+    return finish();
+}
+
+bool MarkdownEditor::activateBlockHit(const BlockView &view, const BlockHit &hit, const QPoint &point, qreal left,
+                                      qreal top)
+{
+    using Kind = BlockHit::Kind;
+    switch (hit.kind) {
+    case Kind::None:
+        return false;
+    case Kind::Fold:
+    case Kind::NestedFold:
+        toggleFoldAt(hit.site);
+        return true;
+    case Kind::MediaControl:
+        return handleMediaClick(view, point, left, top);
+    case Kind::PdfNav:
+        if (hit.index != 0 && pdfNavCanStep(view, hit.index)) {
+            const qsizetype key = view.span.range.start;
+            pdfSlideStep(key, hit.index);
+            d->m_pdfNavLast.insert(key, {d->m_pdfNavNow(), hit.index});
+        }
+        return true;
+    case Kind::FileCard:
+#ifdef NOTEAPPC_HAVE_NETWORK
+        if (!view.x().remoteURL.isEmpty())
+            return handleRemoteImageClick(view.x().remoteURL, view.x().remoteCanLoad,
+                                          view.x().fileCardRect.translated(left, top), point);
+#endif
+        emit openFileRequested(view.x().fileCardPath);
+        return true;
+    case Kind::EmbedCell: {
+        const EmbedCell &cell = view.x().embedCells[size_t(hit.index)];
+#ifdef NOTEAPPC_HAVE_NETWORK
+        if (!cell.remoteURL.isEmpty())
+            return handleRemoteImageClick(cell.remoteURL, cell.remoteCanLoad, cell.rect.translated(left, top), point);
+#endif
+        if (cell.isNote)
+            emit linkActivated(cell.openPath);
+        else if (!cell.openPath.isEmpty())
+            emit openFileRequested(cell.openPath);
+        return true;
+    }
+    case Kind::NotebookRun:
+        runNotebookBlockAt(view.span.range.start);
+        return true;
+    case Kind::Reference:
+        emit referenceActivated(view.x().referenceTarget);
+        return true;
+    case Kind::QueryCollapse:
+        toggleQueryCollapsed(view.span.range.start);
+        return true;
+    case Kind::QuerySort:
+        cycleQuerySort(view.span.range.start);
+        return true;
+    case Kind::QueryRow: {
+        const BlockExtras::QueryRow &row = view.x().queryRows[size_t(hit.index)];
+        emit queryResultActivated(row.path, row.offset);
+        return true;
+    }
+    case Kind::QueryBody:
+    case Kind::BaseBody:
+        return true;
+    case Kind::BaseRow:
+        emit baseRowActivated(view.x().baseRows[size_t(hit.index)].path);
+        return true;
+    case Kind::CodeCopy:
+        copyCodeBlock(view);
+        return true;
+    case Kind::CodeTab:
+        if (!hit.flag)
+            selectCodeTab(d->m_tabGroups.at(size_t(view.tabGroup)).span.start, hit.index);
+        return true; // a click on the strip never moves the caret into the group
+    case Kind::CodeChevron:
+    case Kind::PropertyFold:
+    case Kind::CalloutHeader:
+        setFolded(view, !view.folded);
+        return true;
+    case Kind::CodeUnfold:
+        setFolded(view, false);
+        return false; // the press goes on to place the caret
+    case Kind::PropertyControl:
+        toggleProperty(hit.index);
+        return true;
+    case Kind::PropertyRemove:
+        removeListItemAt(d->m_properties.at(hit.site).range.start, hit.index);
+        return true;
+    case Kind::PropertyAdd:
+        return addListItemAt(d->m_properties.at(hit.site).range.start);
+    case Kind::PropertyChip:
+        return editListItemAt(d->m_properties.at(hit.site).range.start, hit.index);
+    case Kind::PropertyValue:
+        return editPropertyAt(d->m_properties.at(hit.site).range.start);
+    case Kind::Task:
+        toggleTask(*hit.item);
+        return true;
+    }
+    return false;
+}
+
 bool MarkdownEditor::handleBlockClick(const QPoint &point)
 {
     const qreal scroll = verticalScrollBar()->value();
@@ -611,310 +907,31 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             break;
         if (!view.laidOut || view.foldHidden)
             continue;
-        if (handleFoldClick(view, point, left, top))
+        if (activateBlockHit(view, blockHitAt(view, point, left, top), point, left, top))
             return true;
-
-        if (handleMediaClick(view, point, left, top))
-            return true;
-        if (handlePdfEmbedClick(view, point, left, top))
-            return true;
-        if (handleFileCardClick(view, point, left, top))
-            return true;
-        if (handleEmbedCellClick(view, point, left, top))
-            return true;
-
-        // A runnable code-file embed's own run control (NotebookEmbed part
-        // of FileEmbedBlock.cpp): the same rect notebookRunRectFor places
-        // for a fenced block's header, reached from here instead of the
-        // Code-kind branch below since an embed's own span.kind is
-        // Paragraph, not Code.
-        if (view.x().embedPanel && view.notebookEligible) {
-            const QRectF runRect = notebookRunRectFor(view, left, top);
-            if (runRect.isValid() && touchable(runRect, 4).contains(point)) {
-                runNotebookBlockAt(view.span.range.start);
-                return true;
-            }
-        }
-
-        // A reference block's header is the link to what it shows; the rest of
-        // it is an ordinary click, which puts the caret in and shows its source.
-        if (!view.x().referenceTarget.isEmpty()
-            && QRectF(left, top, contentWidth(), codeHeaderHeight()).contains(point)) {
-            emit referenceActivated(view.x().referenceTarget);
-            return true;
-        }
-
-        if (view.isQuery) {
-            if (view.x().queryCollapseRect.isValid()
-                && touchable(view.x().queryCollapseRect.translated(left, top)).contains(point)) {
-                toggleQueryCollapsed(view.span.range.start);
-                return true;
-            }
-            if (view.x().querySortRect.isValid()
-                && touchable(view.x().querySortRect.translated(left, top)).contains(point)) {
-                cycleQuerySort(view.span.range.start);
-                return true;
-            }
-            for (const BlockExtras::QueryRow &row : view.x().queryRows) {
-                if (row.rect.translated(left, top).contains(point)) {
-                    emit queryResultActivated(row.path, row.offset);
-                    return true;
-                }
-            }
-            // Anywhere else in a rendered query block: consumed rather than
-            // falling through to offsetAt(), which has no source text of its
-            // own to put a caret in - the block only shows raw source again
-            // once the caret reaches it by keyboard, the way a formula does.
-            if (view.laidOut && top <= point.y() && point.y() <= top + view.height)
-                return true;
-        }
-
-        if (view.isBase) {
-            for (const BlockExtras::BaseRow &row : view.x().baseRows) {
-                if (row.rect.translated(left, top).contains(point)) {
-                    emit baseRowActivated(row.path);
-                    return true;
-                }
-            }
-            // Same rationale as the isQuery branch above: a rendered base
-            // table has no source text of its own to place a caret in.
-            if (view.laidOut && top <= point.y() && point.y() <= top + view.height)
-                return true;
-        }
-
-        for (const NestedCallout &nested : view.x().nested) {
-            if (nested.span->foldable
-                && touchable(nestedFoldHandleRect(view, nested, left, top), 6).contains(point)) {
-                toggleFoldAt(nested.span->range.start);
-                return true;
-            }
-        }
-
-        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
-            if (view.notebookEligible) {
-                const QRectF runRect = notebookRunRectFor(view, left, top);
-                if (runRect.isValid() && touchable(runRect, 4).contains(point)) {
-                    runNotebookBlockAt(view.span.range.start);
-                    return true;
-                }
-            }
-            const CodeLabel label = codeLabelOf(view, left, top);
-            if (label.visible && touchable(label.rect, 4).contains(point)) {
-                copyCodeBlock(view);
-                return true;
-            }
-            for (const TabRect &tab : tabsOf(view, left, top)) {
-                if (!tab.rect.contains(point))
-                    continue;
-                if (!tab.selected)
-                    selectCodeTab(d->m_tabGroups.at(size_t(view.tabGroup)).span.start, tab.member);
-                return true; // a click on the strip never moves the caret into the group
-            }
-        }
-
-        if (view.span.kind == BlockSpan::Kind::Frontmatter && d->m_mode != Mode::Source
-            && !d->m_properties.isEmpty()) {
-            const QRectF handle = foldHandleRect(view, left, top);
-            // Folded, the single row is the only thing left to click.
-            if (touchable(handle, 6).contains(point)
-                || (view.folded && top <= point.y() && point.y() <= top + view.height)) {
-                setFolded(view, !view.folded);
-                return true;
-            }
-            for (const PropertyRow &row : view.x().propertyRows) {
-                if (!row.control.isNull()) {
-                    if (touchable(row.control.translated(left, top), 4).contains(point)) {
-                        toggleProperty(row.property);
-                        return true;
-                    }
-                    continue;
-                }
-                const qsizetype at = d->m_properties.at(row.property).range.start;
-                for (int i = 0; i < row.removers.size(); ++i) {
-                    if (touchable(row.removers.at(i).translated(left, top)).contains(point)) {
-                        removeListItemAt(at, i);
-                        return true;
-                    }
-                }
-                if (!row.adder.isNull() && touchable(row.adder.translated(left, top)).contains(point)
-                    && addListItemAt(at))
-                    return true;
-                for (int i = 0; i < row.chips.size() && !row.removers.isEmpty(); ++i) {
-                    if (touchable(row.chips.at(i).translated(left, top)).contains(point) && editListItemAt(at, i))
-                        return true;
-                }
-                // The value column of a scalar: click to edit it in place.
-                const QRectF value = row.rect.translated(left, top).adjusted(kKeyColumn, 0, 0, 0);
-                if (d->m_properties.at(row.property).type != Property::Type::List
-                    && value.contains(point) && editPropertyAt(at))
-                    return true;
-            }
-            continue;
-        }
-
-        if (!isFoldable(view) || view.textTop <= 0)
-            continue;
-        // A code block folds from its chevron alone; the rest of its header is
-        // a click into the block, which shows the source whole (an opened block
-        // that was folded is unfolded first, or there would be no source to show).
-        if (view.span.kind == BlockSpan::Kind::Code) {
-            if (touchable(foldHandleRect(view, left, top), 6).contains(point)) {
-                setFolded(view, !view.folded);
-                return true;
-            }
-            const QRectF bar(left - 14, top - 8, contentWidth() + 28, view.textTop + 8);
-            if (view.folded && bar.contains(point)) {
-                setFolded(view, false);
-                return false; // the press goes on to place the caret
-            }
-            continue;
-        }
-        // A callout's whole title row toggles, which is what Obsidian's does;
-        // the panel it paints is a little wider than the column.
-        const QRectF header(left - 14, top - 8, contentWidth() + 28, view.textTop + 8);
-        if (header.contains(point)) {
-            setFolded(view, !view.folded);
-            return true;
-        }
     }
     return false;
 }
 
-// What the mouse cursor says is under `point`. It reads the same rects
-// handleBlockClick acts on, so a pointing hand is always a click that does something.
+// What the mouse cursor says is under `point`: the hit-test a click uses, plus the few
+// things a press handles before it gets to a block (a link, the `</>` button, a diagram).
 Qt::CursorShape MarkdownEditor::cursorShapeAt(const QPoint &point) const
 {
-    if (const auto nav = pdfNavCursorAt(point))
-        return *nav;
-    if (!linkAt(point).isEmpty() || codeLabelAt(point) || d->m_overEditButton || codeBlockHotspotAt(point))
-        return Qt::PointingHandCursor;
+    BlockHit hit;
     const qsizetype index = blockAtPoint(point);
-    if (index < 0)
-        return Qt::IBeamCursor;
-    const BlockView &view = d->m_blocks[size_t(index)];
-    if (!view.laidOut || view.foldHidden || view.tabHidden)
-        return Qt::IBeamCursor;
-    const qreal left = contentLeft();
-    const qreal top = view.y - verticalScrollBar()->value();
-    const auto over = [&point, this](const QRectF &rect, qreal slop = 0) {
-        return rect.isValid() && touchable(rect, slop).contains(point);
-    };
-    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
-    const bool inPanel = panel.contains(point);
-
-    if (d->m_foldHeading || d->m_foldIndent) {
-        for (const FoldMark &mark : foldMarksOf(view, left, top)) {
-            if (over(mark.arrow, 6) || (mark.folded && mark.ellipsis.contains(point)))
-                return Qt::PointingHandCursor;
-        }
+    if (index >= 0) {
+        const BlockView &view = d->m_blocks[size_t(index)];
+        if (view.laidOut && !view.foldHidden && !view.tabHidden)
+            hit = blockHitAt(view, point, contentLeft(), view.y - verticalScrollBar()->value());
     }
-
-    if (!view.x().mediaPath.isEmpty()) {
-        const QRectF bar = mediaBarRect(view, left, top).adjusted(0, -8, 0, 8);
-        const bool onButton = mediaButtonRect(view, left, top).adjusted(-4, -4, 4, 4).contains(point)
-                              || mediaScreenRect(view, left, top).contains(point);
-        return onButton || bar.contains(point) ? Qt::PointingHandCursor : Qt::ArrowCursor;
-    }
-    if (view.x().isPdfEmbed)
-        return Qt::ArrowCursor;
-    if (view.x().isFileCard)
-        return view.x().fileCardRect.translated(left, top).contains(point) ? Qt::PointingHandCursor
-                                                                           : Qt::IBeamCursor;
-    for (const EmbedCell &cell : view.x().embedCells) {
-        if (!cell.rect.translated(left, top).contains(point))
-            continue;
-        bool clickable = cell.isNote || !cell.openPath.isEmpty();
-#ifdef NOTEAPPC_HAVE_NETWORK
-        clickable = clickable || !cell.remoteURL.isEmpty();
-#endif
-        return clickable ? Qt::PointingHandCursor : Qt::ArrowCursor;
-    }
-    if (hookedEmbedBlockAt(point) >= 0)
+    // A slides embed's buttons and a zoomed page's pan come before the rest.
+    if (hit.kind == BlockHit::Kind::PdfNav || hit.shape == Qt::OpenHandCursor)
+        return hit.shape;
+    if (!linkAt(point).isEmpty() || d->m_overEditButton || codeBlockHotspotAt(point))
+        return Qt::PointingHandCursor;
+    if (hit.kind == BlockHit::Kind::None && hit.shape == Qt::IBeamCursor && hookedEmbedBlockAt(point) >= 0)
         return Qt::ArrowCursor; // a picture the window drew: nothing to type into
-    if (!view.x().image.isNull() && inPanel)
-        return Qt::ArrowCursor;
-
-    if (view.x().embedPanel && view.notebookEligible && over(notebookRunRectFor(view, left, top), 4))
-        return Qt::PointingHandCursor;
-    if (!view.x().referenceTarget.isEmpty() && QRectF(left, top, contentWidth(), codeHeaderHeight()).contains(point))
-        return Qt::PointingHandCursor;
-
-    if (view.isQuery) {
-        if (over(view.x().queryCollapseRect.translated(left, top)) || over(view.x().querySortRect.translated(left, top)))
-            return Qt::PointingHandCursor;
-        for (const BlockExtras::QueryRow &row : view.x().queryRows) {
-            if (row.rect.translated(left, top).contains(point))
-                return Qt::PointingHandCursor;
-        }
-        return Qt::ArrowCursor;
-    }
-    if (view.isBase) {
-        for (const BlockExtras::BaseRow &row : view.x().baseRows) {
-            if (row.rect.translated(left, top).contains(point))
-                return Qt::PointingHandCursor;
-        }
-        return Qt::ArrowCursor;
-    }
-    for (const NestedCallout &nested : view.x().nested) {
-        if (nested.span->foldable && over(nestedFoldHandleRect(view, nested, left, top), 6))
-            return Qt::PointingHandCursor;
-    }
-
-    if (view.span.kind == BlockSpan::Kind::Code && !view.isPluginBlock) {
-        if (view.notebookEligible && over(notebookRunRectFor(view, left, top), 4))
-            return Qt::PointingHandCursor;
-        for (const TabRect &tab : tabsOf(view, left, top)) {
-            if (tab.rect.contains(point))
-                return Qt::PointingHandCursor;
-        }
-        if (isFoldable(view) && view.textTop > 0 && over(foldHandleRect(view, left, top), 6))
-            return Qt::PointingHandCursor;
-        // The rest of the header strip, and the output under the listing, are
-        // not text: the strip's click shows the source, which is not an I-beam's job.
-        if (!view.editedListing && hasCodeHeader(view) && view.piece == 0
-            && QRectF(left - 14, top - 8, contentWidth() + 28, view.textTop + 8).contains(point))
-            return Qt::ArrowCursor;
-        for (const BlockExtras::NotebookOutputCell &cell : view.x().notebookOutputs) {
-            if (cell.rect.translated(left, top).contains(point))
-                return Qt::ArrowCursor;
-        }
-    }
-
-    if (view.span.kind == BlockSpan::Kind::Frontmatter && d->m_mode != Mode::Source && !d->m_properties.isEmpty()) {
-        if (over(foldHandleRect(view, left, top), 6) || (view.folded && inPanel))
-            return Qt::PointingHandCursor;
-        for (const PropertyRow &row : view.x().propertyRows) {
-            if (over(row.control.translated(left, top), 4) || over(row.adder.translated(left, top)))
-                return Qt::PointingHandCursor;
-            for (int i = 0; i < row.removers.size(); ++i) {
-                if (over(row.removers.at(i).translated(left, top)))
-                    return Qt::PointingHandCursor;
-            }
-            for (int i = 0; i < row.chips.size() && !row.removers.isEmpty(); ++i) {
-                if (over(row.chips.at(i).translated(left, top), 0))
-                    return Qt::PointingHandCursor;
-            }
-            const QRectF value = row.rect.translated(left, top).adjusted(kKeyColumn, 0, 0, 0);
-            if (d->m_properties.at(row.property).type != Property::Type::List && value.contains(point))
-                return Qt::IBeamCursor;
-        }
-        return inPanel ? Qt::ArrowCursor : Qt::IBeamCursor;
-    }
-
-    // A task's box.
-    if (!view.listTextX.empty()) {
-        for (const ListItemSpan &item : listItemsIn(view.span.range)) {
-            if (item.task && std::none_of(view.revealed.cbegin(), view.revealed.cend(),
-                                          [&item](const Range &range) { return range.overlaps(item.marker); })
-                && over(checkboxRect(view, item), 3))
-                return Qt::PointingHandCursor;
-        }
-    }
-    // A callout's title row folds, as a click there does.
-    if (view.span.kind != BlockSpan::Kind::Code && isFoldable(view) && view.textTop > 0
-        && QRectF(left - 14, top - 8, contentWidth() + 28, view.textTop + 8).contains(point))
-        return Qt::PointingHandCursor;
-    return Qt::IBeamCursor;
+    return hit.shape;
 }
 
 // --- the properties table -------------------------------------------------
@@ -1995,25 +2012,6 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
     label.slotLeft = right - qMax(width, metrics.horizontalAdvance(tr("Copied")));
     label.visible = copied || hovered;
     return label;
-}
-
-const MarkdownEditor::BlockView *MarkdownEditor::codeLabelAt(const QPoint &point) const
-{
-    const qreal scroll = verticalScrollBar()->value();
-    const qreal left = contentLeft();
-    for (const BlockView &view : d->m_blocks) {
-        const qreal top = view.y - scroll;
-        if (top + view.height < 0)
-            continue;
-        if (top > viewport()->height())
-            break;
-        if (view.span.kind != BlockSpan::Kind::Code || !view.laidOut || view.foldHidden)
-            continue;
-        const CodeLabel label = codeLabelOf(view, left, top);
-        if (label.visible && touchable(label.rect, 4).contains(point))
-            return &view;
-    }
-    return nullptr;
 }
 
 void MarkdownEditor::copyCodeBlock(const BlockView &view)

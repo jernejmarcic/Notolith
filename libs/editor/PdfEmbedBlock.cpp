@@ -596,40 +596,6 @@ bool MarkdownEditor::pdfNavCanStep(const BlockView &view, int direction) const
     return direction < 0 ? view.x().pdfSlideIndex > 0 : view.x().pdfSlideIndex + 1 < view.x().pdfSlideCount;
 }
 
-bool MarkdownEditor::handlePdfEmbedClick(const BlockView &view, const QPoint &point, qreal left,
-                                         qreal top)
-{
-    const std::optional<int> hit = pdfNavHit(view, QPointF(point) - QPointF(left, top + view.textTop));
-    if (!hit)
-        return false;
-    // A hidden button's half and the dead band swallow the click, nothing more.
-    if (*hit != 0 && pdfNavCanStep(view, *hit)) {
-        const qsizetype key = view.span.range.start;
-        pdfSlideStep(key, *hit);
-        d->m_pdfNavLast.insert(key, {d->m_pdfNavNow(), *hit});
-    }
-    return true;
-}
-
-std::optional<Qt::CursorShape> MarkdownEditor::pdfNavCursorAt(const QPoint &point) const
-{
-    const qsizetype index = blockAtPoint(point);
-    if (index < 0)
-        return std::nullopt;
-    const BlockView &view = d->m_blocks[size_t(index)];
-    const QPointF origin(contentLeft(), view.y - verticalScrollBar()->value() + view.textTop);
-    const QPointF local = QPointF(point) - origin;
-    const std::optional<int> hit = pdfNavHit(view, local);
-    if (!hit) {
-        // Over a zoomed page a drag pans it.
-        const bool onPage = view.x().isPdfEmbed && d->m_pdfZoom.contains(view.span.range.start)
-                            && std::any_of(view.x().pdfCells.cbegin(), view.x().pdfCells.cend(),
-                                           [&local](const BlockExtras::PdfCell &cell) { return cell.rect.contains(local); });
-        return onPage ? std::optional<Qt::CursorShape>(Qt::OpenHandCursor) : std::nullopt;
-    }
-    return *hit != 0 && pdfNavCanStep(view, *hit) ? Qt::PointingHandCursor : Qt::ArrowCursor;
-}
-
 MarkdownEditor::PdfEmbedInfo MarkdownEditor::pdfEmbedInfoAt(qsizetype offset) const
 {
     PdfEmbedInfo info;
