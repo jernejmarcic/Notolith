@@ -8687,7 +8687,7 @@ struct FakeSpelling {
 
 bool underlined(const MarkdownEditor &editor, qsizetype offset)
 {
-    return editor.formatAt(offset).underlineStyle() == QTextCharFormat::SpellCheckUnderline;
+    return editor.spellWaveAt(offset).isValid();
 }
 
 } // namespace
@@ -14011,4 +14011,44 @@ TEST(CursorShapeTest, CopyAndTheChevronAreHands)
     send(editor->viewport(), QEvent::MouseMove, QPoint(int(panel.left()) + 90, int(panel.center().y())), Qt::NoButton);
     EXPECT_EQ(editor->cursorShapeAt(QPoint(int(panel.right()) - 30, int(panel.top()) + 14)), Qt::PointingHandCursor)
         << "Copy";
+}
+
+TEST(SpellingTest, TheWaveIsTheThemesErrorRedAndVisibleInSourceModeToo)
+{
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here and `codee` and **bold wrds**\n\n```\nwrds\n```\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    const qsizetype word = note.indexOf(QLatin1String("wrds")) + 1;
+    const QColor error = Theme::builtin().color(QStringLiteral("--text-error"));
+    ASSERT_TRUE(error.isValid());
+    EXPECT_EQ(editor->spellWaveAt(word), QColor(error.red(), error.green(), error.blue(), 255)) << "full opacity";
+
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_TRUE(underlined(*editor, word)) << "prose in source mode";
+    EXPECT_TRUE(underlined(*editor, note.indexOf(QLatin1String("wrds"), word + 4) + 1)) << "inside the bold markers";
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("codee")) + 1)) << "inline code";
+    EXPECT_FALSE(underlined(*editor, note.lastIndexOf(QLatin1String("wrds")) + 1)) << "a listing";
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("good")) + 1));
+}
+
+TEST(SpellingTest, TheWaveIsDrawnThickEnoughToSee)
+{
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    editor->show();
+    const QImage shot = editor->viewport()->grab().toImage();
+    // Pixels near the error red, full strength: a 1 px antialiased line has few; a 1.5 px+ wave has a core of them.
+    const QColor error = Theme::builtin().color(QStringLiteral("--text-error"));
+    int strong = 0;
+    for (int y = 0; y < shot.height(); ++y) {
+        for (int x = 0; x < shot.width(); ++x) {
+            const QColor c = shot.pixelColor(x, y);
+            strong += qAbs(c.red() - error.red()) < 24 && qAbs(c.green() - error.green()) < 24
+                      && qAbs(c.blue() - error.blue()) < 24;
+        }
+    }
+    EXPECT_GT(strong, 12);
 }

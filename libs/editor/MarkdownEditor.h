@@ -366,6 +366,9 @@ public:
     /// range covering it; empty when its block has no layout yet. The way to
     /// assert what colour a token got without comparing pixels.
     QTextCharFormat formatAt(qsizetype sourceOffset) const;
+    /// The colour of the wavy underline of the misspelt word at `sourceOffset`;
+    /// invalid where there is none.
+    QColor spellWaveAt(qsizetype sourceOffset) const;
 
     /// Height of the whole note as it is currently laid out. What the scroll
     /// bar is built from, and the only honest way to assert block spacing.

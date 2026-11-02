@@ -1345,6 +1345,11 @@ QTextCharFormat MarkdownEditor::formatAt(qsizetype sourceOffset) const
     return merged;
 }
 
+QColor MarkdownEditor::spellWaveAt(qsizetype sourceOffset) const
+{
+    return formatAt(sourceOffset).property(kSpellWaveProperty).value<QColor>();
+}
+
 void MarkdownEditor::enterBlockAt(qsizetype offset)
 {
     d->m_interacted = true;
@@ -2126,8 +2131,6 @@ QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view, bool typing) 
     default:
         return words; // code, maths, tables, properties: not prose
     }
-    if (d->m_mode == Mode::Source)
-        return words;
 
     // A run of letters, with apostrophes inside it ("don't"), standing on its
     // own: part of "abc123" or "snake_case" is not a word to check.
@@ -2198,9 +2201,13 @@ void MarkdownEditor::appendSpellingFormats(const BlockView &view,
 {
     if (!d->m_spelling.isCorrect)
         return;
+    // The theme's error red, whole; a plain red where the theme has none.
+    QColor error = d->m_theme.color(QStringLiteral("--text-error"));
+    if (!error.isValid())
+        error = Qt::red;
+    error.setAlpha(255);
     QTextCharFormat underline;
-    underline.setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
-    underline.setUnderlineColor(d->m_theme.color(QStringLiteral("--text-error")));
+    underline.setProperty(kSpellWaveProperty, error);
     for (const Range &source : checkedWordsOf(view)) {
         if (d->m_spelling.isCorrect(d->m_text.mid(source.start, source.length())))
             continue;
@@ -2484,6 +2491,40 @@ void strikeThrough(QTextCharFormat &format, const Theme &theme)
         format.setProperty(kStrikeLineProperty, line);
     else
         format.setFontStrikeOut(true);
+}
+
+void paintSpellWaves(QPainter &painter, const QTextLayout &layout, const QPointF &origin)
+{
+    const QFontMetricsF metrics(layout.font());
+    // Thickness follows the font: 1.5 px at the default size, more on a larger one.
+    const qreal width = qMax<qreal>(1.5, metrics.height() / 11);
+    const qreal amplitude = width * 1.1;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    for (const QTextLayout::FormatRange &range : layout.formats()) {
+        const QVariant colour = range.format.property(kSpellWaveProperty);
+        if (!colour.isValid())
+            continue;
+        painter.setPen(QPen(colour.value<QColor>(), width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const int end = range.start + range.length;
+        for (QTextLine row = layout.lineForTextPosition(range.start); row.isValid() && row.textStart() < end;
+             row = layout.lineAt(row.lineNumber() + 1)) {
+            const qreal from = origin.x() + row.cursorToX(qMax(range.start, row.textStart()));
+            const qreal to = origin.x() + row.cursorToX(qMin(end, row.textStart() + row.textLength()));
+            // Just under the baseline, but inside the line.
+            const qreal middle = qMin(origin.y() + row.y() + row.ascent() + row.descent() * 0.8 + amplitude + width / 2,
+                                      origin.y() + row.y() + row.height() - amplitude - width);
+            QPainterPath wave;
+            wave.moveTo(from, middle);
+            bool up = true;
+            for (qreal x = from + amplitude; x < to + amplitude; x += amplitude) {
+                wave.lineTo(qMin(x, to), middle + (up ? -amplitude : amplitude) / 2);
+                up = !up;
+            }
+            painter.drawPath(wave);
+        }
+    }
+    painter.restore();
 }
 
 void paintStrikeLines(QPainter &painter, const QTextLayout &layout, const QPointF &origin)
@@ -5260,6 +5301,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             view.layout->draw(&painter, QPointF(textLeft, top + drop), selectionRanges);
             if (strikeLines)
                 paintStrikeLines(painter, *view.layout, QPointF(textLeft, top + drop));
+            paintSpellWaves(painter, *view.layout, QPointF(textLeft, top + drop));
             paintInlineMaths(painter, view, textLeft, top + drop);
             paintAnchorSeparators(painter, view, textLeft, top + drop);
             paintFootnoteMarks(painter, view, textLeft, top + drop);

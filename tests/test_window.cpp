@@ -6285,7 +6285,7 @@ TEST_F(WindowTest, AWordAddedInOneTabStopsBeingUnderlinedInTheOther)
     ASSERT_NE(first, second);
     const qsizetype at = first->noteText().indexOf(QLatin1String("zzqxv")) + 1;
     const auto underlined = [at](const MarkdownEditor *editor) {
-        return editor->formatAt(at).underlineStyle() == QTextCharFormat::SpellCheckUnderline;
+        return editor->spellWaveAt(at).isValid();
     };
     // The dictionary loads off the UI thread after the first paint.
     const bool loaded = QTest::qWaitFor([&] { return underlined(first) && underlined(second); }, 5000);

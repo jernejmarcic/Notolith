@@ -74,6 +74,14 @@ void strikeThrough(QTextCharFormat &format, const Theme &theme);
 /// Draws the lines `kStrikeLineProperty` asked for over `layout`, drawn at `origin`.
 void paintStrikeLines(QPainter &painter, const QTextLayout &layout, const QPointF &origin);
 
+/// A format property: the colour of a misspelt word's wavy underline. Qt's own
+/// spell-check underline is one device pixel whatever the font, too faint to
+/// see, so the wave is drawn by paintSpellWaves and the format has no underline.
+inline constexpr int kSpellWaveProperty = QTextFormat::UserProperty + 2;
+/// Draws the waves `kSpellWaveProperty` asked for under `layout`, drawn at `origin`:
+/// at least 1.5 px thick, thicker with the font.
+void paintSpellWaves(QPainter &painter, const QTextLayout &layout, const QPointF &origin);
+
 /// The tallest an explicit `height` / `|WxH` may draw an image, in px.
 inline constexpr qreal kMaxEmbedHeight = 4096;
 
