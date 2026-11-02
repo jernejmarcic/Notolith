@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QTemporaryDir>
 
@@ -696,4 +697,44 @@ TEST(UserColours, darkAndLightApplySeparatelyAndOutrankAScheme)
     settings.insert(QStringLiteral("appearance.boldColorDark"), QStringLiteral("rgba(255, 0, 0, 0.5)"));
     EXPECT_EQ(h1(Theme::Mode::Dark).overrides().value(QStringLiteral("--bold-color")),
               QStringLiteral("rgba(255, 0, 0, 0.5)"));
+}
+
+// A theme.css in an untrusted vault is parsed when the vault opens, so hostile input must cost next to nothing.
+TEST(SchemeTest, AHostileThemeFileIsParsedQuicklyAndGivesNoColours)
+{
+    const auto timed = [](const QString &css, qint64 *elapsed) {
+        QElapsedTimer timer;
+        timer.start();
+        const QHash<QString, QString> tokens = Scheme::parseObsidianCSS(css, Theme::Mode::Dark);
+        *elapsed = timer.elapsed();
+        return tokens;
+    };
+    qint64 elapsed = 0;
+
+    // Every `{` used to walk to the end of the file for its matching brace.
+    EXPECT_TRUE(timed(QString(4 << 20, QLatin1Char('{')), &elapsed).isEmpty());
+    EXPECT_LT(elapsed, 1000);
+
+    // One huge value, and a declaration of every other kB pointing at it.
+    QString amplify = QStringLiteral(".theme-dark { --big: ") + QString(4 << 20, QLatin1Char('x'))
+                      + QStringLiteral(";\n");
+    for (int i = 0; i < 100000; ++i)
+        amplify += QStringLiteral("--a%1: var(--big);\n").arg(i);
+    amplify += QStringLiteral("}\n");
+    EXPECT_TRUE(timed(amplify, &elapsed).isEmpty());
+    EXPECT_LT(elapsed, 1000);
+
+    // A value that doubles at every step: bounded by the size and the substitutions allowed.
+    QString doubling = QStringLiteral(".theme-dark { --v0: #fff;\n");
+    for (int i = 1; i < 200; ++i)
+        doubling += QStringLiteral("--v%1: var(--v%2) var(--v%2);\n").arg(i).arg(i - 1);
+    doubling += QStringLiteral("}\n");
+    timed(doubling, &elapsed);
+    EXPECT_LT(elapsed, 1000);
+
+    // A normal theme still parses.
+    const QHash<QString, QString> normal =
+        timed(QStringLiteral(".theme-dark { --color-base-00: #000; --background-primary: var(--color-base-00); }"),
+              &elapsed);
+    EXPECT_EQ(normal.value(QStringLiteral("--background-primary")), QStringLiteral("#000000"));
 }

@@ -73,7 +73,8 @@ public:
     static QString normaliseColor(const QString &value);
 
 private:
-    static QString resolveVars(const QString &value, const QHash<QString, QString> &raw,
+    /// `budget` is the substitutions left for the whole file: a hostile theme cannot make this cost more.
+    static QString resolveVars(const QString &value, const QHash<QString, QString> &raw, int *budget,
                                int depth = 0);
 };
 
