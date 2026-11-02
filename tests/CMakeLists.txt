@@ -314,23 +314,26 @@ target_link_libraries(test_math PRIVATE noteAppC_editor noteAppC_render Qt6::Tes
 add_test(NAME math COMMAND test_math)
 set_tests_properties(math PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-add_executable(test_demo test_demo.cpp)
-target_link_libraries(test_demo PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
-target_compile_definitions(test_demo PRIVATE NOTEAPPC_DEMO_VAULT_PATH="${CMAKE_SOURCE_DIR}/demo"
-                                            NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
-foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
-    if(TARGET ${module})
-        target_link_libraries(test_demo PRIVATE ${module})
+# demo/ is a local vault kept out of the repository; the test runs where it exists.
+if(EXISTS ${CMAKE_SOURCE_DIR}/demo)
+    add_executable(test_demo test_demo.cpp)
+    target_link_libraries(test_demo PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+    target_compile_definitions(test_demo PRIVATE NOTEAPPC_DEMO_VAULT_PATH="${CMAKE_SOURCE_DIR}/demo"
+                                                NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
+    foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
+        if(TARGET ${module})
+            target_link_libraries(test_demo PRIVATE ${module})
+        endif()
+    endforeach()
+    add_test(NAME demo COMMAND test_demo)
+    set_tests_properties(demo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # The demo vault's PDF opens in the PDF viewer module and its embeds render through libnotolith-pdfpage.so.
+    if(TARGET notolith-pdfview)
+        target_compile_definitions(test_demo PRIVATE NOTEAPPC_HAVE_PDFVIEW)
+        set_target_properties(test_demo PROPERTIES ENABLE_EXPORTS ON)
+        add_dependencies(test_demo notolith-pdfview)
+        set_property(TEST demo APPEND PROPERTY ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
     endif()
-endforeach()
-add_test(NAME demo COMMAND test_demo)
-set_tests_properties(demo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-# The demo vault's PDF opens in the PDF viewer module and its embeds render through libnotolith-pdfpage.so.
-if(TARGET notolith-pdfview)
-    target_compile_definitions(test_demo PRIVATE NOTEAPPC_HAVE_PDFVIEW)
-    set_target_properties(test_demo PROPERTIES ENABLE_EXPORTS ON)
-    add_dependencies(test_demo notolith-pdfview)
-    set_property(TEST demo APPEND PROPERTY ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
 endif()
 set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
