@@ -11,8 +11,7 @@ software centres.
 
 `cmake --install <build> --prefix /usr` puts the binary (`notolith`) in `bin/`,
 the desktop file in `share/applications/`, the metainfo in `share/metainfo/`,
-the licence and third-party notices in `share/licenses/notolith/`, the demo
-asset notice in `share/doc/notolith/` and the plugin host (`notolith-plugin-host`)
+the licence and third-party notices in `share/licenses/notolith/` and the plugin host (`notolith-plugin-host`)
 in `<libexecdir>/notolith/`. The modules go to `<libdir>/notolith/modules/`.
 
 Earlier Flatpak and AppImage recipes were untested and were removed; they are

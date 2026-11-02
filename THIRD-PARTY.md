@@ -21,7 +21,6 @@ CMake file given; none of it is copied into this repository.
 |---|---|---|
 | Lucide icons | ISC | `libs/theme/icons/` (notice in `libs/theme/icons/LICENSE`; the app icon `noteAppC.svg` is the project's own, GPL-3.0-or-later) |
 | Peer-to-peer link layer (the author's Hearth project) | GPL-3.0-or-later | `libs/ext/link/` |
-| Demo vault assets | per file, see `docs/DEMO-ASSETS.md` | `demo/Embeds/assets/` |
 
 ## Optional builds
 

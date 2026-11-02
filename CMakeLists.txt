@@ -539,11 +539,9 @@ if(NOT ANDROID)
     # What software centres read to describe the app.
     install(FILES packaging/io.github.jernejmarcic.Notolith.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
-    # The licence, the third-party notices and where the demo vault's assets came from.
+    # The licence and the third-party notices.
     install(FILES LICENSE THIRD-PARTY.md
         DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/notolith)
-    install(FILES docs/DEMO-ASSETS.md
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/notolith)
     # The AI plugin (off by default, built only with NOTEAPPC_WITH_AI_PLUGIN, never installed by default) installs
     # its whole directory, library and plugin.ini, under the library directory: PluginRegistry::pluginsRoots()
     # also scans <libdir>/notolith/plugins. An install of it still does not enable it; that is the user opting
