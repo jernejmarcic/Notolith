@@ -6923,10 +6923,17 @@ void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
         return;
     }
 
-    // Select the word the first click landed on. By now that click's release
-    // may have revealed its block's syntax and moved the text, so the pointer
-    // is no longer a reliable way to find the word the reader aimed at.
-    selectWordAt(d->m_pressOffset);
+    // Select the line the first click landed on, without its newline (a table
+    // cell keeps the word: its line is the whole row). By now that click's
+    // release may have revealed its block's syntax and moved the text, so the
+    // pointer is no longer a reliable way to find the line the reader aimed at.
+    if (tableCellAt(d->m_pressOffset).row >= 0) {
+        selectWordAt(d->m_pressOffset);
+        return;
+    }
+    const qsizetype line = d->m_lines.lineAt(d->m_pressOffset);
+    d->m_anchor = d->m_lines.lineStart(line);
+    moveCursor(d->m_lines.lineEnd(line), true);
 }
 
 void MarkdownEditor::selectWordAt(qsizetype offset)

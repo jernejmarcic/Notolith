@@ -7192,10 +7192,10 @@ TEST(RevealTest, AKeyboardSelectionRendersAgain)
     EXPECT_EQ(editor->displayText(), rendered);
 }
 
-TEST(RevealTest, DoubleClickSelectsTheWordThatWasAimedAt)
+TEST(RevealTest, DoubleClickSelectsTheLineThatWasAimedAt)
 {
     // The first click's release reveals the block, which shifts everything
-    // after the markers four characters to the right. The word selected has
+    // after the markers four characters to the right. The line selected has
     // to be the one under the pointer before that happened.
     auto editor = editorWith(kRevealNote);
     const QString rendered = editor->displayText();
@@ -7211,7 +7211,20 @@ TEST(RevealTest, DoubleClickSelectsTheWordThatWasAimedAt)
     send(viewport, QEvent::MouseButtonDblClick, onWords, Qt::LeftButton);
     send(viewport, QEvent::MouseButtonRelease, onWords, Qt::NoButton);
 
-    EXPECT_EQ(editor->selectedText(), QStringLiteral("words"));
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("Some **bold** words to select across."));
+}
+
+TEST(RevealTest, DoubleClickSelectsTheWholeLineButNotItsNewline)
+{
+    const QString note = QStringLiteral("first line\nsecond line here\nthird\n");
+    auto editor = editorWith(note);
+    const QPoint onWord = firstLinePoint(*editor, 10);
+    QWidget *viewport = editor->viewport();
+    send(viewport, QEvent::MouseButtonPress, onWord, Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonRelease, onWord, Qt::NoButton);
+    send(viewport, QEvent::MouseButtonDblClick, onWord, Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonRelease, onWord, Qt::NoButton);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("first line")) << "one source line, no newline";
 }
 
 // --- style files reload live ----------------------------------------------
