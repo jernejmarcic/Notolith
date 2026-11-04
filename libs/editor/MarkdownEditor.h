@@ -1266,6 +1266,9 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     /// Selects the word around `offset`, for a double-click or a long press.
     void selectWordAt(qsizetype offset);
+    /// A press just after a double click, in the same place: selects that
+    /// line and returns true.
+    bool tripleClickAt(const QPoint &point);
     void wheelEvent(QWheelEvent *event) override;
     bool viewportEvent(QEvent *event) override; ///< a touchpad's pinch zooms a PDF page
     void focusInEvent(QFocusEvent *event) override;

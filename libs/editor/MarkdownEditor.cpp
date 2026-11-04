@@ -30,6 +30,7 @@
 #include <QRegion>
 #include <QPainterPath>
 #include <QGuiApplication>
+#include <QStyleHints>
 #include <QScrollBar>
 #include <QScroller>
 #include <QInputDevice>
@@ -6689,6 +6690,10 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
 
     d->m_goalX = -1;
     d->m_interacted = true;
+    if (!event->modifiers().testFlag(Qt::ShiftModifier) && tripleClickAt(event->pos())) {
+        viewport()->update();
+        return;
+    }
     // Measured against the layout the reader is looking at now, before this
     // click can change what is revealed. A double-click selects the word
     // found here, not under a layout the first click has since shifted.
@@ -6953,17 +6958,32 @@ void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
         return;
     }
 
-    // Select the line the first click landed on, without its newline (a table
-    // cell keeps the word: its line is the whole row). By now that click's
-    // release may have revealed its block's syntax and moved the text, so the
-    // pointer is no longer a reliable way to find the line the reader aimed at.
-    if (tableCellAt(d->m_pressOffset).row >= 0) {
-        selectWordAt(d->m_pressOffset);
-        return;
+    // Select the word the first click landed on. By now that click's release
+    // may have revealed its block's syntax and moved the text, so the pointer
+    // is no longer a reliable way to find the word the reader aimed at.
+    selectWordAt(d->m_pressOffset);
+    d->m_doubleClicked.start();
+    d->m_doubleClickPoint = event->pos();
+    d->m_doubleClickOffset = d->m_pressOffset;
+}
+
+bool MarkdownEditor::tripleClickAt(const QPoint &point)
+{
+    if (!d->m_doubleClicked.isValid()
+        || d->m_doubleClicked.elapsed() > QGuiApplication::styleHints()->mouseDoubleClickInterval()
+        || (point - d->m_doubleClickPoint).manhattanLength() > QApplication::startDragDistance())
+        return false;
+    d->m_doubleClicked.invalidate();
+    // The line, without its newline; a table cell keeps the word, its line
+    // is the whole row.
+    if (tableCellAt(d->m_doubleClickOffset).row >= 0) {
+        selectWordAt(d->m_doubleClickOffset);
+        return true;
     }
-    const qsizetype line = d->m_lines.lineAt(d->m_pressOffset);
+    const qsizetype line = d->m_lines.lineAt(d->m_doubleClickOffset);
     d->m_anchor = d->m_lines.lineStart(line);
     moveCursor(d->m_lines.lineEnd(line), true);
+    return true;
 }
 
 void MarkdownEditor::selectWordAt(qsizetype offset)

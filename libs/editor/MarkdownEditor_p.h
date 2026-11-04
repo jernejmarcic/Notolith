@@ -1218,6 +1218,11 @@ std::function<QString(qsizetype)> m_inlineScope;
     bool m_pressing = false;
     /// Where the last press landed, in source coordinates.
     qsizetype m_pressOffset = 0;
+    /// The last double click: a press soon after, in the same place, is a
+    /// triple click and selects that line.
+    QElapsedTimer m_doubleClicked;
+    QPoint m_doubleClickPoint;
+    qsizetype m_doubleClickOffset = 0;
     /// A finger held still on the text selects the word under it, the way
     /// a double-click does with a mouse. Only presses from a touchscreen.
     QTimer m_longPress;

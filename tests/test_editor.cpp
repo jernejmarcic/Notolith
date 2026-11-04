@@ -7216,10 +7216,10 @@ TEST(RevealTest, AKeyboardSelectionRendersAgain)
     EXPECT_EQ(editor->displayText(), rendered);
 }
 
-TEST(RevealTest, DoubleClickSelectsTheLineThatWasAimedAt)
+TEST(RevealTest, DoubleClickSelectsTheWordThatWasAimedAt)
 {
     // The first click's release reveals the block, which shifts everything
-    // after the markers four characters to the right. The line selected has
+    // after the markers four characters to the right. The word selected has
     // to be the one under the pointer before that happened.
     auto editor = editorWith(kRevealNote);
     const QString rendered = editor->displayText();
@@ -7235,10 +7235,22 @@ TEST(RevealTest, DoubleClickSelectsTheLineThatWasAimedAt)
     send(viewport, QEvent::MouseButtonDblClick, onWords, Qt::LeftButton);
     send(viewport, QEvent::MouseButtonRelease, onWords, Qt::NoButton);
 
-    EXPECT_EQ(editor->selectedText(), QStringLiteral("Some **bold** words to select across."));
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("words"));
 }
 
-TEST(RevealTest, DoubleClickSelectsTheWholeLineButNotItsNewline)
+TEST(RevealTest, OneClickPlacesTheCaretAndSelectsNothing)
+{
+    const QString note = QStringLiteral("first line\nsecond line here\nthird\n");
+    auto editor = editorWith(note);
+    const QPoint onWord = firstLinePoint(*editor, 10);
+    QWidget *viewport = editor->viewport();
+    send(viewport, QEvent::MouseButtonPress, onWord, Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonRelease, onWord, Qt::NoButton);
+    EXPECT_TRUE(editor->selectedText().isEmpty());
+    EXPECT_EQ(viewport->cursor().shape(), Qt::IBeamCursor);
+}
+
+TEST(RevealTest, TripleClickSelectsTheWholeLineButNotItsNewline)
 {
     const QString note = QStringLiteral("first line\nsecond line here\nthird\n");
     auto editor = editorWith(note);
@@ -7247,6 +7259,9 @@ TEST(RevealTest, DoubleClickSelectsTheWholeLineButNotItsNewline)
     send(viewport, QEvent::MouseButtonPress, onWord, Qt::LeftButton);
     send(viewport, QEvent::MouseButtonRelease, onWord, Qt::NoButton);
     send(viewport, QEvent::MouseButtonDblClick, onWord, Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonRelease, onWord, Qt::NoButton);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("first"));
+    send(viewport, QEvent::MouseButtonPress, onWord, Qt::LeftButton);
     send(viewport, QEvent::MouseButtonRelease, onWord, Qt::NoButton);
     EXPECT_EQ(editor->selectedText(), QStringLiteral("first line")) << "one source line, no newline";
 }
