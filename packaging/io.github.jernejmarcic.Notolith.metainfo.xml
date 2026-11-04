@@ -52,8 +52,8 @@
     <control>keyboard</control>
   </supports>
   <content_rating type="oars-1.1"/>
-  <!-- AppStream has no hyphen in a version: 0.1.13~beta is 0.1.13-beta, and sorts before 0.1.13. -->
+  <!-- AppStream has no hyphen in a version: 0.1.14~beta is 0.1.14-beta, and sorts before 0.1.14. -->
   <releases>
-    <release version="0.1.13~beta" date="2026-11-02" type="development"/>
+    <release version="0.1.14~beta" date="2026-11-04" type="development"/>
   </releases>
 </component>
