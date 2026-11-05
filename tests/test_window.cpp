@@ -3683,6 +3683,24 @@ TEST_F(WindowTest, RenamingRightAfterATimerSaveRewritesTheLinkWithoutWaitingForT
     EXPECT_EQ(indexed.size() - before, 1) << "the rename's own announcement, no scan applied meanwhile";
 }
 
+TEST_F(WindowTest, TheInlineTitleFollowsTheLineWidthSetting)
+{
+    write(QStringLiteral("Note.md"), "Text.\n");
+    MainWindow window;
+    window.resize(1600, 900);
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Note.md")));
+    QLineEdit *title = titleOf(window.editor());
+    ASSERT_NE(title, nullptr);
+    command(window, "app:open-settings")->trigger();
+    QSpinBox *spin = nullptr;
+    WAIT_TRUE((spin = settingsWidget<QSpinBox>(window, QStringLiteral("settingsSpin_editor.contentWidth"))) != nullptr, 3000);
+    spin->setValue(1000);
+    const int side = qMax(24, (window.editor()->width() - 1000) / 2);
+    EXPECT_EQ(title->textMargins().left(), side) << "the title sits on the note's own column";
+}
+
 TEST_F(WindowTest, TheInlineTitleRenamesTheNoteInEveryPaneAndFollowsLinks)
 {
     write(QStringLiteral("Target.md"), "# Target\n");
