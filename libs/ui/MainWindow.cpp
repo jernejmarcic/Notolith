@@ -3948,7 +3948,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 
 void MainWindow::updateInlineTitleMargins(Leaf *leaf)
 {
-    const int column = m_theme.value(QStringLiteral("--file-line-width")).toInt();
+    // The editor's own column: the "Line width" setting, or the whole width
+    // without a readable line length.
+    const int column = m_settings.boolean(QStringLiteral("editor.readableLineLength"))
+                           ? m_settings.integer(QStringLiteral("editor.contentWidth"))
+                           : leaf->editor->width();
     const int side = qMax(24, (leaf->editor->width() - column) / 2);
     leaf->inlineTitle->setTextMargins(side, 32, side, 0);
 }
@@ -4387,8 +4391,10 @@ void MainWindow::applySettings()
         m_themeApplied = true;
     }
 
-    for (const auto &leaf : m_leaves)
+    for (const auto &leaf : m_leaves) {
         applyEditorSettings(leaf->editor);
+        updateInlineTitleMargins(leaf.get());
+    }
 #ifdef NOTEAPPC_HAVE_CANVAS
     for (const auto &leaf : m_leaves) {
         if (auto *canvas = qobject_cast<CanvasView *>(leaf->view)) {
