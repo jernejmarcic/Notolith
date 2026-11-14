@@ -120,6 +120,7 @@
 #include "PdfPage.h"
 #include "PublishDialog.h"
 #include "MainWindow.h"
+#include "HtmlPageView.h"
 #include "TextFileView.h"
 #include "TexCompiler.h"
 #include "PagePreview.h"
@@ -411,8 +412,9 @@ TEST_F(WindowTest, TextFilesOpenInATextTabAndSaveByteExact)
         ASSERT_NE(text, nullptr) << qPrintable(name);
         EXPECT_EQ(text->toPlainText(), QString::fromUtf8(QByteArray(bytes).replace("\r\n", "\n"))) << qPrintable(name);
         EXPECT_TRUE(window.editor()->isHidden());
-        text->moveCursor(QTextCursor::Start);
-        text->insertPlainText(QStringLiteral("x"));
+        text->setRendered(false); // an HTML file opens rendered; Source is where it is edited
+        text->editor()->moveCursor(QTextCursor::Start);
+        text->editor()->insertPlainText(QStringLiteral("x"));
         EXPECT_TRUE(window.windowTitle().startsWith(QLatin1Char('*'))) << qPrintable(name);
         ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
         EXPECT_FALSE(window.windowTitle().startsWith(QLatin1Char('*')));
@@ -425,19 +427,121 @@ TEST_F(WindowTest, TextFilesOpenInATextTabAndSaveByteExact)
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
 }
 
-TEST_F(WindowTest, ATextTabHasNoWebWidgetAndAnHTMLFileIsOnlySource)
+TEST_F(WindowTest, AnHTMLFileOpensRenderedWithNoWebWidgetAndSourceIsTheEditor)
 {
-    write(QStringLiteral("page.html"), "<html><body><img src=\"http://example.invalid/x.png\"></body></html>");
+    const QByteArray html = "<html><body><h1>Hi</h1><img src=\"http://example.invalid/x.png\"></body></html>";
+    write(QStringLiteral("page.html"), html);
     MainWindow window;
+    window.resize(900, 600);
     window.show();
     window.openVault(dir.path());
     ASSERT_TRUE(window.openNote(path(QStringLiteral("page.html"))));
     auto *text = window.findChild<noteAppC::TextFileView *>();
     ASSERT_NE(text, nullptr);
-    EXPECT_TRUE(text->toPlainText().startsWith(QStringLiteral("<html>")));
-    EXPECT_TRUE(text->findChildren<QWidget *>().size() < 8); // scroll bars and the viewport, nothing else
+    ASSERT_NE(text->page(), nullptr);
+    EXPECT_TRUE(text->isRendered());
+    EXPECT_FALSE(text->page()->isHidden());
+    EXPECT_TRUE(text->editor()->isHidden());
     for (const QWidget *child : text->findChildren<QWidget *>())
         EXPECT_FALSE(QByteArray(child->metaObject()->className()).contains("Web")) << child->metaObject()->className();
+    EXPECT_TRUE(text->page()->hasPage());
+    EXPECT_GT(text->page()->pageHeight(), 0);
+    // Source mode: the editor with the exact bytes.
+    window.findChild<QAction *>(QStringLiteral("editor:toggle-source"))->trigger();
+    EXPECT_FALSE(text->isRendered());
+    EXPECT_FALSE(text->editor()->isHidden());
+    EXPECT_TRUE(text->page()->isHidden());
+    EXPECT_EQ(text->toPlainText().toUtf8(), html);
+}
+
+TEST_F(WindowTest, AnHTMLFileDrawsPixelsAndShowsTheEditedSourceWhenSwitchedBack)
+{
+    write(QStringLiteral("page.html"), "<html><body><p>one</p></body></html>");
+    MainWindow window;
+    window.resize(900, 600);
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("page.html"))));
+    auto *text = window.findChild<noteAppC::TextFileView *>();
+    ASSERT_NE(text, nullptr);
+    const auto inkOf = [text] {
+        const QImage image = text->page()->viewport()->grab().toImage();
+        const QRgb corner = image.pixel(image.width() - 1, image.height() - 1);
+        int ink = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                ink += image.pixel(x, y) != corner;
+        return ink;
+    };
+    const int before = inkOf();
+    EXPECT_GT(before, 0);
+    window.findChild<QAction *>(QStringLiteral("editor:toggle-source"))->trigger();
+    text->editor()->selectAll();
+    text->editor()->insertPlainText(QStringLiteral("<html><body><h1>a much bigger heading</h1><p>two</p></body></html>"));
+    EXPECT_TRUE(text->isModified()); // unsaved
+    window.findChild<QAction *>(QStringLiteral("editor:toggle-source"))->trigger();
+    EXPECT_TRUE(text->isRendered());
+    EXPECT_GT(inkOf(), before);
+    EXPECT_TRUE(text->isModified());
+}
+
+TEST_F(WindowTest, AScriptInAnHTMLFileDoesNothing)
+{
+    const auto inkOfPage = [this](const QByteArray &html) {
+        write(QStringLiteral("s.html"), html);
+        MainWindow window;
+        window.resize(900, 600);
+        window.show();
+        window.openVault(dir.path());
+        EXPECT_TRUE(window.openNote(path(QStringLiteral("s.html"))));
+        auto *text = window.findChild<noteAppC::TextFileView *>();
+        return text->page()->viewport()->grab().toImage();
+    };
+    const QImage plain = inkOfPage("<p id=t>stay</p>");
+    const QImage scripted = inkOfPage("<p id=t>stay</p><script>document.getElementById('t').textContent='gone';"
+                                      "document.write('<h1>injected</h1>')</script>");
+    EXPECT_EQ(plain, scripted);
+}
+
+TEST_F(WindowTest, ATallHTMLPageDrawsOnlyTheViewportAndScrolls)
+{
+    write(QStringLiteral("tall.html"), "<html><body><div style=\"height:100000px;background:#c00\">top</div>"
+                                       "<p>bottom</p></body></html>");
+    MainWindow window;
+    window.resize(900, 600);
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("tall.html"))));
+    auto *text = window.findChild<noteAppC::TextFileView *>();
+    ASSERT_NE(text, nullptr);
+    noteAppC::HtmlPageView *page = text->page();
+    ASSERT_NE(page, nullptr);
+    ASSERT_GE(page->pageHeight(), 100000);
+    const QImage first = page->viewport()->grab().toImage();
+    const qint64 viewportPixels = qint64(first.width()) * first.height();
+    EXPECT_GT(page->largestImagePixels(), 0);
+    EXPECT_LE(page->largestImagePixels(), viewportPixels);
+    EXPECT_GT(page->verticalScrollBar()->maximum(), 99000);
+    page->verticalScrollBar()->setValue(page->verticalScrollBar()->maximum());
+    const QImage last = page->viewport()->grab().toImage();
+    EXPECT_NE(first, last);
+    EXPECT_LE(page->largestImagePixels(), viewportPixels);
+}
+
+TEST_F(WindowTest, TheDefaultModeSourceOpensAnHTMLFileInSource)
+{
+    write(QStringLiteral("page.html"), "<p>x</p>");
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    write(QStringLiteral(".obsidian/app.json"), R"({"livePreview": false})");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_EQ(window.settings().text(QStringLiteral("editor.defaultMode")), QStringLiteral("source"));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("page.html"))));
+    auto *text = window.findChild<noteAppC::TextFileView *>();
+    ASSERT_NE(text, nullptr);
+    EXPECT_FALSE(text->isRendered());
+    EXPECT_FALSE(text->editor()->isHidden());
 }
 
 TEST_F(WindowTest, ATextFileWithANulByteOrInvalidUTF8IsRefusedAndAMarkdownNoteStillOpens)
@@ -467,8 +571,8 @@ TEST_F(WindowTest, ATextTabLeavesThroughTheSaveQuestionAndKeepsHistory)
     ASSERT_TRUE(window.openNote(path(QStringLiteral("data.json"))));
     auto *text = window.findChild<noteAppC::TextFileView *>();
     ASSERT_NE(text, nullptr);
-    text->moveCursor(QTextCursor::End);
-    text->insertPlainText(QStringLiteral("\n"));
+    text->editor()->moveCursor(QTextCursor::End);
+    text->editor()->insertPlainText(QStringLiteral("\n"));
     // Autosave is on by default: leaving saves it rather than asking.
     window.goBack();
     EXPECT_EQ(readAll(path(QStringLiteral("data.json"))), QByteArray("[1]\n"));

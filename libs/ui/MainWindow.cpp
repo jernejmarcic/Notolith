@@ -4219,8 +4219,21 @@ void MainWindow::openCommandPalette()
     m_palette->popUp();
 }
 
+/// The active tab's HTML file, when that is what it shows: its modes are Source and the rendered page.
+TextFileView *MainWindow::activeHtmlFile() const
+{
+    auto *text = qobject_cast<TextFileView *>(m_active->view);
+    return text && text->isHtml() ? text : nullptr;
+}
+
 void MainWindow::toggleReadingView()
 {
+    if (TextFileView *html = activeHtmlFile()) {
+        html->setRendered(!html->isRendered());
+        updateModeButton();
+        html->setFocus();
+        return;
+    }
     MarkdownEditor *editor = m_active->editor;
     if (editor->mode() == MarkdownEditor::Mode::Reading) {
         editor->setMode(m_active->editingMode);
@@ -4232,6 +4245,12 @@ void MainWindow::toggleReadingView()
 
 void MainWindow::toggleSourceMode()
 {
+    if (TextFileView *html = activeHtmlFile()) {
+        html->setRendered(!html->isRendered());
+        updateModeButton();
+        statusBar()->showMessage(html->isRendered() ? tr("Rendered page") : tr("Source mode"), 2000);
+        return;
+    }
     const auto flipped = [](MarkdownEditor::Mode mode) {
         return mode == MarkdownEditor::Mode::Source ? MarkdownEditor::Mode::LivePreview : MarkdownEditor::Mode::Source;
     };
@@ -4424,8 +4443,11 @@ void MainWindow::applySettings()
     }
     if (const QString mode = m_settings.text(QStringLiteral("editor.defaultMode")); mode != m_appliedDefaultMode) {
         m_appliedDefaultMode = mode;
-        for (const auto &leaf : m_leaves)
+        for (const auto &leaf : m_leaves) {
             leaf->editor->setMode(defaultMode());
+            if (auto *text = qobject_cast<TextFileView *>(leaf->view); text && text->isHtml())
+                text->setRendered(defaultMode() != MarkdownEditor::Mode::Source);
+        }
     }
     updateSpelling();
     updateNoteHistory();
@@ -7421,24 +7443,33 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
         openModuleView(path, &error, &view, fragment);
     bool textFile = false;
     if (!view && isTextFileCandidate(path)) {
-        // Source, never rendered or run: HTML included.
+        // Nothing runs: an HTML file's page is litehtml's, drawn only when not in Source mode.
         textFile = true;
         auto *text = new TextFileView(m_active->area);
         text->setTheme(m_theme);
+        text->setLocalPathResolver([this, text = QPointer<TextFileView>(text)](const QString &target) {
+            return text ? resolveLinkFrom(target, text->path()) : QString();
+        });
         if (!text->load(path, &error)) {
             delete text;
         } else {
             Leaf *leaf = m_active;
-            connect(text, &QPlainTextEdit::modificationChanged, this, [this, leaf] {
+            connect(text, &TextFileView::modificationChanged, this, [this, leaf] {
                 if (leaf == m_active)
                     updateTitle();
                 else
                     syncTabs(leaf->group);
             });
-            connect(text, &QPlainTextEdit::textChanged, this, [this, text] {
+            connect(text, &TextFileView::textChanged, this, [this, text] {
                 if (text->isModified() && m_settings.boolean(QStringLiteral("files.autosave")))
                     armAutosave(); // kept like a note
             });
+            // The same link rules as a note's; a link inside the page itself has no editor to jump in.
+            connect(text, &TextFileView::linkActivated, this, [this](const QString &target) {
+                if (!target.startsWith(QLatin1Char('#')))
+                    followLink(target);
+            });
+            text->setRendered(defaultMode() != MarkdownEditor::Mode::Source);
             view = text;
         }
     }
@@ -7467,6 +7498,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
     syncShareViews();
 #endif
     view->setFocus();
+    updateModeButton();
 
     syncTabs(m_active->group);
     watchOpenNotes(); // a module's view follows its file
@@ -8930,6 +8962,12 @@ void MainWindow::updateBacklinkCount()
 
 void MainWindow::setViewMode(MarkdownEditor::Mode mode)
 {
+    if (TextFileView *html = activeHtmlFile()) {
+        html->setRendered(mode != MarkdownEditor::Mode::Source);
+        updateModeButton();
+        html->setFocus();
+        return;
+    }
     MarkdownEditor *editor = m_active->editor;
     if (mode == MarkdownEditor::Mode::Reading) {
         if (editor->mode() != MarkdownEditor::Mode::Reading)
@@ -8944,12 +8982,14 @@ void MainWindow::setViewMode(MarkdownEditor::Mode mode)
 
 void MainWindow::updateModeButton()
 {
+    const TextFileView *html = activeHtmlFile();
     const bool note = !m_active->notePath.isEmpty() && !m_active->view;
-    m_modeButton->setVisible(note);
-    if (!note)
+    m_modeButton->setVisible(note || html);
+    if (!note && !html)
         return;
     const QColor color = m_theme.color(QStringLiteral("--text-muted"));
-    const MarkdownEditor::Mode mode = m_active->editor->mode();
+    const MarkdownEditor::Mode mode = html ? (html->isRendered() ? MarkdownEditor::Mode::Reading : MarkdownEditor::Mode::Source)
+                                           : m_active->editor->mode();
     const char *current = mode == MarkdownEditor::Mode::Reading  ? "mode-reading"
                           : mode == MarkdownEditor::Mode::Source ? "mode-source"
                                                                  : "mode-live";

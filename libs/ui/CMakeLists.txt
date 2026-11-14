@@ -49,6 +49,8 @@ add_library(noteAppC_ui STATIC
     SearchPane.h
     SettingsPage.cpp
     SettingsPage.h
+    HtmlPageView.cpp
+    HtmlPageView.h
     TextFileView.cpp
     TextFileView.h
     ToggleSwitch.cpp
