@@ -4972,7 +4972,7 @@ TEST_F(WindowTest, AnImageOpensInATabOfItsOwn)
     };
     WAIT_TRUE(drawn(), 3000);
     // A file of no kind noteAppC opens still says so, and opens nothing.
-    write(QStringLiteral("data.bin"), "\x01\x02");
+    write(QStringLiteral("data.bin"), QByteArray("\x01\0\x02", 3));
     EXPECT_FALSE(window.openNote(path(QStringLiteral("data.bin"))));
 }
 

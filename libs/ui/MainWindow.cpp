@@ -7251,8 +7251,13 @@ bool MainWindow::isViewFile(const QString &path) const
 
 bool MainWindow::isTextFileCandidate(const QString &path) const
 {
-    return !hasOwnViewerSuffix(path) && !isViewFile(path) && !Vault::isNote(path) && !Vault::isEncryptedNote(path)
-        && !isNotebookFile(path);
+    if (hasOwnViewerSuffix(path) || isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path)
+        || isNotebookFile(path))
+        return false;
+    // A module's suffix stays refused while its feature is off or it will not load.
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    return !m_modules
+        || std::ranges::none_of(m_modules->modules(), [&](const ModuleInfo &module) { return module.suffixes.contains(suffix); });
 }
 
 bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **view, const QString &fragment)
