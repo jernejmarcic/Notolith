@@ -429,6 +429,8 @@ TEST_F(WindowTest, TextFilesOpenInATextTabAndSaveByteExact)
 
 TEST_F(WindowTest, AnHTMLFileOpensRenderedWithNoWebWidgetAndSourceIsTheEditor)
 {
+    if (!noteAppC::HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml: HTML files stay in source";
     const QByteArray html = "<html><body><h1>Hi</h1><img src=\"http://example.invalid/x.png\"></body></html>";
     write(QStringLiteral("page.html"), html);
     MainWindow window;
@@ -456,6 +458,8 @@ TEST_F(WindowTest, AnHTMLFileOpensRenderedWithNoWebWidgetAndSourceIsTheEditor)
 
 TEST_F(WindowTest, AnHTMLFileDrawsPixelsAndShowsTheEditedSourceWhenSwitchedBack)
 {
+    if (!noteAppC::HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml: HTML files stay in source";
     write(QStringLiteral("page.html"), "<html><body><p>one</p></body></html>");
     MainWindow window;
     window.resize(900, 600);
@@ -487,6 +491,8 @@ TEST_F(WindowTest, AnHTMLFileDrawsPixelsAndShowsTheEditedSourceWhenSwitchedBack)
 
 TEST_F(WindowTest, AScriptInAnHTMLFileDoesNothing)
 {
+    if (!noteAppC::HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml: HTML files stay in source";
     const auto inkOfPage = [this](const QByteArray &html) {
         write(QStringLiteral("s.html"), html);
         MainWindow window;
@@ -505,6 +511,8 @@ TEST_F(WindowTest, AScriptInAnHTMLFileDoesNothing)
 
 TEST_F(WindowTest, ATallHTMLPageDrawsOnlyTheViewportAndScrolls)
 {
+    if (!noteAppC::HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml: HTML files stay in source";
     write(QStringLiteral("tall.html"), "<html><body><div style=\"height:100000px;background:#c00\">top</div>"
                                        "<p>bottom</p></body></html>");
     MainWindow window;
