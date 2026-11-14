@@ -13,7 +13,7 @@ namespace noteAppC {
 /// letter) is kept as it is, and zero padding keeps its width.
 QString nextCounterWord(const QString &word)
 {
-    static const QRegularExpression letter(QStringLiteral("^([A-Za-z])([.)]?)$"));
+    static const QRegularExpression letter(QStringLiteral("^([A-Za-z])([.)])$"));
     const auto match = letter.match(word);
     if (match.hasMatch()) {
         const QChar c = match.captured(1).at(0);

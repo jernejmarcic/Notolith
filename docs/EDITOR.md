@@ -356,8 +356,8 @@ Enter gives `18.`, and renumbering never rewrites the run's first number.
 - A bullet whose first word contains digits counts on Enter: the last digit
   run goes up by one, the rest of the word and the zero padding stay (`RA.1`,
   `1.RA`, `1RA`, `RA1`, `bingus.01`, `v09` to `v10`, `x99` to `x100`). A first
-  word that is one letter, with an optional `.` or `)`, steps to the next
-  letter (`z` stops). Links, URLs and code (`[[note1]]`) are not counters. In
+  word that is one letter with a `.` or `)` (`a.`, `B)`) steps to the next
+  letter (`z` stops); a bare letter (`- a lot`, `- I think`) is a plain bullet. Links, URLs and code (`[[note1]]`) are not counters. In
   the middle of a run the following items that were counting on from this one
   move up too; items that were never in step are left alone. One undo step.
   Both are `nextCounterWord` in `EditingCommands.cpp`.

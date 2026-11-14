@@ -2306,17 +2306,20 @@ TEST(ListNumberingTest, ABulletsLastDigitRunCountsOn)
     EXPECT_EQ(next(QStringLiteral("- [[note1]]")), QStringLiteral("- [[note1]]\n- \n"));
 }
 
-TEST(ListNumberingTest, ALoneLetterStepsToTheNextLetter)
+TEST(ListNumberingTest, ALetterWithADelimiterStepsToTheNextLetter)
 {
     const auto next = [](const QString &line) {
         return enterAfter(line + QLatin1Char('\n'), line.left(3));
     };
-    EXPECT_EQ(next(QStringLiteral("- a")), QStringLiteral("- a\n- b \n"));
     EXPECT_EQ(next(QStringLiteral("- a. x")), QStringLiteral("- a. x\n- b. \n"));
     EXPECT_EQ(next(QStringLiteral("- B)")), QStringLiteral("- B)\n- C) \n"));
-    EXPECT_EQ(next(QStringLiteral("- z")), QStringLiteral("- z\n- \n"));
+    EXPECT_EQ(next(QStringLiteral("- z.")), QStringLiteral("- z.\n- \n"));
     EXPECT_EQ(next(QStringLiteral("- Z)")), QStringLiteral("- Z)\n- \n"));
     EXPECT_EQ(next(QStringLiteral("- ab")), QStringLiteral("- ab\n- \n"));
+    // A bare letter is a word: plain bullets, as on master.
+    EXPECT_EQ(next(QStringLiteral("- a lot")), QStringLiteral("- a lot\n- \n"));
+    EXPECT_EQ(next(QStringLiteral("- I think")), QStringLiteral("- I think\n- \n"));
+    EXPECT_EQ(next(QStringLiteral("- x")), QStringLiteral("- x\n- \n"));
 }
 
 TEST(ListNumberingTest, InsertingInTheMiddleRenumbersTheRestOfTheCount)
