@@ -1211,6 +1211,14 @@ its body), no properties table, tables, embeds, maths, queries or bullets.
 Headings and list parents still fold (arrow, "..." box and all). A
 renderer that forgets to ask `plainSource()` shows up as a panel in Source mode.
 
+## Other text files
+
+A file that is not a note and has no viewer of its own (JSON, code, HTML, a log, a file with no suffix) opens in a
+plain text tab if it is UTF-8 with no NUL byte in its first 8 KiB; anything else is refused as binary. It is
+highlighted by file name when KF6 SyntaxHighlighting is built in, saves like a note (Ctrl+S, autosave, line endings and
+BOM kept) and shows HTML as source only: nothing in the tab renders or runs it. It has Qt's own undo, not the note
+editor's find bar.
+
 ## Vim key bindings
 
 Settings > Editor > "Vim key bindings" (`editor.vimMode`, off by default).

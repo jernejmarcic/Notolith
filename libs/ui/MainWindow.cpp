@@ -142,6 +142,7 @@
 #include "ImageView.h"
 #endif
 #include "PdfRecovery.h"
+#include "TextFileView.h"
 #ifdef NOTEAPPC_HAVE_CANVAS
 #include "CanvasView.h"
 #endif
@@ -273,7 +274,7 @@ bool isFileView(const QWidget *view)
 {
     if (!view)
         return false;
-    if (qobject_cast<const ModuleView *>(view))
+    if (qobject_cast<const ModuleView *>(view) || qobject_cast<const TextFileView *>(view))
         return true;
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (qobject_cast<const CanvasView *>(view))
@@ -291,6 +292,8 @@ void followViewPath(QWidget *view, const QString &path)
 {
     if (auto *module = qobject_cast<ModuleView *>(view))
         module->setFilePath(path);
+    else if (auto *text = qobject_cast<TextFileView *>(view))
+        text->setPath(path);
 #ifdef NOTEAPPC_HAVE_CANVAS
     else if (auto *canvas = qobject_cast<CanvasView *>(view))
         canvas->setPath(path);
@@ -299,6 +302,17 @@ void followViewPath(QWidget *view, const QString &path)
     else if (auto *image = qobject_cast<ImageView *>(view))
         image->setPath(path);
 #endif
+}
+
+/// Suffixes with a viewer or editor of their own, which are never opened as plain text even while that viewer is
+/// off or missing (the PDF message says why, the rest keep their refusal).
+bool hasOwnViewerSuffix(const QString &path)
+{
+    for (const char *suffix : {".pdf", ".epub", ".canvas", ".base", ".ipynb", ".mdlock"}) {
+        if (path.endsWith(QLatin1String(suffix), Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
 }
 
 QString stampOf(const QFileInfo &info)
@@ -3924,7 +3938,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         const QModelIndex index = m_tree->indexAt(static_cast<QMouseEvent *>(event)->position().toPoint());
         if (index.isValid() && !m_files->isDir(index)) {
             const QString path = m_files->filePath(index);
-            if (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path) || isNotebookFile(path)) {
+            if (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path) || isNotebookFile(path)
+                || isTextFileCandidate(path)) {
                 newTab();
                 openNote(path, NavSource::Tree);
             }
@@ -5405,6 +5420,8 @@ void MainWindow::applyTheme()
 #endif
         if (auto *module = qobject_cast<ModuleView *>(leaf->view))
             module->setTheme(m_theme);
+        if (auto *text = qobject_cast<TextFileView *>(leaf->view))
+            text->setTheme(m_theme);
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
         if (auto *image = qobject_cast<ImageView *>(leaf->view))
             image->setTheme(m_theme);
@@ -6008,7 +6025,8 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     // A pinned tab keeps its note: what would replace it opens beside it.
     // Back and forward stay in the tab.
     if (m_active->pinned && !m_active->notePath.isEmpty() && source != NavSource::History
-        && (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path) || isNotebookFile(path))) {
+        && (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path) || isNotebookFile(path)
+            || isTextFileCandidate(path))) {
         Leaf *pinned = m_active;
         newTab();
         Leaf *fresh = m_active;
@@ -6028,11 +6046,15 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
         return openView(path, source, fragment);
     }
     if (!Vault::isNote(path) && !Vault::isEncryptedNote(path) && !isNotebookFile(path)) {
+        if (isTextFileCandidate(path)) {
+            if (!maybeLeave())
+                return false;
+            return openView(path, source, fragment); // a file that is not text is refused there, in the status bar
+        }
         if (source != NavSource::History) {
             statusBar()->showMessage(path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)
                                          ? pdfViewerProblem()
-                                         : tr("%1 is not a note - editors for other file types come later")
-                                               .arg(QFileInfo(path).fileName()),
+                                         : tr("%1 is not a note and has no viewer").arg(QFileInfo(path).fileName()),
                                      4000);
         }
         return false;
@@ -7227,6 +7249,12 @@ bool MainWindow::isViewFile(const QString &path) const
     return m_modules && m_modules->moduleForSuffix(path).has_value(); // after every built-in kind, never before
 }
 
+bool MainWindow::isTextFileCandidate(const QString &path) const
+{
+    return !hasOwnViewerSuffix(path) && !isViewFile(path) && !Vault::isNote(path) && !Vault::isEncryptedNote(path)
+        && !isNotebookFile(path);
+}
+
 bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **view, const QString &fragment)
 {
     const std::optional<ModuleInfo> module = m_modules ? m_modules->moduleForSuffix(path) : std::nullopt;
@@ -7386,9 +7414,36 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
 #endif
     if (!view)
         openModuleView(path, &error, &view, fragment);
+    bool textFile = false;
+    if (!view && isTextFileCandidate(path)) {
+        // Source, never rendered or run: HTML included.
+        textFile = true;
+        auto *text = new TextFileView(m_active->area);
+        text->setTheme(m_theme);
+        if (!text->load(path, &error)) {
+            delete text;
+        } else {
+            Leaf *leaf = m_active;
+            connect(text, &QPlainTextEdit::modificationChanged, this, [this, leaf] {
+                if (leaf == m_active)
+                    updateTitle();
+                else
+                    syncTabs(leaf->group);
+            });
+            connect(text, &QPlainTextEdit::textChanged, this, [this, text] {
+                if (text->isModified() && m_settings.boolean(QStringLiteral("files.autosave")))
+                    armAutosave(); // kept like a note
+            });
+            view = text;
+        }
+    }
     if (!view) {
-        if (source != NavSource::History)
-            QMessageBox::warning(this, tr("Open"), tr("Could not open %1:\n%2").arg(path, error));
+        if (source != NavSource::History) {
+            if (textFile)
+                statusBar()->showMessage(error, 5000); // binary, too large, unreadable: no dialog for a click
+            else
+                QMessageBox::warning(this, tr("Open"), tr("Could not open %1:\n%2").arg(path, error));
+        }
         return false;
     }
 
@@ -7440,6 +7495,8 @@ bool MainWindow::isModified(const Leaf *leaf) const
 {
     if (auto *module = qobject_cast<ModuleView *>(leaf->view))
         return module->isModified();
+    if (auto *text = qobject_cast<TextFileView *>(leaf->view))
+        return text->isModified();
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
         return canvas->isModified();
@@ -8039,6 +8096,17 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
                         tr("a Jupyter notebook is not written as Markdown (the Notebooks plugin is off)"), quiet);
         return false;
     }
+    if (auto *text = qobject_cast<TextFileView *>(target->view)) {
+        QString error;
+        if (!text->save(&error)) {
+            reportSaveError(target->notePath, error, quiet);
+            return false;
+        }
+        rememberViewStamp(target->notePath);
+        if (!quiet)
+            statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(target->notePath).fileName()), 2000);
+        return true;
+    }
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;
@@ -8501,6 +8569,11 @@ void MainWindow::reloadChangedNotes()
         for (const auto &leaf : m_leaves) {
             if (auto *module = leaf->notePath == path ? qobject_cast<ModuleView *>(leaf->view) : nullptr) {
                 module->reloadFromDisk();
+                moduleFile = true;
+            }
+            if (auto *text = leaf->notePath == path ? qobject_cast<TextFileView *>(leaf->view) : nullptr) {
+                if (text->reloadFromDisk())
+                    statusBar()->showMessage(tr("%1 changed on disk and was reloaded").arg(QFileInfo(path).fileName()), 5000);
                 moduleFile = true;
             }
         }

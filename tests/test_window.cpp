@@ -120,6 +120,7 @@
 #include "PdfPage.h"
 #include "PublishDialog.h"
 #include "MainWindow.h"
+#include "TextFileView.h"
 #include "TexCompiler.h"
 #include "PagePreview.h"
 #include "PopoutWindow.h"
@@ -378,14 +379,103 @@ TEST_F(WindowTest, OpensANoteIntoTheEditor)
 
 TEST_F(WindowTest, RefusesANonNoteAndLeavesTheEditorAlone)
 {
+    write(QStringLiteral("blob.bin"), QByteArray("ab\0cd", 5));
     MainWindow window;
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Welcome.md")));
-    window.openNote(path(QStringLiteral("attachment.txt")));
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("blob.bin"))));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("binary")));
 
     auto *editor = window.findChild<MarkdownEditor *>();
     ASSERT_NE(editor, nullptr);
     EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+}
+
+// JSON, code, HTML and a file with no suffix open as text, exactly as written, and save byte for byte.
+TEST_F(WindowTest, TextFilesOpenInATextTabAndSaveByteExact)
+{
+    const QList<std::pair<QString, QByteArray>> files = {
+        {QStringLiteral("data.json"), QByteArray("{\"a\": 1}")},
+        {QStringLiteral("tool.py"), QByteArray("print('hi')\n")},
+        {QStringLiteral("page.html"), QByteArray("<h1>Hi</h1><script>alert(1)</script>\r\n<p>x</p>\r\n")},
+        {QStringLiteral("Makefile"), QByteArray("all:\n\ttrue\n")},
+    };
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    for (const auto &[name, bytes] : files) {
+        write(name, bytes);
+        ASSERT_TRUE(window.openNote(path(name))) << qPrintable(name);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); // the last file's view
+        auto *text = window.findChild<noteAppC::TextFileView *>();
+        ASSERT_NE(text, nullptr) << qPrintable(name);
+        EXPECT_EQ(text->toPlainText(), QString::fromUtf8(QByteArray(bytes).replace("\r\n", "\n"))) << qPrintable(name);
+        EXPECT_TRUE(window.editor()->isHidden());
+        text->moveCursor(QTextCursor::Start);
+        text->insertPlainText(QStringLiteral("x"));
+        EXPECT_TRUE(window.windowTitle().startsWith(QLatin1Char('*'))) << qPrintable(name);
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        EXPECT_FALSE(window.windowTitle().startsWith(QLatin1Char('*')));
+        EXPECT_EQ(readAll(path(name)), "x" + bytes) << "no added newline, CRLF kept: " << qPrintable(name);
+    }
+    // A note in the same tab puts the editor back.
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    EXPECT_EQ(window.findChild<noteAppC::TextFileView *>(), nullptr);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+}
+
+TEST_F(WindowTest, ATextTabHasNoWebWidgetAndAnHTMLFileIsOnlySource)
+{
+    write(QStringLiteral("page.html"), "<html><body><img src=\"http://example.invalid/x.png\"></body></html>");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("page.html"))));
+    auto *text = window.findChild<noteAppC::TextFileView *>();
+    ASSERT_NE(text, nullptr);
+    EXPECT_TRUE(text->toPlainText().startsWith(QStringLiteral("<html>")));
+    EXPECT_TRUE(text->findChildren<QWidget *>().size() < 8); // scroll bars and the viewport, nothing else
+    for (const QWidget *child : text->findChildren<QWidget *>())
+        EXPECT_FALSE(QByteArray(child->metaObject()->className()).contains("Web")) << child->metaObject()->className();
+}
+
+TEST_F(WindowTest, ATextFileWithANulByteOrInvalidUTF8IsRefusedAndAMarkdownNoteStillOpens)
+{
+    write(QStringLiteral("nul.dat"), QByteArray("ab\0cd", 5));
+    write(QStringLiteral("latin.txt"), QByteArray("caf\xe9\n"));
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("nul.dat"))));
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("latin.txt"))));
+    EXPECT_EQ(window.findChild<noteAppC::TextFileView *>(), nullptr);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    EXPECT_TRUE(window.openNote(path(QStringLiteral("Projects/Crlf.md"))));
+    EXPECT_EQ(window.findChild<noteAppC::TextFileView *>(), nullptr);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("one\ntwo\n"));
+}
+
+TEST_F(WindowTest, ATextTabLeavesThroughTheSaveQuestionAndKeepsHistory)
+{
+    write(QStringLiteral("data.json"), "[1]");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("data.json"))));
+    auto *text = window.findChild<noteAppC::TextFileView *>();
+    ASSERT_NE(text, nullptr);
+    text->moveCursor(QTextCursor::End);
+    text->insertPlainText(QStringLiteral("\n"));
+    // Autosave is on by default: leaving saves it rather than asking.
+    window.goBack();
+    EXPECT_EQ(readAll(path(QStringLiteral("data.json"))), QByteArray("[1]\n"));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    window.goForward();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    ASSERT_NE(window.findChild<noteAppC::TextFileView *>(), nullptr);
 }
 
 TEST_F(WindowTest, EditingMarksTheTitleAndSavingClearsIt)
