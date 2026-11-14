@@ -92,26 +92,26 @@ TEST(ListEnter, AfterACustomStateTheNextItemIsOpen)
     ParseOptions options = editor->parseOptions();
     options.taskStates = true;
     editor->setParseOptions(options);
-    editor->setNoteText(QStringLiteral("- [-] a"));
-    editor->setCursorOffset(7);
+    editor->setNoteText(QStringLiteral("- [-] ab"));
+    editor->setCursorOffset(8);
     QTest::keyClick(editor.get(), Qt::Key_Return);
-    EXPECT_EQ(editor->noteText(), QStringLiteral("- [-] a\n- [ ] "));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [-] ab\n- [ ] "));
 
     // Off, `[-]` is text and the next item has no box.
-    EXPECT_EQ(enter(QStringLiteral("- [-] a")).text, QStringLiteral("- [-] a\n- "));
+    EXPECT_EQ(enter(QStringLiteral("- [-] ab")).text, QStringLiteral("- [-] ab\n- "));
 }
 
 TEST(ListEnter, KeepsTheIndentation)
 {
-    EXPECT_EQ(enter(QStringLiteral("- a\n\t- b")).text, QStringLiteral("- a\n\t- b\n\t- "));
+    EXPECT_EQ(enter(QStringLiteral("- aa\n\t- bb")).text, QStringLiteral("- aa\n\t- bb\n\t- "));
     EXPECT_EQ(enter(QStringLiteral("1. a\n   2. b")).text, QStringLiteral("1. a\n   2. b\n   3. "));
 }
 
 TEST(ListEnter, ContinuesInsideAQuoteAndACallout)
 {
-    EXPECT_EQ(enter(QStringLiteral("> - x")).text, QStringLiteral("> - x\n> - "));
+    EXPECT_EQ(enter(QStringLiteral("> - xx")).text, QStringLiteral("> - xx\n> - "));
     EXPECT_EQ(enter(QStringLiteral("> 1. x")).text, QStringLiteral("> 1. x\n> 2. "));
-    EXPECT_EQ(enter(QStringLiteral("> > * x")).text, QStringLiteral("> > * x\n> > * "));
+    EXPECT_EQ(enter(QStringLiteral("> > * xx")).text, QStringLiteral("> > * xx\n> > * "));
     const QString callout = QStringLiteral("> [!note] Title\n> - one\n> - [ ] two");
     EXPECT_EQ(enter(callout).text, callout + QStringLiteral("\n> - [ ] "));
     EXPECT_EQ(enter(QStringLiteral("> 1. a\n> 2. b\n> 3. c"), after(QStringLiteral("> 1. a\n> 2. b\n> 3. c"), QStringLiteral("2. b"))).text,
@@ -216,15 +216,15 @@ TEST(ListEnter, AFenceTypedWithinTheParseDelayIsSeen)
         QTest::keyClick(editor.get(), Qt::Key_Return);
     };
     typeLine(QStringLiteral("```"));
-    QTest::keyClicks(editor.get(), QStringLiteral("- a"));
+    QTest::keyClicks(editor.get(), QStringLiteral("- aa"));
     QTest::keyClick(editor.get(), Qt::Key_Return);
-    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- a\n")) << "inside the fence: a newline, not a bullet";
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- aa\n")) << "inside the fence: a newline, not a bullet";
 
     // Closed again, still before any parse: the list after it continues.
     typeLine(QStringLiteral("```"));
-    QTest::keyClicks(editor.get(), QStringLiteral("- b"));
+    QTest::keyClicks(editor.get(), QStringLiteral("- bb"));
     QTest::keyClick(editor.get(), Qt::Key_Return);
-    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- a\n```\n- b\n- "));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- aa\n```\n- bb\n- "));
 }
 
 // The same, with the parse landing between the lines: a fence nothing closes yet
@@ -242,13 +242,13 @@ TEST(ListEnter, AnUnclosedFenceTheParseSawHoldsWhatIsTypedAfterIt)
 
 TEST(ListEnter, AFenceTheParseAlreadySawStillCounts)
 {
-    const QString note = QStringLiteral("```\n- x\n```\n\n- b");
+    const QString note = QStringLiteral("```\n- xx\n```\n\n- bb");
     auto editor = editorWith(note);
     QTest::keyClick(editor.get(), Qt::Key_Return);
     EXPECT_EQ(editor->noteText(), note + QStringLiteral("\n- "));
-    editor->setCursorOffset(after(note, QStringLiteral("- x")));
+    editor->setCursorOffset(after(note, QStringLiteral("- xx")));
     QTest::keyClick(editor.get(), Qt::Key_Return);
-    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- x\n\n```\n\n- b\n- "));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- xx\n\n```\n\n- bb\n- "));
 }
 
 TEST(ListEnter, InsideTheMarkerIsJustANewline)
@@ -279,9 +279,9 @@ TEST(ListIndent, TabIndentsFromAnywhereInTheItem)
 TEST(ListIndent, OrderedRestartsAtOneInTheSubListAndTheRestCloseUp)
 {
     const QString note = QStringLiteral("1. a\n2. b\n3. c");
-    EXPECT_EQ(press(note, after(note, QStringLiteral("2. ")), Qt::Key_Tab).text, QStringLiteral("1. a\n\t1. b\n2. c"));
-    const QString more = QStringLiteral("1. a\n\t1. b\n2. c");
-    EXPECT_EQ(press(more, after(more, QStringLiteral("2. ")), Qt::Key_Tab).text, QStringLiteral("1. a\n\t1. b\n\t2. c"));
+    EXPECT_EQ(press(note, after(note, QStringLiteral("2. ")), Qt::Key_Tab).text, QStringLiteral("1. a\n\t1.1. b\n2. c"));
+    const QString more = QStringLiteral("1. a\n\t1.1. b\n2. c");
+    EXPECT_EQ(press(more, after(more, QStringLiteral("2. ")), Qt::Key_Tab).text, QStringLiteral("1. a\n\t1.1. b\n\t1.2. c"));
 }
 
 TEST(ListIndent, ShiftTabContinuesTheParentNumbering)

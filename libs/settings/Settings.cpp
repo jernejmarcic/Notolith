@@ -76,6 +76,7 @@ QVariantMap &defaults()
         {QStringLiteral("editor.bulletGlyphs"), QStringLiteral("-=dash,*=dot,+=diamond")},
         {QStringLiteral("editor.bulletGlyphsNested"), true}, // a turn arrow for nested bullets instead of by marker
         {QStringLiteral("editor.alignTables"), true},
+        {QStringLiteral("editor.nestedListNumbers"), true}, // Tab under "18." writes "18.1." into the file
         {QStringLiteral("editor.hoverEditButton"), true},
         {QStringLiteral("editor.tableHandles"), true}, // row/column grips, add bars, cell selection on a drawn table
         {QStringLiteral("editor.remoteReferences"), false}, // a ```reference block or an icon may fetch an http(s) URL: off, nothing touches the network unasked

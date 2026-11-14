@@ -339,6 +339,29 @@ parse (up to 20 ms old) and, for the fence lines in the unbroken run of at most
 within that delay counts at once; a fence above a blank line the caret has
 already crossed is seen when the parse lands.
 
+**Nested numbers and counters.** A start number is kept everywhere: `17.` then
+Enter gives `18.`, and renumbering never rewrites the run's first number.
+
+- `editor.nestedListNumbers` (default on, Settings > Editor "Nested list
+  numbers"): Tab on an ordered item under `18.` writes `18.1. ` into the file
+  (the parent's label plus `.1`, its `.` or `)` kept), Enter counts `18.2. `,
+  deeper indents give `18.1.1. `, Shift+Tab gives the next number at the outer
+  level (`19. `). Renumbering makes a nested label follow its parent, so a new
+  `18.` before shifts `18.1.` to `19.1.`. Off, Tab indents the plain number as
+  before. A line `<indent>18.1. text` is a list item with that literal label in
+  the parse (`ListItemSpan::label`) whatever the setting; it is a Notolith
+  extension, so `Parser.cpp` masks the label for md4qt (same length) and fixes
+  the depth from the indentation. Only an indented line in a list, outside a
+  fence, and a label of at most nine characters.
+- A bullet whose first word contains digits counts on Enter: the last digit
+  run goes up by one, the rest of the word and the zero padding stay (`RA.1`,
+  `1.RA`, `1RA`, `RA1`, `bingus.01`, `v09` to `v10`, `x99` to `x100`). A first
+  word that is one letter, with an optional `.` or `)`, steps to the next
+  letter (`z` stops). Links, URLs and code (`[[note1]]`) are not counters. In
+  the middle of a run the following items that were counting on from this one
+  move up too; items that were never in step are left alone. One undo step.
+  Both are `nextCounterWord` in `EditingCommands.cpp`.
+
 `tests/test_lists.cpp` covers every key (asserting the whole note, the caret and
 undo), the glyph map, the pixels the editor paints per marker, the number labels
 and the timing.

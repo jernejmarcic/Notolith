@@ -583,6 +583,11 @@ void MarkdownEditor::setAlignTables(bool on)
     d->m_alignTables = on;
 }
 
+void MarkdownEditor::setNestedListNumbers(bool on)
+{
+    d->m_nestedListNumbers = on;
+}
+
 MarkdownEditor::TablePart MarkdownEditor::hoveredTablePart() const
 {
     return d->m_tableHover.part;
@@ -3015,6 +3020,9 @@ QString MarkdownEditor::listLabel(const ListItemSpan &item) const
 {
     if (!item.ordered)
         return {};
+    // A nested label ("18.1") is in the file, so it is drawn as written.
+    if (!item.label.isEmpty())
+        return item.label + (item.bullet.isNull() ? QLatin1Char('.') : item.bullet);
     // Word's multilevel style: "1." at the top, then "1.1.", "1.2.1.".
     QString body;
     if (d->m_outlineNumbering && item.outline.contains(QLatin1Char('.')))

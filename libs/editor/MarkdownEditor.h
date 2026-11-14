@@ -145,6 +145,9 @@ public:
     /// A table's source aligned into columns when the caret leaves a table
     /// it edited, as Advanced Tables does. On by default.
     void setAlignTables(bool on);
+    /// Tab on an ordered item under `18.` writes `18.1.` into the file, and
+    /// Enter then counts `18.2.`. On by default; off indents the plain number.
+    void setNestedListNumbers(bool on);
     /// The `</>` button over a rendered callout, formula, table, embed or
     /// plugin block (HoverEdit.cpp). On by default; off tracks no hover.
     void setHoverEditButton(bool on);

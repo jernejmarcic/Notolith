@@ -1182,6 +1182,7 @@ std::function<QString(qsizetype)> m_inlineScope;
     qsizetype m_activeBlock = -1;
     Range m_caretCell{-1, -1}; ///< the table cell the caret was last in, to relay out on leaving it
     bool m_alignTables = true;
+    bool m_nestedListNumbers = true; ///< Tab under `18.` writes `18.1.`
     bool m_tableEdited = false; ///< the caret's table was edited; aligned when the caret leaves it
     bool m_formattingTables = false; ///< formatTables' own edits do not count as editing
     bool m_tableHandles = true;
