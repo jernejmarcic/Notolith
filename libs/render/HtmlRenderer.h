@@ -7,7 +7,12 @@
 #include <QList>
 #include <QRectF>
 #include <QString>
+#include <QPoint>
+#include <QRect>
 #include <functional>
+#include <memory>
+
+class QPainter;
 
 namespace noteAppC {
 
@@ -103,6 +108,33 @@ public:
                          const QString &extraCss = QString(), QList<TextRun> *textRuns = nullptr,
                          const std::function<QString(const QString &)> &localPath = {},
                          int maxHeight = kMaxHeight);
+
+    /// One laid-out page that draws any part of itself on demand, for a viewer that scrolls: nothing is
+    /// rasterised until draw(), so a page of any height costs the memory of what is on screen, not the
+    /// kMaxHeight cap of render(). Same container as render(): the same rules for scripts, images, CSS and
+    /// the network (none run, only `localPath` loads).
+    class Page {
+    public:
+        ~Page();
+        int height() const;
+        /// Draws the part of the page inside `clip` (page coordinates) through `painter`, whose origin is the
+        /// page's top left.
+        void draw(QPainter &painter, const QRect &clip) const;
+        /// The href of the link under `pos` (page coordinates), empty for none.
+        QString linkAt(const QPoint &pos) const;
+
+    private:
+        friend class HtmlRenderer;
+        Page();
+        struct Impl;
+        std::unique_ptr<Impl> d;
+    };
+
+    /// Lays `html` out at `widthPixels`; null when litehtml is not compiled in or nothing is visible. Arguments
+    /// as for render().
+    static std::unique_ptr<Page> layout(const QString &html, const Theme &theme, int widthPixels,
+                                        const QString &baseDir, const QString &extraCss = QString(),
+                                        const std::function<QString(const QString &)> &localPath = {});
 
     /// False in a build configured without litehtml (NOTEAPPC_WITH_HTML off,
     /// or the package was not found).

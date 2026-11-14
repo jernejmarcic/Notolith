@@ -17,6 +17,7 @@
 
 #include <litehtml.h>
 #include <litehtml/num_cvt.h>
+#include <litehtml/render_item.h>
 
 #include "ImageLoad.h"
 
@@ -639,7 +640,87 @@ QString sanitise(QString html)
     return html;
 }
 
+/// The theme's rules, then the document's own CSS after them so a colour or font it declares wins.
+std::string themeCss(const HtmlRenderer::Theme &theme, const QString &extraCss)
+{
+    const int fontSize = qMax(1, theme.textFont.pixelSize() > 0 ? theme.textFont.pixelSize() : 14);
+    return "html,body{margin:0;padding:4px;color:" + toCssColor(theme.text)
+        + ";background:transparent;font-family:'" + theme.textFont.family().toStdString()
+        + "';font-size:" + std::to_string(fontSize) + "px;}"
+        + "a{color:" + toCssColor(theme.link) + ";}"
+        + "code,kbd,pre{font-family:'" + theme.codeFont.family().toStdString()
+        + "';background:" + toCssColor(theme.codeBackground) + ";}"
+        + "table,th,td{border:1px solid " + toCssColor(theme.border) + ";border-collapse:collapse;padding:4px;}"
+        + "script,style,iframe,object,embed{display:none;}"
+        + extraCss.toStdString();
+}
+
 } // namespace
+
+struct HtmlRenderer::Page::Impl {
+    Impl(const HtmlRenderer::Theme &theme, const QString &baseDir,
+         const std::function<QString(const QString &)> &localPath)
+        : container(theme, baseDir, localPath)
+    {
+    }
+    PainterContainer container;
+    litehtml::document::ptr document;
+};
+
+HtmlRenderer::Page::Page() = default;
+HtmlRenderer::Page::~Page() = default;
+
+int HtmlRenderer::Page::height() const
+{
+    return int(d->document->height());
+}
+
+void HtmlRenderer::Page::draw(QPainter &painter, const QRect &clip) const
+{
+    d->container.painter = &painter;
+    const litehtml::position box(litehtml::pixel_t(clip.x()), litehtml::pixel_t(clip.y()),
+                                 litehtml::pixel_t(clip.width()), litehtml::pixel_t(clip.height()));
+    d->document->draw(0, 0, 0, &box);
+    d->container.painter = nullptr;
+}
+
+QString HtmlRenderer::Page::linkAt(const QPoint &pos) const
+{
+    const auto root = d->document->root_render();
+    if (!root)
+        return {};
+    const litehtml::pixel_t x = pos.x(), y = pos.y();
+    for (auto el = root->get_element_by_point(x, y, x, y, [](const std::shared_ptr<litehtml::render_item> &) { return true; });
+         el; el = el->parent()) {
+        if (const char *href = el->get_attr("href"); href && QByteArray(el->get_tagName()).toLower() == "a")
+            return QString::fromUtf8(href);
+    }
+    return {};
+}
+
+std::unique_ptr<HtmlRenderer::Page> HtmlRenderer::layout(const QString &html, const Theme &theme, int widthPixels,
+                                                         const QString &baseDir, const QString &extraCss,
+                                                         const std::function<QString(const QString &)> &localPath)
+{
+    if (widthPixels <= 0 || html.trimmed().isEmpty())
+        return nullptr;
+    g_renderCount.fetch_add(1);
+    std::unique_ptr<Page> page(new Page);
+    page->d = std::make_unique<Page::Impl>(theme, baseDir, localPath);
+    page->d->container.width = widthPixels;
+    try {
+        page->d->document = litehtml::document::createFromString(sanitise(html).toStdString(), &page->d->container,
+                                                                 litehtml::master_css, themeCss(theme, extraCss));
+    } catch (...) {
+        return nullptr;
+    }
+    if (!page->d->document)
+        return nullptr;
+    page->d->document->render(litehtml::pixel_t(widthPixels));
+    if (page->d->document->height() <= 0)
+        return nullptr;
+    return page;
+}
 
 bool HtmlRenderer::isAvailable()
 {
@@ -669,18 +750,7 @@ QImage HtmlRenderer::render(const QString &html, const Theme &theme, int widthPi
     container.width = widthPixels;
     container.textRunsOut = textRuns;
 
-    const int fontSize = qMax(1, theme.textFont.pixelSize() > 0 ? theme.textFont.pixelSize() : 14);
-    const std::string userCss = "html,body{margin:0;padding:4px;color:" + toCssColor(theme.text)
-        + ";background:transparent;font-family:'" + theme.textFont.family().toStdString()
-        + "';font-size:" + std::to_string(fontSize) + "px;}"
-        + "a{color:" + toCssColor(theme.link) + ";}"
-        + "code,kbd,pre{font-family:'" + theme.codeFont.family().toStdString()
-        + "';background:" + toCssColor(theme.codeBackground) + ";}"
-        + "table,th,td{border:1px solid " + toCssColor(theme.border) + ";border-collapse:collapse;padding:4px;}"
-        + "script,style,iframe,object,embed{display:none;}"
-        // The document's own stylesheet, cascading after the theme above so
-        // a colour/font it actually declares wins - see the header comment.
-        + extraCss.toStdString();
+    const std::string userCss = themeCss(theme, extraCss);
 
     litehtml::document::ptr document;
     try {
@@ -767,6 +837,21 @@ QImage HtmlRenderer::render(const QString &, const Theme &, int, const QString &
 {
     return {};
 }
+
+HtmlRenderer::Page::Page() = default;
+HtmlRenderer::Page::~Page() = default;
+int HtmlRenderer::Page::height() const { return 0; }
+void HtmlRenderer::Page::draw(QPainter &, const QRect &) const {}
+QString HtmlRenderer::Page::linkAt(const QPoint &) const { return {}; }
+
+std::unique_ptr<HtmlRenderer::Page> HtmlRenderer::layout(const QString &, const Theme &, int, const QString &,
+                                                         const QString &,
+                                                         const std::function<QString(const QString &)> &)
+{
+    return nullptr;
+}
+
+struct HtmlRenderer::Page::Impl {};
 
 } // namespace noteAppC
 

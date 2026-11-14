@@ -75,6 +75,7 @@ class BookmarksPane;
 class GraphView;
 class InlineTitleEdit;
 class MarkdownEditor;
+class TextFileView;
 class OutgoingLinksPane;
 class MetaNotesPane;
 class OutlinePane;
@@ -164,6 +165,7 @@ public:
     void openCommandPalette();
     /// Obsidian's "Toggle reading view" (Ctrl+E): reading, and back to the
     /// editing mode the tab was in.
+    TextFileView *activeHtmlFile() const;
     void toggleReadingView();
     /// "Toggle Live Preview/Source mode"; in reading view, the mode the tab
     /// will edit in.
