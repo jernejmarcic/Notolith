@@ -411,6 +411,8 @@ private:
     /// A file a tab shows in a view of its own rather than the editor: a
     /// .canvas or a .base, when those modules are built and switched on.
     bool isViewFile(const QString &path) const;
+    /// A file nothing else opens, shown as plain text when it is text (TextFileView).
+    bool isTextFileCandidate(const QString &path) const;
     /// Why a .pdf has no viewer: the package is missing, the module was refused, or the feature is switched off.
     QString pdfViewerProblem() const;
     /// The other tabs showing the note `leaf` shows in the editor.

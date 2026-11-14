@@ -49,6 +49,8 @@ add_library(noteAppC_ui STATIC
     SearchPane.h
     SettingsPage.cpp
     SettingsPage.h
+    TextFileView.cpp
+    TextFileView.h
     ToggleSwitch.cpp
     ToggleSwitch.h)
 
@@ -62,6 +64,15 @@ target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::Netwo
     noteAppC_index noteAppC_editor noteAppC_settings noteAppC_modules)
 # Network is for SingleInstance's QLocalSocket (a Unix socket) and, only with NOTEAPPC_WITH_NETWORK, the DICT lookup.
 target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${NOTEAPPC_VERSION_STRING}")
+
+# Colours a text file tab by its name (TextFileView); plain text without the package.
+if(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING)
+    find_package(KF6SyntaxHighlighting QUIET)
+endif()
+if(TARGET KF6::SyntaxHighlighting)
+    target_link_libraries(noteAppC_ui PRIVATE KF6::SyntaxHighlighting)
+    target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING)
+endif()
 
 if(TARGET noteAppC_spell)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_spell)
