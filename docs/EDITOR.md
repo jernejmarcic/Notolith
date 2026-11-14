@@ -1349,6 +1349,21 @@ commands, which are always there.
 
 Tests: `TableAutoTest.*` (`tests/test_tables.cpp`).
 
+**Columns that count up (`CounterWord.cpp`).** The first column, or any column
+whose header has one of the words id, no, no., nr, nr., num, number, #, count,
+index, idx, step, rank, pos, position, st., št, št. (whole word, any case,
+brackets around it ignored), counts when its body cells are a +1 sequence of
+one counter pattern, the same one a bullet uses (`1`, `RA.1`, `bingus.01`,
+zero padding kept; a single cell is a sequence). A keyword column with nothing
+in it counts and starts at 1; a first column without a keyword needs a number
+in it. Then every way of adding a row (Tab or Enter out of the last cell, the
+add-row bar, insert row before or after, duplicate row) fills the new row's
+cell with the next value, a row inserted in the middle renumbers the rows
+after it, and deleting a row closes the gap after it. Each is one undo step.
+Moving rows, sorting and pasting do not renumber. There is no hidden state: once a
+value that breaks the sequence is typed, the column is not a sequence any
+more, nothing touches it, and that holds after a restart. Not in HTML tables.
+
 ## Touch
 
 Only where a touchscreen exists (`grabTouchScroll`, PopupStyle.cpp), so a

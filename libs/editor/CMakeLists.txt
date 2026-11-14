@@ -10,6 +10,8 @@ add_library(noteAppC_editor STATIC
     DisplayMap.h
     EditingCommands.cpp
     CodeBlockHook.cpp
+    CounterWord.cpp
+    CounterWord.h
     CSVembed.cpp
     CSVparser.cpp
     CSVparser.h

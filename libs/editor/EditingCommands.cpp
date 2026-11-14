@@ -11,6 +11,7 @@
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
 
+#include "CounterWord.h"
 #include "Parser.h"
 #include "TableFormat.h"
 
@@ -18,6 +19,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QRegularExpression>
+#include "CounterWord.h"
 #include <QScrollBar>
 #include <QTextBoundaryFinder>
 
@@ -218,44 +220,6 @@ void renumber(QStringList &lines, qsizetype from, qsizetype stopWidth = -1)
         }
         ++level.next;
     }
-}
-
-/// A counter in the first word of a bullet item, `RA.1`, `1RA`, `v09`, or a
-/// letter on its own, `a)`. Returns the word one step on, or an empty string
-/// when the word is no counter. Everything but the last digit run (or the
-/// letter) is kept as it is, and zero padding keeps its width.
-QString nextCounterWord(const QString &word)
-{
-    static const QRegularExpression letter(QStringLiteral("^([A-Za-z])([.)]?)$"));
-    const auto match = letter.match(word);
-    if (match.hasMatch()) {
-        const QChar c = match.captured(1).at(0);
-        return c == QLatin1Char('z') || c == QLatin1Char('Z') ? QString()
-                                                               : QString(QChar(c.unicode() + 1)) + match.captured(2);
-    }
-    // A link, a URL or code is no counter, however many digits it holds.
-    if (word.contains(QLatin1String("[[")) || word.contains(QLatin1String("](")) || word.contains(QLatin1String("://"))
-        || word.startsWith(QLatin1Char('`')) || word.startsWith(QLatin1Char('<')) || word.startsWith(QLatin1Char('!')))
-        return {};
-    const auto isDigit = [](QChar c) { return c >= QLatin1Char('0') && c <= QLatin1Char('9'); };
-    qsizetype end = word.size();
-    while (end > 0 && !isDigit(word.at(end - 1)))
-        --end;
-    if (end == 0)
-        return {};
-    qsizetype start = end;
-    while (start > 0 && isDigit(word.at(start - 1)))
-        --start;
-    QString run = word.mid(start, end - start);
-    // Add one by hand: any length, and the padding stays.
-    qsizetype at = run.size() - 1;
-    while (at >= 0 && run.at(at) == QLatin1Char('9'))
-        run[at--] = QLatin1Char('0');
-    if (at >= 0)
-        run[at] = QChar(run.at(at).unicode() + 1);
-    else
-        run.prepend(QLatin1Char('1'));
-    return word.left(start) + run + word.mid(end);
 }
 
 /// The first word of an item's text, up to the first whitespace.
