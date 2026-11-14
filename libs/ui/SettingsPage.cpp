@@ -785,6 +785,8 @@ QWidget *SettingsPage::buildEditorPage()
     addToggleRow(layout, QStringLiteral("editor.alignTables"), tr("Align tables"),
                 tr("Pad a table's cells into straight columns in the file itself when you "
                    "leave a table you edited, so it reads as a table in any text editor."));
+    addToggleRow(layout, QStringLiteral("editor.nestedListNumbers"), tr("Nested list numbers"),
+                tr("Number an indented item after its parent: 18.1, 18.2. Written into the file."));
     addToggleRow(layout, QStringLiteral("editor.complexCodeBlocks"), tr("Code block colours"),
                 tr("Let codeblocks.ini, a fence's attributes and the theme set a code block's "
                    "background, text, border and token colours. Off draws every block in the "

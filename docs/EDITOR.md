@@ -339,6 +339,29 @@ parse (up to 20 ms old) and, for the fence lines in the unbroken run of at most
 within that delay counts at once; a fence above a blank line the caret has
 already crossed is seen when the parse lands.
 
+**Nested numbers and counters.** A start number is kept everywhere: `17.` then
+Enter gives `18.`, and renumbering never rewrites the run's first number.
+
+- `editor.nestedListNumbers` (default on, Settings > Editor "Nested list
+  numbers"): Tab on an ordered item under `18.` writes `18.1. ` into the file
+  (the parent's label plus `.1`, its `.` or `)` kept), Enter counts `18.2. `,
+  deeper indents give `18.1.1. `, Shift+Tab gives the next number at the outer
+  level (`19. `). Renumbering makes a nested label follow its parent, so a new
+  `18.` before shifts `18.1.` to `19.1.`. Off, Tab indents the plain number as
+  before. A line `<indent>18.1. text` is a list item with that literal label in
+  the parse (`ListItemSpan::label`) whatever the setting; it is a Notolith
+  extension, so `Parser.cpp` masks the label for md4qt (same length) and fixes
+  the depth from the indentation. Only an indented line in a list, outside a
+  fence, and a label of at most nine characters.
+- A bullet whose first word contains digits counts on Enter: the last digit
+  run goes up by one, the rest of the word and the zero padding stay (`RA.1`,
+  `1.RA`, `1RA`, `RA1`, `bingus.01`, `v09` to `v10`, `x99` to `x100`). A first
+  word that is one letter with a `.` or `)` (`a.`, `B)`) steps to the next
+  letter (`z` stops); a bare letter (`- a lot`, `- I think`) is a plain bullet. Links, URLs and code (`[[note1]]`) are not counters. In
+  the middle of a run the following items that were counting on from this one
+  move up too; items that were never in step are left alone. One undo step.
+  Both are `nextCounterWord` in `EditingCommands.cpp`.
+
 `tests/test_lists.cpp` covers every key (asserting the whole note, the caret and
 undo), the glyph map, the pixels the editor paints per marker, the number labels
 and the timing.
@@ -1325,6 +1348,21 @@ commands, which are always there.
   delimiter row fixed, equal cells keep their order).
 
 Tests: `TableAutoTest.*` (`tests/test_tables.cpp`).
+
+**Columns that count up (`CounterWord.cpp`).** The first column, or any column
+whose header has one of the words id, no, no., nr, nr., num, number, #, count,
+index, idx, step, rank, pos, position, st., št, št. (whole word, any case,
+brackets around it ignored), counts when its body cells are a +1 sequence of
+one counter pattern, the same one a bullet uses (`1`, `RA.1`, `bingus.01`,
+zero padding kept; a single cell is a sequence). A keyword column with nothing
+in it counts and starts at 1; a first column without a keyword needs a number
+in it. Then every way of adding a row (Tab or Enter out of the last cell, the
+add-row bar, insert row before or after, duplicate row) fills the new row's
+cell with the next value, a row inserted in the middle renumbers the rows
+after it, and deleting a row closes the gap after it. Each is one undo step.
+Moving rows, sorting and pasting do not renumber. There is no hidden state: once a
+value that breaks the sequence is typed, the column is not a sequence any
+more, nothing touches it, and that holds after a restart. Not in HTML tables.
 
 ## Touch
 

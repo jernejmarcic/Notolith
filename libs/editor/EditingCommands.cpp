@@ -11,6 +11,7 @@
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
 
+#include "CounterWord.h"
 #include "Parser.h"
 #include "TableFormat.h"
 
@@ -18,6 +19,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QRegularExpression>
+#include "CounterWord.h"
 #include <QScrollBar>
 #include <QTextBoundaryFinder>
 
@@ -89,13 +91,19 @@ struct ListLine {
     QString checkbox; ///< "[ ] " including its trailing space, or empty
     bool ordered = false;
     QChar state;           ///< what is in the checkbox; null without one
-    int number = 0;
+    int number = 0;                ///< an ordered item's own number: the last part of a nested label
+    QString label;                 ///< "18.1" for a nested number label, empty otherwise
     qsizetype checkboxColumn = -1; ///< column of the "[" in the line
     qsizetype contentColumn = 0;   ///< column where the item's own text starts
 
     /// What makes two items one list: the bullet character, or an ordered
     /// item's delimiter. CommonMark starts a new list when it changes.
     QString kind() const { return ordered ? bullet.right(1) : bullet; }
+    /// An ordered item's label up to and including its last dot: "18." for
+    /// "18.1", empty for a plain number.
+    QString labelPrefix() const { return label.isEmpty() ? QString() : label.left(label.lastIndexOf(QLatin1Char('.')) + 1); }
+    /// The marker of the item that follows: "19." after "18.", "18.2)" after "18.1)".
+    QString nextMarker() const { return labelPrefix() + QString::number(number + 1) + bullet.right(1); }
     /// The item's depth for comparing with its neighbours; a tab counts four.
     qsizetype width() const
     {
@@ -113,24 +121,32 @@ ListLine parseListLine(QStringView line, bool anyState = false)
     // The quote prefix is `>` with at most one space after it, so a quoted
     // item's own indentation is what comes after that one space.
     static const QRegularExpression head(QStringLiteral(
-        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+)(\\[([ xX])\\][ \\t]+)?"));
+        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}(?:\\.\\d{1,9})*[.)])([ \\t]+)(\\[([ xX])\\][ \\t]+)?"));
 
     static const QRegularExpression headAny(QStringLiteral(
-        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+)(\\[([^\\[\\]\\n\\x{10000}-\\x{10FFFF}])\\][ \\t]+)?"));
+        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}(?:\\.\\d{1,9})*[.)])([ \\t]+)(\\[([^\\[\\]\\n\\x{10000}-\\x{10FFFF}])\\][ \\t]+)?"));
 
     const auto match = (anyState ? headAny : head).matchView(line);
     ListLine item;
     if (!match.hasMatch())
         return item;
 
+    item.bullet = match.captured(3);
+    item.ordered = item.bullet.size() > 1;
+    const QString digits = item.ordered ? item.bullet.chopped(1) : QString();
+    // "18.1." is a nested number label (a Notolith extension); flush left it is
+    // only prose, as the parser reads it.
+    if (digits.contains(QLatin1Char('.'))) {
+        if (match.captured(2).isEmpty())
+            return item;
+        item.label = digits;
+    }
     item.valid = true;
     item.quote = match.captured(1);
     item.indent = match.captured(2);
-    item.bullet = match.captured(3);
     item.spacing = match.captured(4);
     item.checkbox = match.captured(5);
-    item.ordered = item.bullet.size() > 1;
-    item.number = item.ordered ? item.bullet.chopped(1).toInt() : 0;
+    item.number = digits.mid(digits.lastIndexOf(QLatin1Char('.')) + 1).toInt();
     if (!item.checkbox.isEmpty()) {
         item.state = match.captured(6).at(0);
         item.checkboxColumn = match.capturedStart(5);
@@ -155,6 +171,7 @@ void renumber(QStringList &lines, qsizetype from, qsizetype stopWidth = -1)
         qsizetype width = 0;
         int next = 1;
         QString kind;
+        QString label; ///< the last ordered item's label here, "18" or "18.1"; empty after a bullet
     };
     QList<Level> stack;
 
@@ -170,26 +187,79 @@ void renumber(QStringList &lines, qsizetype from, qsizetype stopWidth = -1)
         const bool rewriting = i >= from;
         if (stack.isEmpty() || stack.last().width < width) {
             const int first = !rewriting || stack.isEmpty() ? (item.ordered ? item.number : 1) : 1;
-            stack.append({width, first, item.kind()});
+            stack.append({width, first, item.kind(), {}});
         } else if (stack.last().kind != item.kind()) {
             // A new bullet or delimiter is a new list, which counts from its own number.
             stack.last().kind = item.kind();
             stack.last().next = qMax(item.number, 1);
         }
 
-        if (!item.ordered)
+        if (!item.ordered) {
+            stack.last().label.clear();
             continue;
+        }
 
         Level &level = stack.last();
-        if (rewriting && i > from && width == stopWidth && item.number == level.next)
+        // A nested label follows the item it sits under: 18.1 under 18, and
+        // 19.1 once that item became 19. Under a bullet it keeps its own prefix.
+        const QString parent = stack.size() > 1 ? stack.at(stack.size() - 2).label : QString();
+        const QString wanted = item.label.isEmpty()
+                                   ? QString::number(level.next)
+                                   : (parent.isEmpty() ? item.labelPrefix() : parent + QLatin1Char('.'))
+                                         + QString::number(level.next);
+        const bool carries = item.label.isEmpty() ? item.number == level.next
+                                                  : item.bullet.chopped(1) == wanted;
+        if (rewriting && i > from && width == stopWidth && carries)
             break;
         if (rewriting) {
-            const QString wanted = QString::number(level.next) + item.bullet.right(1);
-            line.replace(item.quote.size() + item.indent.size(), item.bullet.size(), wanted);
+            line.replace(item.quote.size() + item.indent.size(), item.bullet.size(), wanted + item.bullet.right(1));
+            level.label = wanted;
         } else {
             level.next = item.number;
+            level.label = item.bullet.chopped(1);
         }
         ++level.next;
+    }
+}
+
+/// The first word of an item's text, up to the first whitespace.
+QString firstWordOf(const QString &line, const ListLine &item)
+{
+    const QString rest = line.mid(item.contentColumn);
+    qsizetype end = 0;
+    while (end < rest.size() && !rest.at(end).isSpace())
+        ++end;
+    return rest.left(end);
+}
+
+/// After an item `oldWord` got a successor `newWord` inserted below it, the
+/// bullet items that followed it at its level and counted on from it (each
+/// carrying what the one before it would be followed by) move one on. Items
+/// that were never in step with it are left alone: dates and years the owner
+/// typed are not a sequence. Deeper items are passed over, a shallower one or
+/// a different kind of line ends the level.
+void renumberCounters(QStringList &lines, qsizetype after, qsizetype width, QString oldWord, QString newWord,
+                      bool anyState)
+{
+    for (qsizetype i = after; i < lines.size(); ++i) {
+        QString &line = lines[i];
+        const ListLine item = parseListLine(line, anyState);
+        if (!item.valid)
+            continue;
+        if (item.width() > width)
+            continue;
+        if (item.width() < width || item.ordered)
+            break;
+        const QString word = firstWordOf(line, item);
+        const QString expected = nextCounterWord(oldWord);
+        if (expected.isEmpty() || word != expected)
+            break;
+        const QString changed = nextCounterWord(newWord);
+        if (changed.isEmpty())
+            break;
+        line.replace(item.contentColumn, word.size(), changed);
+        oldWord = word;
+        newWord = changed;
     }
 }
 
@@ -773,6 +843,11 @@ bool MarkdownEditor::handleListEnter(bool lineBreak)
             line.remove(item.quote.size(), removed);
             caretColumn = item.contentColumn - removed;
             stopWidth = item.width() - removed;
+            if (!item.label.isEmpty() && parseListLine(line).width() == 0) {
+                // Out of the last indent a nested label is a plain number again.
+                line.replace(item.quote.size(), item.bullet.size(), QString::number(item.number) + item.bullet.right(1));
+                caretColumn = line.size();
+            }
         } else {
             line.remove(item.quote.size(), item.contentColumn - item.quote.size());
             caretColumn = item.quote.size();
@@ -782,12 +857,25 @@ bool MarkdownEditor::handleListEnter(bool lineBreak)
         const QString tail = lines.at(int(index)).mid(column);
         lines[int(index)].truncate(int(column));
         QString marker = item.quote + item.indent;
-        marker += item.ordered ? QString::number(item.number + 1) + item.bullet.right(1)
-                               : item.bullet;
+        marker += item.ordered ? item.nextMarker() : item.bullet;
         marker += item.spacing;
         if (!item.checkbox.isEmpty())
             marker += QStringLiteral("[ ] ");
+        // A bullet whose first word counts (`RA.1`, `1RA`, `a)`) is followed by
+        // one that counts on, the caret past the word and the space after it.
+        QString oldWord;
+        QString newWord;
+        if (!item.ordered) {
+            oldWord = firstWordOf(lines.at(int(index)) + tail, item);
+            // Split inside the word, it is not a counter any more.
+            if (column - item.contentColumn >= oldWord.size())
+                newWord = nextCounterWord(oldWord);
+        }
+        if (!newWord.isEmpty())
+            marker += newWord + QLatin1Char(' ');
         lines.insert(int(index) + 1, marker + tail);
+        if (!newWord.isEmpty())
+            renumberCounters(lines, index + 2, item.width(), oldWord, newWord, d->m_parseOptions.taskStates);
         caretLine = index + 1;
         caretColumn = marker.size();
         from = index + 1;
@@ -843,6 +931,24 @@ bool MarkdownEditor::handleListIndent(int direction)
         line.insert(item.quote.size(), indentUnit(item));
     else
         line.remove(item.quote.size(), outdentWidth(item));
+
+    const qsizetype markerAt = item.quote.size() + parseListLine(line).indent.size();
+    if (direction > 0 && d->m_nestedListNumbers && item.ordered) {
+        // Under an ordered item, a number is named after it: 18. -> 18.1.
+        // (the renumbering below counts it on from any sibling above).
+        const qsizetype width = parseListLine(line).width();
+        for (qsizetype above = index - 1; above >= 0; --above) {
+            const ListLine parent = parseListLine(lines.at(int(above)));
+            if (!parent.valid || parent.width() >= width)
+                continue;
+            if (parent.ordered)
+                line.replace(markerAt, item.bullet.size(), parent.bullet.chopped(1) + QStringLiteral(".1") + item.bullet.right(1));
+            break;
+        }
+    } else if (direction < 0 && !item.label.isEmpty() && parseListLine(line).indent.isEmpty()) {
+        // Out of the last indent a nested label is a plain number again.
+        line.replace(item.quote.size(), item.bullet.size(), QString::number(item.number) + item.bullet.right(1));
+    }
 
     renumber(lines, index, parseListLine(lines.at(int(index))).width());
 

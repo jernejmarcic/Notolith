@@ -11,6 +11,7 @@
 /// storeTableText, formatTable - so it is one undo step and the table is
 /// aligned afterwards. With `editor.tableHandles` off none of it runs.
 
+#include "CounterWord.h"
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
 
@@ -617,12 +618,14 @@ bool MarkdownEditor::appendTableLine(qsizetype index, bool column, int count)
         if (!appendHTMLline(index, column, count))
             return false;
     } else {
+        const QList<int> counters = column ? QList<int>() : TableCounters::columns(text.rows);
         for (int i = 0; i < count; ++i) {
             if (column) {
                 for (int r = 0; r < text.rows.size(); ++r)
                     text.rows[r] << (r == 1 ? QStringLiteral("---") : QString());
             } else {
                 text.rows << QStringList(text.columns, QString());
+                TableCounters::afterInsert(text.rows, int(text.rows.size()) - 1, counters);
             }
         }
         if (!storeTableText(text))

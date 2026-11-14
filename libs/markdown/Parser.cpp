@@ -246,11 +246,11 @@ void describeListItem(const QString &text, const Range &range, const SourceMap &
     // A quote's or callout's ">" markers first: they are hidden on their own
     // (hideQuoteMarkers), and the list marker is what follows them.
     static const QRegularExpression head(QStringLiteral(
-        "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+)([.)]))[ \\t]+(\\[([ xX])\\][ \\t]+)?"));
+        "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+(?:\\.\\d+)*)([.)]))[ \\t]+(\\[([ xX])\\][ \\t]+)?"));
     // Any one UTF-16 unit but a bracket, so `- [[Note]]` and `- [x](url)` stay
     // text; an astral code point is two units and cannot be a state's QChar.
     static const QRegularExpression headAny(QStringLiteral(
-        "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+)([.)]))[ \\t]+(\\[([^\\[\\]\\n\\x{10000}-\\x{10FFFF}])\\][ \\t]+)?"));
+        "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+(?:\\.\\d+)*)([.)]))[ \\t]+(\\[([^\\[\\]\\n\\x{10000}-\\x{10FFFF}])\\][ \\t]+)?"));
 
     // md4qt puts a list item's start at its bullet, not at the start of the
     // line, so the marker has to be read from the line itself.
@@ -269,10 +269,14 @@ void describeListItem(const QString &text, const Range &range, const SourceMap &
     // wrong either way.
     span.indent = depth;
     span.ordered = !match.captured(3).isEmpty();
-    span.number = match.captured(3).toInt();
+    const QString digits = match.captured(3);
+    // "18.1": a nested label, written into the file and drawn as written.
+    if (digits.contains(QLatin1Char('.')))
+        span.label = digits;
+    span.number = digits.mid(digits.lastIndexOf(QLatin1Char('.')) + 1).toInt();
     span.bullet = span.ordered ? match.captured(4).at(0) : match.captured(2).at(0);
     span.shownNumber = shownNumber;
-    span.outline = outline;
+    span.outline = span.label.isEmpty() ? outline : span.label;
     span.task = !match.captured(5).isEmpty();
     if (span.task) {
         span.state = match.captured(6).at(0);
@@ -281,6 +285,84 @@ void describeListItem(const QString &text, const Range &range, const SourceMap &
 
     decorations.syntax.append(span.marker);
     decorations.listItems.append(span);
+}
+
+/// Nested number labels (`    18.1. text`, `18.1.2)`) are not CommonMark list
+/// markers, so md4qt would fold such a line into its parent's paragraph. For
+/// md4qt only, each label's digits and dots become zeros and a closing 1
+/// ("0001."), the same length so every position still indexes the file, and
+/// the line parses as an item nested under the one above it. The real label
+/// is read back from the file by describeListItem. Only an indented line in a
+/// list, outside fences and the frontmatter; a label longer than nine digits
+/// is left as text. Limit: a fence inside a list item that is itself indented
+/// is told from a fence only by its own fence characters.
+void maskNestedLabels(QString &body, const Range &frontmatter)
+{
+    static const QRegularExpression label(QStringLiteral(
+        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]+)(\\d{1,9}(?:\\.\\d{1,9})+)([.)])[ \\t]"));
+    static const QRegularExpression item(QStringLiteral(
+        "^(?:[ \\t]*>[ \\t]?)*[ \\t]*(?:[-*+]|\\d{1,9}[.)])[ \\t]"));
+    static const QRegularExpression fence(QStringLiteral("^[ \\t]*(?:>[ \\t]*)*[ \\t]*(```|~~~)"));
+    if (!body.contains(QLatin1Char('.')))
+        return;
+
+    bool inList = false;
+    bool inFence = false;
+    qsizetype start = 0;
+    while (start <= body.size()) {
+        qsizetype end = body.indexOf(QLatin1Char('\n'), start);
+        if (end < 0)
+            end = body.size();
+        const QStringView line = QStringView(body).mid(start, end - start);
+        if (!(frontmatter.isValid() && frontmatter.contains(start))) {
+            if (fence.matchView(line).hasMatch()) {
+                inFence = !inFence;
+            } else if (!inFence) {
+                const auto match = label.matchView(line);
+                if (match.hasMatch() && inList && match.capturedLength(3) <= 9) {
+                    const qsizetype digits = match.capturedStart(3);
+                    const qsizetype length = match.capturedLength(3);
+                    for (qsizetype i = 0; i < length; ++i)
+                        body[start + digits + i] = i == length - 1 ? QLatin1Char('1') : QLatin1Char('0');
+                } else if ((match.hasMatch() && inList) || item.matchView(line).hasMatch()) {
+                    inList = true;
+                } else if (!line.trimmed().isEmpty() && !line.startsWith(u' ') && !line.startsWith(u'\t')) {
+                    inList = false; // a paragraph at the margin ends the list
+                }
+            }
+        }
+        start = end + 1;
+    }
+}
+
+/// The masked labels are wider than a plain marker, so md4qt wants a child of
+/// `\t18.1. x` indented past its text and reads a one-tab-deeper label as a
+/// sibling. A label item's depth is therefore taken from its indentation
+/// instead: one deeper than the nearest item above it that is indented less.
+/// Its ancestors' ranges are stretched to hold it.
+void nestLabelItems(const QString &text, QList<ListItemSpan> &items)
+{
+    if (std::none_of(items.cbegin(), items.cend(), [](const ListItemSpan &i) { return !i.label.isEmpty(); }))
+        return;
+    struct Open {
+        qsizetype width;
+        int index;
+    };
+    QList<Open> open;
+    for (int i = 0; i < items.size(); ++i) {
+        ListItemSpan &item = items[i];
+        qsizetype width = 0;
+        for (qsizetype at = item.marker.start; at < item.marker.end && text.at(at).isSpace(); ++at)
+            width += text.at(at) == QLatin1Char('\t') ? 4 : 1;
+        while (!open.isEmpty() && open.last().width >= width)
+            open.removeLast();
+        if (!item.label.isEmpty() && !open.isEmpty()) {
+            item.indent = items[open.last().index].indent + 1;
+            for (const Open &outer : std::as_const(open))
+                items[outer.index].range.end = qMax(items[outer.index].range.end, item.range.end);
+        }
+        open.append({width, i});
+    }
 }
 
 /// md4qt reads a list inside a quote flat - "> 1. a" then ">    1. b" come
@@ -323,7 +405,9 @@ void nestQuotedLists(const QString &text, const SourceMap &map, QList<ListItemSp
         Count &count = counts[depth];
         if (!count.started || count.ordered != item.ordered)
             count = {item.ordered, item.number - 1, true}; // a new list: its first number counts
-        if (item.ordered) {
+        if (item.ordered && !item.label.isEmpty()) {
+            item.shownNumber = count.last = item.number; // a nested label counts as written
+        } else if (item.ordered) {
             item.shownNumber = ++count.last;
             const ListItemSpan *parent = open.isEmpty() ? nullptr : &items[open.last().index];
             item.outline = parent && parent->ordered
@@ -2227,6 +2311,8 @@ void walkItem(MD::Item *item, Walk &walk)
             }
             walk.tasks.append(task);
         }
+        if (walk.decorations.listItems.size() > itemsBefore && !walk.decorations.listItems.last().label.isEmpty())
+            outline = walk.decorations.listItems.last().outline; // a nested label stands for itself
         walk.itemOutlines.append(outline);
         walkBlock(listItem, walk);
         walk.itemOutlines.removeLast();
@@ -2399,6 +2485,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
         }
     }
 
+    maskNestedLabels(body, frontmatter);
     QTextStream stream(&body, QIODevice::ReadOnly);
     const auto document = d->parser.parse(stream, QFileInfo(path).absolutePath(),
                                           QFileInfo(path).fileName());
@@ -2545,6 +2632,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
         result.decorations.syntax.append(range);
     result.decorations.comments = obsidian.comments;
     nestQuotedLists(text, map, result.decorations.listItems);
+    nestLabelItems(text, result.decorations.listItems);
     scanFootnotes(text, walk.masked + obsidian.comments, result.decorations);
     // Bare brackets, meta notes and the word count's exclusion are all runs
     // between delimiters, found over what has no syntax of its own.

@@ -15,6 +15,7 @@
 /// TableSpan, its cells the text between the tags: everything here applies,
 /// and the few places that write Markdown hand over to an HTML counterpart.
 
+#include "CounterWord.h"
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
 
@@ -208,6 +209,24 @@ void MarkdownEditor::insertTableRowAfter(const CellRef &cell, int column)
     if (table.html) {
         insertHTMLrow(&table - d->m_decorations.tables.constData(), cell.row, true, column);
         return;
+    }
+    // A table with a counting column is rewritten with its numbers, as the row
+    // commands do; any other gets the plain empty row below.
+    TableText text;
+    const qsizetype tableIndex = &table - d->m_decorations.tables.constData();
+    if (loadTableText(tableIndex, text)) {
+        const QList<int> counters = TableCounters::columns(text.rows);
+        if (!counters.isEmpty()) {
+            const int line = cell.row == 0 ? 2 : cell.row + 2;
+            text.rows.insert(line, QStringList(text.columns, QString()));
+            TableCounters::afterInsert(text.rows, line, counters);
+            if (storeTableText(text)) {
+                const Range moved = d->m_decorations.tables.value(tableIndex).rows.value(line - 1).value(column);
+                if (moved.isValid())
+                    moveCursor(moved.start, false);
+                return;
+            }
+        }
     }
     const qsizetype lineEnd = d->m_lines.lineEnd(d->m_lines.lineAt(cell.range.start));
     // The new row copies the one it follows up to its first pipe, so a row
@@ -462,9 +481,22 @@ bool MarkdownEditor::handleSourceTableKey(int key)
         const QString lastText = d->m_text.mid(d->m_lines.lineStart(lastLine), end - d->m_lines.lineStart(lastLine));
         while (lead < lastText.size() && (lastText.at(lead) == QLatin1Char('>') || lastText.at(lead).isSpace()))
             ++lead;
+        // A counting column carries on into the new row.
+        QList<QStringList> cells;
+        for (qsizetype r = 0; r < table.rows.size(); ++r) {
+            QStringList row;
+            for (const Range &cellRange : table.rows.at(r))
+                row << d->m_text.mid(cellRange.start, cellRange.length());
+            cells << row;
+            if (r == 0)
+                cells << QStringList(columns, QStringLiteral("---")); // the delimiter row
+        }
+        const QList<int> counters = TableCounters::columns(cells);
+        cells << QStringList(columns, QString());
+        TableCounters::afterInsert(cells, int(cells.size()) - 1, counters);
         text += QLatin1Char('\n') + lastText.left(lead) + QLatin1Char('|');
         for (int c = 0; c < columns; ++c)
-            text += QStringLiteral("  |");
+            text += QLatin1Char(' ') + cells.last().value(c) + QStringLiteral(" |");
     }
     text = formatTable(text);
     // Source mode draws no table, so the parse can wait for the debounce. In
@@ -550,16 +582,23 @@ bool MarkdownEditor::runTableCommand(const QString &id)
     const bool header = line == 0;
     const bool last = line == rows.size() - 1;
     const auto emptyRow = [columns] { return QStringList(columns, QString()); };
+    // Columns that count up (an ID, a step number) keep counting through the
+    // row commands; read before the command changes anything.
+    const QList<int> counters = TableCounters::columns(rows);
     if (id.endsWith(QLatin1String("insert-row-before"))) {
         line = header ? 2 : line; // nothing goes above the header
         rows.insert(line, emptyRow());
+        TableCounters::afterInsert(rows, line, counters);
     } else if (id.endsWith(QLatin1String("insert-row-after"))) {
         line = header ? 2 : line + 1;
         rows.insert(line, emptyRow());
+        TableCounters::afterInsert(rows, line, counters);
     } else if (id.endsWith(QLatin1String("delete-row"))) {
         if (header)
             return false;
+        const QStringList removed = rows.at(line);
         rows.removeAt(line);
+        TableCounters::afterDelete(rows, line, removed, counters);
         line = qMin(line, int(rows.size()) - 1);
         if (line == 1)
             line = 0; // the last body row went: back to the header
@@ -600,6 +639,7 @@ bool MarkdownEditor::runTableCommand(const QString &id)
             return false; // the header is the table's only one
         rows.insert(line + 1, rows.at(line));
         ++line;
+        TableCounters::afterInsert(rows, line, counters);
     } else if (id.endsWith(QLatin1String("duplicate-column"))) {
         for (QStringList &row : rows)
             row.insert(column + 1, row.at(column)); // the delimiter row's cell too: the alignment goes with it

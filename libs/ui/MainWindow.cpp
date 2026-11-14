@@ -1665,6 +1665,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setBulletGlyphs(m_settings.text(QStringLiteral("editor.bulletGlyphs")));
     editor->setNestedBulletGlyphs(m_settings.boolean(QStringLiteral("editor.bulletGlyphsNested")));
     editor->setAlignTables(m_settings.boolean(QStringLiteral("editor.alignTables")));
+    editor->setNestedListNumbers(m_settings.boolean(QStringLiteral("editor.nestedListNumbers")));
     editor->setHoverEditButton(m_settings.boolean(QStringLiteral("editor.hoverEditButton")));
     editor->setTableHandles(m_settings.boolean(QStringLiteral("editor.tableHandles")));
     editor->setComplexCodeBlocks(m_settings.boolean(QStringLiteral("editor.complexCodeBlocks")));

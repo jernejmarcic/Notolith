@@ -290,7 +290,10 @@ struct ListItemSpan {
     Range marker;      ///< "  - ", "1. ", including a task's "[x] "; after a quote's ">"
     int indent = 0;    ///< nesting level: how many lists it sits inside
     bool ordered = false;
-    int number = 0;    ///< as typed
+    int number = 0;    ///< as typed (the last part of a nested label)
+    /// A nested number label as written, "18.1" or "18.1.2", drawn as it is.
+    /// Empty for every other item.
+    QString label;
     /// '-', '*' or '+' for a bullet; '.' or ')' after an ordered item's number.
     QChar bullet;
     /// What an ordered item counts as, CommonMark's way: the list's first

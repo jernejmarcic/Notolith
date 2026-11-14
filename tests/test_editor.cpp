@@ -2156,6 +2156,7 @@ TEST(ListEditTest, EnterOnAnEmptyNestedItemOutdentsFirst)
 TEST(ListEditTest, TabIndentsAndRenumbersBothLevels)
 {
     auto editor = editorWith(QStringLiteral("1. a\n2. b\n3. c\n"));
+    editor->setNestedListNumbers(false); // the plain-number way
     editor->setCursorOffset(5); // start of "2. b"
     QTest::keyClick(editor.get(), Qt::Key_Tab);
 
@@ -2191,6 +2192,170 @@ TEST(ListEditTest, ContinuationIsOneUndoStep)
 
     QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
     EXPECT_EQ(editor->noteText(), source);
+}
+
+// --- richer list numbering ------------------------------------------------
+
+namespace {
+
+/// Types `key` with the caret at the end of the line that starts with `lineStart`.
+QString afterKey(const QString &source, const QString &lineStart, Qt::Key key, bool nested = true,
+                 Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+{
+    auto editor = editorWith(source);
+    editor->setNestedListNumbers(nested);
+    const qsizetype at = source.indexOf(lineStart);
+    editor->setCursorOffset(source.indexOf(QLatin1Char('\n'), at));
+    QTest::keyClick(editor.get(), key, modifiers);
+    return editor->noteText();
+}
+
+QString enterAfter(const QString &source, const QString &lineStart)
+{
+    return afterKey(source, lineStart, Qt::Key_Return);
+}
+
+} // namespace
+
+TEST(ListNumberingTest, ARunKeepsItsFirstNumber)
+{
+    EXPECT_EQ(enterAfter(QStringLiteral("17. a\n18. b\n"), QStringLiteral("17.")),
+              QStringLiteral("17. a\n18. \n19. b\n"));
+    EXPECT_EQ(enterAfter(QStringLiteral("17. a\n"), QStringLiteral("17.")), QStringLiteral("17. a\n18. \n"));
+    const QList<ListItemSpan> items = Parser().parseAll(QStringLiteral("17. a\n18. b\n")).decorations.listItems;
+    ASSERT_EQ(items.size(), 2);
+    EXPECT_EQ(items.at(0).shownNumber, 17);
+    EXPECT_EQ(items.at(1).shownNumber, 18);
+}
+
+TEST(ListNumberingTest, TabNumbersAChildAfterItsParent)
+{
+    EXPECT_EQ(afterKey(QStringLiteral("18. a\n19. b\n"), QStringLiteral("19."), Qt::Key_Tab),
+              QStringLiteral("18. a\n\t18.1. b\n"));
+    EXPECT_EQ(afterKey(QStringLiteral("18) a\n19) b\n"), QStringLiteral("19)"), Qt::Key_Tab),
+              QStringLiteral("18) a\n\t18.1) b\n"));
+    // A second child counts on from the first.
+    EXPECT_EQ(afterKey(QStringLiteral("18. a\n\t18.1. b\n19. c\n"), QStringLiteral("19."), Qt::Key_Tab),
+              QStringLiteral("18. a\n\t18.1. b\n\t18.2. c\n"));
+    // A deeper level names its parent.
+    EXPECT_EQ(afterKey(QStringLiteral("18. a\n\t18.1. b\n\t18.2. c\n"), QStringLiteral("\t18.2."), Qt::Key_Tab),
+              QStringLiteral("18. a\n\t18.1. b\n\t\t18.1.1. c\n"));
+}
+
+TEST(ListNumberingTest, WithTheSettingOffTabIndentsThePlainNumber)
+{
+    EXPECT_EQ(afterKey(QStringLiteral("17. a\n18. b\n"), QStringLiteral("18."), Qt::Key_Tab, false),
+              QStringLiteral("17. a\n\t1. b\n"));
+    // Another reading of the same keystroke with the setting on: the item above is 17.
+    EXPECT_EQ(afterKey(QStringLiteral("17. a\n18. b\n"), QStringLiteral("18."), Qt::Key_Tab),
+              QStringLiteral("17. a\n\t17.1. b\n"));
+}
+
+TEST(ListNumberingTest, EnterCountsNestedLabelsAndShiftTabLeavesThem)
+{
+    EXPECT_EQ(enterAfter(QStringLiteral("18. a\n\t18.1. b\n"), QStringLiteral("\t18.1.")),
+              QStringLiteral("18. a\n\t18.1. b\n\t18.2. \n"));
+    EXPECT_EQ(enterAfter(QStringLiteral("18. a\n\t18.1. b\n\t18.2. c\n"), QStringLiteral("\t18.1.")),
+              QStringLiteral("18. a\n\t18.1. b\n\t18.2. \n\t18.3. c\n"));
+    EXPECT_EQ(afterKey(QStringLiteral("18. a\n\t18.1. b\n"), QStringLiteral("\t18.1."), Qt::Key_Backtab, true,
+                       Qt::ShiftModifier),
+              QStringLiteral("18. a\n19. b\n"));
+    // An empty nested item leaves the list in steps, ending as the next number.
+    EXPECT_EQ(enterAfter(QStringLiteral("18. a\n\t18.1. \n"), QStringLiteral("\t18.1.")),
+              QStringLiteral("18. a\n19. \n"));
+}
+
+TEST(ListNumberingTest, ChildrenFollowAParentThatMoved)
+{
+    EXPECT_EQ(enterAfter(QStringLiteral("18. a\n\t18.1. x\n19. b\n\t19.1. y\n"), QStringLiteral("18. a")),
+              QStringLiteral("18. a\n19. \n\t19.1. x\n20. b\n\t20.1. y\n"));
+}
+
+TEST(ListNumberingTest, ANestedLabelIsAListItemInTheParse)
+{
+    const QList<ListItemSpan> items =
+        Parser().parseAll(QStringLiteral("18. a\n\t18.1. b\n\t18.2. c\n\t\t18.2.1. d\n19. e\n")).decorations.listItems;
+    ASSERT_EQ(items.size(), 5);
+    EXPECT_EQ(items.at(1).label, QStringLiteral("18.1"));
+    EXPECT_EQ(items.at(1).indent, 1);
+    EXPECT_EQ(items.at(2).label, QStringLiteral("18.2"));
+    EXPECT_EQ(items.at(3).label, QStringLiteral("18.2.1"));
+    EXPECT_EQ(items.at(3).indent, 2);
+    EXPECT_TRUE(items.at(0).label.isEmpty());
+    // Prose with the same shape, and a fence, stay text.
+    EXPECT_EQ(Parser().parseAll(QStringLiteral("see\n\t1.5. x\n")).decorations.listItems.size(), 0);
+    EXPECT_EQ(Parser().parseAll(QStringLiteral("1. a\n```\n\t1.5. x\n```\n")).decorations.listItems.size(), 1);
+}
+
+TEST(ListNumberingTest, ABulletsLastDigitRunCountsOn)
+{
+    const auto next = [](const QString &line) {
+        return enterAfter(line + QLatin1Char('\n'), line.left(4));
+    };
+    EXPECT_EQ(next(QStringLiteral("- RA.1 x")), QStringLiteral("- RA.1 x\n- RA.2 \n"));
+    EXPECT_EQ(next(QStringLiteral("- 1.RA")), QStringLiteral("- 1.RA\n- 2.RA \n"));
+    EXPECT_EQ(next(QStringLiteral("- 1RA")), QStringLiteral("- 1RA\n- 2RA \n"));
+    EXPECT_EQ(next(QStringLiteral("- RA1")), QStringLiteral("- RA1\n- RA2 \n"));
+    EXPECT_EQ(next(QStringLiteral("- bingus.01")), QStringLiteral("- bingus.01\n- bingus.02 \n"));
+    EXPECT_EQ(next(QStringLiteral("- v09")), QStringLiteral("- v09\n- v10 \n"));
+    EXPECT_EQ(next(QStringLiteral("- x99")), QStringLiteral("- x99\n- x100 \n"));
+    EXPECT_EQ(next(QStringLiteral("* RA.1 x")), QStringLiteral("* RA.1 x\n* RA.2 \n"));
+    EXPECT_EQ(next(QStringLiteral("- [ ] RA.1")), QStringLiteral("- [ ] RA.1\n- [ ] RA.2 \n"));
+    // Not counters.
+    EXPECT_EQ(next(QStringLiteral("- plain")), QStringLiteral("- plain\n- \n"));
+    EXPECT_EQ(next(QStringLiteral("- [[note1]]")), QStringLiteral("- [[note1]]\n- \n"));
+}
+
+TEST(ListNumberingTest, ALetterWithADelimiterStepsToTheNextLetter)
+{
+    const auto next = [](const QString &line) {
+        return enterAfter(line + QLatin1Char('\n'), line.left(3));
+    };
+    EXPECT_EQ(next(QStringLiteral("- a. x")), QStringLiteral("- a. x\n- b. \n"));
+    EXPECT_EQ(next(QStringLiteral("- B)")), QStringLiteral("- B)\n- C) \n"));
+    EXPECT_EQ(next(QStringLiteral("- z.")), QStringLiteral("- z.\n- \n"));
+    EXPECT_EQ(next(QStringLiteral("- Z)")), QStringLiteral("- Z)\n- \n"));
+    EXPECT_EQ(next(QStringLiteral("- ab")), QStringLiteral("- ab\n- \n"));
+    // A bare letter is a word: plain bullets, as on master.
+    EXPECT_EQ(next(QStringLiteral("- a lot")), QStringLiteral("- a lot\n- \n"));
+    EXPECT_EQ(next(QStringLiteral("- I think")), QStringLiteral("- I think\n- \n"));
+    EXPECT_EQ(next(QStringLiteral("- x")), QStringLiteral("- x\n- \n"));
+}
+
+TEST(ListNumberingTest, InsertingInTheMiddleRenumbersTheRestOfTheCount)
+{
+    EXPECT_EQ(enterAfter(QStringLiteral("- RA.1 a\n- RA.2 b\n- RA.3 c\n"), QStringLiteral("- RA.1")),
+              QStringLiteral("- RA.1 a\n- RA.2 \n- RA.3 b\n- RA.4 c\n"));
+    EXPECT_EQ(enterAfter(QStringLiteral("- v09 a\n- v10 b\n"), QStringLiteral("- v09")),
+              QStringLiteral("- v09 a\n- v10 \n- v11 b\n"));
+    // Items that were never in step are not a sequence: left alone.
+    EXPECT_EQ(enterAfter(QStringLiteral("- 2026 a\n- 2030 b\n"), QStringLiteral("- 2026")),
+              QStringLiteral("- 2026 a\n- 2027 \n- 2030 b\n"));
+    // Deeper items are passed over.
+    EXPECT_EQ(enterAfter(QStringLiteral("- n1 a\n\t- sub\n- n2 b\n"), QStringLiteral("- n1")),
+              QStringLiteral("- n1 a\n- n2 \n\t- sub\n- n3 b\n"));
+}
+
+TEST(ListNumberingTest, CountingIsOneUndoStepAndNotInAFence)
+{
+    const QString source = QStringLiteral("- RA.1 a\n- RA.2 b\n");
+    auto editor = editorWith(source);
+    editor->setCursorOffset(8);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    ASSERT_EQ(editor->noteText(), QStringLiteral("- RA.1 a\n- RA.2 \n- RA.3 b\n"));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), source);
+
+    const QString nestedSource = QStringLiteral("18. a\n19. b\n");
+    auto nested = editorWith(nestedSource);
+    nested->setCursorOffset(nestedSource.indexOf(QLatin1Char('\n'), 6));
+    QTest::keyClick(nested.get(), Qt::Key_Tab);
+    ASSERT_NE(nested->noteText(), nestedSource);
+    QTest::keyClick(nested.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(nested->noteText(), nestedSource);
+
+    EXPECT_EQ(enterAfter(QStringLiteral("```\n- RA.1\n```\n"), QStringLiteral("- RA")),
+              QStringLiteral("```\n- RA.1\n\n```\n"));
 }
 
 // --- checkboxes -----------------------------------------------------------

@@ -279,9 +279,9 @@ TEST(ListIndent, TabIndentsFromAnywhereInTheItem)
 TEST(ListIndent, OrderedRestartsAtOneInTheSubListAndTheRestCloseUp)
 {
     const QString note = QStringLiteral("1. a\n2. b\n3. c");
-    EXPECT_EQ(press(note, after(note, QStringLiteral("2. ")), Qt::Key_Tab).text, QStringLiteral("1. a\n\t1. b\n2. c"));
-    const QString more = QStringLiteral("1. a\n\t1. b\n2. c");
-    EXPECT_EQ(press(more, after(more, QStringLiteral("2. ")), Qt::Key_Tab).text, QStringLiteral("1. a\n\t1. b\n\t2. c"));
+    EXPECT_EQ(press(note, after(note, QStringLiteral("2. ")), Qt::Key_Tab).text, QStringLiteral("1. a\n\t1.1. b\n2. c"));
+    const QString more = QStringLiteral("1. a\n\t1.1. b\n2. c");
+    EXPECT_EQ(press(more, after(more, QStringLiteral("2. ")), Qt::Key_Tab).text, QStringLiteral("1. a\n\t1.1. b\n\t1.2. c"));
 }
 
 TEST(ListIndent, ShiftTabContinuesTheParentNumbering)

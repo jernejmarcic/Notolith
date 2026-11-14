@@ -205,13 +205,13 @@ TEST(TableAutoTest, TabInSourceModeRealignsOnlyThatTable)
 
 TEST(TableAutoTest, TabAndEnterWalkASourceTableAndAppendRows)
 {
-    const QString note = QStringLiteral("| a | b |\n| --- | --- |\n| 1 | 2 |\n");
-    auto editor = editorWith(note, after(note, QStringLiteral("| 1")));
+    const QString note = QStringLiteral("| a | b |\n| --- | --- |\n| p | 2 |\n");
+    auto editor = editorWith(note, after(note, QStringLiteral("| p")));
     QTest::keyClick(editor.get(), Qt::Key_Tab); // the last column: past it, a new row
     QTest::keyClick(editor.get(), Qt::Key_Tab);
     QTest::keyClicks(editor.get(), QStringLiteral("z"));
     QString text = editor->noteText();
-    EXPECT_EQ(text, QStringLiteral("| a   | b   |\n| --- | --- |\n| 1   | 2   |\n| z    |     |\n")) << text.toStdString();
+    EXPECT_EQ(text, QStringLiteral("| a   | b   |\n| --- | --- |\n| p   | 2   |\n| z    |     |\n")) << text.toStdString();
 
     QTest::keyClick(editor.get(), Qt::Key_Backtab);
     EXPECT_EQ(editor->cursorOffset(), editor->noteText().indexOf(QStringLiteral("| 2   |")) + 2);
@@ -229,9 +229,9 @@ TEST(TableAutoTest, KeysInsideTheParseDebounceDoWhatTheyDoAfterIt)
     // its own lines, not reparsed; the keys must land exactly where they do
     // once the parse has caught up. The `|` typed into the header last makes
     // it no table at all, which only the parser can say.
-    const QString note = QStringLiteral("para\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nafter\n");
+    const QString note = QStringLiteral("para\n\n| a | b |\n| --- | --- |\n| p | 2 |\n\nafter\n");
     const auto play = [&](bool waitForParse) {
-        auto editor = editorWith(note, after(note, QStringLiteral("| 1")));
+        auto editor = editorWith(note, after(note, QStringLiteral("| p")));
         const auto step = [&](auto &&key) {
             key(editor.get());
             if (waitForParse)
@@ -254,7 +254,7 @@ TEST(TableAutoTest, KeysInsideTheParseDebounceDoWhatTheyDoAfterIt)
     const auto hurried = play(false);
     EXPECT_EQ(hurried.first, settled.first) << hurried.first.toStdString();
     EXPECT_EQ(hurried.second, settled.second);
-    EXPECT_TRUE(settled.first.contains(QStringLiteral("| 123 | x2  |"))) << settled.first.toStdString();
+    EXPECT_TRUE(settled.first.contains(QStringLiteral("| p23  | x2  |"))) << settled.first.toStdString();
 }
 
 TEST(TableAutoTest, AlignmentMenuRewritesDelimiter)
@@ -301,15 +301,15 @@ TEST(TableAutoTest, SortByColumnKeepsHeader)
 
 TEST(TableAutoTest, DuplicateRowAndColumn)
 {
-    const QString note = QStringLiteral("| a | b |\n| --- | --: |\n| 1 | 2 |\n");
-    auto row = editorWith(note, after(note, QStringLiteral("| 1")), MarkdownEditor::Mode::LivePreview);
+    const QString note = QStringLiteral("| a | b |\n| --- | --: |\n| p | 2 |\n");
+    auto row = editorWith(note, after(note, QStringLiteral("| p")), MarkdownEditor::Mode::LivePreview);
     ASSERT_TRUE(row->runCommand(QStringLiteral("noteAppC:table-duplicate-row")));
-    EXPECT_EQ(row->noteText(), QStringLiteral("| a   |   b |\n| --- | --: |\n| 1   |   2 |\n| 1   |   2 |\n"))
+    EXPECT_EQ(row->noteText(), QStringLiteral("| a   |   b |\n| --- | --: |\n| p   |   2 |\n| p   |   2 |\n"))
         << row->noteText().toStdString();
 
     auto column = editorWith(note, after(note, QStringLiteral("| b")), MarkdownEditor::Mode::LivePreview);
     ASSERT_TRUE(column->runCommand(QStringLiteral("noteAppC:table-duplicate-column")));
-    EXPECT_EQ(column->noteText(), QStringLiteral("| a   |   b |   b |\n| --- | --: | --: |\n| 1   |   2 |   2 |\n"))
+    EXPECT_EQ(column->noteText(), QStringLiteral("| a   |   b |   b |\n| --- | --: | --: |\n| p   |   2 |   2 |\n"))
         << column->noteText().toStdString();
 
     auto header = editorWith(note, after(note, QStringLiteral("| a")), MarkdownEditor::Mode::LivePreview);
@@ -809,4 +809,168 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-test"));
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+// --- columns that count up ---------------------------------------------------
+
+namespace {
+
+/// One column's body cells, trimmed, of the first table in `text`.
+QStringList bodyColumn(const QString &text, int column)
+{
+    QStringList cells;
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    int row = 0;
+    for (const QString &line : lines) {
+        if (!line.trimmed().startsWith(QLatin1Char('|')))
+            continue;
+        if (row++ < 2)
+            continue; // the header and the delimiter row
+        QStringList parts = line.trimmed().split(QLatin1Char('|'));
+        cells << parts.value(column + 1).trimmed();
+    }
+    return cells;
+}
+
+QString runOn(const QString &note, const QString &caretAfter, const QString &command, QStringList *column = nullptr,
+              int which = 0)
+{
+    auto editor = editorWith(note, after(note, caretAfter), MarkdownEditor::Mode::LivePreview);
+    EXPECT_TRUE(editor->runCommand(command));
+    if (column)
+        *column = bodyColumn(editor->noteText(), which);
+    return editor->noteText();
+}
+
+const QString kCounted = QStringLiteral("| n | name |\n| --- | --- |\n| 1 | a |\n| 2 | b |\n| 3 | c |\n");
+
+} // namespace
+
+TEST(TableCounterTest, AddingARowCountsOn)
+{
+    // Tab in the last cell of a drawn table, Enter, and Tab in source mode.
+    for (const auto mode : {MarkdownEditor::Mode::LivePreview, MarkdownEditor::Mode::Source}) {
+        auto editor = editorWith(kCounted, after(kCounted, QStringLiteral("| c")), mode);
+        QTest::keyClick(editor.get(), Qt::Key_Tab);
+        EXPECT_EQ(bodyColumn(editor->noteText(), 0), (QStringList{"1", "2", "3", "4"})) << editor->noteText().toStdString();
+        auto enter = editorWith(kCounted, after(kCounted, QStringLiteral("| c")), mode);
+        QTest::keyClick(enter.get(), Qt::Key_Return);
+        EXPECT_EQ(bodyColumn(enter->noteText(), 0), (QStringList{"1", "2", "3", "4"}));
+    }
+    // The add bar.
+    auto editor = gridEditor(kCounted);
+    const QPoint bar = centre(editor->tableChromeRect(tableAt(kCounted), MarkdownEditor::TablePart::AddRow));
+    moveTo(*editor, bar);
+    press(*editor, bar);
+    release(*editor, bar);
+    EXPECT_EQ(bodyColumn(editor->noteText(), 0), (QStringList{"1", "2", "3", "4"})) << editor->noteText().toStdString();
+}
+
+TEST(TableCounterTest, InsertingInTheMiddleRenumbersTheRowsAfter)
+{
+    QStringList column;
+    runOn(kCounted, QStringLiteral("| 2"), QStringLiteral("noteAppC:table-insert-row-after"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "2", "3", "4"}));
+    EXPECT_EQ(bodyColumn(runOn(kCounted, QStringLiteral("| 2"), QStringLiteral("noteAppC:table-insert-row-after")), 1),
+              (QStringList{"a", "b", "", "c"}));
+    runOn(kCounted, QStringLiteral("| 1"), QStringLiteral("noteAppC:table-insert-row-before"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "2", "3", "4"}));
+    runOn(kCounted, QStringLiteral("| 2"), QStringLiteral("noteAppC:table-duplicate-row"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "2", "3", "4"}));
+}
+
+TEST(TableCounterTest, DeletingARowClosesTheGap)
+{
+    QStringList column;
+    runOn(kCounted, QStringLiteral("| 1"), QStringLiteral("noteAppC:table-delete-row"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "2"}));
+    runOn(kCounted, QStringLiteral("| 2"), QStringLiteral("noteAppC:table-delete-row"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "2"}));
+    runOn(kCounted, QStringLiteral("| 3"), QStringLiteral("noteAppC:table-delete-row"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "2"}));
+}
+
+TEST(TableCounterTest, MovingRowsDoesNotRenumber)
+{
+    QStringList column;
+    runOn(kCounted, QStringLiteral("| 2"), QStringLiteral("noteAppC:table-move-row-down"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "3", "2"}));
+}
+
+TEST(TableCounterTest, AKeywordHeaderOutsideTheFirstColumnCounts)
+{
+    const QString note = QStringLiteral("| name | ID |\n| --- | --- |\n| ann | 7 |\n| bob | 8 |\n");
+    QStringList ids;
+    const QString text = runOn(note, QStringLiteral("| bob"), QStringLiteral("noteAppC:table-insert-row-after"), &ids, 1);
+    EXPECT_EQ(ids, (QStringList{"7", "8", "9"}));
+    EXPECT_EQ(bodyColumn(text, 0), (QStringList{"ann", "bob", ""})) << "the names are not a counter";
+    // Other keywords, case and punctuation do not matter; a non-keyword second column does not count.
+    const QString nr = QStringLiteral("| name | (Nr.) | x |\n| --- | --- | --- |\n| ann | 1 | 1 |\n");
+    QStringList second;
+    const QString out = runOn(nr, QStringLiteral("| ann"), QStringLiteral("noteAppC:table-insert-row-after"), &second, 1);
+    EXPECT_EQ(second, (QStringList{"1", "2"}));
+    EXPECT_EQ(bodyColumn(out, 2), (QStringList{"1", ""}));
+}
+
+TEST(TableCounterTest, PatternsAndPaddingCarryOver)
+{
+    QStringList column;
+    runOn(QStringLiteral("| id | t |\n| --- | --- |\n| RA.1 | a |\n| RA.2 | b |\n"), QStringLiteral("| RA.2"),
+          QStringLiteral("noteAppC:table-insert-row-after"), &column);
+    EXPECT_EQ(column, (QStringList{"RA.1", "RA.2", "RA.3"}));
+    runOn(QStringLiteral("| id | t |\n| --- | --- |\n| bingus.08 | a |\n| bingus.09 | b |\n"), QStringLiteral("| bingus.09"),
+          QStringLiteral("noteAppC:table-insert-row-after"), &column);
+    EXPECT_EQ(column, (QStringList{"bingus.08", "bingus.09", "bingus.10"}));
+    // A single cell is a sequence.
+    runOn(QStringLiteral("| n | t |\n| --- | --- |\n| 5 | a |\n"), QStringLiteral("| 5"),
+          QStringLiteral("noteAppC:table-insert-row-after"), &column);
+    EXPECT_EQ(column, (QStringList{"5", "6"}));
+}
+
+TEST(TableCounterTest, AKeywordColumnWithNothingInItStartsAtOne)
+{
+    QStringList column;
+    runOn(QStringLiteral("| # | t |\n| --- | --- |\n| | a |\n"), QStringLiteral("| a"),
+          QStringLiteral("noteAppC:table-insert-row-after"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "2"}));
+    // A first column with no keyword and no number is text.
+    runOn(QStringLiteral("| name | t |\n| --- | --- |\n| ann | a |\n"), QStringLiteral("| a"),
+          QStringLiteral("noteAppC:table-insert-row-after"), &column);
+    EXPECT_EQ(column, (QStringList{"ann", ""}));
+}
+
+TEST(TableCounterTest, ABrokenSequenceIsLeftAlone)
+{
+    const QString broken = QStringLiteral("| n | name |\n| --- | --- |\n| 1 | a |\n| 5 | b |\n| 3 | c |\n");
+    QStringList column;
+    runOn(broken, QStringLiteral("| 1"), QStringLiteral("noteAppC:table-insert-row-after"), &column);
+    EXPECT_EQ(column, (QStringList{"1", "", "5", "3"}));
+    runOn(broken, QStringLiteral("| 1"), QStringLiteral("noteAppC:table-delete-row"), &column);
+    EXPECT_EQ(column, (QStringList{"5", "3"}));
+    auto editor = editorWith(broken, after(broken, QStringLiteral("| c")), MarkdownEditor::Mode::LivePreview);
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+    EXPECT_EQ(bodyColumn(editor->noteText(), 0), (QStringList{"1", "5", "3", ""}));
+    // Typing a value that breaks a counting column stops it, restart or not.
+    auto typed = editorWith(kCounted, after(kCounted, QStringLiteral("| 2")), MarkdownEditor::Mode::Source);
+    QTest::keyClick(typed.get(), Qt::Key_Backspace);
+    QTest::keyClicks(typed.get(), QStringLiteral("9"));
+    const QString changed = typed->noteText();
+    auto again = editorWith(changed, after(changed, QStringLiteral("| 3")), MarkdownEditor::Mode::LivePreview);
+    ASSERT_TRUE(again->runCommand(QStringLiteral("noteAppC:table-insert-row-after")));
+    EXPECT_EQ(bodyColumn(again->noteText(), 0), (QStringList{"1", "9", "3", ""})) << again->noteText().toStdString();
+}
+
+TEST(TableCounterTest, EachRowCommandIsOneUndoStep)
+{
+    for (const char *command : {"insert-row-after", "insert-row-before", "delete-row", "duplicate-row"}) {
+        auto editor = editorWith(kCounted, after(kCounted, QStringLiteral("| 2")), MarkdownEditor::Mode::LivePreview);
+        ASSERT_TRUE(editor->runCommand(QStringLiteral("noteAppC:table-") + QString::fromLatin1(command)));
+        ASSERT_NE(editor->noteText(), kCounted) << command;
+        undo(*editor);
+        EXPECT_EQ(editor->noteText(), kCounted) << command;
+    }
+    auto editor = editorWith(kCounted, after(kCounted, QStringLiteral("| c")), MarkdownEditor::Mode::LivePreview);
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kCounted);
 }
