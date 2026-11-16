@@ -1060,7 +1060,8 @@ bool MarkdownEditor::entityRevealed(const Substitution &substitution) const
     return d->m_mode == Mode::LivePreview && !vimStepping && d->m_anchor == d->m_cursor
            && substitution.range.start <= d->m_cursor
            && d->m_cursor <= substitution.range.end
-           && (d->m_text.at(substitution.range.start) == QLatin1Char('&') || d->m_text.at(substitution.range.start) == QLatin1Char('\\'));
+           && (d->m_text.at(substitution.range.start) == QLatin1Char('&') || d->m_text.at(substitution.range.start) == QLatin1Char('\\')
+               || QStringView(d->m_text).sliced(substitution.range.start).startsWith(QLatin1String("<count"), Qt::CaseInsensitive));
 }
 
 QList<Range> MarkdownEditor::revealedEntities() const

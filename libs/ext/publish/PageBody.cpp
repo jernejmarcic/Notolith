@@ -1087,6 +1087,11 @@ private:
         case InlineNode::Tag:
             return renderTag(note.decorations.styles.at(node.dataIndex).payload);
         case InlineNode::Html:
+            // `<count>`: the number the editor shows (Parser.cpp's scanCountTags).
+            for (const Substitution &substitution : note.decorations.substitutions) {
+                if (substitution.range == node.range)
+                    return escapeHtml(substitution.text);
+            }
             return renderRawHtml(stripHiddenRanges(node.range, note), false);
         case InlineNode::Math:
             return renderMath(note.decorations.maths.at(node.dataIndex), note);
