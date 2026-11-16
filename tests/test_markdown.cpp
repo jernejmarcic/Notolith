@@ -2288,21 +2288,14 @@ TEST(EntityTest, ReferencesInTextAreSubstitutions)
 }
 
 namespace {
-/// What each `<count>` in `text` shows, in order.
+/// What each `<count>` in `text` should hold, in order.
 QStringList countsIn(const QString &text)
 {
     const Decorations decorations = Parser().parseAll(text).decorations;
-    QList<Substitution> tags;
-    for (const Substitution &substitution : decorations.substitutions) {
-        if (sliceOf(text, substitution.range).startsWith(QLatin1Char('<')))
-            tags << substitution;
-    }
-    std::sort(tags.begin(), tags.end(),
-              [](const Substitution &a, const Substitution &b) { return a.range.start < b.range.start; });
     QStringList shown;
-    for (const Substitution &tag : std::as_const(tags)) {
-        EXPECT_TRUE(sliceOf(text, tag.range).toLower().startsWith(QStringLiteral("<count")));
-        shown << tag.text;
+    for (const CountField &field : decorations.counts) {
+        EXPECT_TRUE(sliceOf(text, field.open).toLower().startsWith(QStringLiteral("<count")));
+        shown << field.shown;
     }
     return shown;
 }
@@ -2346,6 +2339,21 @@ TEST(CountTagTest, InAListItemItCountsTheItemsUnderIt)
               QStringList{QStringLiteral("2")});
     // No list under its item: the next list after the whole list.
     EXPECT_EQ(countsIn(QStringLiteral("- see <count>\n- other\n\nfiller\n")), QStringList{QStringLiteral("?")});
+}
+
+TEST(CountTagTest, TheNumberInTheFileIsTextBetweenHiddenTags)
+{
+    const QString text = QStringLiteral("There are <count>7</count> items\n\n- a\n- b\n");
+    const Decorations decorations = Parser().parseAll(text).decorations;
+    ASSERT_EQ(decorations.counts.size(), 1);
+    const CountField &field = decorations.counts.first();
+    EXPECT_EQ(sliceOf(text, field.value), QStringLiteral("7"));
+    EXPECT_EQ(sliceOf(text, field.close), QStringLiteral("</count>"));
+    EXPECT_EQ(field.shown, QStringLiteral("2"));
+    EXPECT_TRUE(decorations.syntax.contains(field.open));
+    EXPECT_TRUE(decorations.syntax.contains(field.close));
+    for (const Substitution &substitution : decorations.substitutions)
+        EXPECT_FALSE(sliceOf(text, substitution.range).startsWith(QLatin1Char('<')));
 }
 
 TEST(CountTagTest, CodeAndOtherTagsStayAsWritten)

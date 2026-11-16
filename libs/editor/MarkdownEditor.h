@@ -1332,6 +1332,9 @@ private:
     QList<std::pair<qsizetype, QString>> foldSites() const;
     void applyFoldState(const QStringList &state);
     void adoptParse(); ///< takes the finished pool parse, once; see finishParse()
+    /// Writes each `<count>` tag's number into the text after a parse of an
+    /// edited note, so the file itself shows it (Parser.cpp's scanCountTags).
+    void syncCountTags();
     /// adoptDecorations() for a parse that replaces a big note's chunks: the text at the top
     /// of the viewport stays there, and the first such landing fires the hook.
     void landDecorations(quint64 version, Decorations decorations, QList<Property> properties,

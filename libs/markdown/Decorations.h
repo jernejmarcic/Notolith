@@ -338,6 +338,15 @@ struct FootnoteDefinition {
     int number = 0;
 };
 
+/// A `<count>` tag (Parser.cpp's scanCountTags): `<count>N</count>` in the
+/// file, its number kept current by the editor, so any Markdown app shows it.
+struct CountField {
+    Range open;    ///< "<count>" or "<count depth=2>"
+    Range value;   ///< the number between the tags; empty at open.end when there is no close tag yet
+    Range close;   ///< "</count>"; invalid for a bare tag
+    QString shown; ///< what the value should be: the count, or "?"
+};
+
 /// Everything the editor needs that the index does not: which ranges are
 /// syntax to hide, what styling the rest gets, and where the blocks are.
 struct Decorations {
@@ -385,6 +394,8 @@ struct Decorations {
     /// disjoint: the excluded runs and, if asked, the unrendered syntax
     /// (ParseOptions). Empty when the count is of everything.
     QList<Range> uncounted;
+    /// Every `<count>` tag, sorted by position.
+    QList<CountField> counts;
 
     /// Ranges to hide for the block containing `sourceOffset`, or all of them
     /// when `activeBlock` is not a real offset.

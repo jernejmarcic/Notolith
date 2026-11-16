@@ -1078,20 +1078,27 @@ publisher do not, so they pay nothing. Output: `StyleSpan::Kind::BareBracket`.
 
 ## Counts (`<count>`)
 
-`<count>` in running text shows the number of items in the list, or the body
-rows of the table, that follows its block: "There are `<count>` items below"
-above a three-item list reads "There are 3 items below" in Live preview,
-Reading and published pages. `<count depth=N>` sets how deep items count: 1 is
-the top level only (the default), 2 adds their children, 0 counts every level.
-Inside a list item that has a list under it, the tag counts that nested list.
-The next block being anything else shows `?`. Tag name and attribute are
-case-insensitive; quotes around N are optional.
+`<count>` in running text counts the items of the list, or the body rows of
+the table, that follows its block. The number is written into the file, so
+any Markdown app shows it: type "There are `<count>` items below" above a
+three-item list and the line becomes `There are <count>3</count> items below`.
+Live preview and Reading hide the tags and show "There are 3 items below";
+Source mode, and the caret in or touching the tags, show them as written.
+Other apps drop the unknown tags and keep the number.
 
-The file keeps the tag: it is a substitution, like an entity, so Source mode
-and the caret touching it show `<count>` as written, and the number changes
-with the list at the next parse. Not inside code, maths or comments. Other
-Markdown apps see an unknown HTML tag. Found by `scanCountTags` in
-`libs/markdown/Parser.cpp` from the parse's own blocks, list items and tables.
+`<count depth=N>` sets how deep items count: 1 is the top level only (the
+default), 2 adds their children, 0 counts every level. Inside a list item that
+has a list under it, the tag counts that nested list. The next block being
+anything else gives `?`. Tag name and attribute are case-insensitive; quotes
+around N are optional. Not inside code, maths or comments.
+
+The editor rewrites the number after each parse of a note being edited
+(`MarkdownEditor::syncCountTags`), never on opening one: a file changed
+elsewhere keeps its old number until the next edit. The rewrite is no undo step
+of its own; undo takes it back with the edit that changed the count. A typed
+`<count>` gets its number and `</count>`, with the caret after them. The
+numbers come from `scanCountTags` in `libs/markdown/Parser.cpp`
+(`Decorations::counts`), from the parse's own blocks, list items and tables.
 
 ## Meta notes ([...])
 
