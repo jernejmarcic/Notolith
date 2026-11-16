@@ -1192,6 +1192,11 @@ QList<Range> MarkdownEditor::revealedSyntax(const BlockView &view) const
         if (caret >= pair.open.start && caret <= pair.close.end)
             revealed << pair.open << pair.close;
     }
+    // And both tags of a `<count>N</count>` the caret is in or touches.
+    for (const CountField &field : d->m_decorations.counts) {
+        if (field.close.isValid() && caret >= field.open.start && caret <= field.close.end)
+            revealed << field.open << field.close;
+    }
 
     const qsizetype line = d->m_lines.lineAt(caret);
     const qsizetype lineStart = d->m_lines.lineStart(line);
@@ -1431,6 +1436,59 @@ void MarkdownEditor::reparse()
                     std::move(result.metadata.headings));
     if (dropped && !d->m_pendingFolds.isEmpty()) // parked for the parse that was dropped
         applyFoldState(std::exchange(d->m_pendingFolds, {}));
+    syncCountTags();
+}
+
+void MarkdownEditor::syncCountTags()
+{
+    // Only a note being edited: opening one never changes its file.
+    if (d->m_decorations.counts.isEmpty() || !isModified() || d->m_parsedVersion != d->m_textVersion)
+        return;
+    struct Fix {
+        qsizetype at;
+        qsizetype removed;
+        QString inserted;
+        bool bare = false;
+    };
+    QList<Fix> fixes;
+    for (const CountField &field : std::as_const(d->m_decorations.counts)) {
+        if (field.close.isValid()) {
+            if (QStringView(d->m_text).mid(field.value.start, field.value.length()) != field.shown)
+                fixes.append({field.value.start, field.value.length(), field.shown, false});
+            continue;
+        }
+        // A bare tag gets its number and close tag, taking in digits already
+        // after it - unless a close tag is being typed or taken apart there.
+        static const QRegularExpression digits(QStringLiteral("^[0-9?]*(<?)"));
+        const auto run = digits.matchView(QStringView(d->m_text).sliced(field.open.end));
+        if (run.capturedLength(1) == 0)
+            fixes.append({field.open.end, run.capturedLength(0), field.shown + QStringLiteral("</count>"), true});
+    }
+    if (fixes.isEmpty())
+        return;
+    std::sort(fixes.begin(), fixes.end(), [](const Fix &a, const Fix &b) { return a.at > b.at; });
+    qsizetype cursor = d->m_cursor;
+    qsizetype anchor = d->m_anchor;
+    for (const Fix &fix : std::as_const(fixes)) {
+        // Like an edit from elsewhere: no undo step of its own (undo takes it
+        // back with the edit that caused it), the caret stays put. A caret
+        // right after a bare tag moves past what is written there.
+        const auto follow = [&fix](qsizetype offset) {
+            if (offset > fix.at + fix.removed || (fix.bare && offset == fix.at + fix.removed))
+                return offset + fix.inserted.size() - fix.removed;
+            return offset > fix.at ? fix.at + fix.inserted.size() : offset;
+        };
+        cursor = follow(cursor);
+        anchor = follow(anchor);
+        d->m_applyingExternal = true;
+        applyEdit(fix.at, fix.removed, fix.inserted);
+        d->m_applyingExternal = false;
+        emit edited(fix.at, fix.removed, fix.inserted); // other panes of this note follow
+    }
+    d->m_cursor = qMin(cursor, d->m_text.size());
+    d->m_anchor = qMin(anchor, d->m_text.size());
+    d->m_activeBlock = blockAt(d->m_cursor);
+    viewport()->update();
 }
 
 int MarkdownEditor::parseCountForTest() const
@@ -1485,10 +1543,13 @@ void MarkdownEditor::adoptParse()
     landDecorations(job.version, std::move(job.decorations), std::move(job.properties), std::move(job.headings));
     d->m_parsedVersion = job.version;
     // The buffer moved on while we were parsing: go round again.
-    if (d->m_parsedVersion != d->m_textVersion)
+    if (d->m_parsedVersion != d->m_textVersion) {
         startParse();
-    else if (!d->m_pendingFolds.isEmpty())
+        return;
+    }
+    if (!d->m_pendingFolds.isEmpty())
         applyFoldState(std::exchange(d->m_pendingFolds, {}));
+    syncCountTags();
 }
 
 void MarkdownEditor::startParse()

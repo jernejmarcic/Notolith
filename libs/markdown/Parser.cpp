@@ -1427,7 +1427,8 @@ int countItems(const QList<ListItemSpan> &items, const Range &within, int base, 
 /// default, N levels with a depth, every level with depth=0) or the body
 /// rows of the table that follows the block holding it; "?" when the next
 /// block is neither. In a list item with a list of its own under it, that
-/// list. The file keeps the tag: a substitution, like an entity.
+/// list. The editor writes the number into the file, `<count>3</count>`, so
+/// any Markdown app shows it (MarkdownEditor::syncCountTags).
 void scanCountTags(const QString &text, Decorations &decorations)
 {
     if (!text.contains(QLatin1String("<count"), Qt::CaseInsensitive))
@@ -1484,7 +1485,24 @@ void scanCountTags(const QString &text, Decorations &decorations)
                 }
             }
         }
-        decorations.substitutions.append({span.range, shown});
+        // `<count>N</count>`: the number is text in the file, the tags are
+        // syntax live preview hides. A bare `<count>` (the editor has not
+        // written its number yet) shows the number in its place.
+        static const QRegularExpression closed(QStringLiteral("^([0-9]*\\??)</count\\s*>"),
+                                               QRegularExpression::CaseInsensitiveOption);
+        const auto rest = closed.matchView(QStringView(text).sliced(span.range.end));
+        CountField field;
+        field.open = span.range;
+        field.shown = shown;
+        if (rest.hasMatch()) {
+            field.value = {span.range.end, span.range.end + rest.capturedLength(1)};
+            field.close = {field.value.end, span.range.end + rest.capturedLength(0)};
+            decorations.syntax << field.open << field.close;
+        } else {
+            field.value = {span.range.end, span.range.end};
+            decorations.substitutions.append({span.range, shown});
+        }
+        decorations.counts.append(field);
     }
 }
 

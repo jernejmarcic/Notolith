@@ -408,11 +408,14 @@ TEST(PublishTest, ACountTagIsPublishedAsItsNumber)
 {
     TestSite site({
         {QStringLiteral("Note.md"), "There are <count> items below\n\n- one\n- two\n- three\n"},
+        {QStringLiteral("Written.md"), "There are <count>3</count> rows\n\n- one\n- two\n- three\n"},
     });
     site.publish();
     const QString page = site.read(QStringLiteral("note.html"));
     ASSERT_FALSE(page.isEmpty());
     EXPECT_TRUE(page.contains(QStringLiteral("There are 3 items below"))) << page.toStdString();
+    const QString written = site.read(QStringLiteral("written.html"));
+    EXPECT_TRUE(written.contains(QStringLiteral("There are 3 rows"))) << written.toStdString();
 }
 
 TEST(PublishTest, AnHTMLHeadingIsDrawnOnceAndIsAnIndexedHeading)

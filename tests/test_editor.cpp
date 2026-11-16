@@ -357,35 +357,63 @@ TEST(MarkdownEditorTest, RendersTheWholeNoteUntilTheReaderClicksIn)
     EXPECT_EQ(editor->displayText(), QStringLiteral("Title\n\nSome **bold** text.\n"));
 }
 
-TEST(MarkdownEditorTest, ACountTagShowsTheNumberOfItemsBelowIt)
+TEST(MarkdownEditorTest, ACountTagWritesTheNumberOfItemsBelowItIntoTheFile)
 {
-    const QString source = QStringLiteral("There are <count> items below\n\n- item 1\n- item 2\n");
+    const QString source = QStringLiteral("There are <count>2</count> items below\n\n- item 1\n- item 2\n");
     auto editor = editorWith(source);
     editor->show();
     (void)editor->grab();
     EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are 2 items below\n")))
         << editor->displayText().toStdString();
 
-    // The caret touching the tag shows it as written, as with an entity.
+    // The caret on the tag's line shows the tags, like any hidden syntax.
     editor->enterBlockAt(source.indexOf(QStringLiteral("<count>")) + 1);
-    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are <count> items below\n")))
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are <count>2</count> items below\n")))
         << editor->displayText().toStdString();
 
-    // A new item counts at once; the file keeps the tag.
+    // A new item: the number in the file follows, in the same undo step.
     editor->setCursorOffset(source.size() - 1);
     QTest::keyClick(editor.get(), Qt::Key_Return);
     QTest::keyClicks(editor.get(), QStringLiteral("item 3"));
+    editor->finishParse();
     QTest::qWait(80);
-    EXPECT_EQ(editor->noteText(), source + QStringLiteral("- item 3\n"));
+    const QString three = QStringLiteral("There are <count>3</count> items below\n\n- item 1\n- item 2\n- item 3\n");
+    EXPECT_EQ(editor->noteText(), three);
+    EXPECT_EQ(editor->cursorOffset(), three.size() - 1) << "the caret stays where it was typing";
     EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are 3 items below\n")))
         << editor->displayText().toStdString();
+    // Undo: the typing, then the new item with the count it brought.
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("There are <count>3</count> items below\n\n- item 1\n- item 2\n- \n"));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), source);
 
     editor->setMode(MarkdownEditor::Mode::Source);
-    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are <count> items below\n")))
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are <count>2</count> items below\n")))
         << editor->displayText().toStdString();
-    editor->setMode(MarkdownEditor::Mode::Reading);
-    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are 3 items below\n")))
-        << editor->displayText().toStdString();
+}
+
+TEST(MarkdownEditorTest, ATypedCountTagGetsItsNumberAndCloseTag)
+{
+    const QString source = QStringLiteral("There are  items\n\n- a\n- b\n- c\n");
+    auto editor = editorWith(source);
+    editor->setCursorOffset(10);
+    QTest::keyClicks(editor.get(), QStringLiteral("<count>"));
+    editor->finishParse();
+    QTest::qWait(80);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("There are <count>3</count> items\n\n- a\n- b\n- c\n"));
+    EXPECT_EQ(editor->cursorOffset(), qsizetype(QStringLiteral("There are <count>3</count>").size()))
+        << "typing goes on after the tag";
+}
+
+TEST(MarkdownEditorTest, OpeningANoteNeverRewritesItsCounts)
+{
+    const QString source = QStringLiteral("<count>9</count> and <count>\n\n- a\n");
+    auto editor = editorWith(source);
+    editor->finishParse();
+    QTest::qWait(80);
+    EXPECT_EQ(editor->noteText(), source);
+    EXPECT_FALSE(editor->isModified());
 }
 
 TEST(MarkdownEditorTest, AResizeRewrapsOnlyWhenTheTextWidthChanges)
