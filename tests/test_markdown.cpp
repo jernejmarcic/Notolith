@@ -2287,6 +2287,73 @@ TEST(EntityTest, ReferencesInTextAreSubstitutions)
         << seen.join(QLatin1Char('|')).toStdString().c_str();
 }
 
+namespace {
+/// What each `<count>` in `text` shows, in order.
+QStringList countsIn(const QString &text)
+{
+    const Decorations decorations = Parser().parseAll(text).decorations;
+    QList<Substitution> tags;
+    for (const Substitution &substitution : decorations.substitutions) {
+        if (sliceOf(text, substitution.range).startsWith(QLatin1Char('<')))
+            tags << substitution;
+    }
+    std::sort(tags.begin(), tags.end(),
+              [](const Substitution &a, const Substitution &b) { return a.range.start < b.range.start; });
+    QStringList shown;
+    for (const Substitution &tag : std::as_const(tags)) {
+        EXPECT_TRUE(sliceOf(text, tag.range).toLower().startsWith(QStringLiteral("<count")));
+        shown << tag.text;
+    }
+    return shown;
+}
+} // namespace
+
+TEST(CountTagTest, CountsTheTopLevelItemsOfTheNextList)
+{
+    EXPECT_EQ(countsIn(QStringLiteral("There are <count> items below\n\n* item 1\n* item 2\n* item 3\n")),
+              QStringList{QStringLiteral("3")});
+    // Blank lines between are fine; tasks and ordered items count.
+    EXPECT_EQ(countsIn(QStringLiteral("<COUNT> things\n\n\n\n1. a\n2. b\n- [ ] c\n")),
+              QStringList{QStringLiteral("2")}); // "- [ ] c" starts a second list
+    EXPECT_EQ(countsIn(QStringLiteral("# Steps: <count>\n\n- [ ] a\n- [x] b\n")), QStringList{QStringLiteral("2")});
+}
+
+TEST(CountTagTest, DepthChoosesHowManyLevelsCount)
+{
+    const QString list = QStringLiteral("\n\n- a\n  - a1\n    - a1x\n  - a2\n- b\n");
+    EXPECT_EQ(countsIn(QStringLiteral("n <count>") + list), QStringList{QStringLiteral("2")});
+    EXPECT_EQ(countsIn(QStringLiteral("n <count depth=1>") + list), QStringList{QStringLiteral("2")});
+    EXPECT_EQ(countsIn(QStringLiteral("n <count depth=2>") + list), QStringList{QStringLiteral("4")});
+    EXPECT_EQ(countsIn(QStringLiteral("n <count depth=\"3\">") + list), QStringList{QStringLiteral("5")});
+    EXPECT_EQ(countsIn(QStringLiteral("n <count Depth='0'>") + list), QStringList{QStringLiteral("5")});
+}
+
+TEST(CountTagTest, CountsTheBodyRowsOfTheNextTable)
+{
+    EXPECT_EQ(countsIn(QStringLiteral("<count> rows\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n")),
+              QStringList{QStringLiteral("2")});
+}
+
+TEST(CountTagTest, AnotherBlockInBetweenShowsAQuestionMark)
+{
+    EXPECT_EQ(countsIn(QStringLiteral("<count> items\n\nnot a list\n\n- a\n")), QStringList{QStringLiteral("?")});
+    EXPECT_EQ(countsIn(QStringLiteral("<count> at the end\n")), QStringList{QStringLiteral("?")});
+}
+
+TEST(CountTagTest, InAListItemItCountsTheItemsUnderIt)
+{
+    EXPECT_EQ(countsIn(QStringLiteral("- parts (<count>)\n  - x\n  - y\n- other\n")),
+              QStringList{QStringLiteral("2")});
+    // No list under its item: the next list after the whole list.
+    EXPECT_EQ(countsIn(QStringLiteral("- see <count>\n- other\n\nfiller\n")), QStringList{QStringLiteral("?")});
+}
+
+TEST(CountTagTest, CodeAndOtherTagsStayAsWritten)
+{
+    EXPECT_TRUE(countsIn(QStringLiteral("`<count>` and <counter> and <count depth=x>\n\n```\n<count>\n```\n\n- a\n"))
+                    .isEmpty());
+}
+
 TEST(HeadingSectionTest, MarkdownAndHTMLHeadingsBothNameASection)
 {
     const QString note = QStringLiteral(

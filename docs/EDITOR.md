@@ -1076,6 +1076,23 @@ The runs come from one linear pass (`scanRuns` in `libs/markdown/Parser.cpp`),
 asked for through `ParseOptions::brackets` - the editor does, the indexer and
 publisher do not, so they pay nothing. Output: `StyleSpan::Kind::BareBracket`.
 
+## Counts (`<count>`)
+
+`<count>` in running text shows the number of items in the list, or the body
+rows of the table, that follows its block: "There are `<count>` items below"
+above a three-item list reads "There are 3 items below" in Live preview,
+Reading and published pages. `<count depth=N>` sets how deep items count: 1 is
+the top level only (the default), 2 adds their children, 0 counts every level.
+Inside a list item that has a list under it, the tag counts that nested list.
+The next block being anything else shows `?`. Tag name and attribute are
+case-insensitive; quotes around N are optional.
+
+The file keeps the tag: it is a substitution, like an entity, so Source mode
+and the caret touching it show `<count>` as written, and the number changes
+with the list at the next parse. Not inside code, maths or comments. Other
+Markdown apps see an unknown HTML tag. Found by `scanCountTags` in
+`libs/markdown/Parser.cpp` from the parse's own blocks, list items and tables.
+
 ## Meta notes ([...])
 
 Setting `editor.metaNotes` (Settings > Editor, **off** by default). A writer's

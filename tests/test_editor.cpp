@@ -357,6 +357,37 @@ TEST(MarkdownEditorTest, RendersTheWholeNoteUntilTheReaderClicksIn)
     EXPECT_EQ(editor->displayText(), QStringLiteral("Title\n\nSome **bold** text.\n"));
 }
 
+TEST(MarkdownEditorTest, ACountTagShowsTheNumberOfItemsBelowIt)
+{
+    const QString source = QStringLiteral("There are <count> items below\n\n- item 1\n- item 2\n");
+    auto editor = editorWith(source);
+    editor->show();
+    (void)editor->grab();
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are 2 items below\n")))
+        << editor->displayText().toStdString();
+
+    // The caret touching the tag shows it as written, as with an entity.
+    editor->enterBlockAt(source.indexOf(QStringLiteral("<count>")) + 1);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are <count> items below\n")))
+        << editor->displayText().toStdString();
+
+    // A new item counts at once; the file keeps the tag.
+    editor->setCursorOffset(source.size() - 1);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    QTest::keyClicks(editor.get(), QStringLiteral("item 3"));
+    QTest::qWait(80);
+    EXPECT_EQ(editor->noteText(), source + QStringLiteral("- item 3\n"));
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are 3 items below\n")))
+        << editor->displayText().toStdString();
+
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are <count> items below\n")))
+        << editor->displayText().toStdString();
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("There are 3 items below\n")))
+        << editor->displayText().toStdString();
+}
+
 TEST(MarkdownEditorTest, AResizeRewrapsOnlyWhenTheTextWidthChanges)
 {
     // With readable line length on, a window wider than it keeps every line

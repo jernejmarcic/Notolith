@@ -10,6 +10,7 @@
 #include <QHash>
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 
 #include <md4qt/doc.h>
@@ -1408,6 +1409,85 @@ void scanEscapes(const QString &text, QList<Range> masked, Decorations &decorati
     }
 }
 
+/// The items of `items` inside `within` whose nesting below `base` is under
+/// `depth` levels (0: every level).
+int countItems(const QList<ListItemSpan> &items, const Range &within, int base, int depth)
+{
+    int count = 0;
+    for (const ListItemSpan &item : items) {
+        if (item.range.start >= within.start && item.range.end <= within.end && item.indent >= base
+            && (depth == 0 || item.indent - base < depth))
+            ++count;
+    }
+    return count;
+}
+
+/// Notolith's `<count>` and `<count depth=N>`: inline HTML that live preview
+/// and reading show as the number of items in the list (top level only by
+/// default, N levels with a depth, every level with depth=0) or the body
+/// rows of the table that follows the block holding it; "?" when the next
+/// block is neither. In a list item with a list of its own under it, that
+/// list. The file keeps the tag: a substitution, like an entity.
+void scanCountTags(const QString &text, Decorations &decorations)
+{
+    if (!text.contains(QLatin1String("<count"), Qt::CaseInsensitive))
+        return;
+    static const QRegularExpression tag(
+        QStringLiteral("^<count(?:\\s+depth\\s*=\\s*([\"']?)(\\d{1,3})\\1)?\\s*/?>$"),
+        QRegularExpression::CaseInsensitiveOption);
+    for (const StyleSpan &span : std::as_const(decorations.styles)) {
+        if (span.kind != StyleSpan::Kind::Html)
+            continue;
+        const auto match = tag.matchView(QStringView(text).mid(span.range.start, span.range.length()));
+        if (!match.hasMatch())
+            continue;
+        const int depth = match.hasCaptured(2) ? match.captured(2).toInt() : 1;
+        const qsizetype at = span.range.start;
+
+        // The innermost list item holding the tag, if it has items under it.
+        const ListItemSpan *owner = nullptr;
+        for (const ListItemSpan &item : std::as_const(decorations.listItems)) {
+            if (item.range.start <= at && at < item.range.end && (!owner || item.indent > owner->indent))
+                owner = &item;
+        }
+        QString shown;
+        if (owner) {
+            const int nested = countItems(decorations.listItems, owner->range, owner->indent + 1, depth);
+            if (nested > 0)
+                shown = QString::number(nested);
+        }
+        if (shown.isEmpty()) {
+            const BlockSpan *holder = nullptr;
+            const BlockSpan *next = nullptr;
+            for (const BlockSpan &block : std::as_const(decorations.blocks)) {
+                if (block.range.start <= at && at < block.range.end)
+                    holder = &block;
+            }
+            const qsizetype after = holder ? holder->range.end : span.range.end;
+            for (const BlockSpan &block : std::as_const(decorations.blocks)) {
+                if (block.range.start >= after && (!next || block.range.start < next->range.start))
+                    next = &block;
+            }
+            shown = QStringLiteral("?");
+            if (next && next->kind == BlockSpan::Kind::List) {
+                int base = std::numeric_limits<int>::max();
+                for (const ListItemSpan &item : std::as_const(decorations.listItems)) {
+                    if (item.range.start >= next->range.start && item.range.end <= next->range.end)
+                        base = qMin(base, item.indent);
+                }
+                if (base != std::numeric_limits<int>::max())
+                    shown = QString::number(countItems(decorations.listItems, next->range, base, depth));
+            } else if (next && next->kind == BlockSpan::Kind::Table) {
+                for (const TableSpan &table : std::as_const(decorations.tables)) {
+                    if (table.range.start == next->range.start)
+                        shown = QString::number(qMax(0, int(table.rows.size()) - table.headerRows));
+                }
+            }
+        }
+        decorations.substitutions.append({span.range, shown});
+    }
+}
+
 /// A paragraph that holds `$$ ... $$` on lines of its own - md4qt does not end
 /// a paragraph where a formula starts - is cut into the text before it, the
 /// formula, and the text after, so the formula is a block the editor can draw.
@@ -2580,6 +2660,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
         scanEscapes(text, notText, walk.decorations);
     }
     splitParagraphsAtDisplayMath(text, walk.decorations);
+    scanCountTags(text, walk.decorations);
     result.decorations = std::move(walk.decorations);
     if (frontmatter.isValid()) {
         result.decorations.blocks.prepend({BlockSpan::Kind::Frontmatter, frontmatter, 0});

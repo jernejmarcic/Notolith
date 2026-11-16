@@ -404,6 +404,17 @@ TEST(PublishTest, RawHtmlSanitised)
     EXPECT_TRUE(page.contains(QStringLiteral("<u>kept</u>")));
 }
 
+TEST(PublishTest, ACountTagIsPublishedAsItsNumber)
+{
+    TestSite site({
+        {QStringLiteral("Note.md"), "There are <count> items below\n\n- one\n- two\n- three\n"},
+    });
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    ASSERT_FALSE(page.isEmpty());
+    EXPECT_TRUE(page.contains(QStringLiteral("There are 3 items below"))) << page.toStdString();
+}
+
 TEST(PublishTest, AnHTMLHeadingIsDrawnOnceAndIsAnIndexedHeading)
 {
     TestSite site({
