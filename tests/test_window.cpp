@@ -6896,6 +6896,39 @@ TEST_F(WindowTest, ANotebookHasACellToolbarThatEditsWholeCells)
 #endif
 
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+// A notebook's code cell is typed into as in Jupyter: clicking its empty panel puts the caret in the listing,
+// whose fence lines stay hidden (they would push it down and take the typing onto `` ```python ``).
+TEST_F(WindowTest, ClickingANotebooksEmptyCodeCellTypesIntoIt)
+{
+    write(QStringLiteral("Click.ipynb"), QByteArray());
+    MainWindow window;
+    window.resize(1000, 700);
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Click.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setFocus();
+    QTest::keyClicks(editor, QStringLiteral("# EHR"));
+    window.findChild<QWidget *>(QStringLiteral("notebookBar"))
+        ->findChild<QToolButton *>(QStringLiteral("notebookAddCell"))
+        ->click();
+    ASSERT_EQ(editor->noteText(), QStringLiteral("# EHR\n\n```python\n\n```\n"));
+    const qsizetype listing = editor->noteText().indexOf(QStringLiteral("\n\n```\n")) + 1;
+    QTest::qWait(400); // the debounced parse
+    const qreal inCell = editor->caretRectNow().top();
+    // The caret on the title, then a click in the middle of the empty panel.
+    editor->setCursorOffset(2);
+    QTest::qWait(400);
+    const QRectF panel = editor->blockPanelAt(listing);
+    ASSERT_TRUE(panel.isValid());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, panel.center().toPoint());
+    QApplication::processEvents();
+    EXPECT_EQ(editor->cursorOffset(), listing);
+    EXPECT_EQ(editor->caretRectNow().top(), inCell) << "no fence line opened above the caret";
+    QTest::keyClicks(editor, QStringLiteral("import"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# EHR\n\n```python\nimport\n```\n"));
+}
+
 // The sidebar's Notebook pane: the kernel, then the caret cell's tags and metadata, applied into the file on save.
 TEST_F(WindowTest, TheNotebookPaneEditsTheCaretCellsTagsAndMetadata)
 {

@@ -2815,3 +2815,19 @@ TEST(CodeStylerTest, BracesThatAreNotALanguageStayText)
         EXPECT_EQ(rendered(QStringLiteral("`") + code + QStringLiteral("`\n"), codeStylerOn()), QStringLiteral("x\n"));
     }
 }
+
+TEST(CodeFenceTest, AnEmptyListingIsTheEmptyLineBetweenTheFences)
+{
+    // md4qt puts an empty listing at the end of the opening fence line; a caret there types onto the fence.
+    const QString text = QStringLiteral("# EHR\n\n```python\n\n```\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    const qsizetype emptyLine = text.indexOf(QStringLiteral("\n\n```\n")) + 1;
+    EXPECT_EQ(decorations.codeFences.first().content, (Range{emptyLine, emptyLine}));
+    bool found = false;
+    for (const BlockSpan &block : decorations.blocks)
+        found = found || (block.kind == BlockSpan::Kind::Code && block.range == Range{emptyLine, emptyLine});
+    EXPECT_TRUE(found);
+    // No line between the fences: nowhere else to put it.
+    EXPECT_EQ(decorationsOf(QStringLiteral("```python\n```\n")).codeFences.size(), 1);
+}

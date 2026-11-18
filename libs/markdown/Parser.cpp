@@ -2124,7 +2124,7 @@ void walkItem(MD::Item *item, Walk &walk)
     case MD::ItemType::Code:
     case MD::ItemType::Math:
     case MD::ItemType::RawHtml: {
-        const Range range = rangeOf(*item, map);
+        Range range = rangeOf(*item, map);
         walk.masked.append(range);
 
         const auto kind = item->type() == MD::ItemType::Math      ? StyleSpan::Kind::Math
@@ -2158,6 +2158,14 @@ void walkItem(MD::Item *item, Walk &walk)
             QMap<QString, QString> parameters;
             bool styled = false;
             const bool fenced = item->type() == MD::ItemType::Code && code->isFensedCode() && block && walk.text;
+            if (fenced && range.length() == 0) {
+                // An empty listing: md4qt puts it at the end of the opening fence line. It is the empty line
+                // below, or a caret placed in the listing types onto the fence line (```pythonimport).
+                const Range endDelim = rangeOf(code->endDelim(), map);
+                const qsizetype below = walk.text->indexOf(QLatin1Char('\n'), range.start) + 1;
+                if (below > 0 && endDelim.isValid() && below < endDelim.start)
+                    range = {below, below};
+            }
             if (fenced) {
                 const Range languageRange = rangeOf(code->syntaxPos(), map);
                 attributesRange = fenceAttributesRange(languageRange, map);

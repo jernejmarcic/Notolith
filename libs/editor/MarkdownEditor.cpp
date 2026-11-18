@@ -1185,7 +1185,21 @@ const CodeFenceSpan *MarkdownEditor::fenceAroundCaret() const
     const QList<CodeFenceSpan> &fences = d->m_decorations.codeFences;
     auto it = std::lower_bound(fences.cbegin(), fences.cend(), d->m_cursor,
                                [](const CodeFenceSpan &fence, qsizetype at) { return fence.block.end < at; });
-    return it != fences.cend() && it->depth == 0 && it->block.start <= d->m_cursor ? &*it : nullptr;
+    if (it == fences.cend() || it->depth != 0 || it->block.start > d->m_cursor)
+        return nullptr;
+    if (d->m_notebookLayout) {
+        // A notebook's cell is edited as in Jupyter: no fence lines while the caret is in the listing (showing
+        // them would push the listing down under the pointer and put `` ```python `` where a click lands). They
+        // open only with the caret on one of them, so they can still be edited.
+        const qsizetype opened = d->m_text.indexOf(QLatin1Char('\n'), it->block.start);
+        qsizetype end = it->block.end;
+        while (end > it->block.start && d->m_text.at(end - 1) == QLatin1Char('\n'))
+            --end;
+        const qsizetype closing = d->m_text.lastIndexOf(QLatin1Char('\n'), end - 1) + 1;
+        if (opened >= 0 && opened < closing && d->m_cursor > opened && d->m_cursor < closing)
+            return nullptr;
+    }
+    return &*it;
 }
 
 QList<Range> MarkdownEditor::revealedSyntax(const BlockView &view) const
@@ -3060,7 +3074,10 @@ bool MarkdownEditor::notebookCellBoundary(qsizetype block) const
     const BlockSpan &span = d->m_blocks.at(block).span;
     if (span.kind == BlockSpan::Kind::Code)
         return true;
-    return QStringView(d->m_text).sliced(span.range.start, span.range.length()).trimmed() == QLatin1String("<!-- cell -->");
+    // A fence line is the code cell's (the parser leaves it in a block of its own either side of the listing).
+    const QStringView line = QStringView(d->m_text).sliced(span.range.start, span.range.length()).trimmed();
+    return line == QLatin1String("<!-- cell -->") || line.startsWith(QLatin1String("```"))
+           || line.startsWith(QLatin1String("~~~"));
 }
 
 void MarkdownEditor::paintNotebookCellOutline(QPainter &painter, const BlockView &view, qreal top) const
@@ -3070,7 +3087,7 @@ void MarkdownEditor::paintNotebookCellOutline(QPainter &painter, const BlockView
     const qsizetype index = &view - d->m_blocks.data();
     const bool code = view.span.kind == BlockSpan::Kind::Code;
     if (!code && notebookCellBoundary(index))
-        return; // a `<!-- cell -->` line is between cells
+        return; // a `<!-- cell -->` line, or a fence line, is between cells
     // A long fence is laid out in pieces: one cell all the same.
     const bool first = code ? view.piece == 0 : index == 0 || notebookCellBoundary(index - 1);
     const bool last = code ? view.piece == view.pieces - 1
