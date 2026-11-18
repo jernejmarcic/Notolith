@@ -457,7 +457,14 @@ bool parseIpynb(const QByteArray &bytes, IpynbDocument *document, QString *error
         return false;
     };
     QJsonParseError parseError;
-    const QJsonDocument json = QJsonDocument::fromJson(bytes, &parseError);
+    // An empty file (touch cw.ipynb) is a notebook with no cells yet, as Jupyter and VS Code open it; it stays
+    // empty on disk until something is typed.
+    const QJsonDocument json = bytes.trimmed().isEmpty()
+        ? QJsonDocument(QJsonObject{{QStringLiteral("cells"), QJsonArray()},
+                                    {QStringLiteral("metadata"), QJsonObject()},
+                                    {QStringLiteral("nbformat"), 4},
+                                    {QStringLiteral("nbformat_minor"), 5}})
+        : QJsonDocument::fromJson(bytes, &parseError);
     if (!json.isObject())
         return fail(QStringLiteral("not a notebook: %1").arg(parseError.errorString()));
     const QJsonObject root = json.object();

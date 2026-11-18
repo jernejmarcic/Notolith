@@ -1825,6 +1825,20 @@ TEST(IpynbTest, SomethingThatIsNotANotebookIsRefusedAndNotTouched)
     EXPECT_FALSE(readIpynb("[]", &text, &error));
 }
 
+TEST(IpynbTest, AnEmptyFileIsANotebookWithNoCells)
+{
+    QString text, error;
+    ASSERT_TRUE(readIpynb(QByteArray(), &text, &error)) << error.toStdString();
+    EXPECT_TRUE(text.isEmpty());
+    EXPECT_EQ(mergeIpynb(QByteArray(), text), QByteArray()) << "opening it writes nothing";
+    const QByteArray merged = mergeIpynb("\n", QStringLiteral("# Coursework\n\n```python\nx = 1\n```\n"));
+    const QJsonArray cells = cellsIn(merged);
+    ASSERT_EQ(cells.size(), 2);
+    EXPECT_EQ(cells.at(1).toObject().value(QStringLiteral("cell_type")).toString(), QStringLiteral("code"));
+    EXPECT_EQ(joinedSource(cells.at(1).toObject()), QStringLiteral("x = 1"));
+    expectNbformatValid(merged);
+}
+
 TEST(IpynbTest, UnknownKeysSurviveAnEditAndTheLanguageComesFromTheKernelspec)
 {
     QJsonObject root = QJsonDocument::fromJson(sampleNotebook()).object();
