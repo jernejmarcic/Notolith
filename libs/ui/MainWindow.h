@@ -66,6 +66,7 @@ class EncryptionSession;
 namespace notebook {
 class NotebookController;
 class IpynbPictures;
+struct IpynbCell;
 struct IpynbRuns;
 struct NotebookRunResult;
 }
@@ -381,6 +382,8 @@ private:
         /// Opening another note here opens it in a new tab instead; the tab's
         /// close button is a pin that unpins it.
         bool pinned = false;
+        /// A notebook's cell toolbar over the editor (MainWindowNotebook.cpp), made the first time one opens here.
+        QWidget *notebookBar = nullptr;
     };
     /// Tabs in one split: a tab bar over a stack of their editors.
     struct TabGroup {
@@ -1084,6 +1087,22 @@ QLabel *m_vimStatus = nullptr;
     /// The pictures the markdown cells of each open .ipynb carry, as read when it was opened
     /// (MarkdownEditor::setInlineImages); a notebook with none has no entry.
     QHash<QString, std::shared_ptr<notebook::IpynbPictures>> m_notebookImages;
+    /// A notebook's language and kernel name, as last read (readNote).
+    struct NotebookInfo {
+        QString language;
+        QString kernel;
+    };
+    QHash<QString, NotebookInfo> m_notebookInfo;
+    std::shared_ptr<notebook::IpynbCell> m_notebookCellClipboard; ///< the cell toolbar's cut or copy
+    QTimer m_notebookBarTimer; ///< the toolbar's cell type follows the caret, a moment after it moves
+    /// MainWindowNotebook.cpp: the toolbar shown over a notebook's editor, and what its buttons do.
+    void syncNotebookBar(Leaf *leaf);
+    void syncNotebookCellType(Leaf *leaf);
+    QString notebookLanguageOf(const QString &path) const;
+    /// `change` gets the cells and the caret's (-1 for none), changes the list and returns the cell for the
+    /// caret; the text is rebuilt and the difference applied as one undo step.
+    void editNotebookCells(const std::function<int(QList<notebook::IpynbCell> &, int)> &change);
+    void runNotebookCellAndAdvance();
     crypt::EncryptionSession *m_encryption = nullptr; ///< null in a build without encryption
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;

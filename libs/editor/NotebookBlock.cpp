@@ -449,6 +449,11 @@ QRectF MarkdownEditor::notebookRunRectFor(const BlockView &view, qreal left, qre
         return {};
     const QFontMetricsF metrics(d->m_theme.uiFont());
     const qreal size = metrics.height();
+    if (d->m_notebookLayout && d->m_mode != Mode::Source && !hasCodeHeader(view)) {
+        // Jupyter's place: in the gutter, beside the cell's first line, right of `In [n]:`.
+        const qreal line = lineHeightFor(view.span);
+        return QRectF(left - 32 - size, top + view.textTop + (line - size) / 2, size, size);
+    }
     if (view.editedListing) {
         // No header strip while the caret is in the listing: the control sits
         // in the panel's top-right corner, on the opening fence line, whose
@@ -503,7 +508,9 @@ void MarkdownEditor::paintNotebookHostBadge(QPainter &painter, const BlockView &
         text = tr("wasm");
     if (!view.x().notebookImplicit.isEmpty() || !view.x().notebookImplicitMain.isEmpty())
         text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + tr("+implicit");
-    if (view.x().notebookRunning && view.x().notebookCount > 0)
+    if (d->m_notebookLayout && d->m_mode != Mode::Source) {
+        // The gutter's `In [n]:` says it.
+    } else if (view.x().notebookRunning && view.x().notebookCount > 0)
         text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + QStringLiteral("[*]");
     else if (view.x().notebookCount > 0)
         text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + QStringLiteral("[%1]").arg(view.x().notebookCount);

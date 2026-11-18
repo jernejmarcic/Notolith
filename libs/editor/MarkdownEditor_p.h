@@ -1204,6 +1204,7 @@ std::function<QString(qsizetype)> m_inlineScope;
     bool m_modified = false;
     bool m_readable = true;
     bool m_lineNumbers = true; ///< shown in source mode only
+    bool m_notebookLayout = false; ///< setNotebookLayout
     bool m_strictLineBreaks = false; ///< Obsidian's app.json setting
     ParseOptions m_parseOptions = [] { ParseOptions o; o.brackets = true; return o; }();
     bool m_indentGuides = false;

@@ -29,6 +29,20 @@ namespace noteAppC::notebook {
 /// `.ipynb`, any case.
 bool isIpynbPath(const QString &path);
 
+/// One cell of a notebook's text, as the editor shows it.
+struct IpynbCell {
+    enum class Type { Markdown, Code, Raw };
+    Type type = Type::Markdown;
+    QString source;
+    qsizetype start = -1; ///< where it begins in the text (ipynbCells only): a code cell's opening fence
+};
+
+/// The cells of a notebook's text: fences in `language` (or `raw`) are code (raw) cells, whatever lies between
+/// them is markdown, split at `<!-- cell -->` lines. Blank stretches are no cell.
+QList<IpynbCell> ipynbCells(const QString &markdown, const QString &language);
+/// The text that shows `cells`: the inverse of ipynbCells.
+QString ipynbText(const QList<IpynbCell> &cells, const QString &language);
+
 struct IpynbDocument {
     QJsonObject root;
     QString language;       ///< the fence language of its code cells, lower-case
@@ -65,6 +79,9 @@ public:
     explicit IpynbPictures(const IpynbDocument &document);
 
     bool isEmpty() const { return m_images.isEmpty(); }
+    /// The notebook's language, and its kernelspec's display name (empty without one).
+    const QString &language() const { return m_language; }
+    const QString &kernelName() const { return m_kernel; }
     /// "<cell>/<name>" -> the image's bytes; only pictures (an attachment of another type is not one).
     const QHash<QString, QByteArray> &images() const { return m_images; }
     /// "<cell>/" for a picture named in `markdown` at `offset`: `cell` is the file's cell that the one of the text
@@ -77,6 +94,7 @@ private:
     QStringList m_types;   ///< the file's cells, as the text shows them
     QStringList m_sources;
     QString m_language;
+    QString m_kernel;
     mutable QString m_text;           ///< the text the next two are for
     mutable QList<qsizetype> m_starts; ///< where each of its cells starts
     mutable QList<qsizetype> m_paired; ///< the file's cell it pairs with, or -1

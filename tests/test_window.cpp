@@ -6841,6 +6841,61 @@ TEST_F(WindowTest, WithAutosaveOffNothingSavesUntilAsked)
 }
 
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+// A notebook gets the Jupyter-like cell view: the toolbar over it, `In [n]:` in the editor's gutter, and toolbar
+// buttons that add, move, retype, cut and paste whole cells as one undo step each.
+TEST_F(WindowTest, ANotebookHasACellToolbarThatEditsWholeCells)
+{
+    write(QStringLiteral("Cells.ipynb"), QByteArray());
+    write(QStringLiteral("Plain.md"), "# plain\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Cells.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    auto *bar = window.findChild<QWidget *>(QStringLiteral("notebookBar"));
+    ASSERT_NE(bar, nullptr);
+    EXPECT_TRUE(bar->isVisible());
+    EXPECT_TRUE(editor->notebookLayout());
+    const auto click = [&](const char *name) {
+        auto *button = bar->findChild<QToolButton *>(QString::fromLatin1(name));
+        ASSERT_NE(button, nullptr) << name;
+        button->click();
+    };
+    auto *type = bar->findChild<QComboBox *>(QStringLiteral("notebookCellType"));
+    ASSERT_NE(type, nullptr);
+
+    click("notebookAddCell");
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\n\n```\n"));
+    QTest::keyClicks(editor, QStringLiteral("x = 1"));
+    click("notebookAddCell");
+    QTest::keyClicks(editor, QStringLiteral("# Title"));
+    // Retype the second cell as Markdown, then move it above the first.
+    type->setCurrentIndex(type->findText(QStringLiteral("Markdown")));
+    emit type->activated(type->currentIndex());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\nx = 1\n```\n\n# Title\n"));
+    click("notebookMoveUp");
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Title\n\n```python\nx = 1\n```\n"));
+    EXPECT_EQ(type->currentText(), QStringLiteral("Markdown")) << "the caret moved with the cell";
+    // Cut it, paste it below the code cell.
+    click("notebookCutCell");
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\nx = 1\n```\n"));
+    click("notebookPasteCell");
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\nx = 1\n```\n\n# Title\n"));
+    // Shift+Enter on the last cell goes on to a new code cell.
+    QTest::keyClick(editor, Qt::Key_Return, Qt::ShiftModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\nx = 1\n```\n\n# Title\n\n```python\n\n```\n"));
+    // Each toolbar edit is one undo step.
+    QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\nx = 1\n```\n\n# Title\n"));
+
+    // A plain note has neither.
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Plain.md"))));
+    EXPECT_FALSE(bar->isVisible());
+    EXPECT_FALSE(window.editor()->notebookLayout());
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
 // A .ipynb in the vault opens as a note: cells as text, its stored outputs
 // shown on the blocks, an untouched save changing no bytes, an edit saved
 // back into the same notebook, and the notebooks feature switch turning it

@@ -46,12 +46,7 @@ QJsonArray linesOf(const QString &text)
     return lines;
 }
 
-struct Cell {
-    enum class Type { Markdown, Code, Raw };
-    Type type = Type::Markdown;
-    QString source;
-    qsizetype start = -1; ///< where it begins in the text (cellsFromMarkdown only): a code cell's opening fence
-};
+using Cell = IpynbCell;
 
 QString typeName(Cell::Type type)
 {
@@ -437,6 +432,16 @@ void appendValue(QByteArray &out, const QJsonValue &value, int depth)
 
 } // namespace
 
+QList<IpynbCell> ipynbCells(const QString &markdown, const QString &language)
+{
+    return cellsFromMarkdown(markdown, language);
+}
+
+QString ipynbText(const QList<IpynbCell> &cells, const QString &language)
+{
+    return markdownOf(cells, language);
+}
+
 bool isIpynbPath(const QString &path)
 {
     return path.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive);
@@ -719,6 +724,8 @@ QByteArray newIpynb(const KernelSpec *kernel)
 IpynbPictures::IpynbPictures(const IpynbDocument &document)
 {
     m_language = document.language;
+    m_kernel = document.root.value(QStringLiteral("metadata")).toObject().value(QStringLiteral("kernelspec")).toObject()
+                   .value(QStringLiteral("display_name")).toString();
     int shown = 0; // the index among the cells the text shows (cellsOf)
     for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
         const QJsonObject cell = value.toObject();

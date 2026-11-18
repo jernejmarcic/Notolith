@@ -558,6 +558,11 @@ MainWindow::MainWindow(QWidget *parent)
     }
     m_modeButton->hide();
     m_selectionCountTimer.setSingleShot(true);
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    m_notebookBarTimer.setSingleShot(true);
+    m_notebookBarTimer.setInterval(120);
+    connect(&m_notebookBarTimer, &QTimer::timeout, this, [this] { syncNotebookCellType(m_active); });
+#endif
     m_selectionCountTimer.setInterval(200);
     connect(&m_selectionCountTimer, &QTimer::timeout, this, [this] {
         if (m_active)
@@ -7748,6 +7753,7 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error, bool s
             m_notebookDirty.remove(path);
             auto pictures = std::make_shared<notebook::IpynbPictures>();
             const bool read = notebook::readIpynb(bytes, &out.text, error, pictures.get());
+            m_notebookInfo.insert(path, {pictures->language(), pictures->kernelName()});
             if (pictures->isEmpty())
                 m_notebookImages.remove(path);
             else
@@ -8863,6 +8869,9 @@ void MainWindow::onModificationChanged(bool)
 
 void MainWindow::updateTitle()
 {
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    syncNotebookBar(m_active);
+#endif
     // A file-less module tab shows the mark too: the host saves it like a note.
     const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
     const bool modified = (!m_active->notePath.isEmpty() || fileLess) && isModified(m_active);

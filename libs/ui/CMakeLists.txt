@@ -110,6 +110,7 @@ if(TARGET noteAppC_crypt)
 endif()
 
 if(TARGET noteAppC_notebook)
+    target_sources(noteAppC_ui PRIVATE MainWindowNotebook.cpp)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_notebook)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_NOTEBOOK)
 endif()

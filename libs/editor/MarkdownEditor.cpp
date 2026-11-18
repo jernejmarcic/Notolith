@@ -1089,6 +1089,33 @@ void MarkdownEditor::setLineNumbers(bool on)
     viewport()->update();
 }
 
+void MarkdownEditor::setNotebookLayout(bool on)
+{
+    if (d->m_notebookLayout == on)
+        return;
+    d->m_notebookLayout = on;
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+bool MarkdownEditor::notebookLayout() const
+{
+    return d->m_notebookLayout;
+}
+
+void MarkdownEditor::replaceAsOneStep(qsizetype at, qsizetype removed, const QString &inserted, qsizetype caret)
+{
+    at = qBound<qsizetype>(0, at, d->m_text.size());
+    removed = qBound<qsizetype>(0, removed, d->m_text.size() - at);
+    pushUndo();
+    d->m_lastEdit.invalidate();
+    applyEdit(at, removed, inserted);
+    caret = qBound<qsizetype>(0, caret, d->m_text.size());
+    setSelectionRange(caret, caret);
+    ensureCursorVisible();
+}
+
 void MarkdownEditor::setReadableLineLength(bool on)
 {
     if (d->m_readable == on)
@@ -2974,6 +3001,9 @@ QList<QTextLayout::FormatRange> MarkdownEditor::nestedCodeFormatsFor(const Block
 
 int MarkdownEditor::gutterWidth() const
 {
+    if (d->m_notebookLayout && d->m_mode != Mode::Source)
+        return int(QFontMetricsF(d->m_theme.monospaceFont()).horizontalAdvance(QStringLiteral("In [888]:"))
+                   + QFontMetricsF(d->m_theme.uiFont()).height()) + 40;
     if (!d->m_lineNumbers || d->m_mode != Mode::Source)
         return 0;
     // Wide enough for the largest number this note can reach.
@@ -2997,10 +3027,69 @@ int MarkdownEditor::contentLeft() const
                 (viewport()->width() - contentWidth()) / 2);
 }
 
+std::pair<qsizetype, qsizetype> MarkdownEditor::notebookActiveCell() const
+{
+    const qsizetype at = blockAt(d->m_cursor);
+    if (at < 0 || at >= d->m_blocks.size())
+        return {-1, -1};
+    const auto isCode = [this](qsizetype i) { return d->m_blocks.at(i).span.kind == BlockSpan::Kind::Code; };
+    if (isCode(at))
+        return {at, at};
+    // A markdown cell: the blocks between the code blocks (or `<!-- cell -->` lines) either side.
+    const auto isBoundary = [&](qsizetype i) {
+        if (isCode(i))
+            return true;
+        const Range range = d->m_blocks.at(i).span.range;
+        return QStringView(d->m_text).sliced(range.start, range.length()).trimmed() == QLatin1String("<!-- cell -->");
+    };
+    if (isBoundary(at))
+        return {-1, -1};
+    qsizetype first = at;
+    while (first > 0 && !isBoundary(first - 1))
+        --first;
+    qsizetype last = at;
+    while (last + 1 < d->m_blocks.size() && !isBoundary(last + 1))
+        ++last;
+    return {first, last};
+}
+
+void MarkdownEditor::paintNotebookGutter(QPainter &painter, const BlockView &view, qreal top) const
+{
+    const qreal left = contentLeft();
+    painter.save();
+    // The selected cell's bar, block by block, reaching down to the next block so a cell reads as one stretch.
+    const auto [first, last] = notebookActiveCell();
+    const qsizetype index = &view - d->m_blocks.data();
+    if (first >= 0 && index >= first && index <= last) {
+        const bool code = view.span.kind == BlockSpan::Kind::Code;
+        const qreal from = top - (code ? 8 : 0);
+        qreal to = top + view.height + (code ? 8 : 0);
+        if (index < last)
+            to = top + (d->m_blocks.at(index + 1).y - view.y);
+        painter.fillRect(QRectF(left - 26, from, 4, to - from), d->m_theme.color(QStringLiteral("--interactive-accent")));
+    }
+    if (view.span.kind == BlockSpan::Kind::Code && view.notebookEligible && view.piece == 0) {
+        const QString count = view.x().notebookRunning ? QStringLiteral("*")
+                              : view.x().notebookCount > 0 ? QString::number(view.x().notebookCount)
+                                                           : QStringLiteral(" ");
+        QFont font = d->m_theme.monospaceFont();
+        font.setPixelSize(int(font.pixelSize() * 0.9));
+        painter.setFont(font);
+        painter.setPen(d->m_theme.color(QStringLiteral("--text-accent")));
+        const qreal line = QFontMetricsF(font).height();
+        const qreal run = QFontMetricsF(d->m_theme.uiFont()).height();
+        painter.drawText(QRectF(left - gutterWidth(), top + view.textTop, gutterWidth() - 36 - run, line),
+                         Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("In [%1]:").arg(count));
+    }
+    painter.restore();
+}
+
 void MarkdownEditor::paintGutter(QPainter &painter, const BlockView &view, qreal top) const
 {
     if (gutterWidth() == 0 || !view.layout)
         return;
+    if (d->m_notebookLayout)
+        return; // paintBlocks drew paintNotebookGutter, for every kind of block
 
     painter.save();
     QFont font = d->m_theme.monospaceFont();
@@ -5234,6 +5323,8 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             break;
         if (view.tabHidden || view.foldHidden)
             continue;
+        if (d->m_notebookLayout && d->m_mode != Mode::Source)
+            paintNotebookGutter(painter, view, top);
 
         if (view.span.kind == BlockSpan::Kind::Frontmatter && d->m_mode != Mode::Source
             && !d->m_properties.isEmpty()) {
@@ -6440,6 +6531,11 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
     d->m_blink.start();
     if (event->key() == Qt::Key_0 && event->modifiers() == Qt::ControlModifier && resetPdfZoom())
         return;
+    if (d->m_notebookLayout && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+        && event->modifiers() == Qt::ShiftModifier) {
+        emit notebookRunAndAdvance();
+        return;
+    }
     // Ctrl pressed with the pointer already resting on a link previews it,
     // as in Obsidian, without the mouse having to move.
     if (event->key() == Qt::Key_Control && viewport()->underMouse()) {

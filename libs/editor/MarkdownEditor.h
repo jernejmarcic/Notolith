@@ -106,6 +106,13 @@ public:
     void setLineNumbers(bool on);
     bool lineNumbers() const;
 
+    /// A Jupyter notebook's look (docs/NOTEBOOKS.md, "Cell view"): `In [n]:` beside each code block, a bar beside
+    /// the cell holding the caret, and Shift+Enter asks to run that cell and go on (notebookRunAndAdvance).
+    void setNotebookLayout(bool on);
+    bool notebookLayout() const;
+    /// Replaces `removed` units at `at` with `inserted` as one undo step and puts the caret at `caret`.
+    void replaceAsOneStep(qsizetype at, qsizetype removed, const QString &inserted, qsizetype caret);
+
     void setReadableLineLength(bool on);
     void setContentWidth(int pixels);
 
@@ -1220,6 +1227,8 @@ signals:
     void modificationChanged(bool modified);
     void linkActivated(const QString &target);
     void cursorMoved(qsizetype offset);
+    /// Shift+Enter in the notebook layout: run the cell at the caret and move on to the next one.
+    void notebookRunAndAdvance();
     /// The pointer came to rest on a link to a note, the way Obsidian's page
     /// preview wants it: plain hover in reading view, with Ctrl held while
     /// editing. `globalPos` is where the pointer is.
@@ -2277,6 +2286,10 @@ private:
     /// Width reserved for the line-number gutter, 0 when it is not shown.
     int gutterWidth() const;
     void paintGutter(QPainter &painter, const BlockView &view, qreal top) const;
+    /// The notebook layout's gutter: `In [n]:` on a code block, the bar beside the caret's cell.
+    void paintNotebookGutter(QPainter &painter, const BlockView &view, qreal top) const;
+    /// The blocks of the cell holding the caret (first, last), or {-1, -1}.
+    std::pair<qsizetype, qsizetype> notebookActiveCell() const;
     /// True when a wikilink target has no note behind it, so live preview can
     /// dim it the way Obsidian does. Cached per parse: the resolver reaches
     /// the index, and a note full of links is laid out on every keystroke.

@@ -22,6 +22,13 @@ set_target_properties(noteAppC_theme PROPERTIES AUTOMOC ON)
 # Icons are Lucide (ISC), the set Obsidian itself uses - see icons/LICENSE.
 qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/arrow-left.svg
+    icons/arrow-down.svg
+    icons/arrow-up.svg
+    icons/clipboard-paste.svg
+    icons/copy.svg
+    icons/fast-forward.svg
+    icons/rotate-ccw.svg
+    icons/scissors.svg
     icons/arrow-right.svg
     icons/arrow-up-down.svg
     icons/arrow-up-right.svg

@@ -1538,6 +1538,10 @@ bool MarkdownEditor::hasCodeHeader(const BlockView &view) const
 {
     if (plainSource(view))
         return false;
+    // A notebook's cell has no strip: the run control and `In [n]:` are in the gutter, as in Jupyter.
+    if (d->m_notebookLayout && d->m_mode != Mode::Source && view.notebookEligible && !view.options
+        && view.tabGroup < 0)
+        return false;
     if (view.options || view.tabGroup >= 0 || view.notebookEligible)
         return true;
     // Every fence with a language names itself in a strip. Matched on the
@@ -2151,8 +2155,11 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
 {
     if (!hasCodeHeader(view)) {
         // No language to name, no `#|` options, no tabs, not a notebook
-        // block: the copy button alone, in the corner.
-        paintCodeLabel(painter, view, left, top);
+        // block: the copy button alone, in the corner. A notebook's cell: its run control, in the gutter.
+        if (d->m_notebookLayout && view.notebookEligible)
+            paintNotebookRunControl(painter, view, left, top);
+        else
+            paintCodeLabel(painter, view, left, top);
         return;
     }
 
