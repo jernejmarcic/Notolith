@@ -4,6 +4,7 @@
 #include <QAbstractScrollArea>
 #include <QColor>
 #include <QHash>
+#include <QLineF>
 #include <QPixmap>
 #include <QPolygonF>
 #include <QUndoStack>
@@ -150,10 +151,15 @@ private:
     // --- PdfPagesArea.cpp: interaction, annotation tools -------------------
     std::optional<PdfAnnotationData> annotationAt(int page, const QPointF &pagePointPts) const;
     std::optional<PdfAnnotationData> findByID(int page, const QString &id) const;
-    /// Word boxes (poppler's own) intersecting `dragRectPts`, grouped into
-    /// one rect per text row - used both for a plain text selection and for
-    /// building a highlight/underline/strike-out's quads.
-    QList<QRectF> selectionRows(int page, const QRectF &dragRectPts) const;
+    /// The words (poppler's own, in reading order) from the one nearest the
+    /// drag's start to the one nearest its end, as a text view selects:
+    /// whole lines between them, not a box.
+    QList<PdfWordBox> selectedWords(int page, const QLineF &dragPts) const;
+    /// Those words grouped into one rect per text row - used both for a plain
+    /// text selection and for building a highlight/underline/strike-out's quads.
+    QList<QRectF> selectionRows(int page, const QLineF &dragPts) const;
+    /// Their text: a space where poppler says one follows, a newline per row.
+    QString selectionTextOf(int page, const QLineF &dragPts) const;
     void commitTextMarkup(int page, const QList<QRectF> &rowsPts);
     void beginMoveOrSelect(int page, const QPointF &pagePointPts, const QPoint &viewportPoint);
     void finishMove();
@@ -200,7 +206,7 @@ private:
     int m_selectedPage = -1;
     QString m_selectionText;
     int m_selectionPage = -1;
-    QRectF m_selectionDragPts; ///< page points, while dragging
+    QLineF m_selectionDragPts; ///< page points, from the press to the pointer
 
     // A gesture in progress.
     bool m_dragging = false;

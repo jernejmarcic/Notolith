@@ -606,6 +606,40 @@ TEST(PdfPagesAreaTest, DragSelectsTextAndCopiesIt)
     EXPECT_TRUE(area.selectedText().contains(QStringLiteral("Hello")));
 }
 
+// From a word in one line to the end of the next selects the rest of the
+// first line and the whole of the second, as a text view does - not the box
+// the two points span, which leaves out the second line's start.
+TEST(PdfPagesAreaTest, DragAcrossLinesSelectsInReadingOrder)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString pdf = makeTestPdf(dir.path(), 1);
+
+    PdfPagesArea area;
+    ASSERT_TRUE(area.load(pdf));
+    area.resize(900, 700);
+    area.show();
+    pump();
+
+    const QList<PdfWordBox> words = area.document()->words(0);
+    qsizetype start = -1;
+    for (qsizetype i = 0; i < words.size() && start < 0; ++i) {
+        if (words.at(i).text == QStringLiteral("page"))
+            start = i;
+    }
+    ASSERT_GE(start, 0);
+    const QRectF from = screenRectFor(area, 0, words.at(start).rect);
+    const QRectF to = screenRectFor(area, 0, words.last().rect);
+    area.setTool(PdfPagesArea::Tool::Select);
+    drag(area.viewport(), from.center().toPoint(), to.center().toPoint());
+
+    const QString text = area.selectedText();
+    EXPECT_TRUE(text.startsWith(QStringLiteral("page"))) << text.toStdString();
+    EXPECT_TRUE(text.contains(QStringLiteral("A second line"))) << text.toStdString();
+    EXPECT_FALSE(text.contains(QStringLiteral("world"))) << text.toStdString();
+    EXPECT_EQ(text.count(QLatin1Char('\n')), 1) << text.toStdString();
+}
+
 TEST(PdfPagesAreaTest, HighlightToolAddsAnAnnotationFromTheDrag)
 {
     QTemporaryDir dir;

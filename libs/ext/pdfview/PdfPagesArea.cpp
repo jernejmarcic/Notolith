@@ -67,7 +67,7 @@ bool PdfPagesArea::load(const QString &path, QString *error)
     m_currentPage = 0;
     m_selectedID.clear();
     m_selectedPage = -1;
-    m_selectionDragPts = QRectF();
+    m_selectionDragPts = QLineF();
     m_selectionText.clear();
     m_selectionPage = -1;
     findClear();
@@ -405,7 +405,7 @@ void PdfPagesArea::paintEvent(QPaintEvent *)
         painter.drawRect(rect);
         painter.restore();
     }
-    if (m_tool == Tool::Select && m_selectionPage >= 0 && !m_selectionDragPts.isEmpty()) {
+    if (m_tool == Tool::Select && m_selectionPage >= 0 && !m_selectionDragPts.isNull()) {
         // Not gated on m_dragging: a text selection stays highlighted (and
         // copyable with Ctrl+C) after the mouse comes up, same as any text
         // editor's own selection.
@@ -421,7 +421,7 @@ void PdfPagesArea::paintEvent(QPaintEvent *)
     }
     if ((m_tool == Tool::Highlight || m_tool == Tool::Underline || m_tool == Tool::StrikeOut) && m_dragging
         && m_dragPage >= 0) {
-        const auto rows = selectionRows(m_dragPage, QRectF(m_dragStartPagePts, m_dragCurrentPagePts).normalized());
+        const auto rows = selectionRows(m_dragPage, QLineF(m_dragStartPagePts, m_dragCurrentPagePts));
         painter.save();
         QColor preview = m_color;
         preview.setAlpha(110);
@@ -609,19 +609,77 @@ std::optional<PdfAnnotationData> PdfPagesArea::findByID(int page, const QString 
     return std::nullopt;
 }
 
-QList<QRectF> PdfPagesArea::selectionRows(int page, const QRectF &dragRectPts) const
+namespace {
+
+/// Whether two word boxes sit on one text row.
+bool sameRow(const QRectF &a, const QRectF &b)
+{
+    return std::abs(a.center().y() - b.center().y()) < std::max(2.0, std::min(a.height(), b.height()) * 0.6);
+}
+
+/// How far `point` is from `box`, a row's height counting three times a
+/// width so the nearest word is first the nearest row's.
+double distanceTo(const QRectF &box, const QPointF &point)
+{
+    const double dx = std::max({box.left() - point.x(), 0.0, point.x() - box.right()});
+    const double dy = std::max({box.top() - point.y(), 0.0, point.y() - box.bottom()});
+    return dx + 3 * dy;
+}
+
+} // namespace
+
+QList<PdfWordBox> PdfPagesArea::selectedWords(int page, const QLineF &dragPts) const
+{
+    // A press with no drag selects nothing (it may be a click on a link).
+    if (dragPts.isNull() || dragPts.length() < 2)
+        return {};
+    const QList<PdfWordBox> words = m_document.words(page);
+    const auto nearest = [&words](const QPointF &point) {
+        qsizetype best = -1;
+        double bestDistance = 0;
+        for (qsizetype i = 0; i < words.size(); ++i) {
+            const double distance = distanceTo(words.at(i).rect, point);
+            if (best < 0 || distance < bestDistance) {
+                best = i;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    };
+    qsizetype first = nearest(dragPts.p1());
+    qsizetype last = nearest(dragPts.p2());
+    if (first < 0)
+        return {};
+    if (first > last)
+        std::swap(first, last);
+    return words.mid(first, last - first + 1);
+}
+
+QString PdfPagesArea::selectionTextOf(int page, const QLineF &dragPts) const
+{
+    const QList<PdfWordBox> words = selectedWords(page, dragPts);
+    QString text;
+    for (qsizetype i = 0; i < words.size(); ++i) {
+        text += words.at(i).text;
+        if (i + 1 == words.size())
+            break;
+        if (!sameRow(words.at(i).rect, words.at(i + 1).rect))
+            text += QLatin1Char('\n');
+        else if (words.at(i).spaceAfter)
+            text += QLatin1Char(' ');
+    }
+    return text;
+}
+
+QList<QRectF> PdfPagesArea::selectionRows(int page, const QLineF &dragPts) const
 {
     QList<QRectF> rows;
-    if (dragRectPts.isEmpty())
-        return rows;
     struct Band {
         double centerY;
         QRectF rect;
     };
     QList<Band> bands;
-    for (const PdfWordBox &word : m_document.words(page)) {
-        if (!word.rect.intersects(dragRectPts))
-            continue;
+    for (const PdfWordBox &word : selectedWords(page, dragPts)) {
         const double cy = word.rect.center().y();
         bool merged = false;
         for (Band &band : bands) {
@@ -713,10 +771,10 @@ void PdfPagesArea::mousePressEvent(QMouseEvent *event)
         return;
 
     if (page < 0) {
-        if (!m_selectedID.isEmpty() || !m_selectionDragPts.isEmpty()) {
+        if (!m_selectedID.isEmpty() || !m_selectionDragPts.isNull()) {
             m_selectedID.clear();
             m_selectedPage = -1;
-            m_selectionDragPts = QRectF();
+            m_selectionDragPts = QLineF();
             m_selectionText.clear();
             m_selectionPage = -1;
             emit selectionChanged();
@@ -737,7 +795,7 @@ void PdfPagesArea::mousePressEvent(QMouseEvent *event)
         // Every fresh press starts a new potential gesture - the previous
         // text selection, if any, does not survive a new click the way it
         // would in any other text view either.
-        m_selectionDragPts = QRectF();
+        m_selectionDragPts = QLineF();
         m_selectionText.clear();
         m_selectionPage = -1;
         const auto hit = annotationAt(page, pagePt);
@@ -782,8 +840,8 @@ void PdfPagesArea::mouseMoveEvent(QMouseEvent *event)
         // Kept after the release too (not cleared when m_dragging goes
         // false), so the highlighted rows and Ctrl+C both still work once
         // the mouse comes up - that is the whole point of a text drag.
-        m_selectionDragPts = QRectF(m_dragStartPagePts, pagePt).normalized();
-        m_selectionText = m_document.text(m_dragPage, m_selectionDragPts);
+        m_selectionDragPts = QLineF(m_dragStartPagePts, pagePt);
+        m_selectionText = selectionTextOf(m_dragPage, m_selectionDragPts);
         m_selectionPage = m_dragPage;
     }
     viewport()->update();
@@ -808,8 +866,7 @@ void PdfPagesArea::mouseReleaseEvent(QMouseEvent *event)
     case Tool::Highlight:
     case Tool::Underline:
     case Tool::StrikeOut: {
-        const QRectF rect = QRectF(m_dragStartPagePts, m_dragCurrentPagePts).normalized();
-        const QList<QRectF> rows = selectionRows(page, rect);
+        const QList<QRectF> rows = selectionRows(page, QLineF(m_dragStartPagePts, m_dragCurrentPagePts));
         if (!rows.isEmpty())
             commitTextMarkup(page, rows);
         break;
@@ -1114,7 +1171,7 @@ void PdfPagesArea::setTool(Tool tool)
     m_tool = tool;
     m_selectedID.clear();
     m_selectedPage = -1;
-    m_selectionDragPts = QRectF();
+    m_selectionDragPts = QLineF();
     m_selectionText.clear();
     m_selectionPage = -1;
     emit selectionChanged();
