@@ -1665,6 +1665,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setReadableLineLength(m_settings.boolean(QStringLiteral("editor.readableLineLength")));
     editor->setContentWidth(m_settings.integer(QStringLiteral("editor.contentWidth")));
     editor->setLineNumbers(m_settings.boolean(QStringLiteral("editor.lineNumbers")));
+    editor->setNotebookCellOutlines(m_settings.boolean(QStringLiteral("notebooks.cellOutlines")));
     editor->setAutoPairs(m_settings.boolean(QStringLiteral("editor.autoPairs")));
     editor->setVimMode(m_settings.boolean(QStringLiteral("editor.vimMode")));
     editor->setStrictLineBreaks(m_settings.boolean(QStringLiteral("editor.strictLineBreaks")));

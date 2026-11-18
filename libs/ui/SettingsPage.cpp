@@ -1134,6 +1134,8 @@ QWidget *SettingsPage::buildCorePluginsPage()
                     "number counts its runs. Needs the language's Jupyter kernel (Python: ipykernel); "
                     "off, every block is a fresh process of the language's own tool. \"#| kernel: on\" or "
                     "\"off\" decides for one block."));
+    addToggleRow(layout, QStringLiteral("notebooks.cellOutlines"), tr("Outline notebook cells"),
+                 tr("A faint outline round each cell of a Jupyter notebook (.ipynb)."));
 #endif
     addToggleRow(layout, QStringLiteral("render.mermaid"), tr("Mermaid diagrams"),
                  tr("Draw mermaid code blocks as diagrams, with the tool below, off the main thread and cached. "

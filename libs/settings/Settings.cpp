@@ -118,6 +118,8 @@ QVariantMap &defaults()
         // false: each block is a short process of the system's own tool. true: a note's blocks share
         // one Jupyter kernel per language (variables persist, execution counts, rich output) where one is installed.
         {QStringLiteral("notebooks.sharedKernel"), false},
+        // A faint outline round each cell of a Jupyter notebook's cell view.
+        {QStringLiteral("notebooks.cellOutlines"), true},
         // `#| sandbox: wasm` blocks run a WebAssembly module in place of the language's interpreter:
         // `python=/path/python.wasm;ruby=/path/ruby.wasm`. A language with no entry is refused there.
         {QStringLiteral("notebooks.wasmModules"), QString()},

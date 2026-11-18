@@ -110,6 +110,8 @@ public:
     /// the cell holding the caret, and Shift+Enter asks to run that cell and go on (notebookRunAndAdvance).
     void setNotebookLayout(bool on);
     bool notebookLayout() const;
+    /// A faint outline round each cell in the notebook layout.
+    void setNotebookCellOutlines(bool on);
     /// Replaces `removed` units at `at` with `inserted` as one undo step and puts the caret at `caret`.
     void replaceAsOneStep(qsizetype at, qsizetype removed, const QString &inserted, qsizetype caret);
 
@@ -2290,6 +2292,8 @@ private:
     void paintNotebookGutter(QPainter &painter, const BlockView &view, qreal top) const;
     /// The blocks of the cell holding the caret (first, last), or {-1, -1}.
     std::pair<qsizetype, qsizetype> notebookActiveCell() const;
+    bool notebookCellBoundary(qsizetype block) const; ///< a code block or a `<!-- cell -->` line
+    void paintNotebookCellOutline(QPainter &painter, const BlockView &view, qreal top) const;
     /// True when a wikilink target has no note behind it, so live preview can
     /// dim it the way Obsidian does. Cached per parse: the resolver reaches
     /// the index, and a note full of links is laid out on every keystroke.

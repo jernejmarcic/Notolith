@@ -371,6 +371,32 @@ index library knows nothing of nbformat, the window hands it a reader. The index
 reads the file's JSON, not its outputs, so a notebook full of PNGs costs one
 parse, off the UI thread.
 
+### Cell view
+
+A notebook opens in a layout like Jupyter's web notebook, on the same editor and
+text as above, so undo, saving and every other view work as for typing:
+
+- A toolbar over the editor: insert a code cell below, cut, copy and paste a
+  cell, move it up or down, run it and go to the next, interrupt, restart, and
+  restart and run all; the caret cell's type (Code, Markdown, Raw); the kernel's
+  name on the right. Each toolbar edit is one undo step.
+- Code cells have no header strip. The gutter holds `In [n]:` (`*` while it
+  runs) and the run control; an accent bar marks the caret's cell.
+- Shift+Enter runs a code cell and moves to the next cell, adding an empty code
+  cell after the last.
+- A faint outline round each cell (Settings, Notebooks: Outline notebook cells,
+  `notebooks.cellOutlines`, on by default). A code cell's outline is its panel's
+  edge.
+- The right sidebar's Notebook pane shows the kernel and language, then the
+  caret cell's tags (comma-separated) and the rest of its `metadata` as JSON.
+  Apply holds the edit until the notebook is saved, where it replaces that
+  cell's metadata in the file. The cell is the file's cell the save pairs the
+  text's cell with; a cell the file does not have yet says to save first.
+  Anything that is not a JSON object is refused.
+
+Not built: Jupyter's command mode (A, B, DD, M, Y), its File and Edit menus,
+and the Trusted badge.
+
 ## Where outputs go
 
 In the XDG cache, keyed by language, source and tier, never in the note

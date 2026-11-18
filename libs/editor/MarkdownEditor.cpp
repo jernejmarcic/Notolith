@@ -1104,6 +1104,14 @@ bool MarkdownEditor::notebookLayout() const
     return d->m_notebookLayout;
 }
 
+void MarkdownEditor::setNotebookCellOutlines(bool on)
+{
+    if (d->m_notebookCellOutlines == on)
+        return;
+    d->m_notebookCellOutlines = on;
+    viewport()->update();
+}
+
 void MarkdownEditor::replaceAsOneStep(qsizetype at, qsizetype removed, const QString &inserted, qsizetype caret)
 {
     at = qBound<qsizetype>(0, at, d->m_text.size());
@@ -3032,16 +3040,10 @@ std::pair<qsizetype, qsizetype> MarkdownEditor::notebookActiveCell() const
     const qsizetype at = blockAt(d->m_cursor);
     if (at < 0 || at >= d->m_blocks.size())
         return {-1, -1};
-    const auto isCode = [this](qsizetype i) { return d->m_blocks.at(i).span.kind == BlockSpan::Kind::Code; };
-    if (isCode(at))
+    if (d->m_blocks.at(at).span.kind == BlockSpan::Kind::Code)
         return {at, at};
     // A markdown cell: the blocks between the code blocks (or `<!-- cell -->` lines) either side.
-    const auto isBoundary = [&](qsizetype i) {
-        if (isCode(i))
-            return true;
-        const Range range = d->m_blocks.at(i).span.range;
-        return QStringView(d->m_text).sliced(range.start, range.length()).trimmed() == QLatin1String("<!-- cell -->");
-    };
+    const auto isBoundary = [this](qsizetype i) { return notebookCellBoundary(i); };
     if (isBoundary(at))
         return {-1, -1};
     qsizetype first = at;
@@ -3051,6 +3053,44 @@ std::pair<qsizetype, qsizetype> MarkdownEditor::notebookActiveCell() const
     while (last + 1 < d->m_blocks.size() && !isBoundary(last + 1))
         ++last;
     return {first, last};
+}
+
+bool MarkdownEditor::notebookCellBoundary(qsizetype block) const
+{
+    const BlockSpan &span = d->m_blocks.at(block).span;
+    if (span.kind == BlockSpan::Kind::Code)
+        return true;
+    return QStringView(d->m_text).sliced(span.range.start, span.range.length()).trimmed() == QLatin1String("<!-- cell -->");
+}
+
+void MarkdownEditor::paintNotebookCellOutline(QPainter &painter, const BlockView &view, qreal top) const
+{
+    // Edge by edge, block by block, so a cell begun above the viewport is still outlined: the sides on every
+    // block, the top on its first and the bottom on its last. A code cell is its fence: its panel's edge.
+    const qsizetype index = &view - d->m_blocks.data();
+    const bool code = view.span.kind == BlockSpan::Kind::Code;
+    if (!code && notebookCellBoundary(index))
+        return; // a `<!-- cell -->` line is between cells
+    // A long fence is laid out in pieces: one cell all the same.
+    const bool first = code ? view.piece == 0 : index == 0 || notebookCellBoundary(index - 1);
+    const bool last = code ? view.piece == view.pieces - 1
+                           : index + 1 >= d->m_blocks.size() || notebookCellBoundary(index + 1);
+    const qreal margin = code ? 8 : 4; // a code panel reaches 8 above and below its text, 14 either side
+    const qreal x0 = std::floor(contentLeft() - 14) + 0.5;
+    const qreal x1 = std::floor(contentLeft() + contentWidth() + 14) - 0.5;
+    const qreal y0 = std::floor(first ? top - margin : top) + 0.5;
+    const qreal y1 = last ? std::floor(top + view.height + margin) - 0.5
+                          : std::floor(top + (d->m_blocks.at(index + 1).y - view.y)) + 0.5;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setPen(QPen(d->m_theme.color(QStringLiteral("--background-modifier-border")), 1));
+    painter.drawLine(QPointF(x0, y0), QPointF(x0, y1));
+    painter.drawLine(QPointF(x1, y0), QPointF(x1, y1));
+    if (first)
+        painter.drawLine(QPointF(x0, y0), QPointF(x1, y0));
+    if (last)
+        painter.drawLine(QPointF(x0, y1), QPointF(x1, y1));
+    painter.restore();
 }
 
 void MarkdownEditor::paintNotebookGutter(QPainter &painter, const BlockView &view, qreal top) const
@@ -5489,6 +5529,17 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
                                           ? style.bg
                                           : d->m_theme.color(QStringLiteral("--background-primary-alt")));
             }
+        }
+    }
+
+    // The cells' outlines, over the blocks: a code cell's is its panel's edge.
+    if (d->m_notebookLayout && d->m_notebookCellOutlines && d->m_mode != Mode::Source) {
+        for (auto it = firstExposed; it != d->m_blocks.cend(); ++it) {
+            const qreal top = it->y - scroll;
+            if (top > exposedBottom)
+                break;
+            if (!it->tabHidden && !it->foldHidden)
+                paintNotebookCellOutline(painter, *it, top);
         }
     }
 }
