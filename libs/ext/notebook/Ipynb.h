@@ -65,10 +65,15 @@ void seedIpynbOutputs(const IpynbDocument &document);
 /// What a run of a code cell left, by the output-cache key it ran under: held by the window from the run's end
 /// until the notebook is saved. A result with `hasRun` false is a clear (the cell's outputs go, its count is null).
 /// `cellMetadata` is the metadata edited since (the sidebar's), by the file's cell it replaces: the index among
-/// the file's markdown, code and raw cells (ipynbFileCellAt).
+/// the file's markdown, code and raw cells (ipynbFileCellAt), and that cell's source as the file had it. A save
+/// into a file whose cell there reads otherwise (changed on disk since) drops the edit rather than move it.
+struct IpynbMetadataEdit {
+    QString source;
+    QJsonObject metadata;
+};
 struct IpynbRuns {
     QHash<QString, NotebookRunResult> results;
-    QHash<int, QJsonObject> cellMetadata;
+    QHash<int, IpynbMetadataEdit> cellMetadata;
     bool isEmpty() const { return results.isEmpty() && cellMetadata.isEmpty(); }
 };
 
@@ -77,6 +82,8 @@ struct IpynbRuns {
 int ipynbFileCellAt(const IpynbDocument &document, const QString &markdown, qsizetype offset);
 /// The `metadata` of the file's cell `fileCell` (ipynbFileCellAt); empty for none.
 QJsonObject ipynbCellMetadata(const IpynbDocument &document, int fileCell);
+/// The source of the file's cell `fileCell`, its lines joined; empty for none.
+QString ipynbCellSource(const IpynbDocument &document, int fileCell);
 
 /// The pictures a notebook's markdown cells carry (`attachments`, referenced as `![x](attachment:name)`), and
 /// what it takes to say which cell of a text edited since is which. Two cells attach different pictures under one

@@ -667,13 +667,16 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
         }
     }
 
-    // Metadata edited in the sidebar replaces the cell's own; a cell deleted since takes its edit with it.
+    // Metadata edited in the sidebar replaces the cell's own; a cell deleted since takes its edit with it, and a
+    // file changed on disk since (its cell there reads otherwise) drops it rather than give it to another cell.
     for (qsizetype i = 0; i < n; ++i) {
-        const auto edited = runs.cellMetadata.constFind(int(pairing.file.at(i)));
-        if (pairing.file.at(i) < 0 || edited == runs.cellMetadata.cend())
+        const qsizetype k = pairing.file.at(i);
+        const auto edited = runs.cellMetadata.constFind(int(k));
+        if (k < 0 || edited == runs.cellMetadata.cend()
+            || joined(originals.at(k).value(QStringLiteral("source"))) != edited->source)
             continue;
         QJsonObject cell = rebuilt.at(i).toObject();
-        cell.insert(QStringLiteral("metadata"), *edited);
+        cell.insert(QStringLiteral("metadata"), edited->metadata);
         rebuilt.replace(i, cell);
     }
 
@@ -736,7 +739,9 @@ int ipynbFileCellAt(const IpynbDocument &document, const QString &markdown, qsiz
     return int(pairCells(cellsOf(document.root), shown).file.at(at));
 }
 
-QJsonObject ipynbCellMetadata(const IpynbDocument &document, int fileCell)
+namespace {
+
+QJsonObject fileCellAt(const IpynbDocument &document, int fileCell)
 {
     int index = 0;
     for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
@@ -745,9 +750,21 @@ QJsonObject ipynbCellMetadata(const IpynbDocument &document, int fileCell)
         if (type != QLatin1String("markdown") && type != QLatin1String("code") && type != QLatin1String("raw"))
             continue;
         if (index++ == fileCell)
-            return cell.value(QStringLiteral("metadata")).toObject();
+            return cell;
     }
     return {};
+}
+
+} // namespace
+
+QJsonObject ipynbCellMetadata(const IpynbDocument &document, int fileCell)
+{
+    return fileCellAt(document, fileCell).value(QStringLiteral("metadata")).toObject();
+}
+
+QString ipynbCellSource(const IpynbDocument &document, int fileCell)
+{
+    return joined(fileCellAt(document, fileCell).value(QStringLiteral("source")));
 }
 
 QByteArray newIpynb(const KernelSpec *kernel)

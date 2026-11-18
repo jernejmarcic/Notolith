@@ -299,19 +299,6 @@ void MainWindow::syncNotebookPane()
         return;
     }
     const QString path = leaf->notePath;
-    const QFileInfo info(path);
-    const QString stamp = QStringLiteral("%1\n%2\n%3")
-                              .arg(path, QString::number(info.lastModified().toMSecsSinceEpoch()),
-                                   QString::number(info.size()));
-    if (stamp != m_notebookDiskStamp) {
-        // The file as a save will merge into: its cells are the ones the metadata belongs to.
-        auto document = std::make_shared<notebook::IpynbDocument>();
-        QByteArray bytes;
-        if (!Vault::readBytes(path, &bytes) || !notebook::parseIpynb(bytes, document.get()))
-            document.reset();
-        m_notebookDisk = std::move(document);
-        m_notebookDiskStamp = stamp;
-    }
     const NotebookInfo notebookInfo = m_notebookInfo.value(path);
     label("notebookPaneKernel")
         ->setText(tr("Kernel: %1\nLanguage: %2")
@@ -319,8 +306,7 @@ void MainWindow::syncNotebookPane()
     const QString text = leaf->editor->noteText();
     const QList<IpynbCell> cells = notebook::ipynbCells(text, notebookLanguageOf(path));
     const int shown = cellIndexAt(cells, leaf->editor->cursorOffset());
-    const int fileCell =
-        m_notebookDisk ? notebook::ipynbFileCellAt(*m_notebookDisk, text, leaf->editor->cursorOffset()) : -1;
+    const int fileCell = notebookCaretFileCell(leaf);
     if (shown < 0 || fileCell < 0) {
         label("notebookPaneCell")
             ->setText(shown < 0 ? tr("No cells") : tr("Cell %1 is new: save the notebook to edit its metadata.").arg(shown + 1));
@@ -338,7 +324,7 @@ void MainWindow::syncNotebookPane()
     m_notebookPaneCell = fileCell;
     const auto runs = m_notebookDirty.value(path);
     QJsonObject metadata = runs && runs->cellMetadata.contains(fileCell)
-                               ? runs->cellMetadata.value(fileCell)
+                               ? runs->cellMetadata.value(fileCell).metadata
                                : notebook::ipynbCellMetadata(*m_notebookDisk, fileCell);
     QStringList tagList;
     for (const QJsonValue &tag : metadata.take(QStringLiteral("tags")).toArray())
@@ -349,12 +335,42 @@ void MainWindow::syncNotebookPane()
     form->show();
 }
 
+int MainWindow::notebookCaretFileCell(Leaf *leaf)
+{
+    const QString &path = leaf->notePath;
+    const QFileInfo info(path);
+    const QString stamp = QStringLiteral("%1\n%2\n%3")
+                              .arg(path, QString::number(info.lastModified().toMSecsSinceEpoch()),
+                                   QString::number(info.size()));
+    if (stamp != m_notebookDiskStamp) {
+        // The file as a save will merge into: its cells are the ones the metadata belongs to.
+        auto document = std::make_shared<notebook::IpynbDocument>();
+        QByteArray bytes;
+        if (!Vault::readBytes(path, &bytes) || !notebook::parseIpynb(bytes, document.get()))
+            document.reset();
+        m_notebookDisk = std::move(document);
+        m_notebookDiskStamp = stamp;
+    }
+    return m_notebookDisk ? notebook::ipynbFileCellAt(*m_notebookDisk, leaf->editor->noteText(),
+                                                      leaf->editor->cursorOffset())
+                          : -1;
+}
+
 void MainWindow::applyNotebookCellMetadata()
 {
     QWidget *pane = m_notebookPane;
     if (!pane || m_notebookPaneCell < 0)
         return;
     auto *status = pane->findChild<QLabel *>(QStringLiteral("notebookPaneStatus"));
+    // Paired again now: a save since the pane was filled (autosave, while this was being typed) renumbers the
+    // file's cells.
+    Leaf *leaf = m_active;
+    const int fileCell = leaf && !leaf->view && leaf->notePath == m_notebookPanePath ? notebookCaretFileCell(leaf) : -1;
+    if (fileCell < 0) {
+        status->setText(tr("Not applied: the caret's cell is new or another note is open; save the notebook first."));
+        return;
+    }
+    m_notebookPaneCell = fileCell;
     const QString written = pane->findChild<QPlainTextEdit *>(QStringLiteral("notebookPaneMetadata"))->toPlainText();
     QJsonParseError parse{};
     const QJsonDocument document =
@@ -379,7 +395,7 @@ void MainWindow::applyNotebookCellMetadata()
     std::shared_ptr<notebook::IpynbRuns> &runs = m_notebookDirty[m_notebookPanePath];
     if (!runs)
         runs = std::make_shared<notebook::IpynbRuns>();
-    runs->cellMetadata.insert(m_notebookPaneCell, metadata);
+    runs->cellMetadata.insert(m_notebookPaneCell, {notebook::ipynbCellSource(*m_notebookDisk, m_notebookPaneCell), metadata});
     for (const auto &leaf : m_leaves) {
         if (!leaf->view && leaf->notePath == m_notebookPanePath)
             leaf->editor->setModified(true);

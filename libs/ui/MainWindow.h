@@ -1110,6 +1110,8 @@ QLabel *m_vimStatus = nullptr;
     QWidget *buildNotebookPane(QWidget *parent);
     void syncNotebookPane();
     void applyNotebookCellMetadata();
+    /// The file cell the caret of `leaf` (a notebook) is in, against the file as it is now on disk; -1 for none.
+    int notebookCaretFileCell(Leaf *leaf);
     std::shared_ptr<notebook::IpynbDocument> m_notebookDisk; ///< the notebook the pane last read from disk
     QString m_notebookDiskStamp;  ///< its path, modification time and size, as read
     QString m_notebookPanePath;   ///< the notebook and file cell the pane shows (-1: none, or not saved yet)

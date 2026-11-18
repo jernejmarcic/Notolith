@@ -6946,6 +6946,26 @@ TEST_F(WindowTest, TheNotebookPaneEditsTheCaretCellsTagsAndMetadata)
     ASSERT_TRUE(QTest::qWaitFor([&] { return cell->text().startsWith(QStringLiteral("Cell 2 is new")); }, 2000))
         << cell->text().toStdString();
     EXPECT_FALSE(json->isVisibleTo(pane));
+
+    // The new cell moved above the title, the pane filled for the title, then a save renumbers the file's
+    // cells before Apply: the edit still lands on the title.
+    window.findChild<QWidget *>(QStringLiteral("notebookBar"))
+        ->findChild<QToolButton *>(QStringLiteral("notebookMoveUp"))
+        ->click();
+    editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("# Title")));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return cell->text() == QStringLiteral("Cell 2 (markdown)"); }, 2000))
+        << cell->text().toStdString();
+    tags->setFocus();
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    tags->setText(QStringLiteral("moved"));
+    apply->click();
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonArray cells = QJsonDocument::fromJson(readAll(path(QStringLiteral("Meta.ipynb"))))
+                                 .object().value(QStringLiteral("cells")).toArray();
+    ASSERT_EQ(cells.size(), 2);
+    EXPECT_FALSE(cells.at(0).toObject().value(QStringLiteral("metadata")).toObject().contains(QStringLiteral("tags")));
+    EXPECT_EQ(cells.at(1).toObject().value(QStringLiteral("metadata")).toObject().value(QStringLiteral("tags")).toArray(),
+              QJsonArray{QStringLiteral("moved")});
 }
 #endif
 

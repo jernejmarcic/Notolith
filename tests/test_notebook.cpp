@@ -1863,7 +1863,8 @@ TEST(IpynbTest, EditedCellMetadataIsSavedIntoItsOwnCell)
     IpynbRuns runs;
     const QJsonObject edited{{QStringLiteral("tags"), QJsonArray{QStringLiteral("parameters")}},
                              {QStringLiteral("collapsed"), true}};
-    runs.cellMetadata.insert(1, edited);
+    runs.cellMetadata.insert(1, {ipynbCellSource(document, 1), edited});
+    EXPECT_EQ(ipynbCellSource(document, 1), QStringLiteral("x = 1"));
     EXPECT_FALSE(runs.isEmpty());
     const QByteArray merged = mergeIpynb(file, text, runs);
     const QJsonArray cells = cellsIn(merged);
@@ -1877,6 +1878,11 @@ TEST(IpynbTest, EditedCellMetadataIsSavedIntoItsOwnCell)
     ASSERT_TRUE(parseIpynb(same, &reread));
     EXPECT_EQ(ipynbCellMetadata(reread, 1), edited);
     expectNbformatValid(merged);
+    // The file changed on disk since the edit (its second cell reads otherwise): the edit goes nowhere.
+    const QByteArray changed = mergeIpynb("", QStringLiteral("# A\n\n```python\nz = 2\n```\n\n# B\n"));
+    const QByteArray dropped = mergeIpynb(changed, QStringLiteral("# A\n\n```python\nz = 2\n```\n\n# B\n"), runs);
+    for (const QJsonValue &cell : cellsIn(dropped.isEmpty() ? changed : dropped))
+        EXPECT_TRUE(cell.toObject().value(QStringLiteral("metadata")).toObject().isEmpty());
 }
 
 TEST(IpynbTest, UnknownKeysSurviveAnEditAndTheLanguageComesFromTheKernelspec)
