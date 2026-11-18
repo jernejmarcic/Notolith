@@ -6896,6 +6896,60 @@ TEST_F(WindowTest, ANotebookHasACellToolbarThatEditsWholeCells)
 #endif
 
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+// The sidebar's Notebook pane: the kernel, then the caret cell's tags and metadata, applied into the file on save.
+TEST_F(WindowTest, TheNotebookPaneEditsTheCaretCellsTagsAndMetadata)
+{
+    write(QStringLiteral("Meta.ipynb"), QByteArray());
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Meta.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setFocus();
+    QTest::keyClicks(editor, QStringLiteral("# Title"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+
+    auto *pane = window.findChild<QWidget *>(QStringLiteral("notebookPane"));
+    ASSERT_NE(pane, nullptr);
+    auto *cell = pane->findChild<QLabel *>(QStringLiteral("notebookPaneCell"));
+    auto *tags = pane->findChild<QLineEdit *>(QStringLiteral("notebookPaneTags"));
+    auto *json = pane->findChild<QPlainTextEdit *>(QStringLiteral("notebookPaneMetadata"));
+    auto *apply = pane->findChild<QPushButton *>(QStringLiteral("notebookPaneApply"));
+    auto *status = pane->findChild<QLabel *>(QStringLiteral("notebookPaneStatus"));
+    ASSERT_TRUE(cell && tags && json && apply && status);
+    editor->setCursorOffset(0);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return cell->text() == QStringLiteral("Cell 1 (markdown)"); }, 2000))
+        << cell->text().toStdString();
+    EXPECT_EQ(json->toPlainText(), QStringLiteral("{\n}"));
+
+    // Not an object: nothing applied.
+    json->setPlainText(QStringLiteral("[1]"));
+    apply->click();
+    EXPECT_TRUE(status->text().startsWith(QStringLiteral("Not applied")));
+    tags->setText(QStringLiteral("intro, hide-input, intro"));
+    json->setPlainText(QStringLiteral("{\"slideshow\": {\"slide_type\": \"slide\"}}"));
+    apply->click();
+    EXPECT_TRUE(editor->isModified());
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QJsonObject metadata = QJsonDocument::fromJson(readAll(path(QStringLiteral("Meta.ipynb"))))
+                                     .object().value(QStringLiteral("cells")).toArray().at(0).toObject()
+                                     .value(QStringLiteral("metadata")).toObject();
+    EXPECT_EQ(metadata.value(QStringLiteral("tags")).toArray(),
+              (QJsonArray{QStringLiteral("intro"), QStringLiteral("hide-input")}));
+    EXPECT_EQ(metadata.value(QStringLiteral("slideshow")).toObject().value(QStringLiteral("slide_type")).toString(),
+              QStringLiteral("slide"));
+
+    // A cell typed since the save is new: nothing to edit until it is saved.
+    window.findChild<QWidget *>(QStringLiteral("notebookBar"))
+        ->findChild<QToolButton *>(QStringLiteral("notebookAddCell"))
+        ->click();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return cell->text().startsWith(QStringLiteral("Cell 2 is new")); }, 2000))
+        << cell->text().toStdString();
+    EXPECT_FALSE(json->isVisibleTo(pane));
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
 // A .ipynb in the vault opens as a note: cells as text, its stored outputs
 // shown on the blocks, an untouched save changing no bytes, an edit saved
 // back into the same notebook, and the notebooks feature switch turning it

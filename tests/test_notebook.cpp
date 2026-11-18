@@ -1847,6 +1847,38 @@ TEST(IpynbTest, AnEmptyFileIsANotebookWithNoCells)
     expectNbformatValid(merged);
 }
 
+TEST(IpynbTest, EditedCellMetadataIsSavedIntoItsOwnCell)
+{
+    const QByteArray file = mergeIpynb("", QStringLiteral("# A\n\n```python\nx = 1\n```\n\n# B\n"));
+    IpynbDocument document;
+    ASSERT_TRUE(parseIpynb(file, &document));
+    // A cell typed in above the code cell since: the code cell is still the file's second.
+    const QString text = QStringLiteral("# A\n\n```python\ny = 0\n```\n\n```python\nx = 1\n```\n\n# B\n");
+    const qsizetype code = text.lastIndexOf(QStringLiteral("x = 1"));
+    EXPECT_EQ(ipynbFileCellAt(document, text, code), 1);
+    EXPECT_EQ(ipynbFileCellAt(document, text, text.indexOf(QStringLiteral("y = 0"))), -1) << "a new cell";
+    EXPECT_EQ(ipynbFileCellAt(document, text, 0), 0);
+    EXPECT_TRUE(ipynbCellMetadata(document, 1).isEmpty());
+
+    IpynbRuns runs;
+    const QJsonObject edited{{QStringLiteral("tags"), QJsonArray{QStringLiteral("parameters")}},
+                             {QStringLiteral("collapsed"), true}};
+    runs.cellMetadata.insert(1, edited);
+    EXPECT_FALSE(runs.isEmpty());
+    const QByteArray merged = mergeIpynb(file, text, runs);
+    const QJsonArray cells = cellsIn(merged);
+    ASSERT_EQ(cells.size(), 4);
+    EXPECT_EQ(cells.at(2).toObject().value(QStringLiteral("metadata")).toObject(), edited);
+    EXPECT_TRUE(cells.at(1).toObject().value(QStringLiteral("metadata")).toObject().isEmpty());
+    // Unedited text: the edit alone still makes a save.
+    const QByteArray same = mergeIpynb(file, ipynbMarkdown(document), runs);
+    EXPECT_EQ(cellsIn(same).at(1).toObject().value(QStringLiteral("metadata")).toObject(), edited);
+    IpynbDocument reread;
+    ASSERT_TRUE(parseIpynb(same, &reread));
+    EXPECT_EQ(ipynbCellMetadata(reread, 1), edited);
+    expectNbformatValid(merged);
+}
+
 TEST(IpynbTest, UnknownKeysSurviveAnEditAndTheLanguageComesFromTheKernelspec)
 {
     QJsonObject root = QJsonDocument::fromJson(sampleNotebook()).object();

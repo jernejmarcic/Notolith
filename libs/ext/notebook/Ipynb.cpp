@@ -667,6 +667,16 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
         }
     }
 
+    // Metadata edited in the sidebar replaces the cell's own; a cell deleted since takes its edit with it.
+    for (qsizetype i = 0; i < n; ++i) {
+        const auto edited = runs.cellMetadata.constFind(int(pairing.file.at(i)));
+        if (pairing.file.at(i) < 0 || edited == runs.cellMetadata.cend())
+            continue;
+        QJsonObject cell = rebuilt.at(i).toObject();
+        cell.insert(QStringLiteral("metadata"), *edited);
+        rebuilt.replace(i, cell);
+    }
+
     // The cells that ran (or were cleared) since the file was read take their outputs and count from that run;
     // every other cell stays the file's own object, since what the editor holds of an output is not all the file
     // said (colour codes, alternative representations).
@@ -711,6 +721,33 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
         root.insert(QStringLiteral("metadata"), notebookMetadata(kernel.name.isEmpty() ? nullptr : &kernel));
     }
     return dumpIpynbJSON(root);
+}
+
+int ipynbFileCellAt(const IpynbDocument &document, const QString &markdown, qsizetype offset)
+{
+    const QList<Cell> shown = cellsFromMarkdown(markdown, document.language);
+    if (shown.isEmpty())
+        return -1;
+    qsizetype at = 0; // the last cell starting at or before `offset`, else the first (the toolbar's cell)
+    for (qsizetype i = 0; i < shown.size(); ++i) {
+        if (shown.at(i).start <= offset)
+            at = i;
+    }
+    return int(pairCells(cellsOf(document.root), shown).file.at(at));
+}
+
+QJsonObject ipynbCellMetadata(const IpynbDocument &document, int fileCell)
+{
+    int index = 0;
+    for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
+        const QJsonObject cell = value.toObject();
+        const QString type = cell.value(QStringLiteral("cell_type")).toString();
+        if (type != QLatin1String("markdown") && type != QLatin1String("code") && type != QLatin1String("raw"))
+            continue;
+        if (index++ == fileCell)
+            return cell.value(QStringLiteral("metadata")).toObject();
+    }
+    return {};
 }
 
 QByteArray newIpynb(const KernelSpec *kernel)

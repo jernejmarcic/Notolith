@@ -561,7 +561,10 @@ MainWindow::MainWindow(QWidget *parent)
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
     m_notebookBarTimer.setSingleShot(true);
     m_notebookBarTimer.setInterval(120);
-    connect(&m_notebookBarTimer, &QTimer::timeout, this, [this] { syncNotebookCellType(m_active); });
+    connect(&m_notebookBarTimer, &QTimer::timeout, this, [this] {
+        syncNotebookCellType(m_active);
+        syncNotebookPane();
+    });
 #endif
     m_selectionCountTimer.setInterval(200);
     connect(&m_selectionCountTimer, &QTimer::timeout, this, [this] {
@@ -3300,6 +3303,10 @@ void MainWindow::applyFeatures()
              return m_bookmarks.data();
          },
          "bookmarksTabButton", "bookmark", tr("Bookmarks"), "bookmarks"},
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+        {"notebooks", m_notebookPane, [this, parent] { return buildNotebookPane(parent); },
+         "notebookTabButton", "code", tr("Notebook"), "notebook-metadata"},
+#endif
 #ifdef NOTEAPPC_HAVE_GRAPH
         {"graph", m_localGraph,
          [this, parent] {
@@ -3453,6 +3460,9 @@ void MainWindow::showNoteInPanes(const QString &path)
             m_metaPane->clear();
         }
     }
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    syncNotebookPane();
+#endif
     if (m_outline && path.isEmpty())
         m_outline->clear();
     else if (m_outline && m_active && path == m_active->notePath && !m_active->view) {

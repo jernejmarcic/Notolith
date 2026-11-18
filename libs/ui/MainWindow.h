@@ -67,6 +67,7 @@ namespace notebook {
 class NotebookController;
 class IpynbPictures;
 struct IpynbCell;
+struct IpynbDocument;
 struct IpynbRuns;
 struct NotebookRunResult;
 }
@@ -1103,6 +1104,16 @@ QLabel *m_vimStatus = nullptr;
     /// caret; the text is rebuilt and the difference applied as one undo step.
     void editNotebookCells(const std::function<int(QList<notebook::IpynbCell> &, int)> &change);
     void runNotebookCellAndAdvance();
+    /// The sidebar pane with the notebook's kernel and the caret cell's tags and metadata, editable; an edit is
+    /// held in m_notebookDirty until the notebook is saved.
+    QPointer<QWidget> m_notebookPane;
+    QWidget *buildNotebookPane(QWidget *parent);
+    void syncNotebookPane();
+    void applyNotebookCellMetadata();
+    std::shared_ptr<notebook::IpynbDocument> m_notebookDisk; ///< the notebook the pane last read from disk
+    QString m_notebookDiskStamp;  ///< its path, modification time and size, as read
+    QString m_notebookPanePath;   ///< the notebook and file cell the pane shows (-1: none, or not saved yet)
+    int m_notebookPaneCell = -1;
     crypt::EncryptionSession *m_encryption = nullptr; ///< null in a build without encryption
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;
