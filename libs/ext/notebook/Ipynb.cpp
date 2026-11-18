@@ -610,6 +610,18 @@ CellPairing pairCells(const QList<Cell> &original, const QList<Cell> &shown)
 
 } // namespace
 
+namespace {
+/// A new notebook's metadata: the kernelspec of `kernel`, or - none - only `language_info.name = python`.
+QJsonObject notebookMetadata(const KernelSpec *kernel)
+{
+    if (!kernel)
+        return {{QStringLiteral("language_info"), QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}};
+    return {{QStringLiteral("kernelspec"), QJsonObject{{QStringLiteral("display_name"), kernel->displayName},
+                                                       {QStringLiteral("language"), kernel->language},
+                                                       {QStringLiteral("name"), kernel->name}}}};
+}
+} // namespace
+
 QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, QString *error)
 {
     return mergeIpynb(fileBytes, markdown, IpynbRuns(), error);
@@ -688,21 +700,18 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
 
     QJsonObject root = document.root;
     root.insert(QStringLiteral("cells"), rebuilt);
+    if (fileBytes.trimmed().isEmpty()) {
+        // An empty file's first save: the kernel a new notebook gets (the default python3's), so Jupyter need not ask.
+        const KernelSpec kernel = kernelSpecsByLanguage().value(QStringLiteral("python"));
+        root.insert(QStringLiteral("metadata"), notebookMetadata(kernel.name.isEmpty() ? nullptr : &kernel));
+    }
     return dumpIpynbJSON(root);
 }
 
 QByteArray newIpynb(const KernelSpec *kernel)
 {
-    QJsonObject metadata;
-    if (kernel) {
-        metadata.insert(QStringLiteral("kernelspec"), QJsonObject{{QStringLiteral("display_name"), kernel->displayName},
-                                                                   {QStringLiteral("language"), kernel->language},
-                                                                   {QStringLiteral("name"), kernel->name}});
-    } else {
-        metadata.insert(QStringLiteral("language_info"), QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}});
-    }
     return dumpIpynbJSON({{QStringLiteral("cells"), QJsonArray{newCell({Cell::Type::Code, QString()}, 5)}},
-                          {QStringLiteral("metadata"), metadata},
+                          {QStringLiteral("metadata"), notebookMetadata(kernel)},
                           {QStringLiteral("nbformat"), 4},
                           {QStringLiteral("nbformat_minor"), 5}});
 }

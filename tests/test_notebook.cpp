@@ -1836,6 +1836,14 @@ TEST(IpynbTest, AnEmptyFileIsANotebookWithNoCells)
     ASSERT_EQ(cells.size(), 2);
     EXPECT_EQ(cells.at(1).toObject().value(QStringLiteral("cell_type")).toString(), QStringLiteral("code"));
     EXPECT_EQ(joinedSource(cells.at(1).toObject()), QStringLiteral("x = 1"));
+    // The first save names the kernel a new notebook gets: python's kernelspec, or language_info without one.
+    const QJsonObject metadata = QJsonDocument::fromJson(merged).object().value(QStringLiteral("metadata")).toObject();
+    const QJsonObject kernelspec = metadata.value(QStringLiteral("kernelspec")).toObject();
+    if (kernelspec.isEmpty())
+        EXPECT_EQ(metadata.value(QStringLiteral("language_info")).toObject().value(QStringLiteral("name")).toString(),
+                  QStringLiteral("python"));
+    else
+        EXPECT_EQ(kernelspec.value(QStringLiteral("language")).toString(), QStringLiteral("python"));
     expectNbformatValid(merged);
 }
 
