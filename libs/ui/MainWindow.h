@@ -303,6 +303,13 @@ private slots:
     // QMetaObject::invokeMethod the same way they already drive save().
 
     void newNoteIn(const QString &folderRelative);
+    /// A new "Untitled<extension>" (the next free name) holding `text` in `folderRelative`, opened at once.
+    void newFileIn(const QString &folderRelative, const QString &extension, const QString &text = QString());
+    /// "New file" choices (Markdown, text, notebook, JSON, canvas, base, other...) for the folder `folder` names
+    /// when one is picked. Owned by `parent`.
+    QMenu *newFileMenu(QWidget *parent, const std::function<QString()> &folder);
+    /// Right-clicking a New note `button` offers newFileMenu() for newNoteFolder().
+    void offerOtherFileKinds(QToolButton *button);
     /// Where a new note goes when nothing chose a folder: files.newNoteLocation
     /// (Obsidian's newFileLocation) - the vault root, the open note's folder,
     /// or files.newNoteFolder. Vault-relative, "" the root.

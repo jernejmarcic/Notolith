@@ -722,6 +722,7 @@ QWidget *MainWindow::buildHeaderBar()
     QToolButton *newNote = iconButton(QStringLiteral("headerNewNoteButton"), QStringLiteral("plus"),
                                       tr("New note (Ctrl+N)"), 18);
     connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(newNoteFolder()); });
+    offerOtherFileKinds(newNote);
 
 #ifdef NOTEAPPC_HAVE_GRAPH
     // Obsidian's ribbon has a graph icon; Ctrl+G alone left nothing on screen
@@ -812,6 +813,7 @@ QWidget *MainWindow::buildSidebar()
     QToolButton *newNote = iconButton(QStringLiteral("sidebarNewNoteButton"),
                                       QStringLiteral("file-plus"), tr("New note"), 14);
     connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(newNoteFolder()); });
+    offerOtherFileKinds(newNote);
     QToolButton *newFolder = iconButton(QStringLiteral("sidebarNewFolderButton"),
                                         QStringLiteral("folder-plus"), tr("New folder"), 14);
     connect(newFolder, &QToolButton::clicked, this, [this] { newFolderIn(QString()); });
@@ -9077,6 +9079,8 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     const QModelIndex index = m_tree->indexAt(pos);
     DimMenu menu(this);
     QAction *newNoteAction = menu.addAction(tr("New note"));
+    const QString folderRelative = folderRelativeFor(index);
+    menu.addMenu(newFileMenu(&menu, [folderRelative] { return folderRelative; }));
     QAction *newFolderAction = menu.addAction(tr("New folder"));
     QAction *renameAction = nullptr;
     QAction *moveAction = nullptr;
@@ -9205,16 +9209,84 @@ QString MainWindow::copyPath(const QString &absolutePath)
 
 void MainWindow::newNoteIn(const QString &folderRelative)
 {
+    newFileIn(folderRelative, QStringLiteral(".md"));
+}
+
+void MainWindow::newFileIn(const QString &folderRelative, const QString &extension, const QString &text)
+{
     if (!m_vault.isValid())
         return;
     QString error;
-    const QString path = m_vault.createNote(folderRelative, tr("Untitled"), &error);
+    const QString path = m_vault.createNote(folderRelative, tr("Untitled"), &error, extension, text);
     if (path.isEmpty()) {
-        QMessageBox::warning(this, tr("New note"), tr("Could not create the note:\n%1").arg(error));
+        QMessageBox::warning(this, tr("New file"), tr("Could not create the note:\n%1").arg(error));
         return;
     }
-    m_indexer->reindex(path);
+    if (Vault::isNote(path) || isNotebookFile(path))
+        m_indexer->reindex(path);
     openNote(path);
+}
+
+QMenu *MainWindow::newFileMenu(QWidget *parent, const std::function<QString()> &folder)
+{
+    auto *menu = new DimMenu(tr("New file"), parent);
+    menu->setObjectName(QStringLiteral("newFileMenu"));
+    const auto entry = [&](const QString &label, const QString &extension, const std::function<QString()> &text) {
+        connect(menu->addAction(label), &QAction::triggered, this,
+                [this, folder, extension, text] { newFileIn(folder(), extension, text ? text() : QString()); });
+    };
+    entry(tr("Markdown note (.md)"), QStringLiteral(".md"), {});
+    entry(tr("Plain text (.txt)"), QStringLiteral(".txt"), {});
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (featureOn("notebooks"))
+        entry(tr("Jupyter notebook (.ipynb)"), QStringLiteral(".ipynb"), [] {
+            const notebook::KernelSpec kernel = notebook::kernelSpecsByLanguage().value(QStringLiteral("python"));
+            return QString::fromUtf8(notebook::newIpynb(kernel.name.isEmpty() ? nullptr : &kernel));
+        });
+#endif
+    entry(tr("JSON (.json)"), QStringLiteral(".json"), [] { return QStringLiteral("{}\n"); });
+    entry(tr("HTML page (.html)"), QStringLiteral(".html"), {});
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (featureOn("canvas"))
+        entry(tr("Canvas (.canvas)"), QStringLiteral(".canvas"), [] { return QStringLiteral("{}\n"); });
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    if (featureOn("bases"))
+        entry(tr("Base (.base)"), QStringLiteral(".base"), [] { return bases::BaseFile::newFileTemplate(); });
+#endif
+    menu->addSeparator();
+    // Any other kind: the name as typed, its extension included ("data.csv", "script.py").
+    connect(menu->addAction(tr("Other...")), &QAction::triggered, this, [this, folder] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, tr("New file"), tr("File name, with its extension:"),
+                                                   QLineEdit::Normal, QStringLiteral("Untitled.txt"), &ok)
+                                 .trimmed();
+        if (!ok || name.isEmpty() || !m_vault.isValid())
+            return;
+        const QFileInfo info(name);
+        QString error;
+        const QString path = m_vault.createNote(folder(), info.completeBaseName(), &error,
+                                                info.suffix().isEmpty() ? QString() : QLatin1Char('.') + info.suffix());
+        if (path.isEmpty()) {
+            QMessageBox::warning(this, tr("New file"), tr("Could not create the note:\n%1").arg(error));
+            return;
+        }
+        if (Vault::isNote(path) || isNotebookFile(path))
+            m_indexer->reindex(path);
+        openNote(path);
+    });
+    return menu;
+}
+
+void MainWindow::offerOtherFileKinds(QToolButton *button)
+{
+    button->setToolTip(button->toolTip() + tr(" - right-click for other kinds of file"));
+    button->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(button, &QToolButton::customContextMenuRequested, this, [this, button](const QPoint &at) {
+        QMenu *menu = newFileMenu(button, [this] { return newNoteFolder(); });
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->popup(button->mapToGlobal(at));
+    });
 }
 
 QString MainWindow::newNoteFolder() const

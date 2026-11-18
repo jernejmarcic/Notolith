@@ -3564,6 +3564,35 @@ TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)
     EXPECT_TRUE(QDir(path(QStringLiteral("New folder"))).exists());
 }
 
+TEST_F(WindowTest, RightClickingNewNoteCreatesOtherKindsOfFile)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    auto *newNote = window.findChild<QToolButton *>(QStringLiteral("sidebarNewNoteButton"));
+    ASSERT_NE(newNote, nullptr);
+    const auto pick = [&](const QString &label) {
+        emit newNote->customContextMenuRequested(QPoint(2, 2));
+        QMenu *menu = newNote->findChild<QMenu *>(QStringLiteral("newFileMenu"));
+        ASSERT_NE(menu, nullptr);
+        QAction *chosen = nullptr;
+        for (QAction *action : menu->actions())
+            if (action->text() == label)
+                chosen = action;
+        ASSERT_NE(chosen, nullptr) << label.toStdString();
+        chosen->trigger();
+        menu->close();
+        delete menu;
+    };
+    pick(QStringLiteral("Plain text (.txt)"));
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Untitled.txt"))));
+    pick(QStringLiteral("JSON (.json)"));
+    QFile json(path(QStringLiteral("Untitled.json")));
+    ASSERT_TRUE(json.open(QIODevice::ReadOnly));
+    EXPECT_EQ(json.readAll(), QByteArray("{}\n"));
+    pick(QStringLiteral("Markdown note (.md)"));
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Untitled.md"))));
+}
+
 TEST_F(WindowTest, AboutPageShowsTheGPLNoticeAndTheFullLicence)
 {
     MainWindow window;
