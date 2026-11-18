@@ -53,6 +53,8 @@ add_library(noteAppC_ui STATIC
     HtmlPageView.h
     TextFileView.cpp
     TextFileView.h
+    DatabaseView.cpp
+    DatabaseView.h
     ToggleSwitch.cpp
     ToggleSwitch.h)
 
@@ -62,7 +64,7 @@ qt_add_resources(noteAppC_ui "license" PREFIX "/" BASE ${CMAKE_SOURCE_DIR} FILES
 target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Qt6::Concurrent used to arrive only with the optional spell module; SearchPane
 # needs it unconditionally to run Index::search() off the UI thread.
-target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::Network noteAppC_vault noteAppC_theme
+target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Sql noteAppC_vault noteAppC_theme
     noteAppC_index noteAppC_editor noteAppC_settings noteAppC_modules)
 # Network is for SingleInstance's QLocalSocket (a Unix socket) and, only with NOTEAPPC_WITH_NETWORK, the DICT lookup.
 target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${NOTEAPPC_VERSION_STRING}")

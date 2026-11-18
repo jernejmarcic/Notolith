@@ -47,6 +47,7 @@
 #include <QPointer>
 #include <QScopeGuard>
 #include <QSqlDatabase>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QLayout>
 #include <QLineEdit>
@@ -122,6 +123,10 @@
 #include "MainWindow.h"
 #include "HtmlPageView.h"
 #include "TextFileView.h"
+#include "DatabaseView.h"
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QSqlQueryModel>
 #include "TexCompiler.h"
 #include "PagePreview.h"
 #include "PopoutWindow.h"
@@ -3591,6 +3596,55 @@ TEST_F(WindowTest, RightClickingNewNoteCreatesOtherKindsOfFile)
     EXPECT_EQ(json.readAll(), QByteArray("{}\n"));
     pick(QStringLiteral("Markdown note (.md)"));
     EXPECT_TRUE(QFile::exists(path(QStringLiteral("Untitled.md"))));
+}
+
+TEST_F(WindowTest, AnSQLiteDatabaseOpensAsReadOnlyTables)
+{
+    const QString file = path(QStringLiteral("shop.db"));
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("make"));
+        db.setDatabaseName(file);
+        ASSERT_TRUE(db.open());
+        QSqlQuery q(db);
+        ASSERT_TRUE(q.exec(QStringLiteral("CREATE TABLE items (name TEXT, price REAL)")));
+        ASSERT_TRUE(q.exec(QStringLiteral("INSERT INTO items VALUES ('apple', 1.5), ('pear', 2), ('fig', 3)")));
+        ASSERT_TRUE(q.exec(QStringLiteral("CREATE TABLE \"odd \"\"name\"\"\" (x)")));
+        ASSERT_TRUE(q.exec(QStringLiteral("CREATE VIEW cheap AS SELECT name FROM items WHERE price < 2")));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("make"));
+    QFile(path(QStringLiteral("empty.db"))).open(QIODevice::WriteOnly);
+    const QByteArray before = [&] { QFile f(file); f.open(QIODevice::ReadOnly); return f.readAll(); }();
+
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(file));
+    auto *view = window.findChild<noteAppC::DatabaseView *>();
+    ASSERT_NE(view, nullptr);
+    EXPECT_EQ(view->tables(), (QStringList{QStringLiteral("cheap"), QStringLiteral("items"), QStringLiteral("odd \"name\"")}));
+    ASSERT_TRUE(view->showTable(QStringLiteral("items")));
+    EXPECT_EQ(view->model()->rowCount(), 3);
+    EXPECT_EQ(view->model()->data(view->model()->index(2, 0)).toString(), QStringLiteral("fig"));
+    ASSERT_TRUE(view->showTable(QStringLiteral("cheap")));
+    EXPECT_EQ(view->model()->rowCount(), 1);
+    ASSERT_TRUE(view->showTable(QStringLiteral("odd \"name\"")));
+    EXPECT_FALSE(view->model()->lastError().isValid());
+    EXPECT_FALSE(view->model()->flags(view->model()->index(0, 0)) & Qt::ItemIsEditable);
+
+    // Read-only: the connection refuses a write, and the file is the same bytes.
+    const QStringList connections = QSqlDatabase::connectionNames().filter(QStringLiteral("databaseView-"));
+    ASSERT_EQ(connections.size(), 1);
+    QSqlQuery write(QSqlDatabase::database(connections.first(), false));
+    EXPECT_FALSE(write.exec(QStringLiteral("DELETE FROM items")));
+    const QByteArray after = [&] { QFile f(file); f.open(QIODevice::ReadOnly); return f.readAll(); }();
+    EXPECT_EQ(after, before);
+
+    // An empty .db is refused, not opened as a new database.
+    noteAppC::DatabaseView empty;
+    QString error;
+    EXPECT_FALSE(empty.load(path(QStringLiteral("empty.db")), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(QFileInfo(path(QStringLiteral("empty.db"))).size(), 0);
 }
 
 TEST_F(WindowTest, AboutPageShowsTheGPLNoticeAndTheFullLicence)

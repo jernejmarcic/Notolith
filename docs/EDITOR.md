@@ -1266,6 +1266,19 @@ highlighted by file name when KF6 SyntaxHighlighting is built in, saves like a n
 BOM kept) and shows HTML as source only: nothing in the tab renders or runs it. It has Qt's own undo, not the note
 editor's find bar.
 
+New files of other kinds: the file tree's context menu has a New file submenu, also shown by right-clicking either
+New note button. It offers Markdown, plain text, Jupyter notebook, JSON, HTML, canvas and base (each only while its
+feature is on), and Other... for any name typed with its extension.
+
+An empty `.ipynb` opens as a notebook with no cells and stays 0 bytes until something is typed.
+
+## Databases
+
+An SQLite file (`.db`, `.sqlite`, `.sqlite3`, `.db3`) opens as a read-only table viewer: tables and views on the left,
+the chosen one's rows on the right, fetched as they scroll into sight, and the row count below. The connection is
+opened with `QSQLITE_OPEN_READONLY`, so nothing in the tab can write to the file. A `.db` that does not start with the
+SQLite header (empty, or another format) is refused rather than opened as a new database.
+
 ## Vim key bindings
 
 Settings > Editor > "Vim key bindings" (`editor.vimMode`, off by default).

@@ -142,6 +142,7 @@
 #include "ImageView.h"
 #endif
 #include "PdfRecovery.h"
+#include "DatabaseView.h"
 #include "TextFileView.h"
 #ifdef NOTEAPPC_HAVE_CANVAS
 #include "CanvasView.h"
@@ -7271,6 +7272,8 @@ bool MainWindow::isViewFile(const QString &path) const
     const QString media = mediaKindOf(path);
     if (media == QLatin1String("image") || (!media.isEmpty() && featureOn("media-embeds")))
         return true;
+    if (DatabaseView::isDatabasePath(path))
+        return true;
     return m_modules && m_modules->moduleForSuffix(path).has_value(); // after every built-in kind, never before
 }
 
@@ -7442,6 +7445,13 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
         }
     }
 #endif
+    if (!view && DatabaseView::isDatabasePath(path)) {
+        auto *database = new DatabaseView(m_active->area);
+        if (!database->load(path, &error))
+            delete database;
+        else
+            view = database;
+    }
     if (!view)
         openModuleView(path, &error, &view, fragment);
     bool textFile = false;
