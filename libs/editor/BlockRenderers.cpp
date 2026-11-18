@@ -704,6 +704,13 @@ MarkdownEditor::BlockHit MarkdownEditor::blockHitAt(const BlockView &view, const
             return hand(Kind::NestedFold, nested.span->range.start);
     }
 
+    if (d->m_notebookLayout) {
+        const QList<QRectF> actions = notebookCellActionRects(view, left, top);
+        for (int i = 0; i < actions.size(); ++i) {
+            if (over(actions.at(i)))
+                return hand(Kind::NotebookCellAction, 0, i);
+        }
+    }
     if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
         if (view.notebookEligible && over(notebookRunRectFor(view, left, top), 4))
             return hand(Kind::NotebookRun);
@@ -839,6 +846,9 @@ bool MarkdownEditor::activateBlockHit(const BlockView &view, const BlockHit &hit
     case Kind::NotebookRun:
         runNotebookBlockAt(view.span.range.start);
         return true;
+    case Kind::NotebookCellAction:
+        emit notebookCellActionRequested(NotebookCellAction(hit.index));
+        return true;
     case Kind::Reference:
         emit referenceActivated(view.x().referenceTarget);
         return true;
@@ -926,7 +936,8 @@ Qt::CursorShape MarkdownEditor::cursorShapeAt(const QPoint &point) const
     // A slides embed's buttons and a zoomed page's pan come before the rest.
     if (hit.kind == BlockHit::Kind::PdfNav || hit.shape == Qt::OpenHandCursor)
         return hit.shape;
-    if (!linkAt(point).isEmpty() || d->m_overEditButton || codeBlockHotspotAt(point))
+    if (!linkAt(point).isEmpty() || d->m_overEditButton || codeBlockHotspotAt(point)
+        || notebookAddCellBarRect().contains(point))
         return Qt::PointingHandCursor;
     if (hit.kind == BlockHit::Kind::None && hit.shape == Qt::IBeamCursor && hookedEmbedBlockAt(point) >= 0)
         return Qt::ArrowCursor; // a picture the window drew: nothing to type into

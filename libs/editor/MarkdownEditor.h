@@ -112,6 +112,12 @@ public:
     bool notebookLayout() const;
     /// A faint outline round each cell in the notebook layout.
     void setNotebookCellOutlines(bool on);
+    /// The notebook layout's buttons over the caret's cell (NotebookCellAction), viewport coordinates; null
+    /// when not shown.
+    enum class NotebookCellAction { Duplicate, MoveUp, MoveDown, InsertAbove, InsertBelow, Delete };
+    QRectF notebookCellActionRect(NotebookCellAction action) const;
+    /// The notebook layout's "Click to add a cell." bar under the last cell, viewport coordinates.
+    QRectF notebookAddCellBarRect() const;
     /// Replaces `removed` units at `at` with `inserted` as one undo step and puts the caret at `caret`.
     void replaceAsOneStep(qsizetype at, qsizetype removed, const QString &inserted, qsizetype caret);
 
@@ -1231,6 +1237,10 @@ signals:
     void cursorMoved(qsizetype offset);
     /// Shift+Enter in the notebook layout: run the cell at the caret and move on to the next one.
     void notebookRunAndAdvance();
+    /// A button over the caret's cell was clicked.
+    void notebookCellActionRequested(MarkdownEditor::NotebookCellAction action);
+    /// The bar under the last cell was clicked.
+    void notebookAddCellAtEndRequested();
     /// The pointer came to rest on a link to a note, the way Obsidian's page
     /// preview wants it: plain hover in reading view, with Ctrl held while
     /// editing. `globalPos` is where the pointer is.
@@ -1550,7 +1560,7 @@ private:
             QueryCollapse, QuerySort, QueryRow, QueryBody, BaseRow, BaseBody, NestedFold,
             CodeCopy, CodeTab, CodeChevron, CodeUnfold,
             PropertyFold, PropertyControl, PropertyRemove, PropertyAdd, PropertyChip, PropertyValue,
-            CalloutHeader, Task
+            CalloutHeader, Task, NotebookCellAction
         };
         Kind kind = Kind::None;
         Qt::CursorShape shape = Qt::IBeamCursor;
@@ -2294,6 +2304,10 @@ private:
     std::pair<qsizetype, qsizetype> notebookActiveCell() const;
     bool notebookCellBoundary(qsizetype block) const; ///< a code block or a `<!-- cell -->` line
     void paintNotebookCellOutline(QPainter &painter, const BlockView &view, qreal top) const;
+    /// The cell buttons' rects when `view` begins the caret's cell, at `top`; empty otherwise.
+    QList<QRectF> notebookCellActionRects(const BlockView &view, qreal left, qreal top) const;
+    void paintNotebookChrome(QPainter &painter, qreal left, qreal scroll) const;
+    static constexpr qreal kNotebookAddBar = 56; ///< the room under the last block for the add bar
     /// True when a wikilink target has no note behind it, so live preview can
     /// dim it the way Obsidian does. Cached per parse: the resolver reaches
     /// the index, and a note full of links is laid out on every keystroke.

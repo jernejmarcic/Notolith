@@ -6929,6 +6929,42 @@ TEST_F(WindowTest, ClickingANotebooksEmptyCodeCellTypesIntoIt)
     EXPECT_EQ(editor->noteText(), QStringLiteral("# EHR\n\n```python\nimport\n```\n"));
 }
 
+// The buttons over the caret's cell and the bar under the last one, as VS Code draws them.
+TEST_F(WindowTest, ANotebooksCellButtonsAndAddBarEditCells)
+{
+    write(QStringLiteral("Buttons.ipynb"), QByteArray());
+    MainWindow window;
+    window.resize(1000, 700);
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Buttons.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setFocus();
+    QTest::keyClicks(editor, QStringLiteral("# Top"));
+    QTest::qWait(400); // the debounced parse
+    const QRectF bar = editor->notebookAddCellBarRect();
+    ASSERT_TRUE(bar.isValid());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, bar.center().toPoint());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Top\n\n```python\n\n```\n"));
+    QTest::keyClicks(editor, QStringLiteral("x = 1"));
+    QTest::qWait(400);
+    using Action = MarkdownEditor::NotebookCellAction;
+    const auto press = [&](Action action) {
+        const QRectF rect = editor->notebookCellActionRect(action);
+        ASSERT_TRUE(rect.isValid()) << int(action);
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, rect.center().toPoint());
+        QTest::qWait(400);
+    };
+    press(Action::Duplicate);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Top\n\n```python\nx = 1\n```\n\n```python\nx = 1\n```\n"));
+    press(Action::Delete);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Top\n\n```python\nx = 1\n```\n"));
+    press(Action::MoveUp);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\nx = 1\n```\n\n# Top\n"));
+    press(Action::InsertAbove);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\n\n```\n\n```python\nx = 1\n```\n\n# Top\n"));
+}
+
 // The sidebar's Notebook pane: the kernel, then the caret cell's tags and metadata, applied into the file on save.
 TEST_F(WindowTest, TheNotebookPaneEditsTheCaretCellsTagsAndMetadata)
 {

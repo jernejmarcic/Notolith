@@ -3110,21 +3110,96 @@ void MarkdownEditor::paintNotebookCellOutline(QPainter &painter, const BlockView
     painter.restore();
 }
 
+QList<QRectF> MarkdownEditor::notebookCellActionRects(const BlockView &view, qreal left, qreal top) const
+{
+    if (!d->m_notebookLayout || d->m_mode == Mode::Source || view.piece != 0)
+        return {};
+    const qsizetype index = &view - d->m_blocks.data();
+    const auto [first, last] = notebookActiveCell();
+    if (first < 0 || index != first - d->m_blocks.at(first).piece)
+        return {};
+    // Right-aligned inside the cell's top edge, as VS Code puts them.
+    const qreal size = 22;
+    const qreal right = left + contentWidth() + 14 - 6;
+    QList<QRectF> rects;
+    for (int i = 0; i < 6; ++i)
+        rects.append(QRectF(right - (6 - i) * size, top + 2, size, size));
+    return rects;
+}
+
+void MarkdownEditor::paintNotebookChrome(QPainter &painter, qreal left, qreal scroll) const
+{
+    painter.save();
+    const QColor border = d->m_theme.color(QStringLiteral("--background-modifier-border"));
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
+    // The caret's cell: its bar in one stroke from its first block to its last, and its buttons.
+    const auto [first, last] = notebookActiveCell();
+    if (first >= 0) {
+        const BlockView &view = d->m_blocks.at(first - d->m_blocks.at(first).piece);
+        const bool code = view.span.kind == BlockSpan::Kind::Code;
+        const BlockView &end = code ? lastPiece(view) : d->m_blocks.at(last); // a long fence: all its pieces
+        const qreal from = view.y - scroll - (code ? 8 : 4);
+        const qreal to = end.y + end.height - scroll + (code ? 8 : 4);
+        painter.fillRect(QRectF(left - 26, from, 4, to - from), d->m_theme.color(QStringLiteral("--interactive-accent")));
+        const QList<QRectF> rects = notebookCellActionRects(view, left, view.y - scroll);
+        if (!rects.isEmpty()) {
+            const QRectF strip = rects.first().united(rects.last()).adjusted(-3, -1, 3, 1);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(QPen(border, 1));
+            painter.setBrush(d->m_theme.color(QStringLiteral("--background-primary")));
+            painter.drawRoundedRect(strip, 4, 4);
+            static const char *const icons[] = {"copy", "arrow-up", "arrow-down", "plus", "plus", "trash"};
+            for (int i = 0; i < 6; ++i) {
+                const QRectF icon = rects.at(i).adjusted(4, 4, -4, -4);
+                Icons::icon(QString::fromLatin1(icons[i]), muted, int(icon.width())).paint(&painter, icon.toRect());
+                // Insert above or below: the plus with a bar on the side the new cell goes.
+                if (i == 3 || i == 4) {
+                    const qreal y = i == 3 ? rects.at(i).top() + 2.5 : rects.at(i).bottom() - 2.5;
+                    painter.setPen(QPen(muted, 1.5));
+                    painter.drawLine(QPointF(icon.left(), y), QPointF(icon.right(), y));
+                }
+            }
+            painter.setRenderHint(QPainter::Antialiasing, false);
+        }
+    }
+    // The bar under the last cell.
+    const QRectF bar = notebookAddCellBarRect();
+    if (bar.isValid()) {
+        painter.setPen(QPen(border, 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(bar.adjusted(0.5, 0.5, -0.5, -0.5));
+        QFont font = d->m_theme.uiFont();
+        font.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+        painter.setFont(font);
+        painter.setPen(d->m_theme.color(QStringLiteral("--text-faint")));
+        painter.drawText(bar, Qt::AlignCenter, tr("Click to add a cell."));
+    }
+    painter.restore();
+}
+
+QRectF MarkdownEditor::notebookAddCellBarRect() const
+{
+    if (!d->m_notebookLayout || d->m_mode == Mode::Source || d->m_blocks.empty())
+        return {};
+    const qreal left = contentLeft();
+    const qreal top = d->m_totalHeight - kNotebookAddBar + 14 - verticalScrollBar()->value();
+    return QRectF(std::floor(left - 14), std::floor(top), std::floor(contentWidth() + 28), 30);
+}
+
+QRectF MarkdownEditor::notebookCellActionRect(NotebookCellAction action) const
+{
+    const auto [first, last] = notebookActiveCell();
+    if (first < 0)
+        return {};
+    const BlockView &view = d->m_blocks.at(first - d->m_blocks.at(first).piece);
+    const QList<QRectF> rects = notebookCellActionRects(view, contentLeft(), view.y - verticalScrollBar()->value());
+    return rects.isEmpty() ? QRectF() : rects.at(int(action));
+}
+
 void MarkdownEditor::paintNotebookGutter(QPainter &painter, const BlockView &view, qreal top) const
 {
     const qreal left = contentLeft();
     painter.save();
-    // The selected cell's bar, block by block, reaching down to the next block so a cell reads as one stretch.
-    const auto [first, last] = notebookActiveCell();
-    const qsizetype index = &view - d->m_blocks.data();
-    if (first >= 0 && index >= first && index <= last) {
-        const bool code = view.span.kind == BlockSpan::Kind::Code;
-        const qreal from = top - (code ? 8 : 0);
-        qreal to = top + view.height + (code ? 8 : 0);
-        if (index < last)
-            to = top + (d->m_blocks.at(index + 1).y - view.y);
-        painter.fillRect(QRectF(left - 26, from, 4, to - from), d->m_theme.color(QStringLiteral("--interactive-accent")));
-    }
     if (view.span.kind == BlockSpan::Kind::Code && view.notebookEligible && view.piece == 0) {
         const QString count = view.x().notebookRunning ? QStringLiteral("*")
                               : view.x().notebookCount > 0 ? QString::number(view.x().notebookCount)
@@ -5124,6 +5199,8 @@ void MarkdownEditor::updateLayout()
             foldLevel = view.span.level;
     }
     d->m_totalHeight = y + d->m_topPadding + tail;
+    if (d->m_notebookLayout && d->m_mode != Mode::Source)
+        d->m_totalHeight += kNotebookAddBar;
 
     // Lay out what is on screen, plus a screen either side so scrolling does
     // not stutter, plus the caret's block wherever it is. Blocks are placed in
@@ -5193,6 +5270,8 @@ void MarkdownEditor::updateLayout()
             y += view.height + kBlockSpacing;
         }
         d->m_totalHeight = y + d->m_topPadding + tail;
+        if (d->m_notebookLayout && d->m_mode != Mode::Source)
+            d->m_totalHeight += kNotebookAddBar;
     }
     updateScrollRange();
     if (d->m_notebookInput.edit)
@@ -5559,6 +5638,8 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
                 paintNotebookCellOutline(painter, *it, top);
         }
     }
+    if (d->m_notebookLayout && d->m_mode != Mode::Source)
+        paintNotebookChrome(painter, left, scroll);
 }
 
 void MarkdownEditor::paintEvent(QPaintEvent *event)
@@ -6867,6 +6948,11 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         return;
     d->m_touchHandles = false;
 
+    // The notebook layout's bar under the last cell.
+    if (notebookAddCellBarRect().contains(event->position())) {
+        emit notebookAddCellAtEndRequested();
+        return;
+    }
     // The `</>` button comes first: over a PDF's controls, a card, a query
     // block or a hooked embed it is the only thing a press there means.
     if (!touch) {

@@ -168,6 +168,44 @@ void MainWindow::syncNotebookBar(Leaf *leaf)
         static_cast<QVBoxLayout *>(leaf->area->layout())->insertWidget(0, bar);
         leaf->notebookBar = bar;
         connect(leaf->editor, &MarkdownEditor::notebookRunAndAdvance, this, [this] { runNotebookCellAndAdvance(); });
+        // The buttons over the caret's cell and the bar under the last, drawn by the editor.
+        connect(leaf->editor, &MarkdownEditor::notebookAddCellAtEndRequested, this, [this] {
+            editNotebookCells([](QList<IpynbCell> &cells, int) {
+                cells.append(IpynbCell{IpynbCell::Type::Code, QString(), -1});
+                return int(cells.size()) - 1;
+            });
+        });
+        connect(leaf->editor, &MarkdownEditor::notebookCellActionRequested, this,
+                [this](MarkdownEditor::NotebookCellAction action) {
+            using Action = MarkdownEditor::NotebookCellAction;
+            editNotebookCells([action](QList<IpynbCell> &cells, int at) {
+                if (at < 0)
+                    return at;
+                switch (action) {
+                case Action::Duplicate:
+                    cells.insert(at + 1, cells.at(at));
+                    return at + 1;
+                case Action::MoveUp:
+                    if (at > 0)
+                        cells.swapItemsAt(at, at - 1);
+                    return qMax(0, at - 1);
+                case Action::MoveDown:
+                    if (at + 1 < cells.size())
+                        cells.swapItemsAt(at, at + 1);
+                    return qMin(at + 1, int(cells.size()) - 1);
+                case Action::InsertAbove:
+                    cells.insert(at, IpynbCell{IpynbCell::Type::Code, QString(), -1});
+                    return at;
+                case Action::InsertBelow:
+                    cells.insert(at + 1, IpynbCell{IpynbCell::Type::Code, QString(), -1});
+                    return at + 1;
+                case Action::Delete:
+                    cells.removeAt(at);
+                    return qMin(at, int(cells.size()) - 1);
+                }
+                return at;
+            });
+        });
         connect(leaf->editor, &MarkdownEditor::cursorMoved, this, [this, leaf] {
             if (leaf->notebookBar && leaf->notebookBar->isVisible())
                 m_notebookBarTimer.start();
