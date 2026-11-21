@@ -56,7 +56,9 @@ set(NOTEAPPC_ABI_TAG "${PROJECT_VERSION}-${NOTEAPPC_ABI_TOKEN}-${Qt6_VERSION}")
 # the path. Off, the default build is unchanged: every module is a shared object. Only the modules that go
 # through noteappc_add_static_module change; the PDF and share modules stay shared, as their
 # poppler and protobuf stacks are not in the Android kit (those options are off there).
-if(ANDROID)
+# macOS too: a module .so would need $ORIGIN-style RPATHs and undefined-symbol linking against the executable that
+# dyld handles differently, and the bundle is simpler with everything in the one binary.
+if(ANDROID OR APPLE)
     set(noteappc_static_default ON)
 else()
     set(noteappc_static_default OFF)
@@ -266,7 +268,8 @@ endif()
 # -DNOTEAPPC_ALLOW_NO_SECCOMP=ON builds without (Android has none), and nothing that needs the sandbox runs.
 option(NOTEAPPC_ALLOW_NO_SECCOMP "Build without libseccomp: code blocks, plugins, diagrams, TeX and pandoc then never run" OFF)
 if(NOT TARGET PkgConfig::SECCOMP)
-    if(NOTEAPPC_ALLOW_NO_SECCOMP OR ANDROID)
+    # macOS has neither seccomp nor bubblewrap: the sandboxed features are unavailable there, as in a build without it.
+    if(NOTEAPPC_ALLOW_NO_SECCOMP OR ANDROID OR APPLE)
         message(WARNING "libseccomp not found: nothing that needs the sandbox (code blocks, plugins, diagrams, TeX, pandoc) will run")
     else()
         message(FATAL_ERROR "libseccomp (with its development files) is required: the sandbox every code block, plugin, "
@@ -277,7 +280,7 @@ endif()
 # Runtime dependencies of the sandbox, checked here because a missing one is found otherwise only when a block is
 # run: bubblewrap, and util-linux's prlimit (the task limit is set inside the sandbox's user namespace, where
 # only the job's own tasks count, which a limit set before bwrap starts cannot do).
-if(NOT ANDROID)
+if(NOT ANDROID AND NOT APPLE)
     foreach(tool bwrap prlimit)
         find_program(NOTEAPPC_RUNTIME_${tool} ${tool})
         if(NOT NOTEAPPC_RUNTIME_${tool})
@@ -529,7 +532,11 @@ endif()
 # install(TARGETS) would need a LIBRARY DESTINATION it has no use for.
 if(NOT ANDROID)
     include(GNUInstallDirs)
-    install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    # BUNDLE DESTINATION is what installing a MACOSX_BUNDLE target needs; Linux ignores it.
+    install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} BUNDLE DESTINATION .)
+endif()
+# The desktop entry, icon theme file and AppStream metadata are freedesktop things; a macOS bundle carries its own.
+if(NOT ANDROID AND NOT APPLE)
     install(FILES packaging/io.github.jernejmarcic.Notolith.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
     install(FILES libs/theme/icons/noteAppC.svg
