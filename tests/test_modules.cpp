@@ -5,7 +5,6 @@
 // reported, never loaded or dropped silently.
 #include <gtest/gtest.h>
 
-#include <link.h>
 
 #include <QApplication>
 #include <QDir>
