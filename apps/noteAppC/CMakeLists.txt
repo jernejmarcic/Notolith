@@ -50,3 +50,38 @@ if(ANDROID)
     set_property(TARGET noteAppC PROPERTY QT_ANDROID_MIN_SDK_VERSION 26)
     set_property(TARGET noteAppC PROPERTY QT_ANDROID_TARGET_SDK_VERSION 34)
 endif()
+
+# macOS: a .app bundle with our own Info.plist (bundle id as in the Linux desktop file, a numeric version as Apple
+# requires, so no "-beta" suffix) and an .icns made from the app's SVG. The icon needs rsvg-convert (librsvg) and
+# iconutil at configure time; without them the bundle is built iconless rather than failing.
+if(APPLE)
+    set(MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+    set(MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
+    set(MACOSX_BUNDLE_ICON_FILE Notolith)
+    set(noteappc_iconset ${CMAKE_CURRENT_BINARY_DIR}/Notolith.iconset)
+    set(noteappc_icns ${CMAKE_CURRENT_BINARY_DIR}/Notolith.icns)
+    find_program(NOTEAPPC_RSVG rsvg-convert)
+    find_program(NOTEAPPC_ICONUTIL iconutil)
+    if(NOTEAPPC_RSVG AND NOTEAPPC_ICONUTIL)
+        file(MAKE_DIRECTORY ${noteappc_iconset})
+        # The sizes iconutil expects: 16 to 512 pt, each also at 2x.
+        foreach(size 16 32 128 256 512)
+            math(EXPR double "${size} * 2")
+            execute_process(COMMAND ${NOTEAPPC_RSVG} -w ${size} -h ${size}
+                    -o ${noteappc_iconset}/icon_${size}x${size}.png ${CMAKE_SOURCE_DIR}/libs/theme/icons/noteAppC.svg)
+            execute_process(COMMAND ${NOTEAPPC_RSVG} -w ${double} -h ${double}
+                    -o ${noteappc_iconset}/icon_${size}x${size}@2x.png ${CMAKE_SOURCE_DIR}/libs/theme/icons/noteAppC.svg)
+        endforeach()
+        execute_process(COMMAND ${NOTEAPPC_ICONUTIL} -c icns -o ${noteappc_icns} ${noteappc_iconset}
+            RESULT_VARIABLE noteappc_iconutil_result)
+    endif()
+    if(EXISTS ${noteappc_icns})
+        target_sources(noteAppC PRIVATE ${noteappc_icns})
+        set_source_files_properties(${noteappc_icns} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    else()
+        message(WARNING "no .icns built (rsvg-convert and iconutil are needed): the macOS bundle has no icon")
+    endif()
+    set_target_properties(noteAppC PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in)
+endif()
