@@ -15,10 +15,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        # libzmq: the notebook; googletest: the tests; librsvg: the .icns; gumbo-parser: litehtml's parser.
+        # zeromq: the notebook; googletest: the tests; librsvg: the .icns; gumbo-parser: litehtml's parser.
         run: >
           brew install ninja qt qtkeychain hunspell libgit2 libarchive yaml-cpp nlohmann-json protobuf
-          litehtml gumbo-parser poppler-qt6 libzmq googletest librsvg pkgconf
+          litehtml gumbo-parser poppler-qt6 zeromq googletest librsvg pkgconf
 
       - name: Configure
         # KF6 SyntaxHighlighting is not in Homebrew. The PDF view is a shared module and macOS loads modules
