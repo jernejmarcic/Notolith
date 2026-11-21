@@ -1773,6 +1773,9 @@ TEST(IndexerThreadTest, AScanStoppedByAVaultSwitchLeavesNothingBehind)
 // outside changes were never seen. Now the indexer says so once and polls.
 TEST(IndexerThreadTest, AFolderThatCannotBeWatchedTurnsOnPolling)
 {
+#ifndef Q_OS_LINUX
+    GTEST_SKIP() << "only inotify refuses a folder for its permissions; FSEvents watches it all the same";
+#endif
     if (geteuid() == 0)
         GTEST_SKIP() << "root ignores file permissions";
     QTemporaryDir dir;

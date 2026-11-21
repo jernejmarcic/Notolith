@@ -395,6 +395,9 @@ TEST(StorageMigration, ADestinationThatExistsIsNeverOverwritten)
 
 TEST(StorageMigration, TwoStartsAtTheSameInstantMoveEachFileOnceAndSayNothingOfTheOther)
 {
+#ifdef __APPLE__
+    GTEST_SKIP() << "Qt calls into CoreFoundation, which aborts in a forked child that has not exec'd";
+#endif
     OldLayout machine;
     ASSERT_NO_FATAL_FAILURE(machine.populate());
     constexpr int many = 1500;
