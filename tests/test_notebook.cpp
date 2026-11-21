@@ -2737,6 +2737,9 @@ TEST(NotebookSandboxTest, WhereBubblewrapAndUserNamespacesAreThereACellRuns)
         GTEST_SKIP() << "bubblewrap not installed";
     if (!DirectRunner::canRun(QStringLiteral("bash")))
         GTEST_SKIP() << "bash not installed";
+#ifndef __linux__
+    GTEST_SKIP() << "user namespaces are Linux only";
+#else
     // Whether this process may make a user namespace, asked of a child so that this one is untouched.
     const pid_t child = fork();
     ASSERT_GE(child, 0);
@@ -2753,6 +2756,7 @@ TEST(NotebookSandboxTest, WhereBubblewrapAndUserNamespacesAreThereACellRuns)
     close(filter);
     EXPECT_TRUE(sandboxUsable()) << "bubblewrap is installed and user namespaces work, yet a trivial cell did not run: "
                                     "every sandbox test is skipped on this machine, so none of them says anything";
+#endif
 }
 
 TEST(DirectRunnerTest, ACellIsHeldToItsMemoryAndProcessLimits)
@@ -2865,6 +2869,7 @@ TEST(KernelProcessTest, InterruptReachesTheProcessInsideThePidNamespace)
 
 #include <cstring>
 #include <sys/socket.h>
+#include <fcntl.h>
 #include <sys/un.h>
 
 namespace {
@@ -2873,7 +2878,9 @@ namespace {
 /// connect to (the session bus, an agent), or for one of a kernel's five.
 int listenAt(const QString &path)
 {
-    const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    const int fd = socket(AF_UNIX, SOCK_STREAM, 0); // not SOCK_NONBLOCK: macOS has no such flag
+    if (fd >= 0)
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     strncpy(address.sun_path, QFile::encodeName(path).constData(), sizeof(address.sun_path) - 1);

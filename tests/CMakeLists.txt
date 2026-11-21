@@ -96,6 +96,9 @@ function(noteappc_fake_module target id abi suffix source)
     target_link_libraries(${target} PRIVATE noteAppC_modules_headers Qt6::Widgets)
     set_target_properties(${target} PROPERTIES AUTOMOC ON PREFIX ""
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fakemodules)
+    if(APPLE) # the host's symbols (ModuleView) resolve at load, as an ELF module's do
+        target_link_options(${target} PRIVATE -undefined dynamic_lookup)
+    endif()
 endfunction()
 noteappc_fake_module(fake_good fake "${NOTEAPPC_ABI_TAG}" fake FakeModule.cpp)
 noteappc_fake_module(fake_badabi fake-badabi "0.0.0-deadbeef-6.0.0" fake FakeModule.cpp)
