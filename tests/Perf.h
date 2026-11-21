@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
@@ -28,6 +29,14 @@
 #else
 #define SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER() ((void)0)
 #endif
+
+// A hosted CI runner (CI is set on GitHub's) is a shared VM, several times slower and noisier than the machine a
+// budget was set on, and the fastest of a few runs does not make up for that: such a guard skips there.
+#define SKIP_WALL_CLOCK_GUARD_ON_SHARED_CI()                                                                 \
+    do {                                                                                                     \
+        if (const char *ci = std::getenv("CI"); ci && *ci)                                                   \
+            GTEST_SKIP() << "wall-clock budget: a shared CI runner is too slow and noisy to hold it";        \
+    } while (0)
 
 namespace perf {
 

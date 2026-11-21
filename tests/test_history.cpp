@@ -128,6 +128,7 @@ TEST_F(HistoryTest, ASaveCostsWellUnderAMillisecond)
     for (int line = 0; line < 200; ++line)
         text += QStringLiteral("A line of a 10 kB note, number %1.\n").arg(line);
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    SKIP_WALL_CLOCK_GUARD_ON_SHARED_CI();
     bool allRecorded = true;
     double worst = 0;
     // Best of three medians: load only ever adds time.

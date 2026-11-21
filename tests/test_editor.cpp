@@ -495,7 +495,7 @@ TEST(MarkdownEditorTest, TypingEditsTheBufferAtTheCaret)
     EXPECT_TRUE(editor->isModified());
     EXPECT_EQ(editor->cursorOffset(), 11);
     // Counted with the parse, after the typing pause, not per keystroke.
-    QTest::qWait(80);
+    QTest::qWaitFor([&] { return editor->wordCount() == 2; }, 2000);
     EXPECT_EQ(editor->wordCount(), 2);
 }
 
@@ -1415,6 +1415,7 @@ QString longLineNote(int lineBytes)
 TEST(PlaceholderTest, AKeystrokeInTheBigPlaceholderStaysInsideTheBudgetOnLongLines)
 {
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    SKIP_WALL_CLOCK_GUARD_ON_SHARED_CI();
     for (const int lineBytes : {4000, 16000}) {
         SCOPED_TRACE(lineBytes);
         const QString note = longLineNote(lineBytes);
@@ -1785,7 +1786,7 @@ TEST(EnterJitterTest, ANewlineIsParsedOnTheSpotOnlyForTheReadersOwnKeyWhileParse
         QTest::keyClick(first.get(), Qt::Key_Return);
         EXPECT_EQ(first->parseCountForTest(), firstBefore + 1);
         EXPECT_EQ(second->parseCountForTest(), secondBefore) << "the other pane parsed inside the key";
-        QTest::qWait(100);
+        QTest::qWaitFor([&] { return second->parseCountForTest() > secondBefore; }, 2000);
         EXPECT_EQ(second->parseCountForTest(), secondBefore + 1);
         EXPECT_EQ(second->noteText(), first->noteText());
     }
@@ -1797,7 +1798,7 @@ TEST(EnterJitterTest, ANewlineIsParsedOnTheSpotOnlyForTheReadersOwnKeyWhileParse
         for (int i = 0; i < 50; ++i)
             editor->applyExternalEdit(note.size() / 2, 0, QStringLiteral("edit %1\n").arg(i));
         EXPECT_EQ(editor->parseCountForTest(), before) << "parsed inside the burst";
-        QTest::qWait(100);
+        QTest::qWaitFor([&] { return editor->parseCountForTest() > before; }, 2000);
         EXPECT_EQ(editor->parseCountForTest(), before + 1);
     }
     // A slow parse makes the next newline wait for the debounce, on any machine.
@@ -1808,7 +1809,7 @@ TEST(EnterJitterTest, ANewlineIsParsedOnTheSpotOnlyForTheReadersOwnKeyWhileParse
         const int before = editor->parseCountForTest();
         QTest::keyClick(editor.get(), Qt::Key_Return);
         EXPECT_EQ(editor->parseCountForTest(), before) << "a slow parse ran inside the key";
-        QTest::qWait(150);
+        QTest::qWaitFor([&] { return editor->parseCountForTest() > before; }, 2000);
         EXPECT_EQ(editor->parseCountForTest(), before + 1);
         // ... and a fast one measured since lets the next one be immediate again.
         const int measured = editor->parseCountForTest();
@@ -1869,6 +1870,7 @@ TEST(EnterJitterTest, ALetterInALongNoteDoesNotMoveTheViewWhenTheParseLands)
 // note of 20-30 kB was debounced, and the one after parsed again at once.
 TEST(EnterJitterTest, EveryEnterInANoteOfMiddlingSizeIsParsedOnTheSpot)
 {
+    SKIP_WALL_CLOCK_GUARD_ON_SHARED_CI(); // the adaptive budget is the parse time of the machine it runs on
     for (int kilobytes : {20, 24}) { // Limit: 28 kB parses in 4.2 ms on this loaded box, over the budget on purpose
         SCOPED_TRACE(kilobytes);
         const QString note = generateNote(kilobytes);
@@ -10138,6 +10140,7 @@ TEST(CSVembedTest, OtherTextEncodingsAreReadAsText)
 TEST(CSVembedTest, ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds)
 {
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    SKIP_WALL_CLOCK_GUARD_ON_SHARED_CI();
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
     // the cell budget is what bounds it, whatever the shape: a narrow file's 500 rows, a wide one's 64 columns
@@ -13714,7 +13717,8 @@ TEST(ReferenceBlockTest, ClickingTheHeaderAsksForTheFileToBeOpened)
     QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
                       QPoint(editor->textColumn() + 10, int(panel.top()) + 20)); // on the title strip
     ASSERT_EQ(spy.count(), 1);
-    EXPECT_EQ(spy.first().first().toString(), path);
+    // The file as the app resolved it: where the temporary directory is a link (/var on macOS), the real path.
+    EXPECT_EQ(spy.first().first().toString(), QFileInfo(path).canonicalFilePath());
 
     // a click on the listing is no link: it puts the caret in, and the source shows
     QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,

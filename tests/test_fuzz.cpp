@@ -134,7 +134,11 @@ TEST(FuzzTest, RandomEditsKeepTheEditorsTextAndUndoPutsItBack)
         fresh.setCursorOffset(editor.cursorOffset());
         // Typing styles the edited block at once and reparses the note 20 ms
         // after the last keystroke, off the UI thread; compare after that.
-        QTest::qWait(120);
+        // A slow machine may take longer: wait until no further parse lands.
+        for (int parses = -1; parses != editor.parseCountForTest();) {
+            parses = editor.parseCountForTest();
+            QTest::qWait(120);
+        }
         // Reading view: no caret, and no block revealed around it, which the
         // edited editor has and a fresh one does not.
         editor.setMode(MarkdownEditor::Mode::Reading);
