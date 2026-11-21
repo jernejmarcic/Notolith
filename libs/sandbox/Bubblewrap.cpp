@@ -222,12 +222,21 @@ void prepareChild(const Limits &limits, int filterFD)
     keepInChild(filterFD);
 }
 
+QString unavailableMessage(const QString &linuxText)
+{
+#ifdef __APPLE__
+    return QCoreApplication::translate("sandbox", "this is not available on macOS yet");
+#else
+    return linuxText;
+#endif
+}
+
 Outcome run(const Command &command, const Limits &limits, const QByteArray &input, int timeoutMs, qint64 maxOutput,
             bool mergeChannels)
 {
     Outcome outcome;
     if (command.program.isEmpty()) {
-        outcome.failure = QCoreApplication::translate("sandbox", "it runs only inside bubblewrap's sandbox; install bubblewrap");
+        outcome.failure = unavailableMessage(QCoreApplication::translate("sandbox", "it runs only inside bubblewrap's sandbox; install bubblewrap"));
         return outcome;
     }
     QProcess process;

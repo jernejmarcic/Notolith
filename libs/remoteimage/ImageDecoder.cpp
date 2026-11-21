@@ -63,7 +63,8 @@ static QString decoderProbe()
         return QCoreApplication::translate("RemoteImage", "Not loaded: the image decoder (notolith-imagedecode) is not installed.");
     sandbox::Command command = helperCommand(helper);
     if (command.program.isEmpty())
-        return QCoreApplication::translate("RemoteImage", "Not loaded: images from the web are decoded only inside bubblewrap's sandbox; install bubblewrap.");
+        return sandbox::unavailableMessage(QCoreApplication::translate(
+            "RemoteImage", "Not loaded: images from the web are decoded only inside bubblewrap's sandbox; install bubblewrap."));
     if (command.filterFD >= 0)
         ::close(command.filterFD);
     return {};

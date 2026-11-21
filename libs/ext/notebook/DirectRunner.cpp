@@ -409,7 +409,8 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
         // wasmtime bug with the user's files and network, and no seccomp.
         if (program.isEmpty()) {
             delete running;
-            return fail(tr("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap"));
+            return fail(sandbox::unavailableMessage(
+                tr("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap")));
         }
         used = SandboxTier::Wasm;
     } else {
@@ -417,7 +418,8 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
                     &filterFD);
         if (program.isEmpty()) {
             delete running;
-            return fail(tr("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap"));
+            return fail(sandbox::unavailableMessage(
+                tr("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap")));
         }
     }
 

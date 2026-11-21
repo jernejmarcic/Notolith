@@ -121,7 +121,9 @@ void MainWindow::runPandoc(const QString &program, const QStringList &arguments,
     // there); no network, no home, no other drive. Without bubblewrap it does not run.
     const sandbox::Command sandboxed = sandbox::bubblewrapCommand(workingDirectory, program, arguments, {}, readOnlyBinds);
     if (sandboxed.program.isEmpty()) {
-        QMessageBox::warning(this, title, tr("pandoc runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap."));
+        QMessageBox::warning(this, title,
+                             sandbox::unavailableMessage(
+                                 tr("pandoc runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap.")));
         return;
     }
     sandbox::Limits limits; // not RLIMIT_AS: pandoc's runtime reserves far more address space than it uses

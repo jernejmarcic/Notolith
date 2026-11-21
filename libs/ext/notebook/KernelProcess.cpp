@@ -103,7 +103,8 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     wrapCommand(tier, argv.constFirst(), argv.mid(1), request, &program, &args, &m_tierUsed,
                 &filterFD);
     if (program.isEmpty()) {
-        m_error = QStringLiteral("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap");
+        m_error = sandbox::unavailableMessage(
+            QStringLiteral("code runs only inside bubblewrap's sandbox (with libseccomp); install bubblewrap"));
         return false;
     }
 

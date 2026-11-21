@@ -39,6 +39,10 @@ Command bubblewrapCommand(const QString &dir, const QString &program, const QStr
                           const QStringList &environment = {}, const QStringList &readOnlyBinds = {},
                           qint64 memoryBytes = 1LL << 30);
 
+/// The message for "this needs the sandbox and there is none": `linuxText` (it says to install bubblewrap) on
+/// Linux, and on macOS, where there is nothing to install, that the feature is not available there yet.
+QString unavailableMessage(const QString &linuxText);
+
 /// Runs `program arguments` (a complete bwrap line, filter and all) in a cgroup of its own, by
 /// `systemd-run --user --scope` in front of it: at most `memoryBytes` of RAM (swap off) and `tasks` tasks for
 /// everything inside. This is the only cap on memory that is not per process: the tmpfs pages a sandbox

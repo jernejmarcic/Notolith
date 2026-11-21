@@ -116,7 +116,7 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
                                    QStringLiteral("-jobname=") + jobName, inputPath};
     const sandbox::Command wrapped = sandbox::bubblewrapCommand(work.path(), engine, arguments, {QStringLiteral("openout_any=p")});
     if (wrapped.program.isEmpty()) {
-        result.error = QStringLiteral("TeX runs only inside bubblewrap's sandbox; install bubblewrap");
+        result.error = sandbox::unavailableMessage(QStringLiteral("TeX runs only inside bubblewrap's sandbox; install bubblewrap"));
         return result;
     }
     sandbox::Limits limits;

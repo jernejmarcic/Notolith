@@ -238,7 +238,7 @@ void PluginHost::ensureStarted()
     if (program.isEmpty()) {
         m_startError = hostBinaryPath().isEmpty()
             ? QStringLiteral("the plugin host (notolith-plugin-host) is not installed")
-            : QStringLiteral("plugins run only inside bubblewrap's sandbox; install bubblewrap");
+            : sandbox::unavailableMessage(QStringLiteral("plugins run only inside bubblewrap's sandbox; install bubblewrap"));
         if (m_callbacks.log)
             m_callbacks.log(m_manifest.id(), m_startError);
         m_process.reset();
