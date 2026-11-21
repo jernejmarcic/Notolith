@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "Vault.h"
 #include "ConfigFile.h"
+#include "FullSync.h"
 
 #include <QDir>
 #include <QFile>
@@ -18,6 +19,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <sys/param.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -445,10 +447,28 @@ int openFolderNoFollow(int rootFd, const QStringList &parts, bool create, int *e
     return copy;
 }
 
+/// The canonical path `fd` names now, empty when it cannot be told (the callers then fall back to their own check).
+QString fdPath(int fd)
+{
+#ifdef __APPLE__
+    char buffer[MAXPATHLEN]; // F_GETPATH writes up to MAXPATHLEN bytes
+    if (::fcntl(fd, F_GETPATH, buffer) < 0)
+        return {};
+    return QFileInfo(QFile::decodeName(buffer)).canonicalFilePath();
+#else
+    return QFileInfo(QStringLiteral("/proc/self/fd/%1").arg(fd)).canonicalFilePath();
+#endif
+}
+
 /// A descriptor on the folder at `path`, links on the way followed (it is the caller's chosen path).
 int openRootPath(const QString &path, int *err)
 {
-    const int fd = ::open(QFile::encodeName(path).constData(), O_PATH | O_DIRECTORY | O_CLOEXEC);
+#ifdef __linux__
+    constexpr int kFolderAccess = O_PATH; // no read access needed, and a path descriptor cannot be written through
+#else
+    constexpr int kFolderAccess = O_RDONLY; // macOS has no O_PATH
+#endif
+    const int fd = ::open(QFile::encodeName(path).constData(), kFolderAccess | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0)
         *err = errno;
     return fd;
@@ -493,7 +513,7 @@ Vault::HeldFolder Vault::HeldFolder::open(const QString &path, QString *error)
 
 QString Vault::HeldFolder::realPath() const
 {
-    return m_fd < 0 ? QString() : QFileInfo(QStringLiteral("/proc/self/fd/%1").arg(m_fd)).canonicalFilePath();
+    return m_fd < 0 ? QString() : fdPath(m_fd);
 }
 
 bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &bytes, QString *error) const
@@ -576,7 +596,7 @@ bool writeAt(int rootFd, const QString &relativePath, const QByteArray &bytes, Q
             return cleanup(n < 0 ? errno : EIO);
         done += n;
     }
-    if (sync && ::fsync(file.fd) < 0) // as QSaveFile does: the bytes are on disk before the name moves
+    if (sync && fullSync(file.fd) < 0) // as QSaveFile does: the bytes are on disk before the name moves
         return cleanup(errno);
     file.reset(-1);
     if (::renameat(dir.fd, temp.constData(), dir.fd, leaf.constData()) < 0)
@@ -661,7 +681,7 @@ bool Vault::readInside(const QString &path, Note &out, QString *error, bool *lea
     struct stat info {};
     if (::fstat(file.fd, &info) < 0 || !S_ISREG(info.st_mode))
         return fail(QStringLiteral("%1 is not a regular file").arg(path));
-    const QString real = QFileInfo(QStringLiteral("/proc/self/fd/%1").arg(file.fd)).canonicalFilePath();
+    const QString real = fdPath(file.fd);
     if (!real.isEmpty()) {
         if (!resolvesInside(real)) {
             if (leadsOutside)

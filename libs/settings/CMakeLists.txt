@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 add_library(noteAppC_settings STATIC
+    FullSync.h
     Hotkeys.cpp
     Hotkeys.h
     Settings.cpp

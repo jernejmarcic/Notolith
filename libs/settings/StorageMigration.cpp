@@ -2,6 +2,7 @@
 #include "StorageMigration.h"
 
 #include "ConfigFile.h"
+#include "FullSync.h"
 #include "Settings.h"
 
 #include <QCryptographicHash>
@@ -38,7 +39,7 @@ bool syncFile(const QString &path)
     const int fd = ::open(path.toLocal8Bit().constData(), O_RDONLY | O_CLOEXEC);
     if (fd < 0)
         return false;
-    const bool ok = ::fsync(fd) == 0;
+    const bool ok = fullSync(fd) == 0;
     ::close(fd);
     return ok;
 }
@@ -49,7 +50,7 @@ bool syncDirectory(const QString &directory)
     const int fd = ::open(directory.toLocal8Bit().constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0)
         return false;
-    const bool ok = ::fsync(fd) == 0;
+    const bool ok = fullSync(fd) == 0;
     ::close(fd);
     return ok;
 }
