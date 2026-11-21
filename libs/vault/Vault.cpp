@@ -477,14 +477,15 @@ QString fdPath(int fd)
 #endif
 }
 
+#ifdef __linux__
+constexpr int kFolderAccess = O_PATH; // no read access needed, and a path descriptor cannot be written through
+#else
+constexpr int kFolderAccess = O_RDONLY; // macOS has no O_PATH
+#endif
+
 /// A descriptor on the folder at `path`, links on the way followed (it is the caller's chosen path).
 int openRootPath(const QString &path, int *err)
 {
-#ifdef __linux__
-    constexpr int kFolderAccess = O_PATH; // no read access needed, and a path descriptor cannot be written through
-#else
-    constexpr int kFolderAccess = O_RDONLY; // macOS has no O_PATH
-#endif
     const int fd = ::open(QFile::encodeName(path).constData(), kFolderAccess | O_DIRECTORY | O_CLOEXEC);
     if (fd < 0)
         *err = errno;
@@ -535,7 +536,7 @@ bool Vault::HeldFolder::isOrHolds(const QString &path) const
         return true;
     // Up from `path` to the root of the filesystem tree, each step an open of "..": the folder held is the one
     // named, or holds it, when its device and inode turn up on the way.
-    int walk = ::open(QFile::encodeName(path).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    int walk = ::open(QFile::encodeName(path).constData(), kFolderAccess | O_DIRECTORY | O_CLOEXEC);
     if (walk < 0)
         return true;
     for (int depth = 0; depth < 4096; ++depth) {
@@ -548,7 +549,7 @@ bool Vault::HeldFolder::isOrHolds(const QString &path) const
             ::close(walk);
             return true;
         }
-        const int parent = ::openat(walk, "..", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        const int parent = ::openat(walk, "..", kFolderAccess | O_DIRECTORY | O_CLOEXEC);
         ::close(walk);
         if (parent < 0)
             return true;
