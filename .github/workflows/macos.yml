@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# macOS probe: configure, build, test and package Notolith natively on Apple Silicon. Sandboxed features (code
+# blocks, plugins, diagrams, TeX, pandoc) are unavailable there, as in a Linux build without libseccomp.
+name: macos
+
+on:
+  push:
+    branches: [feat/macos-build]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        # libzmq: the notebook; googletest: the tests; librsvg: the .icns; gumbo-parser: litehtml's parser.
+        run: >
+          brew install ninja qt qtkeychain hunspell libgit2 libarchive yaml-cpp nlohmann-json protobuf
+          litehtml gumbo-parser poppler-qt6 libzmq googletest librsvg pkgconf
+
+      - name: Configure
+        # KF6 SyntaxHighlighting is not in Homebrew. The PDF view is a shared module and macOS loads modules
+        # differently (static modules are the default here, but the PDF half stays shared), so it is off for now.
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_PREFIX_PATH="$(brew --prefix)"
+          -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDFVIEW=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        # An isolated home and XDG tree: the tests must never touch the runner's own.
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
+          mkdir -p "$HOME"
+          ctest --test-dir build --output-on-failure -j3
+
+      - name: Package
+        run: |
+          app=$(find build -name 'notolith.app' -maxdepth 4 | head -n 1)
+          echo "bundle: $app"
+          macdeployqt "$app" -dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Notolith-macOS
+          path: build/**/*.dmg
