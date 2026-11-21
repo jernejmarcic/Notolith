@@ -256,7 +256,8 @@ if(NOT NOTEAPPC_WITH_NETWORK)
 endif()
 list(JOIN noteappc_offline_needed "|" noteappc_offline_needed_pattern)
 list(JOIN noteappc_offline_symbols "|" noteappc_offline_symbols_pattern)
-if(noteappc_offline_needed_pattern OR noteappc_offline_symbols_pattern)
+# readelf, nm -D and the ELF NEEDED list are Linux's: on macOS the script finds nothing and the self-test cannot fail.
+if(NOT APPLE AND (noteappc_offline_needed_pattern OR noteappc_offline_symbols_pattern))
     add_test(NAME offline_exe COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_offline.sh
         "${noteappc_offline_needed_pattern}" "${noteappc_offline_symbols_pattern}" $<TARGET_FILE:noteAppC>)
     add_test(NAME offline_modules COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/check_offline.sh
@@ -676,7 +677,8 @@ endif()
 # socket, name resolution, dlopen of a network library); Unix sockets, the single-instance one and the notebook's,
 # pass. The probe makes each call, so the trap itself is tested. A build that has the networking on makes such
 # calls in its own tests, so it does not get the trap. Last in this file so that every test above is covered.
-if(NOT NOTEAPPC_WITH_NETWORK)
+# LD_PRELOAD interposition is Linux's (macOS has DYLD_INSERT_LIBRARIES and two-level namespaces): no trap there.
+if(NOT NOTEAPPC_WITH_NETWORK AND NOT APPLE)
     enable_language(C)
     add_library(nettrap SHARED nettrap.c)
     target_link_libraries(nettrap PRIVATE ${CMAKE_DL_LIBS})
