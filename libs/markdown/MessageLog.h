@@ -36,6 +36,7 @@ private:
     QFile m_file;
     qint64 m_maxBytes;
     int m_lockFD = -1;
+    int m_rotateFD = -1; // m_lockFD, or a file of its own where flock() and fcntl() locks conflict
 };
 
 } // namespace noteAppC

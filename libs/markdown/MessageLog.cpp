@@ -49,12 +49,21 @@ MessageLog::MessageLog(const QString &path, const QString &lockPath, qint64 maxB
             rotate();
         ::flock(m_lockFD, LOCK_SH);
     }
+#ifdef __APPLE__
+    // flock() and fcntl() locks are one system on macOS: a byte-range lock waits for the whole-file shared flock this
+    // process holds itself, for ever. The rotation lock gets a file of its own there.
+    m_rotateFD = ::open((lockPath + QStringLiteral(".rotate")).toLocal8Bit().constData(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+#else
+    m_rotateFD = m_lockFD;
+#endif
     reopen();
 }
 
 MessageLog::~MessageLog()
 {
     m_file.close();
+    if (m_rotateFD >= 0 && m_rotateFD != m_lockFD)
+        ::close(m_rotateFD);
     if (m_lockFD >= 0)
         ::close(m_lockFD);
 }
@@ -87,7 +96,7 @@ void MessageLog::append(const QString &line)
         {
             // The file by its name, looked at again under the lock: another process may have moved it
             // already, and then this one only follows.
-            const RotationLock hold(m_lockFD);
+            const RotationLock hold(m_rotateFD);
             if (QFileInfo(m_path).size() > m_maxBytes)
                 rotate();
         }
