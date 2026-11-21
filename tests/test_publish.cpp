@@ -122,6 +122,8 @@ TEST(PublishTest, LinksResolveAcrossFolders)
 
 TEST(PublishTest, TheSchemesCodeColoursReachThePage)
 {
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
     TestSite site({{QStringLiteral("Code.md"), "```cpp\nstatic int x = 0;\n```\n"}});
     site.publish();
     EXPECT_FALSE(site.read(QStringLiteral("code.html")).contains(QLatin1String("--code-type")))
@@ -1742,6 +1744,8 @@ int main(int argc, char **argv)
 
 TEST(ComplexCodeTest, PublishEmitsTokenClasses)
 {
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
     const QString text = QStringLiteral("```cpp\nstatic int x = 0;\nreturn x;\n```\n");
     ParsedNote note;
     note.relativePath = QStringLiteral("a.md");
