@@ -6,7 +6,7 @@
 #include <QStringList>
 
 #include <algorithm>
-#include <atomic>
+#include <mutex>
 
 namespace noteAppC {
 
@@ -85,11 +85,16 @@ void apply(TaskState &s, const QMap<QString, QString> &keys)
     }
 }
 
-std::atomic<std::shared_ptr<const TaskStates>> &slot()
+// A mutex, not std::atomic<std::shared_ptr>: libc++ (macOS) does not implement that specialisation.
+struct Slot {
+    std::mutex lock;
+    std::shared_ptr<const TaskStates> value;
+};
+
+Slot &slot()
 {
-    static std::atomic<std::shared_ptr<const TaskStates>> value{std::make_shared<const TaskStates>(
-        TaskStates::fromSections(readINIsections(TaskStates::path())))};
-    return value;
+    static Slot s{{}, std::make_shared<const TaskStates>(TaskStates::fromSections(readINIsections(TaskStates::path())))};
+    return s;
 }
 
 } // namespace
@@ -185,12 +190,17 @@ QChar nextTaskState(QChar c)
 
 std::shared_ptr<const TaskStates> TaskStates::current()
 {
-    return slot().load();
+    Slot &s = slot();
+    const std::lock_guard guard(s.lock);
+    return s.value;
 }
 
 void TaskStates::setCurrent(TaskStates states)
 {
-    slot().store(std::make_shared<const TaskStates>(std::move(states)));
+    auto next = std::make_shared<const TaskStates>(std::move(states));
+    Slot &s = slot();
+    const std::lock_guard guard(s.lock);
+    s.value.swap(next); // the old states are released after the lock, by `next`
 }
 
 QString TaskStates::path()

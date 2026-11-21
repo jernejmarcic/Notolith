@@ -29,7 +29,7 @@ jobs:
           -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDFVIEW=OFF
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build -- -k 0 # every failing file in one run, not only the first
 
       - name: Test
         # An isolated home and XDG tree: the tests must never touch the runner's own.
