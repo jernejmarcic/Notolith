@@ -531,10 +531,9 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     }
     const QString realOut = out.realPath();
     {
-        // Compared as the held folder really is: not the vault itself, and not a folder that holds it.
-        const QString realVault = QFileInfo(vaultRoot).canonicalFilePath();
-        if (realOut.isEmpty() || (!realVault.isEmpty()
-                                  && (realOut == realVault || realVault.startsWith(realOut + QLatin1Char('/'))))) {
+        // Compared by device and inode, not by spelling: not the vault itself, and not a folder that holds it.
+        // Refused too when either cannot be told.
+        if (realOut.isEmpty() || out.isOrHolds(vaultRoot)) {
             if (error) *error = QStringLiteral("refusing to publish into the vault or a folder that contains it");
             return false;
         }

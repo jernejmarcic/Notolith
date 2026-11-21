@@ -116,7 +116,7 @@ public:
     /// leading out of the vault. Missing folders are created. A link as the
     /// file itself is replaced, never followed. Same temp file + fsync +
     /// rename as write(); the temp file is dot-prefixed and removed on failure.
-    /// Linux only. `relativePath` should already pass isConfinedPath().
+    /// `relativePath` should already pass isConfinedPath().
     bool writeBytesNoFollow(const QString &relativePath, const QByteArray &bytes, QString *error = nullptr) const;
     /// Copies `source` over `target` through a temporary file beside it and a rename, so a failed copy leaves
     /// the earlier `target` as it was (an export replacing a file).
@@ -138,6 +138,9 @@ public:
         int fd() const { return m_fd; }
         /// Where the held folder really is now (links resolved), asked of the descriptor and not of a name.
         QString realPath() const;
+        /// Whether this folder is `path` or holds it, by device and inode and not by spelling (case, firmlinks and
+        /// links all spell one folder many ways). Also true when that cannot be told: callers refuse on true.
+        bool isOrHolds(const QString &path) const;
 
     private:
         explicit HeldFolder(int fd);

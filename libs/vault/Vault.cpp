@@ -273,6 +273,23 @@ bool Vault::write(const QString &path, const Note &note, QString *error)
     return writeBytes(path, encode(note), error);
 }
 
+namespace {
+/// QSaveFile's commit() syncs with fsync, which on macOS stops at the drive's cache, and ignores a failure. So
+/// there the bytes are flushed for real first; false (the write cancelled) when that fails. Nothing changes on Linux.
+bool flushToDrive(QSaveFile &file)
+{
+#ifdef __APPLE__
+    if (!file.flush() || fullSync(file.handle()) < 0) {
+        file.cancelWriting();
+        return false;
+    }
+#else
+    Q_UNUSED(file);
+#endif
+    return true;
+}
+} // namespace
+
 bool Vault::writeBytes(const QString &path, const QByteArray &bytes, QString *error)
 {
     // QSaveFile writes the target of a link, a dangling one too, and a vault can ship one.
@@ -287,7 +304,7 @@ bool Vault::writeBytes(const QString &path, const QByteArray &bytes, QString *er
             *error = file.errorString();
         return false;
     }
-    if (file.write(bytes) != bytes.size() || !file.commit()) {
+    if (file.write(bytes) != bytes.size() || !flushToDrive(file) || !file.commit()) {
         if (error)
             *error = file.errorString();
         return false;
@@ -389,7 +406,7 @@ bool Vault::copyReplacing(const QString &source, const QString &target, QString 
         out.cancelWriting();
         return fail(in.errorString());
     }
-    if (!out.commit())
+    if (!flushToDrive(out) || !out.commit())
         return fail(out.errorString());
     return true;
 }
@@ -509,6 +526,46 @@ Vault::HeldFolder Vault::HeldFolder::open(const QString &path, QString *error)
     if (fd < 0 && error)
         *error = QStringLiteral("cannot open %1 as a folder (a link is refused): %2").arg(path, errnoText(errno));
     return HeldFolder(fd);
+}
+
+bool Vault::HeldFolder::isOrHolds(const QString &path) const
+{
+    struct stat self {};
+    if (m_fd < 0 || ::fstat(m_fd, &self) < 0)
+        return true;
+    // Up from `path` to the root of the filesystem tree, each step an open of "..": the folder held is the one
+    // named, or holds it, when its device and inode turn up on the way.
+    int walk = ::open(QFile::encodeName(path).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (walk < 0)
+        return true;
+    for (int depth = 0; depth < 4096; ++depth) {
+        struct stat here {};
+        if (::fstat(walk, &here) < 0) {
+            ::close(walk);
+            return true;
+        }
+        if (here.st_dev == self.st_dev && here.st_ino == self.st_ino) {
+            ::close(walk);
+            return true;
+        }
+        const int parent = ::openat(walk, "..", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        ::close(walk);
+        if (parent < 0)
+            return true;
+        struct stat up {};
+        if (::fstat(parent, &up) < 0) {
+            ::close(parent);
+            return true;
+        }
+        if (up.st_dev == here.st_dev && up.st_ino == here.st_ino) { // the root is its own parent
+            const bool found = up.st_dev == self.st_dev && up.st_ino == self.st_ino;
+            ::close(parent);
+            return found;
+        }
+        walk = parent;
+    }
+    ::close(walk);
+    return true; // too deep to be a real path
 }
 
 QString Vault::HeldFolder::realPath() const
@@ -681,20 +738,17 @@ bool Vault::readInside(const QString &path, Note &out, QString *error, bool *lea
     struct stat info {};
     if (::fstat(file.fd, &info) < 0 || !S_ISREG(info.st_mode))
         return fail(QStringLiteral("%1 is not a regular file").arg(path));
+    // Where the opened file really is. When that cannot be told, fail closed: a link on the way could lead out.
     const QString real = fdPath(file.fd);
-    if (!real.isEmpty()) {
-        if (!resolvesInside(real)) {
-            if (leadsOutside)
-                *leadsOutside = true;
-            return fail(QStringLiteral("%1 leads outside the vault").arg(path));
-        }
-    } else {
-        struct stat link {};
-        if (::lstat(name.constData(), &link) < 0 || S_ISLNK(link.st_mode)) {
-            if (leadsOutside)
-                *leadsOutside = true;
-            return fail(QStringLiteral("%1 is a link, and where it leads cannot be checked").arg(path));
-        }
+    if (real.isEmpty()) {
+        if (leadsOutside)
+            *leadsOutside = true;
+        return fail(QStringLiteral("%1 cannot be checked for leading outside the vault").arg(path));
+    }
+    if (!resolvesInside(real)) {
+        if (leadsOutside)
+            *leadsOutside = true;
+        return fail(QStringLiteral("%1 leads outside the vault").arg(path));
     }
     const QString tooLarge =
         QStringLiteral("%1 is too large to open (over %2 MiB)").arg(path).arg(kMaxNoteBytes >> 20);
