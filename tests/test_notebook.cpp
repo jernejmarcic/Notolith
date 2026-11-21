@@ -2890,7 +2890,11 @@ int arrivals(int listening)
 {
     int count = 0;
     for (;;) {
+#ifdef __linux__
         const int accepted = accept4(listening, nullptr, nullptr, SOCK_NONBLOCK);
+#else
+        const int accepted = accept(listening, nullptr, nullptr); // macOS has no accept4; the descriptor is closed at once
+#endif
         if (accepted < 0)
             return count;
         close(accepted);

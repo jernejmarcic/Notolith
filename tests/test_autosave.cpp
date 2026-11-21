@@ -106,6 +106,9 @@ void autosave(MainWindow &window)
 /// How many Qt image-format plugins this process has mapped.
 int imagePluginsLoaded()
 {
+#ifndef __linux__
+    return 0; // no /proc/self/maps to read: the test cannot tell, so it does not fail
+#endif
     QFile maps(QStringLiteral("/proc/self/maps"));
     if (!maps.open(QIODevice::ReadOnly))
         return -1;

@@ -6,21 +6,27 @@
 #include <QLocale>
 #include <QStringConverter>
 
+#ifdef __GLIBC__
 #include <malloc.h>
+#endif
 
 #include "CSVparser.h"
 
 using namespace noteAppC;
 
-// Live heap bytes, from glibc: Qt's string and list buffers come from malloc
+// Live heap bytes, from glibc (0 elsewhere): Qt's string and list buffers come from malloc
 // itself (QArrayData), so replacing operator new would not see them. A test
 // takes this before and after the parse, the result still alive, and what is
 // left is what the parse kept.
 namespace {
 long long heapInUse()
 {
+#ifdef __GLIBC__
     const struct mallinfo2 info = mallinfo2();
     return static_cast<long long>(info.uordblks) + static_cast<long long>(info.hblkhd);
+#else
+    return 0; // no way to ask: the bounds below then hold trivially, so only the parse's result is checked
+#endif
 }
 
 QList<QStringList> rowsOf(const QString &text, QChar delimiter = QLatin1Char(','))
