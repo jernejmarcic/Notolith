@@ -1712,6 +1712,7 @@ TEST_F(WindowTest, FoundPandocDimsNothing)
 // mark when it runs, so "refused" is told from "ran and wrote nothing".
 TEST_F(WindowTest, PandocExportRefusesToOverwriteANote)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir config;
     QTemporaryDir bin;
     QTemporaryDir out;
@@ -1759,6 +1760,7 @@ TEST_F(WindowTest, PandocExportRefusesToOverwriteANote)
 // sandbox, which cannot see the file) is not pandoc's output: it must not be copied into the export or the vault.
 TEST_F(WindowTest, APandocOutputThatIsALinkToAUsersFileIsNeverCopied)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir config;
     QTemporaryDir bin;
     QTemporaryDir secretDir;
@@ -1804,6 +1806,7 @@ TEST_F(WindowTest, APandocOutputThatIsALinkToAUsersFileIsNeverCopied)
 // The sandbox is given the one file the person chose: a link to a file is refused, not followed.
 TEST_F(WindowTest, PandocImportRefusesALinkToTheFile)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir config;
     QTemporaryDir bin;
     QTemporaryDir inputs;
@@ -1832,6 +1835,7 @@ TEST_F(WindowTest, PandocImportRefusesALinkToTheFile)
 // Several documents dropped at once are all imported, one after the other, and a failure does not stop the rest.
 TEST_F(WindowTest, PandocImportsEveryDroppedFileInTurn)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir config;
     QTemporaryDir bin;
     QTemporaryDir inputs;
@@ -1875,6 +1879,7 @@ TEST_F(WindowTest, PandocImportsEveryDroppedFileInTurn)
 // A picture that cannot be copied into the vault is reported, and the note does not link the file that is not there.
 TEST_F(WindowTest, PandocImportReportsAPictureItCouldNotCopy)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir config;
     QTemporaryDir bin;
     QTemporaryDir inputs;
@@ -1914,6 +1919,7 @@ TEST_F(WindowTest, PandocImportReportsAPictureItCouldNotCopy)
 // pandoc copies the pictures first and makes the note after: a note that cannot be made takes them back out.
 TEST_F(WindowTest, PandocImportTakesItsPicturesBackWhenTheNoteCannotBeMade)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir config;
     QTemporaryDir bin;
     QTemporaryDir inputs;
@@ -1958,6 +1964,7 @@ TEST_F(WindowTest, PandocImportTakesItsPicturesBackWhenTheNoteCannotBeMade)
 // A file waiting for pandoc was dropped for the vault that was open then: another vault opened since does not get it.
 TEST_F(WindowTest, AQueuedPandocImportIsDroppedWhenAnotherVaultIsOpened)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir config;
     QTemporaryDir bin;
     QTemporaryDir inputs;
@@ -2006,6 +2013,7 @@ TEST_F(WindowTest, AReferenceHeaderOpensNotesAndNeverHandsOtherFilesToTheSystem)
 // An import that is already running when another vault opens belongs to the vault it was started for.
 TEST_F(WindowTest, ARunningPandocImportIsDroppedWhenAnotherVaultIsOpened)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir config;
     QTemporaryDir bin;
     QTemporaryDir inputs;
@@ -2072,6 +2080,7 @@ TEST_F(WindowTest, PandocFoundIsToggleable)
 // new note, which does not touch the note that has its name.
 TEST_F(WindowTest, PandocExportsANoteAndImportsItBack)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     if (noteAppC::pandoc::locate(QString()).isEmpty())
         GTEST_SKIP() << "pandoc is not installed";
     QTemporaryDir config;

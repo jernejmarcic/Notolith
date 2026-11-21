@@ -213,6 +213,7 @@ TEST(MermaidPruneTest, DropsTheOldAndThenTheLeastRecentlyUsedBeyondTheSize)
 
 TEST_F(MermaidTest, ARenderIsAJobOnAnotherThreadNotACallOnTheUIThread)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     const auto answer = ask(rendererFor(fake(QStringLiteral("mmdr"), QStringLiteral("0.5"))), QStringLiteral("graph TD\nA-->B"));
     EXPECT_LT(answer->callMs, 200); // the tool takes 500 ms; the call that asked did not wait for it
     EXPECT_NE(answer->thread, QThread::currentThread());
@@ -223,6 +224,7 @@ TEST_F(MermaidTest, ARenderIsAJobOnAnotherThreadNotACallOnTheUIThread)
 
 TEST_F(MermaidTest, TheToolIsGivenTheAppsColours)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     ask(rendererFor(fake(QStringLiteral("mmdr"))), QStringLiteral("graph TD\nA-->B"));
     QFile config(dir.filePath(QStringLiteral("config")));
     ASSERT_TRUE(config.open(QIODevice::ReadOnly));
@@ -233,6 +235,7 @@ TEST_F(MermaidTest, TheToolIsGivenTheAppsColours)
 
 TEST_F(MermaidTest, TheSourceGoesInOnStdinAndTheToolsSVGIsCachedAsItIs)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     ask(rendererFor(fake(QStringLiteral("mmdr"))), QStringLiteral("graph TD\nA-->C"));
     QFile in(dir.filePath(QStringLiteral("stdin")));
     ASSERT_TRUE(in.open(QIODevice::ReadOnly));
@@ -243,6 +246,7 @@ TEST_F(MermaidTest, TheSourceGoesInOnStdinAndTheToolsSVGIsCachedAsItIs)
 
 TEST_F(MermaidTest, TheToolKeepsTheSandboxsLimitsAndNoneOfTheEnvironment)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     // A fence is a stranger's input: the tool must not see this process's variables, and runs under the limits.
     // The fake records what it was given.
     qputenv("NOTEAPPC_TEST_SECRET", "hunter2");
@@ -270,6 +274,7 @@ TEST_F(MermaidTest, TheToolKeepsTheSandboxsLimitsAndNoneOfTheEnvironment)
 
 TEST_F(MermaidTest, ResolvesTheToolFromTheCargoHomeBin)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     // A launcher's PATH has no cargo bin: the stub is only in $CARGO_HOME/bin.
     onlyBubblewrapOnPath();
     const QByteArray oldCargo = qgetenv("CARGO_HOME");
@@ -327,6 +332,7 @@ TEST_F(MermaidTest, TheInstalledMmdrDrawsADarkDiagram)
 
 TEST_F(MermaidTest, ADiagramIsDrawnInPlaceOfItsFenceAndTheCaretBringsTheSourceBack)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     const QString tool = fake(QStringLiteral("mmdr"), QStringLiteral("0.2"));
     MarkdownEditor editor;
     editor.resize(900, 600);
@@ -354,6 +360,7 @@ TEST_F(MermaidTest, ADiagramIsDrawnInPlaceOfItsFenceAndTheCaretBringsTheSourceBa
 
 TEST_F(MermaidTest, ADiagramAlreadyMadeIsReadFromDiskNotMadeAgain)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     const QString tool = fake(QStringLiteral("mmdr"));
     ask(rendererFor(tool), QStringLiteral("graph TD\nA-->D"));
     ASSERT_EQ(runs(), 1);
@@ -365,6 +372,7 @@ TEST_F(MermaidTest, ADiagramAlreadyMadeIsReadFromDiskNotMadeAgain)
 
 TEST_F(MermaidTest, AMissingToolShowsTheSourceAndAHintAndIsNotLookedForAgain)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     const QString tool = dir.filePath(QStringLiteral("not-yet"));
     const auto renderer = rendererFor(tool);
     const auto first = ask(renderer, QStringLiteral("graph TD\nA-->E"));
@@ -394,6 +402,7 @@ TEST_F(MermaidTest, ThePlainNameInTheDefaultHint)
 
 TEST_F(MermaidTest, AFailingToolShowsTheSourceAndItsFirstErrorLineOnce)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     const QString tool = fake(QStringLiteral("mmdr"), QStringLiteral("0"),
                               QStringLiteral("echo 'Error: parse error on line 2' >&2; echo more >&2; exit 1\n"));
     const auto renderer = rendererFor(tool);
@@ -410,6 +419,7 @@ TEST_F(MermaidTest, AFailingToolShowsTheSourceAndItsFirstErrorLineOnce)
 
 TEST_F(MermaidTest, AToolThatHangsIsKilled)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     const QString tool = fake(QStringLiteral("mmdr"), QStringLiteral("30"));
     QElapsedTimer timer;
     timer.start();
@@ -424,6 +434,7 @@ TEST_F(MermaidTest, AToolThatHangsIsKilled)
 // of the kind has the other, and answers long before the hang is killed.
 TEST_F(MermaidTest, AHungToolDoesNotBlockTheOtherFences)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     const QString tool = rawFake(QStringLiteral("mmdr"),
                                  QStringLiteral("in=$(cat)\ncase \"$in\" in *HANG*) sleep 30;; esac\ncat <<'EOF'\n") + QLatin1String(kSVG)
                                      + QStringLiteral("\nEOF\n"));
@@ -546,6 +557,7 @@ TEST_F(MermaidWindowTest, TheSettingIsOnByDefaultAndTheToolIsMmdr)
 
 TEST_F(MermaidWindowTest, OnADiagramIsDrawnInTheWindow)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     configure(true, fake(QStringLiteral("mmdr")));
     MainWindow window;
     window.show();
@@ -563,6 +575,7 @@ TEST_F(MermaidWindowTest, OnADiagramIsDrawnInTheWindow)
 // Showing a note must not start the tool of a vault the person has not trusted: a click, and a yes, do.
 TEST_F(MermaidWindowTest, OnAnUntrustedVaultTheToolStartsOnlyAfterAClickAndAYes)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     configure(true, fake(QStringLiteral("mmdr")), false);
     MainWindow window;
     window.show();

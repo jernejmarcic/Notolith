@@ -300,12 +300,17 @@ TEST_F(PluginHostTest, WithoutBubblewrapAPluginRefusesToStart)
     qputenv("PATH", path);
     ASSERT_TRUE(done) << "refused at once, not after a timeout";
     EXPECT_FALSE(ok);
+#ifdef __APPLE__ // the refusal says the sandbox is not there yet, not that bubblewrap is
+    EXPECT_TRUE(error.contains(QLatin1String("macOS"))) << error.toStdString();
+#else
     EXPECT_TRUE(error.contains(QLatin1String("bubblewrap"))) << error.toStdString();
+#endif
     EXPECT_EQ(host.state(), PluginHost::State::Crashed);
 }
 
 TEST_F(PluginHostTest, RunsACommandAndRendersACodeBlockEndToEnd)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QString notice;
     PluginHost host(manifest, {PluginPermission::ReadNotes},
                     callbacksReturning(QStringLiteral("three little words"), &notice));
@@ -341,6 +346,7 @@ TEST_F(PluginHostTest, RunsACommandAndRendersACodeBlockEndToEnd)
 
 TEST_F(PluginHostTest, ARequestOutsideGrantedPermissionsIsRefusedAndLogged)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QString notice;
     QStringList logged;
     PluginAppCallbacks callbacks = callbacksReturning(QStringLiteral("irrelevant"), &notice);
@@ -367,6 +373,7 @@ TEST_F(PluginHostTest, ARequestOutsideGrantedPermissionsIsRefusedAndLogged)
 
 TEST_F(PluginHostTest, AHangingCommandIsKilledByItsTimeoutAndTheHostRestartsOnNextUse)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     PluginHost host(manifest, {PluginPermission::ReadNotes}, callbacksReturning(QStringLiteral("x")));
     host.setRequestTimeoutMsForTesting(400);
 
@@ -402,6 +409,7 @@ TEST_F(PluginHostTest, AHangingCommandIsKilledByItsTimeoutAndTheHostRestartsOnNe
 
 TEST(PluginHostManifestTimeoutTest, ADeclaredTimeoutMsOverridesTheDefaultWithoutTheTestingHook)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     // A plugin.ini's own `timeout-ms` (docs/PLUGINS.md, "Timeouts") has to
     // take effect from the constructor alone - setRequestTimeoutMsForTesting
     // exists only so a *different* test does not need to wait out a real
@@ -446,6 +454,7 @@ TEST(PluginHostManifestTimeoutTest, ADeclaredTimeoutMsOverridesTheDefaultWithout
 
 TEST_F(PluginHostTest, ACrashingCommandDoesNotTakeThisProcessDownWithIt)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     PluginHost host(manifest, {PluginPermission::ReadNotes}, callbacksReturning(QStringLiteral("x")));
     bool done = false;
     bool ok = true;

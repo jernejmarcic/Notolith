@@ -303,7 +303,11 @@ TEST(NotebookSandboxTest, WithoutBubblewrapNothingRunsAsTheUser)
     EXPECT_TRUE(tier1);
     EXPECT_TRUE(wasm);
     EXPECT_FALSE(kernelStarted);
+#ifdef __APPLE__ // the refusal says the sandbox is not there yet, not that bubblewrap is
+    EXPECT_TRUE(kernel.error().contains(QStringLiteral("macOS")));
+#else
     EXPECT_TRUE(kernel.error().contains(QStringLiteral("bubblewrap")));
+#endif
     EXPECT_TRUE(diagram.program.isEmpty());
 }
 
@@ -918,6 +922,7 @@ TEST(DirectRunnerTest, AHaskellProgramWithMainRuns)
 
 TEST(DirectRunnerTest, PythonsLastExpressionPrintsAndErrorsAreErrors)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     if (!DirectRunner::canRun(QStringLiteral("python")))
         GTEST_SKIP() << "python3 is not installed";
     auto result = runDirect(QStringLiteral("python"), QStringLiteral("x = 20\nprint('side')\nx + 1\n"));
@@ -944,6 +949,7 @@ TEST(DirectRunnerTest, PythonsLastExpressionPrintsAndErrorsAreErrors)
 
 TEST(DirectRunnerTest, ACBlockIsCompiledAndRun)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     if (!DirectRunner::canRun(QStringLiteral("c")))
         GTEST_SKIP() << "gcc is not installed";
     const auto result = runDirect(QStringLiteral("c"), QStringLiteral("#include <stdio.h>\nint main(void) { printf(\"%d\\n\", 6 * 7); }\n"));
@@ -976,6 +982,7 @@ void expectCheckedWhenNoMain(const QString &language, const QString &good, const
 
 TEST(DirectRunnerTest, ARustBlockWithNoMainIsCheckedNotRun)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     expectCheckedWhenNoMain(QStringLiteral("rust"),
                             QStringLiteral("struct Note { title: String }\nimpl Note { fn slug(&self) -> String { self.title.to_lowercase() } }\n"),
                             QStringLiteral("fn f() -> u32 { \"x\" }\n"), QStringLiteral("E0308"), QStringLiteral("rustc"));
@@ -983,6 +990,7 @@ TEST(DirectRunnerTest, ARustBlockWithNoMainIsCheckedNotRun)
 
 TEST(DirectRunnerTest, ACBlockWithNoMainIsCheckedNotRun)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     expectCheckedWhenNoMain(QStringLiteral("c"), QStringLiteral("static int twice(int x) { return 2 * x; }\n"),
                             QStringLiteral("int f(void) { return undeclared; }\n"), QStringLiteral("undeclared"),
                             QStringLiteral("gcc"));
@@ -990,6 +998,7 @@ TEST(DirectRunnerTest, ACBlockWithNoMainIsCheckedNotRun)
 
 TEST(DirectRunnerTest, ACppBlockWithNoMainIsCheckedNotRun)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     expectCheckedWhenNoMain(QStringLiteral("cpp"), QStringLiteral("struct P { int x; int twice() const { return 2 * x; } };\n"),
                             QStringLiteral("int f() { return undeclared; }\n"), QStringLiteral("undeclared"),
                             QStringLiteral("g++"));
@@ -997,6 +1006,7 @@ TEST(DirectRunnerTest, ACppBlockWithNoMainIsCheckedNotRun)
 
 TEST(DirectRunnerTest, AJavaBlockWithNoMainIsCheckedNotRun)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     expectCheckedWhenNoMain(QStringLiteral("java"), QStringLiteral("class Note { int twice(int x) { return 2 * x; } }\n"),
                             QStringLiteral("class Note { int f() { return undeclared; } }\n"), QStringLiteral("undeclared"),
                             QStringLiteral("javac"));
@@ -1004,6 +1014,7 @@ TEST(DirectRunnerTest, AJavaBlockWithNoMainIsCheckedNotRun)
 
 TEST(DirectRunnerTest, BlocksWithMainStillRunAndAMainInACommentDoesNotCount)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     if (!DirectRunner::canRun(QStringLiteral("c")) || !DirectRunner::canRun(QStringLiteral("rust")))
         GTEST_SKIP() << "gcc or rustc is not installed";
     auto result = runDirect(QStringLiteral("rust"), QStringLiteral("fn main() { println!(\"{}\", 6 * 7); }\n"));
@@ -1038,6 +1049,7 @@ std::optional<NotebookRunResult> runImplicit(const QString &language, const QStr
 
 TEST(DirectRunnerTest, ImplicitCodeIsPrependedForACompiledLanguage)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     if (!DirectRunner::canRun(QStringLiteral("rust")) || !DirectRunner::canRun(QStringLiteral("python")))
         GTEST_SKIP() << "rustc or python3 is not installed";
     auto result = runImplicit(QStringLiteral("rust"),
@@ -1054,6 +1066,7 @@ TEST(DirectRunnerTest, ImplicitCodeIsPrependedForACompiledLanguage)
 
 TEST(DirectRunnerTest, AnErrorLineIsTheBlocksOwn)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     if (!DirectRunner::canRun(QStringLiteral("python")))
         GTEST_SKIP() << "python3 is not installed";
     auto result = runImplicit(QStringLiteral("python"), QStringLiteral("x = 1\n1/0"), QStringLiteral("import math\nimport os"));
@@ -1071,6 +1084,7 @@ TEST(DirectRunnerTest, AnErrorLineIsTheBlocksOwn)
 
 TEST(DirectRunnerTest, AWrapperRunsABlockWithNoMain)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     if (!DirectRunner::canRun(QStringLiteral("rust")))
         GTEST_SKIP() << "rustc is not installed";
     const QString wrapper = QStringLiteral("fn main() {\n{{code}}\n}");
@@ -1095,6 +1109,7 @@ TEST(DirectRunnerTest, AWrapperRunsABlockWithNoMain)
 
 TEST(DirectRunnerTest, ImportsOnlyAndNoMainIsStillCheckOnly)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     if (!DirectRunner::canRun(QStringLiteral("c")))
         GTEST_SKIP() << "gcc is not installed";
     // size_t is only declared by the prelude: the check sees it, and still finds no main.
@@ -1107,6 +1122,7 @@ TEST(DirectRunnerTest, ImportsOnlyAndNoMainIsStillCheckOnly)
 
 TEST(DirectRunnerTest, WithoutImplicitCodeTheRunnerInputIsByteIdentical)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     DirectRunner::Request request;
     request.language = QStringLiteral("rust");
     int offset = -1;
@@ -1404,6 +1420,7 @@ int main(int argc, char **argv)
 
 TEST(DirectRunnerTest, ATimeoutOnTheBlockStopsItAndAWarningIsStderr)
 {
+    NOTEAPPC_SKIP_WITHOUT_SANDBOX();
     QTemporaryDir cacheHome;
     qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
     NotebookController controller;

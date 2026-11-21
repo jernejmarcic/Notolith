@@ -4,6 +4,8 @@
 // Whether a test that runs a sandboxed tool can run at all. A builder that denies unprivileged user namespaces
 // (a container, a hardened kernel) has bwrap on PATH and cannot use it, so "bwrap is missing" is not the same
 // question as "the sandbox works here". The answer is found once, with the flags the sandbox itself uses.
+#include <gtest/gtest.h>
+
 #include <QProcess>
 #include <QStandardPaths>
 #include <QString>
@@ -23,3 +25,11 @@ inline bool bubblewrapUsable()
     }();
     return works;
 }
+
+// macOS has no sandbox yet (a Seatbelt one is phase 2), so what runs a tool through it reports itself unavailable, as a
+// Linux build without bubblewrap does. A test that needs such a run starts with this.
+#ifdef __APPLE__
+#define NOTEAPPC_SKIP_WITHOUT_SANDBOX() GTEST_SKIP() << "needs the sandbox, which macOS does not have yet"
+#else
+#define NOTEAPPC_SKIP_WITHOUT_SANDBOX() (void)0
+#endif
