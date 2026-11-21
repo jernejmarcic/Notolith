@@ -23,25 +23,25 @@ set -e
 file="src/platform/qt/graphic_qt.cpp"
 
 grep -q NoFontMerging "$file" || {
-  sed -i 's|_font.setPointSizeF(size);|_font.setPointSizeF(size);\n  _font.setStyleStrategy(QFont::NoFontMerging);|' "$file"
+  perl -pi -e 's|\Q_font.setPointSizeF(size);\E|_font.setPointSizeF(size);\n  _font.setStyleStrategy(QFont::NoFontMerging);|' "$file"
   echo "patched $file: Qt font merging disabled"
 }
 
 grep -q "QPainterPath path;" "$file" || {
-  sed -i 's|#include <QFile>|#include <QFile>\n#include <QPainterPath>|' "$file"
-  sed -i 's|  _painter->drawText(QPointF(x, y), text);|  QPainterPath path;\n  path.addText(QPointF(x, y), _font->getQFont(), text);\n  _painter->fillPath(path, QBrush(_painter->pen().color()));|' "$file"
-  sed -i 's|  g.getQPainter()->drawText(QPointF(x, y), _text);|  QPainterPath path;\n  path.addText(QPointF(x, y), _font, _text);\n  g.getQPainter()->fillPath(path, QBrush(g.getQPainter()->pen().color()));|' "$file"
+  perl -pi -e 's|\Q#include <QFile>\E|#include <QFile>\n#include <QPainterPath>|' "$file"
+  perl -pi -e 's|\Q  _painter->drawText(QPointF(x, y), text);\E|  QPainterPath path;\n  path.addText(QPointF(x, y), _font->getQFont(), text);\n  _painter->fillPath(path, QBrush(_painter->pen().color()));|' "$file"
+  perl -pi -e 's|\Q  g.getQPainter()->drawText(QPointF(x, y), _text);\E|  QPainterPath path;\n  path.addText(QPointF(x, y), _font, _text);\n  g.getQPainter()->fillPath(path, QBrush(g.getQPainter()->pen().color()));|' "$file"
   echo "patched $file: glyphs drawn as outlines, not 1 pt rasters"
 }
 
 latex="src/latex.cpp"
 grep -q "free(userdata_fallback);" "$latex" || {
-  sed -i 's|    delete userdata_fallback;|    free(userdata_fallback);|' "$latex"
+  perl -pi -e 's|\Q    delete userdata_fallback;\E|    free(userdata_fallback);|' "$latex"
   echo "patched $latex: asprintf's buffer freed with free()"
 }
 
 indexed="src/utils/indexed_arr.h"
 grep -q "h = (int)_rows - 1" "$indexed" || {
-  sed -i 's|int     l = 0, h = _rows;|int     l = 0, h = (int)_rows - 1;|' "$indexed"
+  perl -pi -e 's|\Qint     l = 0, h = _rows;\E|int     l = 0, h = (int)_rows - 1;|' "$indexed"
   echo "patched $indexed: binary search stays inside the table"
 }
