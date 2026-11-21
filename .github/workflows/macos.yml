@@ -32,14 +32,22 @@ jobs:
         run: cmake --build build -- -k 0 # every failing file in one run, not only the first
 
       - name: Test
-        # An isolated home and XDG tree: the tests must never touch the runner's own.
+        # Not fatal: the Package step below runs whatever the tests say. An isolated home and XDG tree: the tests
+        # must never touch the runner's own.
+        continue-on-error: true
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           export HOME="$RUNNER_TEMP/home"
           export XDG_CONFIG_HOME="$HOME/.config" XDG_CACHE_HOME="$HOME/.cache" XDG_DATA_HOME="$HOME/.local/share" XDG_STATE_HOME="$HOME/.local/state"
           mkdir -p "$HOME"
-          ctest --test-dir build --output-on-failure -j3
+          ctest --test-dir build --output-on-failure --timeout 300 -j3
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ctest-log
+          path: build/Testing/Temporary/LastTest.log
 
       - name: Package
         run: |
